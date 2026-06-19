@@ -1,0 +1,86 @@
+# AMS Ticket Intelligence - Codex Instructions
+
+You are building a Windows-compatible full-stack application named AMS Ticket Intelligence.
+
+## User preferences
+
+- The user is not a technical person.
+- Prefer complete files over partial snippets.
+- Avoid Linux-only commands.
+- Use Windows-compatible commands and paths.
+- Use Python 3.12.
+- Use uv for Python dependency management.
+- Use PostgreSQL as the database.
+- Use FastAPI for backend APIs.
+- Use React + TypeScript + Vite for frontend.
+- Use SQLAlchemy 2.x and Alembic for database migrations.
+- Use local filesystem storage for uploaded files and exports in MVP.
+- Do not require Docker for MVP.
+- Design for large files: total source data can be 1.5GB or more.
+- Never load all ticket rows into memory at once.
+- Use chunked or streaming processing where possible.
+- Use background job records in PostgreSQL for long-running work.
+- Use deterministic code for analytics calculations.
+- Use AI only for classification, summarization, pattern interpretation, and recommendations.
+- Every major feature should have clear tests or verification steps.
+
+## Project goal
+
+Build an AI-driven AMS ticket analytics platform for Incident and Service Catalog task data.
+
+The system must support:
+- Uploading multiple monthly ticket files.
+- Storing original uploaded files.
+- Parsing CSV/XLSX data.
+- Mapping source columns to a normalized ticket model.
+- Creating dashboards for ticket volumetrics, SLA performance, and monthly trends.
+- AI-based ticket classification across four classification levels.
+- Classification of technical vs functional tickets.
+- Classification of system-created vs user-created tickets.
+- Identification of improvement opportunities:
+  - process improvements
+  - SLA adherence improvements
+  - problem management / permanent fixes
+  - monitoring and observability
+  - RPA automation
+  - AI-based automation
+  - virtual assistant / self-service
+- Demand versus available capacity analysis.
+- Exporting results to Excel and PowerPoint.
+
+## Architecture
+
+Backend:
+- Python 3.12
+- FastAPI
+- SQLAlchemy 2.x
+- Alembic
+- Pydantic
+- PostgreSQL
+- pandas / polars
+- openpyxl
+- xlsxwriter
+- python-pptx
+- plotly / kaleido
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+- shadcn/ui if practical
+- TanStack Query
+- TanStack Table
+- Apache ECharts or Plotly.js
+
+## Development rules
+
+- Build incrementally.
+- Do not rewrite unrelated code.
+- Keep modules clean and maintainable.
+- Add meaningful error handling.
+- Add README instructions for Windows.
+- Add .env.example.
+- Add tests where practical.
+- After changes, run formatting, linting, type checks, and tests where available.
+- Summarize what changed and how to verify.

@@ -1,0 +1,195 @@
+from __future__ import annotations
+
+from datetime import date
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.schemas.dashboard import (
+    CreatedResolvedOpenRow,
+    CreationSourceTrendRow,
+    FilterValuesResponse,
+    IncidentSlaNameBreakdownResponse,
+    IncidentSlaSummaryResponse,
+    IncidentSlaTrendRow,
+    MttrTrendRow,
+    ReassignmentTrendRow,
+    ReopenTrendRow,
+    SlaTrendRow,
+    TechnicalFunctionalBreakdownResponse,
+)
+from app.services.dashboard import (
+    DashboardFilters,
+    DateFilterBasis,
+    TimeGrain,
+    created_resolved_open_trend,
+    creation_source_trend,
+    filter_values,
+    incident_sla_name_breakdown,
+    incident_sla_summary,
+    incident_sla_trend,
+    mttr_trend,
+    reassignment_trend,
+    reopen_trend,
+    sla_trend,
+    technical_functional_breakdown,
+)
+
+router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+DbSession = Annotated[Session, Depends(get_db)]
+
+
+def parse_multi_values(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+
+    parsed: list[str] = []
+    for value in values:
+        parsed.extend(part.strip() for part in value.split(",") if part.strip())
+    return parsed
+
+
+def dashboard_filters(
+    project_id: Annotated[UUID, Query(...)],
+    ticket_type: Annotated[list[str] | None, Query()] = None,
+    priority: Annotated[list[str] | None, Query()] = None,
+    state: Annotated[list[str] | None, Query()] = None,
+    assignment_group: Annotated[list[str] | None, Query()] = None,
+    application: Annotated[list[str] | None, Query()] = None,
+    customer_name: Annotated[list[str] | None, Query()] = None,
+    tower_name: Annotated[list[str] | None, Query()] = None,
+    cluster_name: Annotated[list[str] | None, Query()] = None,
+    application_group_name: Annotated[list[str] | None, Query()] = None,
+    application_name: Annotated[list[str] | None, Query()] = None,
+    response_sla_name: Annotated[list[str] | None, Query()] = None,
+    resolution_sla_name: Annotated[list[str] | None, Query()] = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    month_key: str | None = None,
+    time_grain: TimeGrain = TimeGrain.MONTHLY,
+    date_filter_basis: DateFilterBasis = DateFilterBasis.CREATED,
+) -> DashboardFilters:
+    return DashboardFilters(
+        project_id=project_id,
+        ticket_type=parse_multi_values(ticket_type),
+        priority=parse_multi_values(priority),
+        state=parse_multi_values(state),
+        assignment_group=parse_multi_values(assignment_group),
+        application=parse_multi_values(application),
+        customer_name=parse_multi_values(customer_name),
+        tower_name=parse_multi_values(tower_name),
+        cluster_name=parse_multi_values(cluster_name),
+        application_group_name=parse_multi_values(application_group_name),
+        application_name=parse_multi_values(application_name),
+        response_sla_name=parse_multi_values(response_sla_name),
+        resolution_sla_name=parse_multi_values(resolution_sla_name),
+        start_date=start_date,
+        end_date=end_date,
+        month_key=month_key,
+        time_grain=time_grain,
+        date_filter_basis=date_filter_basis,
+    )
+
+
+DashboardFilterDependency = Annotated[DashboardFilters, Depends(dashboard_filters)]
+
+
+@router.get(
+    "/trends/created-resolved-open",
+    response_model=list[CreatedResolvedOpenRow],
+)
+def get_created_resolved_open_trend(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> list[dict[str, object]]:
+    return created_resolved_open_trend(db, filters)
+
+
+@router.get("/trends/mttr", response_model=list[MttrTrendRow])
+def get_mttr_trend(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> list[dict[str, object]]:
+    return mttr_trend(db, filters)
+
+
+@router.get("/trends/sla", response_model=list[SlaTrendRow])
+def get_sla_trend(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> list[dict[str, object]]:
+    return sla_trend(db, filters)
+
+
+@router.get("/trends/incident-sla", response_model=list[IncidentSlaTrendRow])
+def get_incident_sla_trend(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> list[dict[str, object]]:
+    return incident_sla_trend(db, filters)
+
+
+@router.get(
+    "/breakdowns/incident-sla-names",
+    response_model=IncidentSlaNameBreakdownResponse,
+)
+def get_incident_sla_name_breakdown(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+    name_type: Annotated[str, Query(pattern="^(RESPONSE|RESOLUTION|BOTH)$")] = "BOTH",
+) -> dict[str, list[dict[str, object]]]:
+    return incident_sla_name_breakdown(db, filters, name_type)
+
+
+@router.get("/summary/incident-sla", response_model=IncidentSlaSummaryResponse)
+def get_incident_sla_summary(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> dict[str, object]:
+    return incident_sla_summary(db, filters)
+
+
+@router.get("/trends/reopen-count", response_model=list[ReopenTrendRow])
+def get_reopen_trend(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> list[dict[str, object]]:
+    return reopen_trend(db, filters)
+
+
+@router.get("/trends/reassignment-count", response_model=list[ReassignmentTrendRow])
+def get_reassignment_trend(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> list[dict[str, object]]:
+    return reassignment_trend(db, filters)
+
+
+@router.get("/trends/creation-source", response_model=list[CreationSourceTrendRow])
+def get_creation_source_trend(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> list[dict[str, object]]:
+    return creation_source_trend(db, filters)
+
+
+@router.get(
+    "/breakdowns/technical-functional",
+    response_model=TechnicalFunctionalBreakdownResponse,
+)
+def get_technical_functional_breakdown(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> dict[str, int]:
+    return technical_functional_breakdown(db, filters)
+
+
+@router.get("/filter-values", response_model=FilterValuesResponse)
+def get_filter_values(
+    filters: DashboardFilterDependency,
+    db: DbSession,
+) -> dict[str, list[str]]:
+    return filter_values(db, filters)

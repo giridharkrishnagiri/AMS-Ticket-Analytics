@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv cache
+.uv-cache/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Backend runtime data / local uploads
+backend/data/
+data/
+uploads/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large source uploads / local ticket extracts
+*.csv
+*.xlsx
+*.xls
+*.zip
+*.7z
+*.parquet
+
+# Keep sample templates if explicitly added later
+!sample*.csv
+!sample*.xlsx
