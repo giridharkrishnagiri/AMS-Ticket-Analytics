@@ -15,6 +15,7 @@ def test_expected_ams_tables_are_registered() -> None:
         "dashboard_aggregates",
         "export_jobs",
         "application_dimensions",
+        "application_inventory_items",
         "incident_sla_rows",
     }
 
@@ -109,3 +110,30 @@ def test_incident_sla_columns_exist() -> None:
     assert "inc_number" in sla_columns
     assert "taskslatable_sla_target" in sla_columns
     assert "raw_data" in sla_columns
+
+
+def test_application_inventory_columns_exist() -> None:
+    ticket_columns = Base.metadata.tables["tickets"].columns.keys()
+    inventory_columns = Base.metadata.tables["application_inventory_items"].columns.keys()
+
+    assert "application_number_apm" in inventory_columns
+    assert "parent_application_name" in inventory_columns
+    assert "assignment_group" in inventory_columns
+    assert "assignment_group_owner" in inventory_columns
+    assert "application_owner" in inventory_columns
+    assert "business_service_ci_name" in inventory_columns
+    assert "support_lead" in inventory_columns
+    assert "functional_track" in inventory_columns
+    assert "ams_owner" in inventory_columns
+    assert "supported_by_vendor" in inventory_columns
+    assert "cmdb_payload" in inventory_columns
+    assert "application_inventory_id" in ticket_columns
+    assert "parent_application_number" in ticket_columns
+    assert "parent_application_name" in ticket_columns
+    assert "business_service_ci_name" in ticket_columns
+    assert "application_owner" in ticket_columns
+    assert "support_lead" in ticket_columns
+    assert "functional_track" in ticket_columns
+    assert "ams_owner" in ticket_columns
+    assert "supported_by_vendor" in ticket_columns
+    assert "assignment_group_owner" in ticket_columns

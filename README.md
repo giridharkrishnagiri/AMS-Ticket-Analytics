@@ -574,9 +574,9 @@ AND (
 LIMIT 50;
 ```
 
-## Application Dimension Configuration
+## Legacy Application Dimension Configuration
 
-The `Application Dimensions` tab configures business-friendly application hierarchy values and enriches normalized tickets for dashboard filtering.
+The previous `Application Dimensions` backend API remains available for compatibility. New user-facing work should use `Application Inventory`, which better matches the real CMDB/Application data.
 
 Supported dimension fields:
 
@@ -644,6 +644,97 @@ Ticket enrichment updates only:
 - `tickets.application_name`
 
 Raw ticket fields such as `application`, `business_service`, `cmdb_ci`, `service_offering`, `catalog_item`, and uploaded source data are preserved. Dashboard dimension filters use the enriched ticket columns so aggregate dashboard queries stay simple and do not require dimension joins.
+
+## Application Inventory Upload And Enrichment
+
+The frontend navigation includes an `Application Inventory` tab. Use it to upload CMDB/Application Inventory CSV or XLSX files and enrich normalized tickets by Business Service CI Name.
+
+The inventory upload supports:
+
+- `.xlsx` files with a `Group-App-BizService` worksheet.
+- `.csv` files with headers in the first row.
+- Excel header detection by finding the row containing `Business Service CI Name`; this supports the real workbook where row 2 contains the useful headers.
+- Core columns A through K mapped to normalized inventory fields.
+- Columns L through CC, and any other unmapped columns, preserved as JSONB in `application_inventory_items.cmdb_payload` using original header names.
+
+Core inventory columns:
+
+- `Application Number (APM)` -> `application_number_apm`
+- `Parent Business Application` -> `parent_application_name`
+- `Support group name` -> `assignment_group`
+- `Support group's owner` -> `assignment_group_owner`
+- `Application Owner` -> `application_owner`
+- `Business Service CI Name` -> `business_service_ci_name`
+- `Support Lead (Managed by)` -> `support_lead`
+- `Functional Track` -> `functional_track`
+- `AMS Owner` -> `ams_owner`
+- `Supported By Vendor` -> `supported_by_vendor`
+- `Active` -> `active`
+
+Application Inventory endpoints:
+
+- `GET /api/application-inventory?project_id=...`
+- `POST /api/application-inventory/upload`
+- `POST /api/application-inventory/enrich-tickets`
+- `GET /api/application-inventory/enrichment-summary?project_id=...`
+- `GET /api/application-inventory/unmatched-business-services?project_id=...`
+- `GET /api/application-inventory/filter-values?project_id=...`
+- `PUT /api/application-inventory/{id}`
+- `DELETE /api/application-inventory/{id}`
+- `GET /api/projects`
+
+Upload Application Inventory:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/api/application-inventory/upload" `
+  -F "project_id=PUT_PROJECT_UUID_HERE" `
+  -F "file=@C:\AIProjects\CMDB_CI_Support_Groups_Support_owners - Updated.xlsx"
+```
+
+Enrich tickets from Application Inventory:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/api/application-inventory/enrich-tickets" `
+  -H "Content-Type: application/json" `
+  -d "{\"project_id\":\"PUT_PROJECT_UUID_HERE\",\"replace_existing\":true}"
+```
+
+Check enrichment coverage:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/api/application-inventory/enrichment-summary?project_id=PUT_PROJECT_UUID_HERE"
+curl.exe "http://127.0.0.1:8000/api/application-inventory/unmatched-business-services?project_id=PUT_PROJECT_UUID_HERE&limit=100"
+curl.exe "http://127.0.0.1:8000/api/application-inventory/filter-values?project_id=PUT_PROJECT_UUID_HERE"
+```
+
+Ticket enrichment uses deterministic SQL `UPDATE ... FROM` statements and does not loop through all tickets in Python.
+
+Matching order:
+
+1. `tickets.business_service` to `application_inventory_items.business_service_ci_name`
+2. Remaining unmatched `tickets.application` to `application_inventory_items.business_service_ci_name`
+
+When a Business Service CI Name appears multiple times, enrichment chooses one inventory row per ticket deterministically:
+
+1. Active rows first.
+2. Prefer inventory rows whose `assignment_group` matches the ticket assignment group.
+3. Then lowest `source_row_number`.
+4. Then earliest `created_at`.
+
+Enrichment updates only denormalized inventory fields on `tickets`:
+
+- `application_inventory_id`
+- `parent_application_number`
+- `parent_application_name`
+- `business_service_ci_name`
+- `application_owner`
+- `support_lead`
+- `functional_track`
+- `ams_owner`
+- `supported_by_vendor`
+- `assignment_group_owner`
+
+It does not alter raw ticket fields such as `application`, `business_service`, `cmdb_ci`, `assignment_group`, or `normalized_payload`. Dashboard filter values now include future inventory filters such as Functional Track, AMS Owner, Supported By Vendor, Support Lead, Application Owner, Business Service CI Name, and Parent Application Name.
 
 ## Dashboard API And UI
 

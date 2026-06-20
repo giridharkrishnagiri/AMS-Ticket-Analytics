@@ -1,4 +1,5 @@
 from app.models.application_dimension import ApplicationDimension
+from app.models.application_inventory_item import ApplicationInventoryItem
 from app.models.client import Client
 from app.models.dashboard_aggregate import DashboardAggregate
 from app.models.export_job import ExportJob
@@ -14,6 +15,7 @@ from app.models.uploaded_file import UploadedFile
 __all__ = [
     "Client",
     "ApplicationDimension",
+    "ApplicationInventoryItem",
     "DashboardAggregate",
     "ExportJob",
     "IngestionJob",

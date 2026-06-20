@@ -12,6 +12,7 @@ from app.models.mixins import TimestampMixin, UuidPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.application_dimension import ApplicationDimension
+    from app.models.application_inventory_item import ApplicationInventoryItem
     from app.models.client import Client
     from app.models.dashboard_aggregate import DashboardAggregate
     from app.models.export_job import ExportJob
@@ -51,6 +52,10 @@ class Project(UuidPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
     )
     application_dimensions: Mapped[list[ApplicationDimension]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    application_inventory_items: Mapped[list[ApplicationInventoryItem]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )

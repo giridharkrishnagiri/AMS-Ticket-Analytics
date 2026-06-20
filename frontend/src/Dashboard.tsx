@@ -74,6 +74,13 @@ const emptyFilterValues: DashboardFilterValues = {
   month_keys: [],
   response_sla_names: [],
   resolution_sla_names: [],
+  functional_tracks: [],
+  ams_owners: [],
+  supported_by_vendors: [],
+  support_leads: [],
+  application_owners: [],
+  business_service_ci_names: [],
+  parent_application_names: [],
 };
 
 const emptyTechnicalFunctional: TechnicalFunctionalBreakdown = {

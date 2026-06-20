@@ -20,6 +20,13 @@ export type DashboardQuery = {
   applicationNames?: string[];
   responseSlaNames?: string[];
   resolutionSlaNames?: string[];
+  functionalTracks?: string[];
+  amsOwners?: string[];
+  supportedByVendors?: string[];
+  supportLeads?: string[];
+  applicationOwners?: string[];
+  businessServiceCiNames?: string[];
+  parentApplicationNames?: string[];
 };
 
 export type PeriodMetricRow = {
@@ -144,6 +151,13 @@ export type DashboardFilterValues = {
   month_keys: string[];
   response_sla_names: string[];
   resolution_sla_names: string[];
+  functional_tracks: string[];
+  ams_owners: string[];
+  supported_by_vendors: string[];
+  support_leads: string[];
+  application_owners: string[];
+  business_service_ci_names: string[];
+  parent_application_names: string[];
 };
 
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
@@ -179,6 +193,13 @@ function buildDashboardQuery(input: DashboardQuery): string {
   appendMulti(query, "application_name", input.applicationNames);
   appendMulti(query, "response_sla_name", input.responseSlaNames);
   appendMulti(query, "resolution_sla_name", input.resolutionSlaNames);
+  appendMulti(query, "functional_track", input.functionalTracks);
+  appendMulti(query, "ams_owner", input.amsOwners);
+  appendMulti(query, "supported_by_vendor", input.supportedByVendors);
+  appendMulti(query, "support_lead", input.supportLeads);
+  appendMulti(query, "application_owner", input.applicationOwners);
+  appendMulti(query, "business_service_ci_name", input.businessServiceCiNames);
+  appendMulti(query, "parent_application_name", input.parentApplicationNames);
 
   return query.toString();
 }

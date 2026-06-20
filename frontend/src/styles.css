@@ -381,6 +381,16 @@ h2 {
   color: #64748b;
 }
 
+.helper-text {
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.error-inline {
+  color: #b91c1c;
+}
+
 .action-row {
   display: flex;
   flex-wrap: wrap;
@@ -490,6 +500,7 @@ h2 {
   margin-top: 16px;
 }
 
+.upload-form label.checkbox-label,
 .checkbox-label {
   display: inline-flex;
   align-items: center;
@@ -499,9 +510,14 @@ h2 {
   font-weight: 800;
 }
 
+.upload-form label.checkbox-label input,
 .checkbox-label input {
-  width: auto;
-  min-height: auto;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  flex: 0 0 16px;
+  padding: 0;
+  accent-color: #0f766e;
 }
 
 .scope-note {

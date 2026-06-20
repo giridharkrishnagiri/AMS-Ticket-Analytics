@@ -53,6 +53,13 @@ class DashboardFilters:
     application_name: list[str]
     response_sla_name: list[str]
     resolution_sla_name: list[str]
+    functional_track: list[str]
+    ams_owner: list[str]
+    supported_by_vendor: list[str]
+    support_lead: list[str]
+    application_owner: list[str]
+    business_service_ci_name: list[str]
+    parent_application_name: list[str]
     start_date: date | None = None
     end_date: date | None = None
     month_key: str | None = None
@@ -180,6 +187,20 @@ def dashboard_base_conditions(filters: DashboardFilters) -> list[Any]:
         conditions.append(Ticket.response_sla_name.in_(filters.response_sla_name))
     if filters.resolution_sla_name:
         conditions.append(Ticket.resolution_sla_name.in_(filters.resolution_sla_name))
+    if filters.functional_track:
+        conditions.append(Ticket.functional_track.in_(filters.functional_track))
+    if filters.ams_owner:
+        conditions.append(Ticket.ams_owner.in_(filters.ams_owner))
+    if filters.supported_by_vendor:
+        conditions.append(Ticket.supported_by_vendor.in_(filters.supported_by_vendor))
+    if filters.support_lead:
+        conditions.append(Ticket.support_lead.in_(filters.support_lead))
+    if filters.application_owner:
+        conditions.append(Ticket.application_owner.in_(filters.application_owner))
+    if filters.business_service_ci_name:
+        conditions.append(Ticket.business_service_ci_name.in_(filters.business_service_ci_name))
+    if filters.parent_application_name:
+        conditions.append(Ticket.parent_application_name.in_(filters.parent_application_name))
     return conditions
 
 
@@ -904,5 +925,24 @@ def filter_values(db: Session, filters: DashboardFilters) -> dict[str, list[str]
             db,
             incident_only_filters(filters),
             Ticket.resolution_sla_name,
+        ),
+        "functional_tracks": distinct_values_for_column(db, filters, Ticket.functional_track),
+        "ams_owners": distinct_values_for_column(db, filters, Ticket.ams_owner),
+        "supported_by_vendors": distinct_values_for_column(
+            db,
+            filters,
+            Ticket.supported_by_vendor,
+        ),
+        "support_leads": distinct_values_for_column(db, filters, Ticket.support_lead),
+        "application_owners": distinct_values_for_column(db, filters, Ticket.application_owner),
+        "business_service_ci_names": distinct_values_for_column(
+            db,
+            filters,
+            Ticket.business_service_ci_name,
+        ),
+        "parent_application_names": distinct_values_for_column(
+            db,
+            filters,
+            Ticket.parent_application_name,
         ),
     }
