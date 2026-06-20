@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import Float, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import ApplicationDimension, Ticket
+from app.models import Ticket
 
 SECONDS_PER_DAY = 86400
 SECONDS_PER_HOUR = 3600
@@ -167,34 +167,20 @@ def dashboard_base_conditions(filters: DashboardFilters) -> list[Any]:
     if filters.application:
         conditions.append(Ticket.application.in_(filters.application))
     if filters.customer_name:
-        conditions.append(ApplicationDimension.customer_name.in_(filters.customer_name))
+        conditions.append(Ticket.customer_name.in_(filters.customer_name))
     if filters.tower_name:
-        conditions.append(ApplicationDimension.tower_name.in_(filters.tower_name))
+        conditions.append(Ticket.tower_name.in_(filters.tower_name))
     if filters.cluster_name:
-        conditions.append(ApplicationDimension.cluster_name.in_(filters.cluster_name))
+        conditions.append(Ticket.cluster_name.in_(filters.cluster_name))
     if filters.application_group_name:
-        conditions.append(
-            ApplicationDimension.application_group_name.in_(filters.application_group_name)
-        )
+        conditions.append(Ticket.application_group_name.in_(filters.application_group_name))
     if filters.application_name:
-        conditions.append(ApplicationDimension.application_name.in_(filters.application_name))
+        conditions.append(Ticket.application_name.in_(filters.application_name))
     if filters.response_sla_name:
         conditions.append(Ticket.response_sla_name.in_(filters.response_sla_name))
     if filters.resolution_sla_name:
         conditions.append(Ticket.resolution_sla_name.in_(filters.resolution_sla_name))
     return conditions
-
-
-def has_dimension_filters(filters: DashboardFilters) -> bool:
-    return any(
-        [
-            filters.customer_name,
-            filters.tower_name,
-            filters.cluster_name,
-            filters.application_group_name,
-            filters.application_name,
-        ]
-    )
 
 
 def dashboard_select(
@@ -204,8 +190,6 @@ def dashboard_select(
     join_dimensions: bool = False,
 ) -> Any:
     statement = statement.select_from(Ticket)
-    if join_dimensions or has_dimension_filters(filters):
-        statement = statement.outerjoin(Ticket.application_dimension)
     return statement.where(*dashboard_base_conditions(filters))
 
 
@@ -888,32 +872,27 @@ def filter_values(db: Session, filters: DashboardFilters) -> dict[str, list[str]
         "customers": distinct_values_for_column(
             db,
             filters,
-            ApplicationDimension.customer_name,
-            join_dimensions=True,
+            Ticket.customer_name,
         ),
         "towers": distinct_values_for_column(
             db,
             filters,
-            ApplicationDimension.tower_name,
-            join_dimensions=True,
+            Ticket.tower_name,
         ),
         "clusters": distinct_values_for_column(
             db,
             filters,
-            ApplicationDimension.cluster_name,
-            join_dimensions=True,
+            Ticket.cluster_name,
         ),
         "application_groups": distinct_values_for_column(
             db,
             filters,
-            ApplicationDimension.application_group_name,
-            join_dimensions=True,
+            Ticket.application_group_name,
         ),
         "application_names": distinct_values_for_column(
             db,
             filters,
-            ApplicationDimension.application_name,
-            join_dimensions=True,
+            Ticket.application_name,
         ),
         "month_keys": distinct_values_for_column(db, filters, Ticket.month_key),
         "response_sla_names": distinct_values_for_column(

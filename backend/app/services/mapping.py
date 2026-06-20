@@ -858,6 +858,7 @@ def build_ticket_from_raw_row(
         impact=text_or_none(normalized_values.get("impact")),
         application=text_or_none(normalized_values.get("application")),
         business_service=text_or_none(normalized_values.get("business_service")),
+        cmdb_ci=text_or_none(normalized_values.get("configuration_item")),
         assignment_group=text_or_none(normalized_values.get("assignment_group")),
         assigned_to=text_or_none(normalized_values.get("assigned_to")),
         requester=text_or_none(normalized_values.get("requester")),

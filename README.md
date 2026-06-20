@@ -574,6 +574,77 @@ AND (
 LIMIT 50;
 ```
 
+## Application Dimension Configuration
+
+The `Application Dimensions` tab configures business-friendly application hierarchy values and enriches normalized tickets for dashboard filtering.
+
+Supported dimension fields:
+
+- `customer_name`
+- `tower_name`
+- `cluster_name`
+- `application_group_name`
+- `application_name`
+- `application_alias`
+- `business_service_alias`
+- `cmdb_ci_alias`
+- `notes`
+
+The existing JSON alias columns remain available in the database for compatibility, but Prompt 10 matching uses the singular alias columns above.
+
+Application dimension endpoints:
+
+- `GET /api/application-dimensions?project_id=...`
+- `POST /api/application-dimensions`
+- `PUT /api/application-dimensions/{id}`
+- `DELETE /api/application-dimensions/{id}`
+- `POST /api/application-dimensions/bulk-upload`
+- `POST /api/application-dimensions/enrich-tickets`
+- `GET /api/application-dimensions/enrichment-summary?project_id=...`
+
+Example CSV:
+
+```csv
+customer_name,tower_name,cluster_name,application_group_name,application_name,application_alias,business_service_alias,cmdb_ci_alias,notes
+BCBSNJ,Applications Tower,Claims Cluster,Claims Applications,Sample App,Sample App,,,Test mapping
+```
+
+Upload a dimension CSV:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/api/application-dimensions/bulk-upload" `
+  -F "project_id=PUT_PROJECT_UUID_HERE" `
+  -F "file=@C:\AIProjects\application_dimensions.csv"
+```
+
+Enrich tickets:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/api/application-dimensions/enrich-tickets" `
+  -H "Content-Type: application/json" `
+  -d "{\"project_id\":\"PUT_PROJECT_UUID_HERE\",\"replace_existing\":true}"
+```
+
+Matching is deterministic, project-scoped, case-insensitive, trimmed, and active-dimension-only. Priority order:
+
+1. `tickets.application` to `application_dimensions.application_alias`
+2. `tickets.application` to `application_dimensions.application_name`
+3. `tickets.business_service` to `application_dimensions.business_service_alias`
+4. `tickets.cmdb_ci` to `application_dimensions.cmdb_ci_alias`
+5. `tickets.service_offering` to `application_dimensions.business_service_alias`
+6. `tickets.catalog_item` to `application_dimensions.application_alias`
+
+Ticket enrichment updates only:
+
+- `tickets.application_dimension_id`
+- `tickets.customer_name`
+- `tickets.tower_name`
+- `tickets.cluster_name`
+- `tickets.application_group_name`
+- `tickets.application_name`
+
+Raw ticket fields such as `application`, `business_service`, `cmdb_ci`, `service_offering`, `catalog_item`, and uploaded source data are preserved. Dashboard dimension filters use the enriched ticket columns so aggregate dashboard queries stay simple and do not require dimension joins.
+
 ## Dashboard API And UI
 
 The Dashboard tab uses compact backend aggregate APIs only. It does not request raw ticket rows or `tickets.normalized_payload`.

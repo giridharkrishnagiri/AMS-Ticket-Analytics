@@ -45,6 +45,23 @@ class Ticket(Base):
             "assignment_group",
         ),
         Index("ix_tickets_project_type_application", "project_id", "ticket_type", "application"),
+        Index("ix_tickets_project_application", "project_id", "application"),
+        Index("ix_tickets_project_business_service", "project_id", "business_service"),
+        Index("ix_tickets_project_cmdb_ci", "project_id", "cmdb_ci"),
+        Index(
+            "ix_tickets_project_application_dimension_id",
+            "project_id",
+            "application_dimension_id",
+        ),
+        Index("ix_tickets_project_customer_name", "project_id", "customer_name"),
+        Index("ix_tickets_project_tower_name", "project_id", "tower_name"),
+        Index("ix_tickets_project_cluster_name", "project_id", "cluster_name"),
+        Index(
+            "ix_tickets_project_application_group_name",
+            "project_id",
+            "application_group_name",
+        ),
+        Index("ix_tickets_project_application_name", "project_id", "application_name"),
         Index("ix_tickets_project_type_sla_breached", "project_id", "ticket_type", "sla_breached"),
         Index("ix_tickets_project_type_reopen_count", "project_id", "ticket_type", "reopen_count"),
         Index(
@@ -123,6 +140,12 @@ class Ticket(Base):
     impact: Mapped[str | None] = mapped_column(String(80), nullable=True)
     application: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     business_service: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cmdb_ci: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    customer_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tower_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cluster_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    application_group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    application_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     assignment_group: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     assigned_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
     requester: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -77,6 +77,22 @@ def test_dashboard_foundation_columns_exist() -> None:
     assert "application_name" in application_dimension_columns
 
 
+def test_application_dimension_enrichment_columns_exist() -> None:
+    ticket_columns = Base.metadata.tables["tickets"].columns.keys()
+    dimension_columns = Base.metadata.tables["application_dimensions"].columns.keys()
+
+    assert "application_alias" in dimension_columns
+    assert "business_service_alias" in dimension_columns
+    assert "cmdb_ci_alias" in dimension_columns
+    assert "notes" in dimension_columns
+    assert "cmdb_ci" in ticket_columns
+    assert "customer_name" in ticket_columns
+    assert "tower_name" in ticket_columns
+    assert "cluster_name" in ticket_columns
+    assert "application_group_name" in ticket_columns
+    assert "application_name" in ticket_columns
+
+
 def test_incident_sla_columns_exist() -> None:
     ticket_columns = Base.metadata.tables["tickets"].columns.keys()
     sla_columns = Base.metadata.tables["incident_sla_rows"].columns.keys()

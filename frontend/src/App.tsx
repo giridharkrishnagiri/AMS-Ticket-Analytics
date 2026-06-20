@@ -1,12 +1,13 @@
 import { useState } from "react";
 
+import ApplicationDimensions from "./ApplicationDimensions";
 import Dashboard from "./Dashboard";
 import HealthDashboard from "./HealthDashboard";
 import MappingWizard from "./MappingWizard";
 import SlaUpload from "./SlaUpload";
 import UploadCenter from "./UploadCenter";
 
-type AppView = "dashboard" | "health" | "mapping" | "sla" | "uploads";
+type AppView = "application-dimensions" | "dashboard" | "health" | "mapping" | "sla" | "uploads";
 
 function App() {
   const [activeView, setActiveView] = useState<AppView>("dashboard");
@@ -49,6 +50,15 @@ function App() {
               SLA Upload
             </button>
             <button
+              className={
+                activeView === "application-dimensions" ? "tab-button active" : "tab-button"
+              }
+              type="button"
+              onClick={() => setActiveView("application-dimensions")}
+            >
+              Application Dimensions
+            </button>
+            <button
               className={activeView === "health" ? "tab-button active" : "tab-button"}
               type="button"
               onClick={() => setActiveView("health")}
@@ -62,6 +72,7 @@ function App() {
         {activeView === "uploads" ? <UploadCenter /> : null}
         {activeView === "mapping" ? <MappingWizard /> : null}
         {activeView === "sla" ? <SlaUpload /> : null}
+        {activeView === "application-dimensions" ? <ApplicationDimensions /> : null}
         {activeView === "health" ? <HealthDashboard /> : null}
       </section>
     </main>
