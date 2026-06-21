@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -16,9 +17,20 @@ from app.models import IngestionJob, Project, TicketRawRow, UploadBatch, Uploade
 from app.schemas.upload import (
     IngestionJobResponse,
     RawRowsPreviewResponse,
+    UploadBatchActionRequest,
+    UploadBatchIngestMultipleResponse,
+    UploadBatchIngestResultResponse,
+    UploadBatchIngestTotalsResponse,
+    UploadBatchNormalizeMultipleResponse,
+    UploadBatchNormalizeRequest,
+    UploadBatchNormalizeResultResponse,
+    UploadBatchNormalizeTotalsResponse,
     UploadBatchResponse,
     UploadCreateResponse,
     UploadedFileResponse,
+    UploadMultipleFileResponse,
+    UploadMultipleResponse,
+    UploadMultipleTotalsResponse,
     ValidationSummaryResponse,
 )
 from app.services.ingestion import (
@@ -29,12 +41,15 @@ from app.services.ingestion import (
     ingest_uploaded_file,
     recalculate_upload_batch_status,
 )
+from app.services.mapping import MappingError, apply_mapping_to_batch
 from app.services.upload_lifecycle import (
     BATCH_STATUS_ARCHIVED,
     BATCH_STATUS_DELETED,
+    BATCH_STATUS_NORMALIZATION_FAILED,
     BATCH_STATUS_NORMALIZED,
     BATCH_STATUS_UPLOADED,
     count_normalized_tickets,
+    mark_upload_batch_normalization_failed,
     sync_legacy_normalized_status,
     utc_now,
 )
@@ -126,6 +141,196 @@ def get_existing_batch_or_404(db: Session, upload_batch_id: UUID) -> UploadBatch
             detail=f"Upload batch {upload_batch_id} was not found.",
         )
     return upload_batch
+
+
+def validate_period_metadata(
+    period_type: str,
+    month_key: str | None,
+    snapshot_date: date | None,
+) -> tuple[str, str | None, date | None]:
+    normalized_period_type = period_type.strip().upper()
+    if normalized_period_type not in {PERIOD_TYPE_MONTHLY, PERIOD_TYPE_SNAPSHOT}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload period type must be MONTHLY or SNAPSHOT.",
+        )
+
+    cleaned_month_key = (month_key or "").strip() or None
+    resolved_snapshot_date: date | None = None
+    if normalized_period_type == PERIOD_TYPE_MONTHLY:
+        if not cleaned_month_key or not MONTH_KEY_PATTERN.fullmatch(cleaned_month_key):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Month-Year is required for monthly uploads.",
+            )
+    else:
+        cleaned_month_key = None
+        resolved_snapshot_date = snapshot_date or datetime.now(UTC).date()
+
+    return normalized_period_type, cleaned_month_key, resolved_snapshot_date
+
+
+def unique_upload_batch_name(
+    db: Session,
+    project_id: UUID,
+    month_key: str | None,
+    base_batch_name: str,
+) -> str:
+    candidate = base_batch_name[:255]
+    suffix = 2
+    while db.scalar(
+        select(UploadBatch.id)
+        .where(
+            UploadBatch.project_id == project_id,
+            UploadBatch.month_key == month_key,
+            UploadBatch.batch_name == candidate,
+            UploadBatch.deleted_at.is_(None),
+            UploadBatch.status != BATCH_STATUS_DELETED,
+        )
+        .limit(1)
+    ):
+        suffix_text = f" ({suffix})"
+        candidate = f"{base_batch_name[: 255 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+    return candidate
+
+
+def build_per_file_batch_name(batch_name: str, filename: str, file_count: int) -> str:
+    cleaned_batch_name = batch_name.strip()
+    if file_count == 1:
+        return cleaned_batch_name
+
+    file_stem = Path(filename).stem.strip() or "file"
+    return f"{cleaned_batch_name} - {file_stem}"
+
+
+def duplicate_upload_warnings(
+    db: Session,
+    *,
+    project_id: UUID,
+    ticket_type: str,
+    period_type: str,
+    month_key: str | None,
+    snapshot_date: date | None,
+    filename: str,
+    size_bytes: int,
+) -> list[str]:
+    month_filter = (
+        UploadBatch.month_key.is_(None)
+        if month_key is None
+        else UploadBatch.month_key == month_key
+    )
+    snapshot_filter = (
+        UploadBatch.snapshot_date.is_(None)
+        if snapshot_date is None
+        else UploadBatch.snapshot_date == snapshot_date
+    )
+    statement = (
+        select(UploadedFile.id)
+        .join(UploadBatch, UploadBatch.id == UploadedFile.upload_batch_id)
+        .where(
+            UploadedFile.project_id == project_id,
+            UploadedFile.ticket_type == ticket_type,
+            UploadedFile.original_filename == filename,
+            UploadedFile.size_bytes == size_bytes,
+            UploadBatch.period_type == period_type,
+            month_filter,
+            snapshot_filter,
+            UploadBatch.deleted_at.is_(None),
+            UploadBatch.status != BATCH_STATUS_DELETED,
+        )
+        .limit(1)
+    )
+    if db.scalar(statement):
+        return [
+            "A file with the same name and size already exists for this project, "
+            "ticket type, and period. Upload was allowed, but verify that this is "
+            "not an accidental duplicate."
+        ]
+    return []
+
+
+async def create_single_file_upload_batch(
+    *,
+    db: Session,
+    project: Project,
+    ticket_type: str,
+    period_type: str,
+    month_key: str | None,
+    snapshot_date: date | None,
+    batch_name: str,
+    upload_file: UploadFile,
+    source_system: str | None,
+    uploaded_by: str | None,
+    description: str | None,
+) -> tuple[UploadBatch, UploadedFile, IngestionJob, list[str]]:
+    upload_batch = UploadBatch(
+        project_id=project.id,
+        month_key=month_key,
+        period_type=period_type,
+        snapshot_date=snapshot_date,
+        batch_name=batch_name,
+        source_system=source_system,
+        status=BATCH_STATUS_UPLOADED,
+        uploaded_by=uploaded_by,
+        file_count=0,
+        total_size_bytes=0,
+        description=description,
+    )
+    db.add(upload_batch)
+    db.flush()
+
+    saved_file = await save_upload_file(upload_batch.id, upload_file)
+    warnings = duplicate_upload_warnings(
+        db,
+        project_id=project.id,
+        ticket_type=ticket_type,
+        period_type=period_type,
+        month_key=month_key,
+        snapshot_date=snapshot_date,
+        filename=saved_file.original_filename,
+        size_bytes=saved_file.size_bytes,
+    )
+
+    uploaded_file = UploadedFile(
+        upload_batch_id=upload_batch.id,
+        project_id=project.id,
+        ticket_type=ticket_type,
+        original_filename=saved_file.original_filename,
+        saved_filename=saved_file.saved_filename,
+        storage_path=str(saved_file.storage_path),
+        content_type=saved_file.content_type,
+        size_bytes=saved_file.size_bytes,
+        checksum_sha256=saved_file.checksum_sha256,
+        status="STORED",
+    )
+    db.add(uploaded_file)
+    db.flush()
+
+    ingestion_job = IngestionJob(
+        upload_batch_id=upload_batch.id,
+        uploaded_file_id=uploaded_file.id,
+        job_type="FILE_INGESTION",
+        status="PENDING",
+        rows_total=0,
+        rows_processed=0,
+    )
+    db.add(ingestion_job)
+
+    upload_batch.file_count = 1
+    upload_batch.total_size_bytes = saved_file.size_bytes
+    return upload_batch, uploaded_file, ingestion_job, warnings
+
+
+def batch_file_label(db: Session, upload_batch_id: UUID) -> str | None:
+    filenames = list(
+        db.scalars(
+            select(UploadedFile.original_filename)
+            .where(UploadedFile.upload_batch_id == upload_batch_id)
+            .order_by(UploadedFile.created_at.asc())
+        )
+    )
+    return ", ".join(filenames) if filenames else None
 
 
 @router.post(
@@ -285,6 +490,350 @@ async def upload_ticket_files(
         batch=build_upload_batch_response(db, upload_batch),
         files=uploaded_files,
         ingestion_jobs=ingestion_jobs,
+    )
+
+
+@router.post(
+    "/upload-multiple",
+    response_model=UploadMultipleResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_ticket_files_as_separate_batches(
+    project_id: Annotated[UUID, Form(...)],
+    ticket_type: Annotated[str, Form(min_length=1, max_length=40)],
+    files: Annotated[list[UploadFile], File(...)],
+    db: DbSession,
+    period_type: Annotated[str, Form(max_length=40)] = PERIOD_TYPE_MONTHLY,
+    month_key: Annotated[str | None, Form(max_length=7)] = None,
+    snapshot_date: Annotated[date | None, Form()] = None,
+    batch_name: Annotated[str | None, Form(max_length=255)] = None,
+    source_system: Annotated[str | None, Form(max_length=120)] = None,
+    uploaded_by: Annotated[str | None, Form(max_length=255)] = None,
+    description: Annotated[str | None, Form()] = None,
+) -> UploadMultipleResponse:
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one CSV or XLSX file is required.",
+        )
+
+    normalized_period_type, cleaned_month_key, resolved_snapshot_date = validate_period_metadata(
+        period_type,
+        month_key,
+        snapshot_date,
+    )
+    cleaned_batch_name = (batch_name or "").strip()
+    if not cleaned_batch_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Batch name is required.",
+        )
+
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} was not found.",
+        )
+
+    normalized_ticket_type = ticket_type.strip().upper()
+    results: list[UploadMultipleFileResponse] = []
+
+    for upload_index, upload_file in enumerate(files, start=1):
+        original_filename = upload_file.filename or f"upload-{upload_index}"
+        if not is_allowed_upload_filename(upload_file.filename):
+            results.append(
+                UploadMultipleFileResponse(
+                    filename=original_filename,
+                    status="FAILED_UPLOAD",
+                    message="Only .csv and .xlsx files are supported.",
+                )
+            )
+            await upload_file.close()
+            continue
+
+        file_batch_name = unique_upload_batch_name(
+            db,
+            project.id,
+            cleaned_month_key,
+            build_per_file_batch_name(cleaned_batch_name, original_filename, len(files)),
+        )
+
+        saved_path: Path | None = None
+        try:
+            upload_batch, uploaded_file, ingestion_job, warnings = (
+                await create_single_file_upload_batch(
+                    db=db,
+                    project=project,
+                    ticket_type=normalized_ticket_type,
+                    period_type=normalized_period_type,
+                    month_key=cleaned_month_key,
+                    snapshot_date=resolved_snapshot_date,
+                    batch_name=file_batch_name,
+                    upload_file=upload_file,
+                    source_system=source_system,
+                    uploaded_by=uploaded_by,
+                    description=description,
+                )
+            )
+            saved_path = Path(uploaded_file.storage_path)
+            db.commit()
+            results.append(
+                UploadMultipleFileResponse(
+                    filename=uploaded_file.original_filename,
+                    size_bytes=uploaded_file.size_bytes,
+                    upload_batch_id=upload_batch.id,
+                    uploaded_file_id=uploaded_file.id,
+                    ingestion_job_id=ingestion_job.id,
+                    status="UPLOADED",
+                    warnings=warnings,
+                )
+            )
+        except (OSError, SQLAlchemyError) as exc:
+            db.rollback()
+            if saved_path is not None:
+                saved_path.unlink(missing_ok=True)
+            results.append(
+                UploadMultipleFileResponse(
+                    filename=original_filename,
+                    status="FAILED_UPLOAD",
+                    message=f"Upload failed: {exc}",
+                )
+            )
+        finally:
+            await upload_file.close()
+
+    files_uploaded = sum(1 for result in results if result.status == "UPLOADED")
+    files_failed = len(results) - files_uploaded
+    return UploadMultipleResponse(
+        project_id=project.id,
+        ticket_type=normalized_ticket_type,
+        period_type=normalized_period_type,
+        files=results,
+        totals=UploadMultipleTotalsResponse(
+            files_selected=len(files),
+            files_uploaded=files_uploaded,
+            files_failed=files_failed,
+        ),
+    )
+
+
+@router.post(
+    "/batches/ingest-multiple",
+    response_model=UploadBatchIngestMultipleResponse,
+)
+def ingest_upload_batches(
+    request: UploadBatchActionRequest,
+    db: DbSession,
+) -> UploadBatchIngestMultipleResponse:
+    project = db.get(Project, request.project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {request.project_id} was not found.",
+        )
+
+    results: list[UploadBatchIngestResultResponse] = []
+    seen_batch_ids: set[UUID] = set()
+    for upload_batch_id in request.upload_batch_ids:
+        if upload_batch_id in seen_batch_ids:
+            continue
+        seen_batch_ids.add(upload_batch_id)
+
+        upload_batch = db.get(UploadBatch, upload_batch_id)
+        if (
+            upload_batch is None
+            or upload_batch.project_id != request.project_id
+            or batch_is_deleted(upload_batch)
+        ):
+            results.append(
+                UploadBatchIngestResultResponse(
+                    upload_batch_id=upload_batch_id,
+                    batch_name="Unknown batch",
+                    status="FAILED",
+                    raw_rows_inserted=0,
+                    error="Upload batch was not found for the selected project.",
+                )
+            )
+            continue
+
+        uploaded_files = list(
+            db.scalars(
+                select(UploadedFile)
+                .where(UploadedFile.upload_batch_id == upload_batch_id)
+                .order_by(UploadedFile.created_at.asc())
+            )
+        )
+        batch_errors: list[str] = []
+        for uploaded_file in uploaded_files:
+            if uploaded_file.status == "INGESTED":
+                continue
+            try:
+                ingest_uploaded_file(db, uploaded_file.id)
+            except Exception as exc:
+                batch_errors.append(f"{uploaded_file.original_filename}: {exc}")
+
+        recalculate_upload_batch_status(db, upload_batch_id)
+        db.commit()
+        db.refresh(upload_batch)
+        raw_rows_inserted = get_count(
+            db,
+            select(func.count(TicketRawRow.id)).where(
+                TicketRawRow.upload_batch_id == upload_batch_id
+            ),
+        )
+        results.append(
+            UploadBatchIngestResultResponse(
+                upload_batch_id=upload_batch.id,
+                batch_name=upload_batch.batch_name,
+                filename=batch_file_label(db, upload_batch.id),
+                status="FAILED" if batch_errors else upload_batch.status,
+                raw_rows_inserted=raw_rows_inserted,
+                error="; ".join(batch_errors[:5]) if batch_errors else None,
+            )
+        )
+
+    batches_ingested = sum(
+        1 for result in results if result.status in {"INGESTED", BATCH_STATUS_NORMALIZED}
+    )
+    batches_failed = sum(1 for result in results if result.status == "FAILED")
+    return UploadBatchIngestMultipleResponse(
+        project_id=request.project_id,
+        batches=results,
+        totals=UploadBatchIngestTotalsResponse(
+            batches_requested=len(seen_batch_ids),
+            batches_ingested=batches_ingested,
+            batches_failed=batches_failed,
+            raw_rows_inserted=sum(result.raw_rows_inserted for result in results),
+        ),
+    )
+
+
+@router.post(
+    "/batches/normalize-multiple",
+    response_model=UploadBatchNormalizeMultipleResponse,
+)
+def normalize_upload_batches(
+    request: UploadBatchNormalizeRequest,
+    db: DbSession,
+) -> UploadBatchNormalizeMultipleResponse:
+    project = db.get(Project, request.project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {request.project_id} was not found.",
+        )
+
+    normalized_ticket_type = request.ticket_type.strip().upper()
+    results: list[UploadBatchNormalizeResultResponse] = []
+    seen_batch_ids: set[UUID] = set()
+
+    for upload_batch_id in request.upload_batch_ids:
+        if upload_batch_id in seen_batch_ids:
+            continue
+        seen_batch_ids.add(upload_batch_id)
+
+        upload_batch = db.get(UploadBatch, upload_batch_id)
+        if (
+            upload_batch is None
+            or upload_batch.project_id != request.project_id
+            or batch_is_deleted(upload_batch)
+        ):
+            results.append(
+                UploadBatchNormalizeResultResponse(
+                    upload_batch_id=upload_batch_id,
+                    batch_name="Unknown batch",
+                    status=BATCH_STATUS_NORMALIZATION_FAILED,
+                    raw_rows=0,
+                    in_scope_inserted=0,
+                    out_of_scope_inserted=0,
+                    failed_rows=0,
+                    errors=["Upload batch was not found for the selected project."],
+                )
+            )
+            continue
+
+        batch_ticket_type = get_batch_ticket_type(db, upload_batch_id)
+        if batch_ticket_type and batch_ticket_type != normalized_ticket_type:
+            results.append(
+                UploadBatchNormalizeResultResponse(
+                    upload_batch_id=upload_batch.id,
+                    batch_name=upload_batch.batch_name,
+                    filename=batch_file_label(db, upload_batch.id),
+                    status=BATCH_STATUS_NORMALIZATION_FAILED,
+                    raw_rows=0,
+                    in_scope_inserted=0,
+                    out_of_scope_inserted=0,
+                    failed_rows=0,
+                    errors=[
+                        f"Batch ticket type is {batch_ticket_type}, not {normalized_ticket_type}."
+                    ],
+                )
+            )
+            continue
+
+        try:
+            result = apply_mapping_to_batch(
+                db=db,
+                upload_batch_id=upload_batch.id,
+                mapping=None,
+                delete_existing=request.delete_existing,
+            )
+            results.append(
+                UploadBatchNormalizeResultResponse(
+                    upload_batch_id=upload_batch.id,
+                    batch_name=upload_batch.batch_name,
+                    filename=batch_file_label(db, upload_batch.id),
+                    status=result.status,
+                    raw_rows=result.total_raw_rows,
+                    in_scope_inserted=result.normalized_ticket_count,
+                    out_of_scope_inserted=result.out_of_scope_ticket_count,
+                    failed_rows=result.failed_row_count,
+                    warnings=result.warnings,
+                    errors=[
+                        f"Row {error.row_number}: {error.message}"
+                        for error in result.errors[:10]
+                    ],
+                )
+            )
+        except (FileNotFoundError, MappingError, SQLAlchemyError) as exc:
+            failed_batch = db.get(UploadBatch, upload_batch.id)
+            if failed_batch is not None:
+                mark_upload_batch_normalization_failed(failed_batch)
+                db.commit()
+            results.append(
+                UploadBatchNormalizeResultResponse(
+                    upload_batch_id=upload_batch.id,
+                    batch_name=upload_batch.batch_name,
+                    filename=batch_file_label(db, upload_batch.id),
+                    status=BATCH_STATUS_NORMALIZATION_FAILED,
+                    raw_rows=get_count(
+                        db,
+                        select(func.count(TicketRawRow.id)).where(
+                            TicketRawRow.upload_batch_id == upload_batch.id
+                        ),
+                    ),
+                    in_scope_inserted=0,
+                    out_of_scope_inserted=0,
+                    failed_rows=0,
+                    errors=[str(exc)],
+                )
+            )
+
+    return UploadBatchNormalizeMultipleResponse(
+        project_id=request.project_id,
+        ticket_type=normalized_ticket_type,
+        batches=results,
+        totals=UploadBatchNormalizeTotalsResponse(
+            raw_rows=sum(result.raw_rows for result in results),
+            in_scope_inserted=sum(result.in_scope_inserted for result in results),
+            out_of_scope_inserted=sum(result.out_of_scope_inserted for result in results),
+            failed_batches=sum(
+                1
+                for result in results
+                if result.status == BATCH_STATUS_NORMALIZATION_FAILED or result.failed_rows > 0
+            ),
+        ),
     )
 
 

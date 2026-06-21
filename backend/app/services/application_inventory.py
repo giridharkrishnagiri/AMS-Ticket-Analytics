@@ -12,7 +12,7 @@ from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models import ApplicationInventoryItem, Project, Ticket
+from app.models import ApplicationInventoryItem, AssessmentOutOfScopeTicket, Project, Ticket
 from app.services.ingestion import (
     CSV_ENCODING_CANDIDATES,
     INGESTION_BATCH_SIZE,
@@ -136,6 +136,20 @@ class BusinessServiceCoverage:
     unmatched_business_service_count: int
     business_service_coverage_pct: float | None
     rows: list[UnmatchedBusinessService]
+
+
+@dataclass(frozen=True)
+class ScopeSummary:
+    project_id: UUID
+    in_scope_tickets: int
+    out_of_scope_tickets: int
+    total_classified_tickets: int
+    in_scope_pct: float | None
+    out_of_scope_pct: float | None
+    distinct_in_scope_assignment_groups: int
+    distinct_out_of_scope_assignment_groups: int
+    top_out_of_scope_assignment_groups: list[ValueCount]
+    top_out_of_scope_business_services: list[ValueCount]
 
 
 def append_sample_message(messages: list[str], message: str) -> None:
@@ -464,6 +478,24 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             ams_owner=None,
             supported_by_vendor=None,
             assignment_group_owner=None,
+            derived_vendor=None,
+        )
+    )
+    db.execute(
+        update(AssessmentOutOfScopeTicket)
+        .where(AssessmentOutOfScopeTicket.project_id == project_id)
+        .values(
+            application_inventory_id=None,
+            parent_application_number=None,
+            parent_application_name=None,
+            business_service_ci_name=None,
+            application_owner=None,
+            support_lead=None,
+            functional_track=None,
+            ams_owner=None,
+            supported_by_vendor=None,
+            assignment_group_owner=None,
+            derived_vendor=None,
         )
     )
 
@@ -473,7 +505,11 @@ def update_tickets_from_inventory(
     project_id: UUID,
     *,
     ticket_column: str,
+    table_name: str = "tickets",
 ) -> int:
+    if table_name not in {"tickets", "assessment_out_of_scope_tickets"}:
+        raise ApplicationInventoryError(f"Unsupported enrichment table: {table_name}")
+
     statement = text(
         f"""
         WITH candidates AS (
@@ -508,15 +544,16 @@ def update_tickets_from_inventory(
                         i.created_at ASC,
                         i.id ASC
                 ) AS row_rank
-            FROM tickets AS t
+            FROM {table_name} AS t
             JOIN application_inventory_items AS i
               ON i.project_id = t.project_id
+             AND i.active IS NOT false
              AND nullif(btrim(t.{ticket_column}), '') IS NOT NULL
              AND lower(btrim(t.{ticket_column})) = lower(btrim(i.business_service_ci_name))
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.application_inventory_id IS NULL
         )
-        UPDATE tickets AS t
+        UPDATE {table_name} AS t
         SET
             application_inventory_id = candidates.inventory_id,
             parent_application_number = candidates.application_number_apm,
@@ -527,7 +564,8 @@ def update_tickets_from_inventory(
             functional_track = candidates.functional_track,
             ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
-            assignment_group_owner = candidates.assignment_group_owner
+            assignment_group_owner = candidates.assignment_group_owner,
+            derived_vendor = candidates.supported_by_vendor
         FROM candidates
         WHERE candidates.row_rank = 1
           AND t.id = candidates.ticket_id
@@ -715,12 +753,29 @@ def enrich_tickets_from_inventory(
         project_id,
         ticket_column="application",
     )
+    out_business_service_updates = update_tickets_from_inventory(
+        db,
+        project_id,
+        ticket_column="business_service",
+        table_name="assessment_out_of_scope_tickets",
+    )
+    out_application_updates = update_tickets_from_inventory(
+        db,
+        project_id,
+        ticket_column="application",
+        table_name="assessment_out_of_scope_tickets",
+    )
     db.commit()
 
     return build_inventory_enrichment_summary(
         db,
         project_id,
-        updated_tickets=business_service_updates + application_updates,
+        updated_tickets=(
+            business_service_updates
+            + application_updates
+            + out_business_service_updates
+            + out_application_updates
+        ),
         matched_by_business_service_count=business_service_updates,
         matched_by_application_count=application_updates,
     )
@@ -818,4 +873,77 @@ def unmatched_business_services(
         unmatched_business_service_count=unmatched_services,
         business_service_coverage_pct=calculate_rate(matched_services, distinct_ticket_services),
         rows=rows,
+    )
+
+
+def count_distinct_nonblank(db: Session, project_id: UUID, model: Any, column: Any) -> int:
+    statement = select(func.count(func.distinct(func.lower(func.btrim(column))))).where(
+        model.project_id == project_id,
+        column.is_not(None),
+        func.btrim(column) != "",
+    )
+    return int(db.scalar(statement) or 0)
+
+
+def top_out_of_scope_values(db: Session, project_id: UUID, column: Any) -> list[ValueCount]:
+    statement = (
+        select(column, func.count(AssessmentOutOfScopeTicket.id))
+        .where(
+            AssessmentOutOfScopeTicket.project_id == project_id,
+            column.is_not(None),
+            func.btrim(column) != "",
+        )
+        .group_by(column)
+        .order_by(func.count(AssessmentOutOfScopeTicket.id).desc(), column.asc())
+        .limit(TOP_UNMATCHED_LIMIT)
+    )
+    return [
+        ValueCount(value=str(value), count=int(count))
+        for value, count in db.execute(statement).all()
+        if value
+    ]
+
+
+def build_scope_summary(db: Session, project_id: UUID) -> ScopeSummary:
+    ensure_project_exists(db, project_id)
+    in_scope_tickets = count_tickets(db, project_id, matched=None)
+    out_of_scope_tickets = int(
+        db.scalar(
+            select(func.count(AssessmentOutOfScopeTicket.id)).where(
+                AssessmentOutOfScopeTicket.project_id == project_id
+            )
+        )
+        or 0
+    )
+    total_classified_tickets = in_scope_tickets + out_of_scope_tickets
+
+    return ScopeSummary(
+        project_id=project_id,
+        in_scope_tickets=in_scope_tickets,
+        out_of_scope_tickets=out_of_scope_tickets,
+        total_classified_tickets=total_classified_tickets,
+        in_scope_pct=calculate_rate(in_scope_tickets, total_classified_tickets),
+        out_of_scope_pct=calculate_rate(out_of_scope_tickets, total_classified_tickets),
+        distinct_in_scope_assignment_groups=count_distinct_nonblank(
+            db,
+            project_id,
+            Ticket,
+            Ticket.assignment_group,
+        ),
+        distinct_out_of_scope_assignment_groups=count_distinct_nonblank(
+            db,
+            project_id,
+            AssessmentOutOfScopeTicket,
+            AssessmentOutOfScopeTicket.assignment_group,
+        ),
+        top_out_of_scope_assignment_groups=top_out_of_scope_values(
+            db,
+            project_id,
+            AssessmentOutOfScopeTicket.assignment_group,
+        ),
+        top_out_of_scope_business_services=top_out_of_scope_values(
+            db,
+            project_id,
+            AssessmentOutOfScopeTicket.business_service,
+        ),
     )

@@ -83,6 +83,8 @@ class Ticket(Base):
         Index("ix_tickets_project_functional_track", "project_id", "functional_track"),
         Index("ix_tickets_project_ams_owner", "project_id", "ams_owner"),
         Index("ix_tickets_project_supported_by_vendor", "project_id", "supported_by_vendor"),
+        Index("ix_tickets_project_vendor", "project_id", "vendor"),
+        Index("ix_tickets_project_derived_vendor", "project_id", "derived_vendor"),
         Index("ix_tickets_project_type_sla_breached", "project_id", "ticket_type", "sla_breached"),
         Index("ix_tickets_project_type_reopen_count", "project_id", "ticket_type", "reopen_count"),
         Index(
@@ -191,6 +193,8 @@ class Ticket(Base):
     ams_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     supported_by_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
     assignment_group_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    derived_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     sla_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -207,6 +211,18 @@ class Ticket(Base):
     )
     response_sla_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolution_sla_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_sla_definition_name_used: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_sla_definition_name_used: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_sla_selection_source: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+    )
+    resolution_sla_selection_source: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+    )
+    response_sla_vendor_used: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_sla_vendor_used: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_sla_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

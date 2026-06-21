@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import Client, Project, Ticket
+from app.models import ApplicationInventoryItem, Client, Project, Ticket
 from app.services.mapping import apply_mapping_to_batch
 
 
@@ -26,6 +26,20 @@ def create_project_fixture():
         code=f"UPP-{unique_suffix}",
     )
     db.add(project)
+    db.flush()
+    db.add(
+        ApplicationInventoryItem(
+            project_id=project.id,
+            application_number_apm="APM-PERIOD",
+            parent_application_name="Period Parent App",
+            assignment_group="AMS Support",
+            business_service_ci_name="Lifecycle Service",
+            supported_by_vendor="HCLTech",
+            active=True,
+            source_filename="period-inventory.xlsx",
+            source_row_number=1,
+        )
+    )
     db.commit()
     return db, client.id, project.id
 
@@ -41,7 +55,11 @@ def csv_upload(filename: str = "incidents.csv") -> dict[str, tuple[str, bytes, s
     return {
         "files": (
             filename,
-            b"number,short_description,sys_created_on\nINC-SNAP-001,Open incident,2026-06-01\n",
+            (
+                b"number,short_description,assignment_group,business_service,"
+                b"sys_created_on\n"
+                b"INC-SNAP-001,Open incident,AMS Support,Lifecycle Service,2026-06-01\n"
+            ),
             "text/csv",
         )
     }
@@ -156,6 +174,8 @@ def test_snapshot_upload_ingestion_and_mapping_work_without_month_key() -> None:
             {
                 "ticket_id": "number",
                 "title": "short_description",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
                 "created_at": "sys_created_on",
             },
         )

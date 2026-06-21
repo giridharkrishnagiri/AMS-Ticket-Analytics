@@ -3,11 +3,19 @@ import { useState } from "react";
 import ApplicationInventory from "./ApplicationInventory";
 import Dashboard from "./Dashboard";
 import HealthDashboard from "./HealthDashboard";
+import Maintenance from "./Maintenance";
 import MappingWizard from "./MappingWizard";
 import SlaUpload from "./SlaUpload";
 import UploadCenter from "./UploadCenter";
 
-type AppView = "application-inventory" | "dashboard" | "health" | "mapping" | "sla" | "uploads";
+type AppView =
+  | "application-inventory"
+  | "dashboard"
+  | "health"
+  | "maintenance"
+  | "mapping"
+  | "sla"
+  | "uploads";
 
 function App() {
   const [activeView, setActiveView] = useState<AppView>("dashboard");
@@ -65,6 +73,13 @@ function App() {
             >
               Health
             </button>
+            <button
+              className={activeView === "maintenance" ? "tab-button active" : "tab-button"}
+              type="button"
+              onClick={() => setActiveView("maintenance")}
+            >
+              Maintenance
+            </button>
           </nav>
         </div>
 
@@ -74,6 +89,7 @@ function App() {
         {activeView === "sla" ? <SlaUpload /> : null}
         {activeView === "application-inventory" ? <ApplicationInventory /> : null}
         {activeView === "health" ? <HealthDashboard /> : null}
+        {activeView === "maintenance" ? <Maintenance /> : null}
       </section>
     </main>
   );

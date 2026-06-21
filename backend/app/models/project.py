@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from app.models.dashboard_aggregate import DashboardAggregate
     from app.models.export_job import ExportJob
     from app.models.incident_sla_row import IncidentSlaRow
+    from app.models.incident_sla_upload import IncidentSlaUpload
     from app.models.source_column_mapping import SourceColumnMapping
     from app.models.ticket import Ticket
     from app.models.upload_batch import UploadBatch
@@ -61,6 +62,10 @@ class Project(UuidPrimaryKeyMixin, TimestampMixin, Base):
     )
     tickets: Mapped[list[Ticket]] = relationship(back_populates="project")
     incident_sla_rows: Mapped[list[IncidentSlaRow]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    incident_sla_uploads: Mapped[list[IncidentSlaUpload]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )

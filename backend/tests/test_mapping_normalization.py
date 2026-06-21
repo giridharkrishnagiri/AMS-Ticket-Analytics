@@ -6,6 +6,7 @@ from sqlalchemy import delete, func, select
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
+    ApplicationInventoryItem,
     Client,
     IngestionJob,
     Project,
@@ -95,6 +96,9 @@ SC_TASK_SOURCE_COLUMNS = [
     "u_vendor",
 ]
 
+IN_SCOPE_ASSIGNMENT_GROUP = "AMS Support"
+IN_SCOPE_BUSINESS_SERVICE = "Mapping Service"
+
 
 def create_raw_batch_fixture(
     rows: list[dict[str, object]],
@@ -172,6 +176,42 @@ def cleanup_client(db, client_id: UUID) -> None:
     db.execute(delete(Client).where(Client.id == client_id))
     db.commit()
     db.close()
+
+
+def add_application_inventory_scope(
+    db,
+    project_id: UUID,
+    *,
+    assignment_group: str = IN_SCOPE_ASSIGNMENT_GROUP,
+    business_service: str = IN_SCOPE_BUSINESS_SERVICE,
+) -> None:
+    db.add(
+        ApplicationInventoryItem(
+            project_id=project_id,
+            application_number_apm="APM-MAPPING",
+            parent_application_name="Mapping Parent App",
+            assignment_group=assignment_group,
+            assignment_group_owner="Mapping Owner",
+            application_owner="Mapping Application Owner",
+            business_service_ci_name=business_service,
+            support_lead="Mapping Support Lead",
+            functional_track="Mapping Track",
+            ams_owner="Mapping AMS Owner",
+            supported_by_vendor="HCLTech",
+            active=True,
+            source_filename="mapping-inventory.xlsx",
+            source_row_number=1,
+        )
+    )
+    db.flush()
+
+
+def in_scope_raw(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+        "business_service": IN_SCOPE_BUSINESS_SERVICE,
+        **row,
+    }
 
 
 def add_uploaded_file_with_raw_rows(
@@ -626,7 +666,8 @@ def test_apply_mapping_normalizes_incident_rows_and_is_idempotent() -> None:
             "short_description": "Email unavailable",
             "state": "Resolved",
             "priority": "Critical",
-            "assignment_group": "AMS Support",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
             "sys_created_on": "2026-06-03 09:15:00",
             "resolved_at": "06/03/2026 10:30",
             "made_sla": "true",
@@ -635,13 +676,14 @@ def test_apply_mapping_normalizes_incident_rows_and_is_idempotent() -> None:
             "work_notes": "Restarted service",
         }
     ]
-    db, client_id, _, upload_batch_id, _, _ = create_raw_batch_fixture(rows)
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(rows)
     mapping = {
         "ticket_id": "number",
         "title": "short_description",
         "status": "state",
         "priority": "priority",
         "assignment_group": "assignment_group",
+        "business_service": "business_service",
         "created_at": "sys_created_on",
         "resolved_at": "resolved_at",
         "sla_breached": "made_sla",
@@ -649,6 +691,8 @@ def test_apply_mapping_normalizes_incident_rows_and_is_idempotent() -> None:
     }
 
     try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
         first_result = apply_mapping_to_batch(db, upload_batch_id, mapping)
         second_result = apply_mapping_to_batch(db, upload_batch_id, mapping)
 
@@ -685,6 +729,8 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
             "short_description": "Request laptop access",
             "state": "Open",
             "priority": "4 - Low",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
             "requested_for": "A User",
             "sys_created_on": "06/12/2026 13:45",
             "has_breached": "No",
@@ -692,7 +738,7 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
             "reassignment_count": "3",
         }
     ]
-    db, client_id, _, upload_batch_id, _, _ = create_raw_batch_fixture(
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
         rows,
         ticket_type="SERVICE_CATALOG_TASK",
     )
@@ -701,6 +747,8 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
         "title": "short_description",
         "status": "state",
         "priority": "priority",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
         "requester": "requested_for",
         "created_at": "sys_created_on",
         "sla_breached": "has_breached",
@@ -709,6 +757,8 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
     }
 
     try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
         result = apply_mapping_to_batch(db, upload_batch_id, mapping)
         ticket = db.scalar(select(Ticket).where(Ticket.upload_batch_id == upload_batch_id))
 
@@ -730,6 +780,8 @@ def test_scoped_apply_can_target_one_incident_batch_only() -> None:
         {
             "number": "INC300",
             "short_description": "First incident batch",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
             "sys_created_on": "2026-06-01",
             "business_stc": "86400",
             "reassignment_count": "2",
@@ -740,10 +792,12 @@ def test_scoped_apply_can_target_one_incident_batch_only() -> None:
         db,
         project_id,
         [
-            {
-                "number": "INC301",
-                "short_description": "Second incident batch",
-                "sys_created_on": "2026-07-01",
+                {
+                    "number": "INC301",
+                    "short_description": "Second incident batch",
+                    "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+                    "business_service": IN_SCOPE_BUSINESS_SERVICE,
+                    "sys_created_on": "2026-07-01",
                 "business_stc": "172800",
                 "reassignment_count": "3",
             }
@@ -754,12 +808,16 @@ def test_scoped_apply_can_target_one_incident_batch_only() -> None:
     mapping = {
         "ticket_id": "number",
         "title": "short_description",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
         "created_at": "sys_created_on",
         "business_duration_seconds": "business_stc",
         "reassignment_count": "reassignment_count",
     }
 
     try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
         result = apply_mapping_with_scope(
             db=db,
             project_id=project_id,
@@ -800,6 +858,8 @@ def test_scoped_apply_targets_only_selected_ticket_type_batches() -> None:
         {
             "number": "INC400",
             "short_description": "Incident first",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
             "sys_created_on": "2026-06-01",
             "business_stc": "86400",
             "reassignment_count": "2",
@@ -812,10 +872,12 @@ def test_scoped_apply_targets_only_selected_ticket_type_batches() -> None:
         db,
         project_id,
         [
-            {
-                "number": "INC401",
-                "short_description": "Incident second",
-                "sys_created_on": "2026-07-01",
+                {
+                    "number": "INC401",
+                    "short_description": "Incident second",
+                    "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+                    "business_service": IN_SCOPE_BUSINESS_SERVICE,
+                    "sys_created_on": "2026-07-01",
                 "business_stc": "172800",
                 "reassignment_count": "3",
             }
@@ -827,10 +889,12 @@ def test_scoped_apply_targets_only_selected_ticket_type_batches() -> None:
         db,
         project_id,
         [
-            {
-                "number": "SCTASK400",
-                "short_description": "SC Task first",
-                "sys_created_on": "2026-06-05",
+                {
+                    "number": "SCTASK400",
+                    "short_description": "SC Task first",
+                    "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+                    "business_service": IN_SCOPE_BUSINESS_SERVICE,
+                    "sys_created_on": "2026-06-05",
                 "business_duration": "259200",
                 "reassignment_count": "4",
             }
@@ -841,6 +905,8 @@ def test_scoped_apply_targets_only_selected_ticket_type_batches() -> None:
     incident_mapping = {
         "ticket_id": "number",
         "title": "short_description",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
         "created_at": "sys_created_on",
         "business_duration_seconds": "business_stc",
         "reassignment_count": "reassignment_count",
@@ -848,12 +914,16 @@ def test_scoped_apply_targets_only_selected_ticket_type_batches() -> None:
     sc_task_mapping = {
         "ticket_id": "number",
         "title": "short_description",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
         "created_at": "sys_created_on",
         "business_duration_seconds": "business_duration",
         "reassignment_count": "reassignment_count",
     }
 
     try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
         incident_result = apply_mapping_with_scope(
             db=db,
             project_id=project_id,
@@ -917,55 +987,59 @@ def test_scoped_apply_targets_only_selected_ticket_type_batches() -> None:
 
 def test_apply_mapping_handles_business_duration_variants_without_row_failures() -> None:
     rows = [
-        {
+        in_scope_raw({
             "number": "SCTASK200",
             "short_description": "Numeric duration",
             "business_duration": 12345,
             "reassignment_count": "2",
-        },
-        {
+        }),
+        in_scope_raw({
             "number": "SCTASK201",
             "short_description": "Numeric string duration",
             "business_duration": "12345",
             "reassignment_count": "3",
-        },
-        {
+        }),
+        in_scope_raw({
             "number": "SCTASK202",
             "short_description": "Comma duration",
             "business_duration": "12,345",
             "reassignment_count": "1,234",
-        },
-        {
+        }),
+        in_scope_raw({
             "number": "SCTASK203",
             "short_description": "Blank duration",
             "business_duration": "",
             "reassignment_count": "",
-        },
-        {
+        }),
+        in_scope_raw({
             "number": "SCTASK204",
             "short_description": "Invalid duration",
             "business_duration": "not a duration",
             "reassignment_count": "not a count",
-        },
-        {
+        }),
+        in_scope_raw({
             "number": "SCTASK205",
             "short_description": "Null duration",
             "business_duration": None,
             "reassignment_count": None,
-        },
+        }),
     ]
-    db, client_id, _, upload_batch_id, _, _ = create_raw_batch_fixture(
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
         rows,
         ticket_type="SERVICE_CATALOG_TASK",
     )
     mapping = {
         "ticket_id": "number",
         "title": "short_description",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
         "business_duration_seconds": "business_duration",
         "reassignment_count": "reassignment_count",
     }
 
     try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
         first_result = apply_mapping_to_batch(db, upload_batch_id, mapping)
         second_result = apply_mapping_to_batch(db, upload_batch_id, mapping)
         tickets = {

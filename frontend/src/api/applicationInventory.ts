@@ -92,6 +92,24 @@ export type ApplicationInventoryFilterValues = {
   assignment_groups: string[];
 };
 
+export type ScopeSummaryValueCount = {
+  value: string;
+  count: number;
+};
+
+export type ScopeSummary = {
+  project_id: string;
+  in_scope_tickets: number;
+  out_of_scope_tickets: number;
+  total_classified_tickets: number;
+  in_scope_pct: number | null;
+  out_of_scope_pct: number | null;
+  distinct_in_scope_assignment_groups: number;
+  distinct_out_of_scope_assignment_groups: number;
+  top_out_of_scope_assignment_groups: ScopeSummaryValueCount[];
+  top_out_of_scope_business_services: ScopeSummaryValueCount[];
+};
+
 export function listApplicationInventory(projectId: string): Promise<ApplicationInventoryItem[]> {
   const query = new URLSearchParams({ project_id: projectId.trim() });
   return requestJson<ApplicationInventoryItem[]>(`/application-inventory?${query.toString()}`);
@@ -157,4 +175,9 @@ export function getApplicationInventoryFilterValues(
   return requestJson<ApplicationInventoryFilterValues>(
     `/application-inventory/filter-values?${query.toString()}`
   );
+}
+
+export function getScopeSummary(projectId: string): Promise<ScopeSummary> {
+  const query = new URLSearchParams({ project_id: projectId.trim() });
+  return requestJson<ScopeSummary>(`/application-inventory/scope-summary?${query.toString()}`);
 }

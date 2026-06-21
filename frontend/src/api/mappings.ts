@@ -44,6 +44,9 @@ export type ApplyMappingResponse = {
   status: string | null;
   total_raw_rows: number;
   normalized_ticket_count: number;
+  out_of_scope_ticket_count: number;
+  blank_assignment_group_count: number;
+  assignment_group_not_in_inventory_count: number;
   failed_row_count: number;
   warnings: string[];
   errors: NormalizationErrorSample[];
@@ -62,6 +65,9 @@ export type ScopedApplyMappingResponse = {
   batch_results: BatchApplyMappingResult[];
   total_raw_rows: number;
   normalized_ticket_count: number;
+  out_of_scope_ticket_count: number;
+  blank_assignment_group_count: number;
+  assignment_group_not_in_inventory_count: number;
   failed_row_count: number;
   warnings: string[];
   errors: NormalizationErrorSample[];

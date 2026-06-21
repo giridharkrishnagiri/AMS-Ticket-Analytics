@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UploadedFileResponse(BaseModel):
@@ -18,6 +18,7 @@ class UploadedFileResponse(BaseModel):
     size_bytes: int
     checksum_sha256: str | None
     status: str
+    error_message: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -70,6 +71,92 @@ class UploadCreateResponse(BaseModel):
     batch: UploadBatchResponse
     files: list[UploadedFileResponse]
     ingestion_jobs: list[IngestionJobResponse]
+
+
+class UploadMultipleFileResponse(BaseModel):
+    filename: str
+    size_bytes: int | None = None
+    upload_batch_id: UUID | None = None
+    uploaded_file_id: UUID | None = None
+    ingestion_job_id: UUID | None = None
+    status: str
+    message: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class UploadMultipleTotalsResponse(BaseModel):
+    files_selected: int
+    files_uploaded: int
+    files_failed: int
+
+
+class UploadMultipleResponse(BaseModel):
+    project_id: UUID
+    ticket_type: str
+    period_type: str
+    files: list[UploadMultipleFileResponse]
+    totals: UploadMultipleTotalsResponse
+
+
+class UploadBatchActionRequest(BaseModel):
+    project_id: UUID
+    upload_batch_ids: list[UUID]
+
+
+class UploadBatchIngestResultResponse(BaseModel):
+    upload_batch_id: UUID
+    batch_name: str
+    filename: str | None = None
+    status: str
+    raw_rows_inserted: int
+    error: str | None = None
+
+
+class UploadBatchIngestTotalsResponse(BaseModel):
+    batches_requested: int
+    batches_ingested: int
+    batches_failed: int
+    raw_rows_inserted: int
+
+
+class UploadBatchIngestMultipleResponse(BaseModel):
+    project_id: UUID
+    batches: list[UploadBatchIngestResultResponse]
+    totals: UploadBatchIngestTotalsResponse
+
+
+class UploadBatchNormalizeRequest(BaseModel):
+    project_id: UUID
+    ticket_type: str
+    upload_batch_ids: list[UUID]
+    delete_existing: bool = True
+
+
+class UploadBatchNormalizeResultResponse(BaseModel):
+    upload_batch_id: UUID
+    batch_name: str
+    filename: str | None = None
+    status: str
+    raw_rows: int
+    in_scope_inserted: int
+    out_of_scope_inserted: int
+    failed_rows: int
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class UploadBatchNormalizeTotalsResponse(BaseModel):
+    raw_rows: int
+    in_scope_inserted: int
+    out_of_scope_inserted: int
+    failed_batches: int
+
+
+class UploadBatchNormalizeMultipleResponse(BaseModel):
+    project_id: UUID
+    ticket_type: str
+    batches: list[UploadBatchNormalizeResultResponse]
+    totals: UploadBatchNormalizeTotalsResponse
 
 
 class RawRowPreviewItem(BaseModel):

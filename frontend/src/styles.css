@@ -496,6 +496,12 @@ h2 {
   margin-top: 18px;
 }
 
+.checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+
 .mapping-table-wrap {
   margin-top: 16px;
 }

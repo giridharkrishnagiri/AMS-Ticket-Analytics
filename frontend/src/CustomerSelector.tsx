@@ -6,12 +6,14 @@ import type { ProjectOption } from "./api/projects";
 type CustomerSelectorProps = {
   projectId: string;
   onProjectIdChange: (projectId: string) => void;
+  onProjectChange?: (project: ProjectOption | null) => void;
   label?: string;
 };
 
 function CustomerSelector({
   projectId,
   onProjectIdChange,
+  onProjectChange,
   label = "Customer",
 }: CustomerSelectorProps) {
   const [projects, setProjects] = useState<ProjectOption[]>([]);
@@ -53,6 +55,10 @@ function CustomerSelector({
     () => projects.find((project) => project.id === projectId),
     [projectId, projects]
   );
+
+  useEffect(() => {
+    onProjectChange?.(selectedProject ?? null);
+  }, [onProjectChange, selectedProject]);
 
   return (
     <label>

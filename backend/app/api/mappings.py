@@ -196,6 +196,11 @@ def apply_mapping(
         status=result.status,
         total_raw_rows=result.total_raw_rows,
         normalized_ticket_count=result.normalized_ticket_count,
+        out_of_scope_ticket_count=result.out_of_scope_ticket_count,
+        blank_assignment_group_count=result.blank_assignment_group_count,
+        assignment_group_not_in_inventory_count=(
+            result.assignment_group_not_in_inventory_count
+        ),
         failed_row_count=result.failed_row_count,
         warnings=result.warnings,
         errors=result.errors,
@@ -235,6 +240,11 @@ def apply_mapping_for_scope(
         batch_results=result.batch_results,
         total_raw_rows=result.total_raw_rows,
         normalized_ticket_count=result.normalized_ticket_count,
+        out_of_scope_ticket_count=result.out_of_scope_ticket_count,
+        blank_assignment_group_count=result.blank_assignment_group_count,
+        assignment_group_not_in_inventory_count=(
+            result.assignment_group_not_in_inventory_count
+        ),
         failed_row_count=result.failed_row_count,
         warnings=result.warnings,
         errors=result.errors,

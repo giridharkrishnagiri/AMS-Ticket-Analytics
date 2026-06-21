@@ -5,11 +5,20 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, event, select
+from sqlalchemy import delete, event, func, select
 
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import Client, IncidentSlaRow, Project, Ticket, UploadBatch, UploadedFile
+from app.models import (
+    AssessmentOutOfScopeTicket,
+    Client,
+    IncidentSlaRow,
+    IncidentSlaUpload,
+    Project,
+    Ticket,
+    UploadBatch,
+    UploadedFile,
+)
 from app.services import sla as sla_service
 
 
@@ -70,6 +79,8 @@ def add_ticket(
     ticket_number: str,
     ticket_type: str = "INCIDENT",
     sla_breached: bool | None = None,
+    vendor: str | None = None,
+    derived_vendor: str | None = None,
 ) -> Ticket:
     ticket = Ticket(
         project_id=project_id,
@@ -83,8 +94,41 @@ def add_ticket(
         state="Closed",
         priority="P3",
         sla_breached=sla_breached,
+        vendor=vendor,
+        derived_vendor=derived_vendor,
         reopen_count=0,
         normalized_payload={"raw_payload_json": {"number": ticket_number}},
+    )
+    db.add(ticket)
+    return ticket
+
+
+def add_out_of_scope_ticket(
+    db,
+    project_id: UUID,
+    upload_batch_id: UUID,
+    ticket_number: str,
+    *,
+    vendor: str | None = None,
+    derived_vendor: str | None = None,
+) -> AssessmentOutOfScopeTicket:
+    ticket = AssessmentOutOfScopeTicket(
+        project_id=project_id,
+        upload_batch_id=upload_batch_id,
+        ticket_number=ticket_number,
+        ticket_type="INCIDENT",
+        month_key="2026-06",
+        created_at=datetime(2026, 6, 1, tzinfo=UTC),
+        short_description=f"{ticket_number} title",
+        state="Closed",
+        priority="P3",
+        assignment_group="Out Group",
+        application="Claims Service",
+        business_service="Claims Service",
+        vendor=vendor,
+        derived_vendor=derived_vendor,
+        reopen_count=0,
+        out_of_scope_reason="assignment_group_not_in_application_inventory",
     )
     db.add(ticket)
     return ticket
@@ -97,8 +141,8 @@ def add_sla_row(
     target: str,
     sla_name: str,
     *,
-    breached: bool,
-    business_seconds: int,
+    breached: bool = False,
+    business_seconds: int = 3600,
     row_number: int,
     stage: str = "Completed",
 ) -> IncidentSlaRow:
@@ -125,6 +169,18 @@ def add_sla_row(
     )
     db.add(sla_row)
     return sla_row
+
+
+def sla_csv(rows: list[str]) -> str:
+    return "\n".join(
+        [
+            "inc_number,inc_priority,taskslatable_stage,inc_assignment_group.name,"
+            "taskslatable_duration,taskslatable_business_duration,"
+            "taskslatable_has_breached,taskslatable_sla.sys_name,"
+            "taskslatable_sla.name,taskslatable_sla.type,taskslatable_sla.target",
+            *rows,
+        ]
+    )
 
 
 def test_incident_sla_upload_parses_rows_and_summary_is_compact() -> None:
@@ -207,12 +263,332 @@ def test_incident_sla_upload_parses_rows_and_summary_is_compact() -> None:
         cleanup_client(db, client_id)
 
 
+def test_incident_sla_upload_skips_duplicate_rows_and_keeps_history() -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_sla_project()
+    try:
+        csv_payload = sla_csv(
+            [
+                "INC-DUP-1,P3,Completed,AMS,120,90,false,ACC-P3,"
+                "Accenture-Gold Response P3-1hr,SLA,Response",
+                "INC-DUP-2,P3,Completed,AMS,3600,1800,true,DEF-P3,"
+                "Default_Standard-Resolution-P3-8hr,SLA,Resolution",
+            ]
+        )
+
+        with TestClient(app) as client:
+            first_response = client.post(
+                "/api/sla/incidents/upload",
+                data={"project_id": str(project_id)},
+                files={"file": ("incident_sla.csv", csv_payload.encode("utf-8"), "text/csv")},
+            )
+            second_response = client.post(
+                "/api/sla/incidents/upload",
+                data={"project_id": str(project_id)},
+                files={"file": ("incident_sla.csv", csv_payload.encode("utf-8"), "text/csv")},
+            )
+            history_response = client.get(
+                "/api/sla/incidents/uploads",
+                params={"project_id": str(project_id)},
+            )
+
+        assert first_response.status_code == 201
+        first_payload = first_response.json()
+        assert first_payload["inserted_rows"] == 2
+        assert first_payload["duplicate_rows_skipped"] == 0
+        assert first_payload["upload_id"] is not None
+
+        assert second_response.status_code == 201
+        second_payload = second_response.json()
+        assert second_payload["total_rows"] == 2
+        assert second_payload["inserted_rows"] == 0
+        assert second_payload["duplicate_rows_skipped"] == 2
+        assert second_payload["failed_rows"] == 0
+
+        assert db.scalar(
+            select(IncidentSlaRow).where(
+                IncidentSlaRow.project_id == project_id,
+                IncidentSlaRow.row_fingerprint.is_(None),
+            )
+        ) is None
+        rows = list(
+            db.scalars(select(IncidentSlaRow).where(IncidentSlaRow.project_id == project_id))
+        )
+        assert len(rows) == 2
+
+        assert history_response.status_code == 200
+        history = history_response.json()
+        assert len(history) == 2
+        assert sum(row["inserted_rows"] for row in history) == 2
+        assert sum(row["duplicate_rows_skipped"] for row in history) == 2
+
+        upload_rows = list(
+            db.scalars(
+                select(IncidentSlaUpload).where(IncidentSlaUpload.project_id == project_id)
+            )
+        )
+        assert len(upload_rows) == 2
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_incident_sla_multi_file_upload_deduplicates_overlapping_rows() -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_sla_project()
+    try:
+        shared_row = (
+            "INC-MULTI-2,P3,Completed,AMS,3600,1800,true,DEF-P3,"
+            "Default_Standard-Resolution-P3-8hr,SLA,Resolution"
+        )
+        first_payload = sla_csv(
+            [
+                "INC-MULTI-1,P3,Completed,AMS,120,90,false,ACC-P3,"
+                "Accenture-Gold Response P3-1hr,SLA,Response",
+                shared_row,
+            ]
+        )
+        second_payload = sla_csv(
+            [
+                shared_row,
+                "INC-MULTI-3,P4,Completed,AMS,240,120,false,DEF-P4,"
+                "Default_Standard-Response-P4-4hr,SLA,Response",
+            ]
+        )
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/sla/incidents/upload-multiple",
+                data={"project_id": str(project_id)},
+                files=[
+                    ("files", ("sla_part_1.csv", first_payload.encode("utf-8"), "text/csv")),
+                    ("files", ("sla_part_2.csv", second_payload.encode("utf-8"), "text/csv")),
+                ],
+            )
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["totals"] == {
+            "total_files": 2,
+            "total_rows_read": 4,
+            "inserted_rows": 3,
+            "duplicate_rows_skipped": 1,
+            "error_rows": 0,
+        }
+        assert payload["files"][0]["inserted_rows"] == 2
+        assert payload["files"][1]["inserted_rows"] == 1
+        assert payload["files"][1]["duplicate_rows_skipped"] == 1
+        assert (
+            db.scalar(
+                select(func.count(IncidentSlaRow.id)).where(
+                    IncidentSlaRow.project_id == project_id
+                )
+            )
+            == 3
+        )
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_incident_sla_upload_backfills_existing_fingerprints_before_deduplication() -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_sla_project()
+    try:
+        raw_data = {
+            "inc_number": "INC-OLD-FINGERPRINT",
+            "inc_priority": "P3",
+            "taskslatable_stage": "Completed",
+            "inc_assignment_group.name": "AMS",
+            "taskslatable_duration": "120",
+            "taskslatable_business_duration": "90",
+            "taskslatable_has_breached": "false",
+            "taskslatable_sla.sys_name": "ACC-P3",
+            "taskslatable_sla.name": "Accenture-Gold Response P3-1hr",
+            "taskslatable_sla.type": "SLA",
+            "taskslatable_sla.target": "Response",
+        }
+        db.add(
+            IncidentSlaRow(
+                project_id=project_id,
+                uploaded_file_name="legacy_sla.csv",
+                source_row_number=2,
+                inc_number="INC-OLD-FINGERPRINT",
+                inc_priority="P3",
+                taskslatable_stage="Completed",
+                assignment_group_name="AMS",
+                taskslatable_duration_seconds=120,
+                taskslatable_business_duration_seconds=90,
+                taskslatable_has_breached=False,
+                taskslatable_sla_sys_name="ACC-P3",
+                taskslatable_sla_name="Accenture-Gold Response P3-1hr",
+                taskslatable_sla_type="SLA",
+                taskslatable_sla_target="Response",
+                raw_data=raw_data,
+            )
+        )
+        db.commit()
+
+        csv_payload = sla_csv(
+            [
+                "INC-OLD-FINGERPRINT,P3,Completed,AMS,120,90,false,ACC-P3,"
+                "Accenture-Gold Response P3-1hr,SLA,Response",
+            ]
+        )
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/sla/incidents/upload",
+                data={"project_id": str(project_id)},
+                files={"file": ("incident_sla.csv", csv_payload.encode("utf-8"), "text/csv")},
+            )
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["inserted_rows"] == 0
+        assert payload["duplicate_rows_skipped"] == 1
+        assert (
+            db.scalar(
+                select(func.count(IncidentSlaRow.id)).where(
+                    IncidentSlaRow.project_id == project_id
+                )
+            )
+            == 1
+        )
+        assert db.scalar(
+            select(IncidentSlaRow.row_fingerprint).where(
+                IncidentSlaRow.project_id == project_id
+            )
+        )
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_incident_sla_duplicate_check_is_project_scoped() -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_sla_project()
+    other_db, other_client_id, other_project_id, _other_batch_id, _other_file_id = (
+        create_sla_project()
+    )
+    try:
+        csv_payload = sla_csv(
+            [
+                "INC-PROJECT-SCOPE,P3,Completed,AMS,120,90,false,ACC-P3,"
+                "Accenture-Gold Response P3-1hr,SLA,Response",
+            ]
+        )
+
+        with TestClient(app) as client:
+            first_response = client.post(
+                "/api/sla/incidents/upload",
+                data={"project_id": str(project_id)},
+                files={"file": ("incident_sla.csv", csv_payload.encode("utf-8"), "text/csv")},
+            )
+            other_response = client.post(
+                "/api/sla/incidents/upload",
+                data={"project_id": str(other_project_id)},
+                files={"file": ("incident_sla.csv", csv_payload.encode("utf-8"), "text/csv")},
+            )
+
+        assert first_response.status_code == 201
+        assert first_response.json()["inserted_rows"] == 1
+        assert other_response.status_code == 201
+        assert other_response.json()["inserted_rows"] == 1
+        assert other_response.json()["duplicate_rows_skipped"] == 0
+    finally:
+        cleanup_client(db, client_id)
+        cleanup_client(other_db, other_client_id)
+
+
+def test_incident_sla_deduplicate_existing_rows_keeps_earliest_per_project() -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_sla_project()
+    other_db, other_client_id, other_project_id, _other_batch_id, _other_file_id = (
+        create_sla_project()
+    )
+    try:
+        add_sla_row(
+            db,
+            project_id,
+            "INC-DEDUP",
+            "Response",
+            "Default Response SLA - P3",
+            row_number=1,
+        )
+        add_sla_row(
+            db,
+            project_id,
+            "INC-DEDUP",
+            "Response",
+            "Default Response SLA - P3",
+            row_number=2,
+        )
+        add_sla_row(
+            other_db,
+            other_project_id,
+            "INC-DEDUP",
+            "Response",
+            "Default Response SLA - P3",
+            row_number=1,
+        )
+        add_sla_row(
+            other_db,
+            other_project_id,
+            "INC-DEDUP",
+            "Response",
+            "Default Response SLA - P3",
+            row_number=2,
+        )
+        db.commit()
+        other_db.commit()
+
+        with TestClient(app) as client:
+            wrong_response = client.post(
+                "/api/sla/deduplicate",
+                json={"project_id": str(project_id), "confirmation": "remove"},
+            )
+            ok_response = client.post(
+                "/api/sla/deduplicate",
+                json={
+                    "project_id": str(project_id),
+                    "confirmation": "DEDUPLICATE SLA ROWS",
+                },
+            )
+
+        assert wrong_response.status_code == 400
+        assert ok_response.status_code == 200
+        payload = ok_response.json()
+        assert payload["duplicate_groups_found"] == 1
+        assert payload["duplicate_rows_deleted"] == 1
+        assert payload["remaining_sla_rows"] == 1
+        assert (
+            db.scalar(
+                select(func.count(IncidentSlaRow.id)).where(
+                    IncidentSlaRow.project_id == project_id
+                )
+            )
+            == 1
+        )
+        assert (
+            other_db.scalar(
+                select(func.count(IncidentSlaRow.id)).where(
+                    IncidentSlaRow.project_id == other_project_id
+                )
+            )
+            == 2
+        )
+    finally:
+        cleanup_client(db, client_id)
+        cleanup_client(other_db, other_client_id)
+
+
 def test_incident_sla_enrichment_prefers_accenture_and_preserves_legacy_sla() -> None:
     db, client_id, project_id, batch_id, file_id = create_sla_project()
     try:
-        add_ticket(db, project_id, batch_id, file_id, "INC-A", sla_breached=True)
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-A",
+            sla_breached=True,
+            vendor="Accenture",
+        )
         add_ticket(db, project_id, batch_id, file_id, "INC-B")
-        add_ticket(db, project_id, batch_id, file_id, "INC-C")
+        add_ticket(db, project_id, batch_id, file_id, "INC-C", vendor="Accenture")
         sc_task = add_ticket(
             db,
             project_id,

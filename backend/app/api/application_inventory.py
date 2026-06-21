@@ -16,6 +16,8 @@ from app.schemas.application_inventory import (
     ApplicationInventoryItemResponse,
     ApplicationInventoryItemUpdateRequest,
     ApplicationInventoryUploadResponse,
+    ScopeSummaryResponse,
+    ScopeSummaryValueCountResponse,
     UnmatchedBusinessServiceResponse,
     UnmatchedBusinessServicesResponse,
     ValueCountResponse,
@@ -25,7 +27,9 @@ from app.services.application_inventory import (
     BusinessServiceCoverage,
     InventoryEnrichmentSummary,
     InventoryUploadResult,
+    ScopeSummary,
     build_inventory_enrichment_summary,
+    build_scope_summary,
     deactivate_inventory_item,
     enrich_tickets_from_inventory,
     inventory_filter_values,
@@ -132,6 +136,29 @@ def coverage_response(coverage: BusinessServiceCoverage) -> UnmatchedBusinessSer
     )
 
 
+def scope_summary_response(summary: ScopeSummary) -> ScopeSummaryResponse:
+    return ScopeSummaryResponse(
+        project_id=summary.project_id,
+        in_scope_tickets=summary.in_scope_tickets,
+        out_of_scope_tickets=summary.out_of_scope_tickets,
+        total_classified_tickets=summary.total_classified_tickets,
+        in_scope_pct=summary.in_scope_pct,
+        out_of_scope_pct=summary.out_of_scope_pct,
+        distinct_in_scope_assignment_groups=summary.distinct_in_scope_assignment_groups,
+        distinct_out_of_scope_assignment_groups=(
+            summary.distinct_out_of_scope_assignment_groups
+        ),
+        top_out_of_scope_assignment_groups=[
+            ScopeSummaryValueCountResponse(value=row.value, count=row.count)
+            for row in summary.top_out_of_scope_assignment_groups
+        ],
+        top_out_of_scope_business_services=[
+            ScopeSummaryValueCountResponse(value=row.value, count=row.count)
+            for row in summary.top_out_of_scope_business_services
+        ],
+    )
+
+
 @router.get("", response_model=list[ApplicationInventoryItemResponse])
 def get_application_inventory(
     project_id: Annotated[UUID, Query(...)],
@@ -229,6 +256,18 @@ def get_application_inventory_filter_values(
     except (FileNotFoundError, ApplicationInventoryError) as exc:
         raise_inventory_http_error(exc)
     return {}
+
+
+@router.get("/scope-summary", response_model=ScopeSummaryResponse)
+def get_application_inventory_scope_summary(
+    project_id: Annotated[UUID, Query(...)],
+    db: DbSession,
+) -> ScopeSummaryResponse:
+    try:
+        summary = build_scope_summary(db, project_id)
+    except (FileNotFoundError, ApplicationInventoryError) as exc:
+        raise_inventory_http_error(exc)
+    return scope_summary_response(summary)
 
 
 @router.put("/{item_id}", response_model=ApplicationInventoryItemResponse)

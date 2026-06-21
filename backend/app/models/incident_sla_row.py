@@ -20,6 +20,7 @@ class IncidentSlaRow(UuidPrimaryKeyMixin, Base):
     __tablename__ = "incident_sla_rows"
     __table_args__ = (
         Index("ix_incident_sla_rows_project_inc_number", "project_id", "inc_number"),
+        Index("ix_incident_sla_rows_project_fingerprint", "project_id", "row_fingerprint"),
         Index(
             "ix_incident_sla_rows_project_inc_target",
             "project_id",
@@ -55,6 +56,7 @@ class IncidentSlaRow(UuidPrimaryKeyMixin, Base):
     taskslatable_sla_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     taskslatable_sla_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     taskslatable_sla_target: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

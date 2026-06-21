@@ -119,3 +119,21 @@ class ApplicationInventoryFilterValuesResponse(BaseModel):
     parent_application_names: list[str]
     business_service_ci_names: list[str]
     assignment_groups: list[str]
+
+
+class ScopeSummaryValueCountResponse(BaseModel):
+    value: str
+    count: int
+
+
+class ScopeSummaryResponse(BaseModel):
+    project_id: UUID
+    in_scope_tickets: int
+    out_of_scope_tickets: int
+    total_classified_tickets: int
+    in_scope_pct: float | None
+    out_of_scope_pct: float | None
+    distinct_in_scope_assignment_groups: int
+    distinct_out_of_scope_assignment_groups: int
+    top_out_of_scope_assignment_groups: list[ScopeSummaryValueCountResponse]
+    top_out_of_scope_business_services: list[ScopeSummaryValueCountResponse]

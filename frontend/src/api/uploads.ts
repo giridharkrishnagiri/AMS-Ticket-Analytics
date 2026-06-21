@@ -38,6 +38,7 @@ export type UploadedFile = {
   size_bytes: number;
   checksum_sha256: string | null;
   status: string;
+  error_message: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -62,6 +63,74 @@ export type UploadResponse = {
   batch: UploadBatch;
   files: UploadedFile[];
   ingestion_jobs: IngestionJob[];
+};
+
+export type UploadMultipleFileResult = {
+  filename: string;
+  size_bytes: number | null;
+  upload_batch_id: string | null;
+  uploaded_file_id: string | null;
+  ingestion_job_id: string | null;
+  status: string;
+  message: string | null;
+  warnings: string[];
+};
+
+export type UploadMultipleResponse = {
+  project_id: string;
+  ticket_type: string;
+  period_type: string;
+  files: UploadMultipleFileResult[];
+  totals: {
+    files_selected: number;
+    files_uploaded: number;
+    files_failed: number;
+  };
+};
+
+export type UploadBatchIngestResult = {
+  upload_batch_id: string;
+  batch_name: string;
+  filename: string | null;
+  status: string;
+  raw_rows_inserted: number;
+  error: string | null;
+};
+
+export type UploadBatchIngestMultipleResponse = {
+  project_id: string;
+  batches: UploadBatchIngestResult[];
+  totals: {
+    batches_requested: number;
+    batches_ingested: number;
+    batches_failed: number;
+    raw_rows_inserted: number;
+  };
+};
+
+export type UploadBatchNormalizeResult = {
+  upload_batch_id: string;
+  batch_name: string;
+  filename: string | null;
+  status: string;
+  raw_rows: number;
+  in_scope_inserted: number;
+  out_of_scope_inserted: number;
+  failed_rows: number;
+  warnings: string[];
+  errors: string[];
+};
+
+export type UploadBatchNormalizeMultipleResponse = {
+  project_id: string;
+  ticket_type: string;
+  batches: UploadBatchNormalizeResult[];
+  totals: {
+    raw_rows: number;
+    in_scope_inserted: number;
+    out_of_scope_inserted: number;
+    failed_batches: number;
+  };
 };
 
 export type RawRowPreviewItem = {
@@ -139,6 +208,34 @@ export async function uploadTicketFiles(input: UploadTicketFilesInput): Promise<
   });
 }
 
+export async function uploadTicketFilesMultiple(
+  input: UploadTicketFilesInput
+): Promise<UploadMultipleResponse> {
+  const formData = new FormData();
+  formData.append("project_id", input.projectId);
+  formData.append("ticket_type", input.ticketType);
+  formData.append("period_type", input.periodType);
+
+  if (input.monthKey?.trim()) {
+    formData.append("month_key", input.monthKey.trim());
+  }
+
+  if (input.snapshotDate?.trim()) {
+    formData.append("snapshot_date", input.snapshotDate.trim());
+  }
+
+  formData.append("batch_name", input.batchName.trim());
+
+  for (const file of input.files) {
+    formData.append("files", file);
+  }
+
+  return requestJson<UploadMultipleResponse>("/uploads/upload-multiple", {
+    method: "POST",
+    body: formData,
+  });
+}
+
 export function listUploadBatches(
   projectId?: string,
   view: UploadBatchView = "all"
@@ -170,6 +267,45 @@ export function ingestUploadedFile(uploadedFileId: string): Promise<IngestionJob
   return requestJson<IngestionJob>(`/uploads/files/${uploadedFileId}/ingest`, {
     method: "POST",
   });
+}
+
+export function ingestUploadBatches(
+  projectId: string,
+  uploadBatchIds: string[]
+): Promise<UploadBatchIngestMultipleResponse> {
+  return requestJson<UploadBatchIngestMultipleResponse>("/uploads/batches/ingest-multiple", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      project_id: projectId,
+      upload_batch_ids: uploadBatchIds,
+    }),
+  });
+}
+
+export function normalizeUploadBatches(
+  projectId: string,
+  ticketType: string,
+  uploadBatchIds: string[],
+  deleteExisting = true
+): Promise<UploadBatchNormalizeMultipleResponse> {
+  return requestJson<UploadBatchNormalizeMultipleResponse>(
+    "/uploads/batches/normalize-multiple",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project_id: projectId,
+        ticket_type: ticketType,
+        upload_batch_ids: uploadBatchIds,
+        delete_existing: deleteExisting,
+      }),
+    }
+  );
 }
 
 export function getIngestionJob(ingestionJobId: string): Promise<IngestionJob> {

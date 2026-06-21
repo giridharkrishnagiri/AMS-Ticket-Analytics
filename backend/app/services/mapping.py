@@ -11,7 +11,16 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models import Project, SourceColumnMapping, Ticket, TicketRawRow, UploadBatch, UploadedFile
+from app.models import (
+    ApplicationInventoryItem,
+    AssessmentOutOfScopeTicket,
+    Project,
+    SourceColumnMapping,
+    Ticket,
+    TicketRawRow,
+    UploadBatch,
+    UploadedFile,
+)
 from app.services.ingestion import INGESTION_BATCH_SIZE, normalize_source_column_name
 from app.services.upload_lifecycle import (
     BATCH_STATUS_DELETED,
@@ -57,6 +66,7 @@ NORMALIZED_FIELDS = (
     "reassignment_count",
     "resolution_code",
     "resolution_notes",
+    "vendor",
     "source_system",
     "month_key",
 )
@@ -127,6 +137,7 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "reassignment_count": ("reassignment_count", "reassignments"),
     "resolution_code": ("resolution_code", "close_code", "closure_code"),
     "resolution_notes": ("resolution_notes", "close_notes", "close_note", "resolution"),
+    "vendor": ("vendor", "scr_vendor", "u_vendor"),
     "source_system": ("source_system", "source", "system"),
     "month_key": ("month_key", "month", "period"),
 }
@@ -168,6 +179,7 @@ BUILT_IN_DEFAULT_MAPPINGS: dict[str, dict[str, str]] = {
         "business_duration_seconds": "business_stc",
         "resolution_code": "close_code",
         "resolution_notes": "close_notes",
+        "vendor": "scr_vendor",
     },
     "SERVICE_CATALOG_TASK": {
         "ticket_id": "number",
@@ -189,6 +201,7 @@ BUILT_IN_DEFAULT_MAPPINGS: dict[str, dict[str, str]] = {
         "resolution_notes": "close_notes",
         "business_duration_seconds": "business_duration",
         "reassignment_count": "reassignment_count",
+        "vendor": "u_vendor",
     },
 }
 
@@ -237,6 +250,9 @@ class ApplyMappingResult:
     upload_batch_id: UUID
     total_raw_rows: int
     normalized_ticket_count: int
+    out_of_scope_ticket_count: int
+    blank_assignment_group_count: int
+    assignment_group_not_in_inventory_count: int
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSample]
@@ -260,6 +276,9 @@ class BatchApplyMappingResult:
     status: str
     total_raw_rows: int
     normalized_ticket_count: int
+    out_of_scope_ticket_count: int
+    blank_assignment_group_count: int
+    assignment_group_not_in_inventory_count: int
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSample]
@@ -275,6 +294,9 @@ class ScopedApplyMappingResult:
     batch_results: list[BatchApplyMappingResult]
     total_raw_rows: int
     normalized_ticket_count: int
+    out_of_scope_ticket_count: int
+    blank_assignment_group_count: int
+    assignment_group_not_in_inventory_count: int
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSample]
@@ -782,6 +804,191 @@ def parse_sla_breached_value(
     return parsed_value
 
 
+def normalize_match_key(value: Any) -> str | None:
+    text = text_or_none(value)
+    return text.lower() if text is not None else None
+
+
+def get_raw_vendor_value(
+    raw_data: Mapping[str, Any],
+    mapping: Mapping[str, str],
+    ticket_type: str,
+) -> str | None:
+    mapped_vendor = text_or_none(get_mapped_value(raw_data, mapping, "vendor"))
+    if mapped_vendor is not None:
+        return mapped_vendor
+
+    if normalize_ticket_type_value(ticket_type) == "INCIDENT":
+        return text_or_none(get_raw_value(raw_data, "scr_vendor"))
+
+    if normalize_ticket_type_value(ticket_type) == "SERVICE_CATALOG_TASK":
+        return text_or_none(get_raw_value(raw_data, "u_vendor"))
+
+    return text_or_none(get_raw_value(raw_data, "vendor"))
+
+
+def load_active_inventory_items(
+    db: Session,
+    project_id: UUID,
+) -> list[ApplicationInventoryItem]:
+    statement = (
+        select(ApplicationInventoryItem)
+        .where(
+            ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.active.is_not(False),
+        )
+        .order_by(
+            ApplicationInventoryItem.source_row_number.asc().nullslast(),
+            ApplicationInventoryItem.created_at.asc(),
+            ApplicationInventoryItem.id.asc(),
+        )
+    )
+    return list(db.scalars(statement).all())
+
+
+def inventory_sort_key(
+    inventory_item: ApplicationInventoryItem,
+    ticket: Ticket,
+) -> tuple[int, int, int, datetime, str]:
+    active_rank = 0 if inventory_item.active is True else 1
+    business_service_rank = 0
+    if normalize_match_key(inventory_item.business_service_ci_name) != normalize_match_key(
+        ticket.business_service
+    ):
+        business_service_rank = 1
+
+    assignment_group_rank = 0
+    if normalize_match_key(inventory_item.assignment_group) != normalize_match_key(
+        ticket.assignment_group
+    ):
+        assignment_group_rank = 1
+
+    return (
+        active_rank,
+        business_service_rank,
+        assignment_group_rank,
+        inventory_item.source_row_number or 999_999_999,
+        inventory_item.created_at,
+        str(inventory_item.id),
+    )
+
+
+def select_inventory_item_for_ticket(
+    ticket: Ticket,
+    inventory_items: list[ApplicationInventoryItem],
+) -> ApplicationInventoryItem | None:
+    ticket_assignment_group = normalize_match_key(ticket.assignment_group)
+    ticket_business_service = normalize_match_key(ticket.business_service)
+    ticket_application = normalize_match_key(ticket.application)
+
+    assignment_group_matches = [
+        item
+        for item in inventory_items
+        if normalize_match_key(item.assignment_group) == ticket_assignment_group
+    ]
+    if assignment_group_matches:
+        return sorted(
+            assignment_group_matches,
+            key=lambda item: inventory_sort_key(item, ticket),
+        )[0]
+
+    service_keys = {ticket_business_service, ticket_application}
+    service_matches = [
+        item
+        for item in inventory_items
+        if normalize_match_key(item.business_service_ci_name) in service_keys
+    ]
+    if service_matches:
+        return sorted(service_matches, key=lambda item: inventory_sort_key(item, ticket))[0]
+
+    return None
+
+
+def apply_inventory_enrichment_to_ticket(
+    ticket: Ticket,
+    inventory_item: ApplicationInventoryItem | None,
+) -> None:
+    if inventory_item is None:
+        return
+
+    ticket.application_inventory_id = inventory_item.id
+    ticket.parent_application_number = inventory_item.application_number_apm
+    ticket.parent_application_name = inventory_item.parent_application_name
+    ticket.business_service_ci_name = inventory_item.business_service_ci_name
+    ticket.application_owner = inventory_item.application_owner
+    ticket.support_lead = inventory_item.support_lead
+    ticket.functional_track = inventory_item.functional_track
+    ticket.ams_owner = inventory_item.ams_owner
+    ticket.supported_by_vendor = inventory_item.supported_by_vendor
+    ticket.assignment_group_owner = inventory_item.assignment_group_owner
+    ticket.derived_vendor = inventory_item.supported_by_vendor
+
+
+def build_out_of_scope_ticket(
+    ticket: Ticket,
+    reason: str,
+) -> AssessmentOutOfScopeTicket:
+    return AssessmentOutOfScopeTicket(
+        project_id=ticket.project_id,
+        upload_batch_id=ticket.upload_batch_id,
+        source_raw_row_id=ticket.raw_row_id,
+        application_inventory_id=ticket.application_inventory_id,
+        ticket_number=ticket.ticket_number,
+        ticket_type=ticket.ticket_type,
+        month_key=ticket.month_key,
+        source_system=ticket.source_system,
+        created_at=ticket.created_at,
+        updated_at=ticket.updated_at,
+        resolved_at=ticket.resolved_at,
+        closed_at=ticket.closed_at,
+        due_at=ticket.due_at,
+        short_description=ticket.short_description,
+        description=ticket.description,
+        state=ticket.state,
+        priority=ticket.priority,
+        urgency=ticket.urgency,
+        impact=ticket.impact,
+        application=ticket.application,
+        business_service=ticket.business_service,
+        assignment_group=ticket.assignment_group,
+        assigned_to=ticket.assigned_to,
+        requester=ticket.requester,
+        opened_by=ticket.opened_by,
+        created_by=ticket.created_by,
+        category=ticket.category,
+        subcategory=ticket.subcategory,
+        catalog_item=ticket.catalog_item,
+        service_offering=ticket.service_offering,
+        reopen_count=ticket.reopen_count,
+        reassignment_count=ticket.reassignment_count,
+        business_duration_seconds=ticket.business_duration_seconds,
+        is_system_created=ticket.is_system_created,
+        system_creation_source=ticket.system_creation_source,
+        is_technical=ticket.is_technical,
+        technical_functional_type=ticket.technical_functional_type,
+        technical_functional_confidence=ticket.technical_functional_confidence,
+        technical_functional_reason=ticket.technical_functional_reason,
+        classification_level_1=ticket.classification_level_1,
+        classification_level_2=ticket.classification_level_2,
+        classification_level_3=ticket.classification_level_3,
+        classification_level_4=ticket.classification_level_4,
+        improvement_area=ticket.improvement_area,
+        estimated_effort_hours=ticket.estimated_effort_hours,
+        vendor=ticket.vendor,
+        derived_vendor=ticket.derived_vendor,
+        parent_application_number=ticket.parent_application_number,
+        parent_application_name=ticket.parent_application_name,
+        business_service_ci_name=ticket.business_service_ci_name,
+        application_owner=ticket.application_owner,
+        support_lead=ticket.support_lead,
+        functional_track=ticket.functional_track,
+        ams_owner=ticket.ams_owner,
+        supported_by_vendor=ticket.supported_by_vendor,
+        assignment_group_owner=ticket.assignment_group_owner,
+        out_of_scope_reason=reason,
+    )
+
+
 def resolve_apply_mapping(
     db: Session,
     upload_batch: UploadBatch,
@@ -866,6 +1073,9 @@ def build_ticket_from_raw_row(
         created_by=text_or_none(normalized_values.get("created_by")),
         category=text_or_none(normalized_values.get("category")),
         subcategory=text_or_none(normalized_values.get("subcategory")),
+        catalog_item=text_or_none(normalized_values.get("catalog_item")),
+        service_offering=text_or_none(normalized_values.get("service_offering")),
+        vendor=get_raw_vendor_value(raw_row.raw_data, mapping, ticket_type),
         sla_breached=parse_sla_breached_value(
             normalized_values.get("sla_breached"),
             mapping.get("sla_breached"),
@@ -896,10 +1106,14 @@ def apply_mapping_to_batch(
 
     total_raw_rows = 0
     normalized_ticket_count = 0
+    out_of_scope_ticket_count = 0
+    blank_assignment_group_count = 0
+    assignment_group_not_in_inventory_count = 0
     failed_row_count = 0
     errors: list[NormalizationErrorSample] = []
     warnings: list[str] = []
-    seen_ticket_numbers: set[str] = set()
+    seen_ticket_destinations: dict[str, str] = {}
+    duplicate_ticket_replacement_count = 0
 
     try:
         mark_upload_batch_normalizing(upload_batch)
@@ -907,7 +1121,19 @@ def apply_mapping_to_batch(
 
         if delete_existing:
             db.execute(delete(Ticket).where(Ticket.upload_batch_id == upload_batch_id))
+            db.execute(
+                delete(AssessmentOutOfScopeTicket).where(
+                    AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id
+                )
+            )
             db.flush()
+
+        inventory_items = load_active_inventory_items(db, upload_batch.project_id)
+        active_assignment_groups = {
+            normalize_match_key(item.assignment_group)
+            for item in inventory_items
+            if normalize_match_key(item.assignment_group) is not None
+        }
 
         raw_row_statement = (
             select(TicketRawRow)
@@ -919,8 +1145,36 @@ def apply_mapping_to_batch(
             total_raw_rows += 1
             try:
                 ticket = build_ticket_from_raw_row(raw_row, upload_batch, resolved_mapping)
-                if ticket.ticket_number in seen_ticket_numbers:
-                    raise MappingError(f"Duplicate ticket_id in batch: {ticket.ticket_number}")
+                previous_destination = seen_ticket_destinations.get(ticket.ticket_number)
+                if previous_destination is not None:
+                    if not delete_existing:
+                        raise MappingError(
+                            f"Duplicate ticket_id in batch: {ticket.ticket_number}"
+                        )
+                    db.flush()
+                    duplicate_ticket_replacement_count += 1
+                    if previous_destination == "IN_SCOPE":
+                        normalized_ticket_count -= 1
+                    elif previous_destination == "OUT_OF_SCOPE_BLANK_ASSIGNMENT_GROUP":
+                        out_of_scope_ticket_count -= 1
+                        blank_assignment_group_count -= 1
+                    elif previous_destination == "OUT_OF_SCOPE_ASSIGNMENT_GROUP_NOT_IN_INVENTORY":
+                        out_of_scope_ticket_count -= 1
+                        assignment_group_not_in_inventory_count -= 1
+
+                if delete_existing:
+                    db.execute(
+                        delete(Ticket).where(
+                            Ticket.project_id == ticket.project_id,
+                            Ticket.ticket_number == ticket.ticket_number,
+                        )
+                    )
+                    db.execute(
+                        delete(AssessmentOutOfScopeTicket).where(
+                            AssessmentOutOfScopeTicket.project_id == ticket.project_id,
+                            AssessmentOutOfScopeTicket.ticket_number == ticket.ticket_number,
+                        )
+                    )
 
                 existing_ticket_id = db.scalar(
                     select(Ticket.id)
@@ -934,11 +1188,49 @@ def apply_mapping_to_batch(
                     raise MappingError(
                         f"Ticket {ticket.ticket_number} already exists for this project."
                     )
+                existing_out_of_scope_ticket_id = db.scalar(
+                    select(AssessmentOutOfScopeTicket.id)
+                    .where(
+                        AssessmentOutOfScopeTicket.project_id == ticket.project_id,
+                        AssessmentOutOfScopeTicket.ticket_number == ticket.ticket_number,
+                    )
+                    .limit(1)
+                )
+                if existing_out_of_scope_ticket_id is not None:
+                    raise MappingError(
+                        f"Ticket {ticket.ticket_number} already exists as out of scope."
+                    )
 
-                seen_ticket_numbers.add(ticket.ticket_number)
-                db.add(ticket)
-                normalized_ticket_count += 1
-                if normalized_ticket_count % INGESTION_BATCH_SIZE == 0:
+                inventory_item = select_inventory_item_for_ticket(ticket, inventory_items)
+                apply_inventory_enrichment_to_ticket(ticket, inventory_item)
+                assignment_group_key = normalize_match_key(ticket.assignment_group)
+                if assignment_group_key is None:
+                    out_of_scope_reason = "blank_assignment_group"
+                    blank_assignment_group_count += 1
+                elif assignment_group_key not in active_assignment_groups:
+                    out_of_scope_reason = "assignment_group_not_in_application_inventory"
+                    assignment_group_not_in_inventory_count += 1
+                else:
+                    out_of_scope_reason = ""
+
+                if out_of_scope_reason:
+                    db.add(build_out_of_scope_ticket(ticket, out_of_scope_reason))
+                    out_of_scope_ticket_count += 1
+                    if out_of_scope_reason == "blank_assignment_group":
+                        seen_ticket_destinations[
+                            ticket.ticket_number
+                        ] = "OUT_OF_SCOPE_BLANK_ASSIGNMENT_GROUP"
+                    else:
+                        seen_ticket_destinations[
+                            ticket.ticket_number
+                        ] = "OUT_OF_SCOPE_ASSIGNMENT_GROUP_NOT_IN_INVENTORY"
+                else:
+                    db.add(ticket)
+                    normalized_ticket_count += 1
+                    seen_ticket_destinations[ticket.ticket_number] = "IN_SCOPE"
+
+                processed_ticket_count = normalized_ticket_count + out_of_scope_ticket_count
+                if processed_ticket_count % INGESTION_BATCH_SIZE == 0:
                     db.flush()
             except MappingError as exc:
                 failed_row_count += 1
@@ -956,6 +1248,11 @@ def apply_mapping_to_batch(
         elif failed_row_count > MAX_ERROR_SAMPLES:
             warnings.append(
                 f"{failed_row_count - MAX_ERROR_SAMPLES} additional row errors were omitted."
+            )
+        if duplicate_ticket_replacement_count > 0:
+            warnings.append(
+                f"{duplicate_ticket_replacement_count} duplicate ticket ID row(s) were "
+                "replaced while normalizing this batch. The latest row in file order was kept."
             )
 
         if total_raw_rows > 0 and failed_row_count == 0:
@@ -977,6 +1274,9 @@ def apply_mapping_to_batch(
         upload_batch_id=upload_batch_id,
         total_raw_rows=total_raw_rows,
         normalized_ticket_count=normalized_ticket_count,
+        out_of_scope_ticket_count=out_of_scope_ticket_count,
+        blank_assignment_group_count=blank_assignment_group_count,
+        assignment_group_not_in_inventory_count=assignment_group_not_in_inventory_count,
         failed_row_count=failed_row_count,
         warnings=warnings[:MAX_WARNING_SAMPLES],
         errors=errors,
@@ -1078,6 +1378,11 @@ def apply_mapping_with_scope(
             status=result.status,
             total_raw_rows=result.total_raw_rows,
             normalized_ticket_count=result.normalized_ticket_count,
+            out_of_scope_ticket_count=result.out_of_scope_ticket_count,
+            blank_assignment_group_count=result.blank_assignment_group_count,
+            assignment_group_not_in_inventory_count=(
+                result.assignment_group_not_in_inventory_count
+            ),
             failed_row_count=result.failed_row_count,
             warnings=result.warnings,
             errors=result.errors,
@@ -1095,6 +1400,15 @@ def apply_mapping_with_scope(
         batch_results=batch_results,
         total_raw_rows=sum(result.total_raw_rows for result in batch_results),
         normalized_ticket_count=sum(result.normalized_ticket_count for result in batch_results),
+        out_of_scope_ticket_count=sum(
+            result.out_of_scope_ticket_count for result in batch_results
+        ),
+        blank_assignment_group_count=sum(
+            result.blank_assignment_group_count for result in batch_results
+        ),
+        assignment_group_not_in_inventory_count=sum(
+            result.assignment_group_not_in_inventory_count for result in batch_results
+        ),
         failed_row_count=sum(result.failed_row_count for result in batch_results),
         warnings=all_warnings[:MAX_WARNING_SAMPLES],
         errors=all_errors[:MAX_ERROR_SAMPLES],

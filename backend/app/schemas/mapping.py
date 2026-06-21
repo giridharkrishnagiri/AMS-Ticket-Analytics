@@ -86,6 +86,9 @@ class ApplyMappingResponse(BaseModel):
     status: str | None = None
     total_raw_rows: int
     normalized_ticket_count: int
+    out_of_scope_ticket_count: int = 0
+    blank_assignment_group_count: int = 0
+    assignment_group_not_in_inventory_count: int = 0
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSampleResponse]
@@ -99,6 +102,9 @@ class BatchApplyMappingResultResponse(BaseModel):
     status: str | None = None
     total_raw_rows: int
     normalized_ticket_count: int
+    out_of_scope_ticket_count: int = 0
+    blank_assignment_group_count: int = 0
+    assignment_group_not_in_inventory_count: int = 0
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSampleResponse]
@@ -113,6 +119,9 @@ class ScopedApplyMappingResponse(BaseModel):
     batch_results: list[BatchApplyMappingResultResponse]
     total_raw_rows: int
     normalized_ticket_count: int
+    out_of_scope_ticket_count: int = 0
+    blank_assignment_group_count: int = 0
+    assignment_group_not_in_inventory_count: int = 0
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSampleResponse]

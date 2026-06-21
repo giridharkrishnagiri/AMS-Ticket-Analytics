@@ -379,6 +379,15 @@ curl.exe -X POST "http://127.0.0.1:8000/api/mappings/apply" `
 
 Use `scope` = `BATCH` with `upload_batch_id` to re-normalize one selected batch. Use `scope` = `TICKET_TYPE` to re-normalize all batches for the selected project and ticket type. Incident mappings are applied only to Incident batches, and Service Catalog Task mappings are applied only to Service Catalog Task batches.
 
+Prompt 10.2 adds scope classification during normalization. The main `tickets` table now stores only tickets whose `assignment_group` matches an active Application Inventory assignment group. Tickets with blank assignment group, or an assignment group missing from active Application Inventory, are stored in `assessment_out_of_scope_tickets`. Apply responses include `out_of_scope_ticket_count`, `blank_assignment_group_count`, and `assignment_group_not_in_inventory_count`.
+
+Map raw ticket vendor fields when available:
+
+- Incident `scr_vendor` -> `vendor`
+- Service Catalog Task `u_vendor` -> `vendor`
+
+The normalized `vendor` value preserves the ServiceNow ticket vendor. `derived_vendor` is populated from Application Inventory `supported_by_vendor` during inventory enrichment and can differ from the raw ticket vendor.
+
 For larger mappings, PowerShell is easier if you store JSON in a file.
 
 Example `C:\AIProjects\incident_mapping.json`:
@@ -456,7 +465,7 @@ curl.exe -X POST "http://127.0.0.1:8000/api/mappings/batches/PUT_SCTASK_BATCH_UU
   --data-binary "@C:\AIProjects\sctask_mapping.json"
 ```
 
-Additional future source columns, such as response SLA, resolution SLA, SLA target, SLA breached, response due, resolution due, actual response time, and actual resolution time, are preserved in `tickets.normalized_payload.raw_payload_json` even before explicit normalized database fields are added.
+Additional future source columns, such as response SLA, resolution SLA, SLA target, SLA breached, response due, resolution due, actual response time, and actual resolution time, are preserved in `tickets.normalized_payload.raw_payload_json` for in-scope tickets even before explicit normalized database fields are added. Out-of-scope tickets keep compact normalized fields and traceability to `source_raw_row_id`.
 
 For dashboard metrics, map Incident ServiceNow `business_stc` to `business_duration_seconds`, Service Catalog Task ServiceNow `business_duration` to `business_duration_seconds`, and `reassignment_count` to `reassignment_count` in the Mapping Wizard. Business duration is stored as seconds; dashboard MTTR APIs convert it to days by dividing by `86400`. Existing uploaded batches should be re-applied through the Mapping Wizard after adding these mappings so the new ticket columns are populated.
 
@@ -508,11 +517,14 @@ curl.exe -X POST "http://127.0.0.1:8000/api/sla/incidents/enrich" `
 Selection logic is deterministic:
 
 - Match `incident_sla_rows.inc_number` to `tickets.ticket_number`.
-- Enrich only `tickets.ticket_type = 'INCIDENT'`.
+- Enrich Incident records in both `tickets` and `assessment_out_of_scope_tickets`.
+- Service Catalog Tasks are not enriched for SLA.
 - Response SLA uses rows with `taskslatable_sla.target = Response`.
 - Resolution SLA uses rows with `taskslatable_sla.target = Resolution`.
-- Prefer SLA names containing `Accenture`.
-- If no Accenture row exists, fall back to SLA names containing `Default`.
+- Use the ticket `vendor` first; if blank, use `derived_vendor`; if both are blank, use Default SLA rows.
+- For each SLA type, prefer rows whose SLA definition name contains the effective vendor case-insensitively.
+- If no vendor-specific row exists for that SLA type, fall back to SLA names containing `Default`.
+- Response and Resolution selection are independent, so one can use a vendor-specific SLA while the other falls back to Default.
 - If multiple preferred rows exist, choose `Completed` stage first, then the lowest source row number.
 
 The enrichment writes:
@@ -523,9 +535,17 @@ The enrichment writes:
 - `resolution_sla_business_elapsed_seconds`
 - `response_sla_name`
 - `resolution_sla_name`
+- `response_sla_definition_name_used`
+- `resolution_sla_definition_name_used`
+- `response_sla_selection_source`
+- `resolution_sla_selection_source`
+- `response_sla_vendor_used`
+- `resolution_sla_vendor_used`
 - `response_sla_updated_at`
 - `resolution_sla_updated_at`
 - `sla_enriched_at`
+
+Selection source values include `ticket_vendor`, `derived_vendor`, `default`, `fallback_default`, and `not_found`.
 
 The existing `tickets.sla_breached` column is preserved for backward compatibility and is not overwritten by Incident SLA enrichment.
 
@@ -574,76 +594,56 @@ AND (
 LIMIT 50;
 ```
 
-## Legacy Application Dimension Configuration
+## Legacy Application Dimensions
 
-The previous `Application Dimensions` backend API remains available for compatibility. New user-facing work should use `Application Inventory`, which better matches the real CMDB/Application data.
+`Application Dimensions` exists only for backward migration/API compatibility. New operational flows use `Application Inventory` as the source of truth for scope classification, application hierarchy, support ownership, functional track, AMS owner, and vendor derivation.
 
-Supported dimension fields:
+Do not use Application Dimensions for new ticket enrichment, scope classification, derived vendor logic, dashboard filters, or SLA selection. The operational reset can clear old Application Dimension rows while preserving Application Inventory.
 
-- `customer_name`
-- `tower_name`
-- `cluster_name`
-- `application_group_name`
-- `application_name`
-- `application_alias`
-- `business_service_alias`
-- `cmdb_ci_alias`
-- `notes`
+## Operational Reset And Scope Split
 
-The existing JSON alias columns remain available in the database for compatibility, but Prompt 10 matching uses the singular alias columns above.
+The frontend includes a `Maintenance` tab for controlled operational reset and scope summary. The reset clears old operational ticket/upload/raw/SLA data before loading fresh ServiceNow extracts. It preserves customers, projects, mapping templates, Alembic history, and Application Inventory.
 
-Application dimension endpoints:
-
-- `GET /api/application-dimensions?project_id=...`
-- `POST /api/application-dimensions`
-- `PUT /api/application-dimensions/{id}`
-- `DELETE /api/application-dimensions/{id}`
-- `POST /api/application-dimensions/bulk-upload`
-- `POST /api/application-dimensions/enrich-tickets`
-- `GET /api/application-dimensions/enrichment-summary?project_id=...`
-
-Example CSV:
-
-```csv
-customer_name,tower_name,cluster_name,application_group_name,application_name,application_alias,business_service_alias,cmdb_ci_alias,notes
-BCBSNJ,Applications Tower,Claims Cluster,Claims Applications,Sample App,Sample App,,,Test mapping
-```
-
-Upload a dimension CSV:
+The reset endpoint requires exact confirmation text:
 
 ```powershell
-curl.exe -X POST "http://127.0.0.1:8000/api/application-dimensions/bulk-upload" `
-  -F "project_id=PUT_PROJECT_UUID_HERE" `
-  -F "file=@C:\AIProjects\application_dimensions.csv"
-```
-
-Enrich tickets:
-
-```powershell
-curl.exe -X POST "http://127.0.0.1:8000/api/application-dimensions/enrich-tickets" `
+curl.exe -X POST "http://127.0.0.1:8000/api/admin/reset-operational-data" `
   -H "Content-Type: application/json" `
-  -d "{\"project_id\":\"PUT_PROJECT_UUID_HERE\",\"replace_existing\":true}"
+  -d "{\"confirmation\":\"RESET OPERATIONAL DATA\"}"
 ```
 
-Matching is deterministic, project-scoped, case-insensitive, trimmed, and active-dimension-only. Priority order:
+Reset clears:
 
-1. `tickets.application` to `application_dimensions.application_alias`
-2. `tickets.application` to `application_dimensions.application_name`
-3. `tickets.business_service` to `application_dimensions.business_service_alias`
-4. `tickets.cmdb_ci` to `application_dimensions.cmdb_ci_alias`
-5. `tickets.service_offering` to `application_dimensions.business_service_alias`
-6. `tickets.catalog_item` to `application_dimensions.application_alias`
+- `tickets`
+- `assessment_out_of_scope_tickets`
+- `ticket_raw_rows`
+- `upload_batches`
+- `uploaded_files`
+- `ingestion_jobs`
+- `incident_sla_rows`
+- dependent dashboard/export rows when present
+- obsolete `application_dimensions` rows when present
 
-Ticket enrichment updates only:
+Reset preserves:
 
-- `tickets.application_dimension_id`
-- `tickets.customer_name`
-- `tickets.tower_name`
-- `tickets.cluster_name`
-- `tickets.application_group_name`
-- `tickets.application_name`
+- `clients`
+- `projects`
+- `source_column_mappings`
+- `application_inventory_items`
+- `alembic_version`
 
-Raw ticket fields such as `application`, `business_service`, `cmdb_ci`, `service_offering`, `catalog_item`, and uploaded source data are preserved. Dashboard dimension filters use the enriched ticket columns so aggregate dashboard queries stay simple and do not require dimension joins.
+Normalization now splits staged raw rows into two destinations:
+
+- In-scope tickets are inserted into `tickets`.
+- Out-of-scope tickets are inserted into `assessment_out_of_scope_tickets`.
+
+Scope is based only on active `application_inventory_items.assignment_group`, using case-insensitive trimmed matching. Blank assignment groups are stored out of scope with `blank_assignment_group`. Assignment groups not found in active Application Inventory are stored out of scope with `assignment_group_not_in_application_inventory`.
+
+Check the split:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/api/application-inventory/scope-summary?project_id=PUT_PROJECT_UUID_HERE"
+```
 
 ## Application Inventory Upload And Enrichment
 
@@ -678,6 +678,7 @@ Application Inventory endpoints:
 - `POST /api/application-inventory/enrich-tickets`
 - `GET /api/application-inventory/enrichment-summary?project_id=...`
 - `GET /api/application-inventory/unmatched-business-services?project_id=...`
+- `GET /api/application-inventory/scope-summary?project_id=...`
 - `GET /api/application-inventory/filter-values?project_id=...`
 - `PUT /api/application-inventory/{id}`
 - `DELETE /api/application-inventory/{id}`
@@ -704,6 +705,7 @@ Check enrichment coverage:
 ```powershell
 curl.exe "http://127.0.0.1:8000/api/application-inventory/enrichment-summary?project_id=PUT_PROJECT_UUID_HERE"
 curl.exe "http://127.0.0.1:8000/api/application-inventory/unmatched-business-services?project_id=PUT_PROJECT_UUID_HERE&limit=100"
+curl.exe "http://127.0.0.1:8000/api/application-inventory/scope-summary?project_id=PUT_PROJECT_UUID_HERE"
 curl.exe "http://127.0.0.1:8000/api/application-inventory/filter-values?project_id=PUT_PROJECT_UUID_HERE"
 ```
 
@@ -721,7 +723,7 @@ When a Business Service CI Name appears multiple times, enrichment chooses one i
 3. Then lowest `source_row_number`.
 4. Then earliest `created_at`.
 
-Enrichment updates only denormalized inventory fields on `tickets`:
+Enrichment updates denormalized inventory fields on in-scope `tickets` and, where a Business Service CI match exists, on `assessment_out_of_scope_tickets`:
 
 - `application_inventory_id`
 - `parent_application_number`
@@ -733,8 +735,9 @@ Enrichment updates only denormalized inventory fields on `tickets`:
 - `ams_owner`
 - `supported_by_vendor`
 - `assignment_group_owner`
+- `derived_vendor`
 
-It does not alter raw ticket fields such as `application`, `business_service`, `cmdb_ci`, `assignment_group`, or `normalized_payload`. Dashboard filter values now include future inventory filters such as Functional Track, AMS Owner, Supported By Vendor, Support Lead, Application Owner, Business Service CI Name, and Parent Application Name.
+It does not alter raw ticket fields such as `application`, `business_service`, `cmdb_ci`, `assignment_group`, or `normalized_payload`. `derived_vendor` comes from Application Inventory `supported_by_vendor`; it does not overwrite the raw ticket `vendor`. Dashboard filter values now include future inventory filters such as Functional Track, AMS Owner, Supported By Vendor, Support Lead, Application Owner, Business Service CI Name, and Parent Application Name.
 
 ## Dashboard API And UI
 
@@ -838,7 +841,7 @@ curl.exe "http://127.0.0.1:8000/api/dashboard/trends/created-resolved-open?proje
 curl.exe "http://127.0.0.1:8000/api/dashboard/trends/created-resolved-open?project_id=PUT_PROJECT_UUID_HERE&ticket_type=INCIDENT,SERVICE_CATALOG_TASK"
 ```
 
-The `application_dimensions` table is prepared for one-time customer/application hierarchy configuration: customer, tower or cluster, application group, and application. Configuration upload/UI will come later.
+Application Inventory is the active source for future customer/application/support hierarchy filters. The legacy `application_dimensions` table is not used by current dashboard filter logic.
 
 System-created classification is deterministic for now, using stored `is_system_created` or obvious creator text such as monitoring, alert, system, integration, scheduler, and service account. LLM-assisted classification may be added later.
 
@@ -856,7 +859,9 @@ The initial schema includes:
 - `source_column_mappings`
 - `ticket_raw_rows`
 - `tickets`
+- `assessment_out_of_scope_tickets`
 - `incident_sla_rows`
+- `application_inventory_items`
 - `dashboard_aggregates`
 - `export_jobs`
 

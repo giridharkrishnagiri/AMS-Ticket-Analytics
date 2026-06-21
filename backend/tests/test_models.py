@@ -16,6 +16,7 @@ def test_expected_ams_tables_are_registered() -> None:
         "export_jobs",
         "application_dimensions",
         "application_inventory_items",
+        "assessment_out_of_scope_tickets",
         "incident_sla_rows",
     }
 
@@ -137,3 +138,26 @@ def test_application_inventory_columns_exist() -> None:
     assert "ams_owner" in ticket_columns
     assert "supported_by_vendor" in ticket_columns
     assert "assignment_group_owner" in ticket_columns
+
+
+def test_scope_split_vendor_sla_columns_exist() -> None:
+    ticket_columns = Base.metadata.tables["tickets"].columns.keys()
+    out_of_scope_columns = Base.metadata.tables["assessment_out_of_scope_tickets"].columns.keys()
+
+    assert "vendor" in ticket_columns
+    assert "derived_vendor" in ticket_columns
+    assert "response_sla_definition_name_used" in ticket_columns
+    assert "resolution_sla_definition_name_used" in ticket_columns
+    assert "response_sla_selection_source" in ticket_columns
+    assert "resolution_sla_selection_source" in ticket_columns
+    assert "response_sla_vendor_used" in ticket_columns
+    assert "resolution_sla_vendor_used" in ticket_columns
+    assert "source_raw_row_id" in out_of_scope_columns
+    assert "out_of_scope_reason" in out_of_scope_columns
+    assert "vendor" in out_of_scope_columns
+    assert "derived_vendor" in out_of_scope_columns
+    assert "functional_track" in out_of_scope_columns
+    assert "ams_owner" in out_of_scope_columns
+    assert "business_service_ci_name" in out_of_scope_columns
+    assert "response_sla_selection_source" in out_of_scope_columns
+    assert "resolution_sla_selection_source" in out_of_scope_columns

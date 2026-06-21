@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -5,8 +6,16 @@ from sqlalchemy import delete, select
 
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import Client, Project, Ticket, UploadBatch
-from app.services.mapping import apply_mapping_to_batch
+from app.models import (
+    ApplicationInventoryItem,
+    Client,
+    Project,
+    Ticket,
+    TicketRawRow,
+    UploadBatch,
+    UploadedFile,
+)
+from app.services.mapping import apply_mapping_to_batch, save_mapping_template
 
 
 def create_project_fixture():
@@ -25,6 +34,20 @@ def create_project_fixture():
         code=f"ULP-{unique_suffix}",
     )
     db.add(project)
+    db.flush()
+    db.add(
+        ApplicationInventoryItem(
+            project_id=project.id,
+            application_number_apm="APM-LIFECYCLE",
+            parent_application_name="Lifecycle Parent App",
+            assignment_group="AMS Support",
+            business_service_ci_name="Lifecycle Service",
+            supported_by_vendor="HCLTech",
+            active=True,
+            source_filename="lifecycle-inventory.xlsx",
+            source_row_number=1,
+        )
+    )
     db.commit()
     return db, client.id, project.id
 
@@ -38,7 +61,10 @@ def cleanup_client(db, client_id: UUID) -> None:
 
 def csv_upload(
     filename: str = "incidents.csv",
-    body: bytes = b"number,short_description,sys_created_on\nINC-LC-001,Open incident,2026-06-01\n",
+    body: bytes = (
+        b"number,short_description,assignment_group,business_service,sys_created_on\n"
+        b"INC-LC-001,Open incident,AMS Support,Lifecycle Service,2026-06-01\n"
+    ),
 ) -> dict[str, tuple[str, bytes, str]]:
     return {"files": (filename, body, "text/csv")}
 
@@ -48,8 +74,8 @@ def upload_monthly_batch(
     project_id: UUID,
     batch_name: str = "Lifecycle Batch",
     file_body: bytes = (
-        b"number,short_description,sys_created_on\n"
-        b"INC-LC-001,Open incident,2026-06-01\n"
+        b"number,short_description,assignment_group,business_service,sys_created_on\n"
+        b"INC-LC-001,Open incident,AMS Support,Lifecycle Service,2026-06-01\n"
     ),
 ) -> tuple[str, str]:
     response = client.post(
@@ -68,8 +94,276 @@ def upload_monthly_batch(
     return payload["batch"]["id"], payload["files"][0]["id"]
 
 
+def add_ingested_raw_batch(
+    db,
+    project_id: UUID,
+    *,
+    batch_name: str,
+    ticket_type: str,
+    rows: list[dict[str, object]],
+) -> UUID:
+    upload_batch = UploadBatch(
+        project_id=project_id,
+        month_key=None,
+        period_type="SNAPSHOT",
+        snapshot_date=date(2026, 6, 20),
+        batch_name=batch_name,
+        status="INGESTED",
+        file_count=1,
+        total_size_bytes=128,
+    )
+    db.add(upload_batch)
+    db.flush()
+
+    uploaded_file = UploadedFile(
+        upload_batch_id=upload_batch.id,
+        project_id=project_id,
+        ticket_type=ticket_type,
+        original_filename=f"{batch_name}.csv",
+        saved_filename=f"{batch_name}.csv",
+        storage_path=f"C:\\temp\\{batch_name}.csv",
+        size_bytes=128,
+        status="INGESTED",
+    )
+    db.add(uploaded_file)
+    db.flush()
+
+    for row_number, raw_data in enumerate(rows, start=2):
+        db.add(
+            TicketRawRow(
+                project_id=project_id,
+                upload_batch_id=upload_batch.id,
+                uploaded_file_id=uploaded_file.id,
+                ticket_type=ticket_type,
+                row_number=row_number,
+                source_filename=uploaded_file.original_filename,
+                raw_ticket_number=str(raw_data.get("number") or ""),
+                raw_data=raw_data,
+                row_hash=uuid4().hex,
+            )
+        )
+
+    db.commit()
+    return upload_batch.id
+
+
 def batch_ids(payload: list[dict[str, object]]) -> set[str]:
     return {str(row["id"]) for row in payload}
+
+
+def test_upload_multiple_creates_one_batch_per_valid_file_and_reports_partial_failure() -> None:
+    db, client_id, project_id = create_project_fixture()
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/uploads/upload-multiple",
+                data={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "period_type": "MONTHLY",
+                    "month_key": "2026-06",
+                    "batch_name": "Multi Incident Upload",
+                },
+                files=[
+                    (
+                        "files",
+                        (
+                            "incidents-1.csv",
+                            (
+                                b"number,short_description,assignment_group,business_service,"
+                                b"sys_created_on\n"
+                                b"INC-MULTI-1,First,AMS Support,Lifecycle Service,2026-06-01\n"
+                            ),
+                            "text/csv",
+                        ),
+                    ),
+                    ("files", ("notes.txt", b"not,a,ticket\n", "text/plain")),
+                    (
+                        "files",
+                        (
+                            "incidents-2.csv",
+                            (
+                                b"number,short_description,assignment_group,business_service,"
+                                b"sys_created_on\n"
+                                b"INC-MULTI-2,Second,AMS Support,Lifecycle Service,2026-06-02\n"
+                            ),
+                            "text/csv",
+                        ),
+                    ),
+                ],
+            )
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["totals"] == {
+            "files_selected": 3,
+            "files_uploaded": 2,
+            "files_failed": 1,
+        }
+        uploaded_files = [row for row in payload["files"] if row["status"] == "UPLOADED"]
+        failed_files = [row for row in payload["files"] if row["status"] == "FAILED_UPLOAD"]
+        assert len(uploaded_files) == 2
+        assert len({row["upload_batch_id"] for row in uploaded_files}) == 2
+        assert failed_files[0]["filename"] == "notes.txt"
+        assert "Only .csv and .xlsx" in failed_files[0]["message"]
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_ingest_multiple_batches_processes_uploaded_files_in_one_call() -> None:
+    db, client_id, project_id = create_project_fixture()
+
+    try:
+        with TestClient(app) as client:
+            upload_response = client.post(
+                "/api/uploads/upload-multiple",
+                data={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "period_type": "MONTHLY",
+                    "month_key": "2026-06",
+                    "batch_name": "Multi Ingest Upload",
+                },
+                files=[
+                    (
+                        "files",
+                        (
+                            "incidents-1.csv",
+                            (
+                                b"number,short_description,assignment_group,business_service,"
+                                b"sys_created_on\n"
+                                b"INC-INGEST-1,First,AMS Support,Lifecycle Service,2026-06-01\n"
+                            ),
+                            "text/csv",
+                        ),
+                    ),
+                    (
+                        "files",
+                        (
+                            "incidents-2.csv",
+                            (
+                                b"number,short_description,assignment_group,business_service,"
+                                b"sys_created_on\n"
+                                b"INC-INGEST-2,Second,AMS Support,Lifecycle Service,2026-06-02\n"
+                            ),
+                            "text/csv",
+                        ),
+                    ),
+                ],
+            )
+            assert upload_response.status_code == 201
+            upload_batch_ids = [
+                row["upload_batch_id"]
+                for row in upload_response.json()["files"]
+                if row["upload_batch_id"]
+            ]
+
+            ingest_response = client.post(
+                "/api/uploads/batches/ingest-multiple",
+                json={
+                    "project_id": str(project_id),
+                    "upload_batch_ids": upload_batch_ids,
+                },
+            )
+
+        assert ingest_response.status_code == 200
+        payload = ingest_response.json()
+        assert payload["totals"]["batches_requested"] == 2
+        assert payload["totals"]["batches_ingested"] == 2
+        assert payload["totals"]["batches_failed"] == 0
+        assert payload["totals"]["raw_rows_inserted"] == 2
+        assert {batch["status"] for batch in payload["batches"]} == {"INGESTED"}
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_normalize_multiple_handles_sc_task_open_snapshot_duplicate_replacement() -> None:
+    db, client_id, project_id = create_project_fixture()
+
+    try:
+        save_mapping_template(
+            db,
+            project_id,
+            "SERVICE_CATALOG_TASK",
+            {
+                "ticket_id": "number",
+                "title": "short_description",
+                "status": "state",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
+                "created_at": "sys_created_on",
+                "closed_at": "closed_at",
+                "business_duration_seconds": "business_duration",
+                "vendor": "u_vendor",
+            },
+        )
+        closed_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="SC Tasks Closed",
+            ticket_type="SERVICE_CATALOG_TASK",
+            rows=[
+                {
+                    "number": "SCTASK-OPEN-DUP",
+                    "short_description": "Closed extract copy",
+                    "state": "Closed",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-01",
+                    "closed_at": "2026-06-02",
+                    "business_duration": "3600",
+                    "u_vendor": "Accenture",
+                }
+            ],
+        )
+        open_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="SC Tasks Open",
+            ticket_type="SERVICE_CATALOG_TASK",
+            rows=[
+                {
+                    "number": "SCTASK-OPEN-DUP",
+                    "short_description": "Open snapshot copy",
+                    "state": "Open",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-01",
+                    "closed_at": "",
+                    "business_duration": "",
+                    "u_vendor": "",
+                }
+            ],
+        )
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/uploads/batches/normalize-multiple",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "SERVICE_CATALOG_TASK",
+                    "upload_batch_ids": [str(closed_batch_id), str(open_batch_id)],
+                    "delete_existing": True,
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["totals"]["failed_batches"] == 0
+        assert [batch["status"] for batch in payload["batches"]] == [
+            "NORMALIZED",
+            "NORMALIZED",
+        ]
+
+        ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "SCTASK-OPEN-DUP"))
+        assert ticket is not None
+        assert ticket.upload_batch_id == open_batch_id
+        assert ticket.state == "Open"
+        assert ticket.closed_at is None
+        assert ticket.business_duration_seconds is None
+    finally:
+        cleanup_client(db, client_id)
 
 
 def test_uploaded_batch_starts_active_and_can_be_deleted_before_normalization() -> None:
@@ -152,6 +446,8 @@ def test_ingested_and_normalized_batches_move_from_active_to_history() -> None:
             {
                 "ticket_id": "number",
                 "title": "short_description",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
                 "created_at": "sys_created_on",
             },
         )
@@ -198,6 +494,8 @@ def test_delete_normalized_batch_is_blocked_and_archive_preserves_history() -> N
             {
                 "ticket_id": "number",
                 "title": "short_description",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
                 "created_at": "sys_created_on",
             },
         )
@@ -233,7 +531,11 @@ def test_failed_normalization_keeps_batch_active() -> None:
                 client,
                 project_id,
                 "Failed Normalization Batch",
-                file_body=b"number,short_description,sys_created_on\n,Missing number,2026-06-01\n",
+                file_body=(
+                    b"number,short_description,assignment_group,business_service,"
+                    b"sys_created_on\n"
+                    b",Missing number,AMS Support,Lifecycle Service,2026-06-01\n"
+                ),
             )
             ingest_response = client.post(f"/api/uploads/files/{uploaded_file_id}/ingest")
             assert ingest_response.status_code == 200
@@ -244,6 +546,8 @@ def test_failed_normalization_keeps_batch_active() -> None:
             {
                 "ticket_id": "number",
                 "title": "short_description",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
                 "created_at": "sys_created_on",
             },
         )
