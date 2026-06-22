@@ -46,6 +46,7 @@ import type {
   UploadedFile,
   ValidationSummary,
 } from "./api/uploads";
+import { formatDisplayDate, formatDisplayDateTime, formatDisplayMonth } from "./utils/dateFormat";
 
 type UploadCenterTab = "application-inventory" | "ticket-details";
 type TicketUploadType = "INCIDENT" | "SERVICE_CATALOG_TASK" | "INCIDENT_SLA";
@@ -149,18 +150,14 @@ function formatNumber(value: number | null | undefined): string {
 }
 
 function formatDate(value: string | null | undefined): string {
-  if (!value) {
-    return "Not available";
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return formatDisplayDateTime(value);
 }
 
 function formatBatchPeriod(batch: UploadBatch): string {
   if (batch.period_type === "SNAPSHOT") {
-    return `Snapshot ${batch.snapshot_date ?? "No date"}`;
+    return `Snapshot ${formatDisplayDate(batch.snapshot_date)}`;
   }
-  return `Monthly ${batch.month_key ?? "No month"}`;
+  return `Monthly ${formatDisplayMonth(batch.month_key)}`;
 }
 
 function safeBatchNamePart(value: string): string {
@@ -1604,6 +1601,14 @@ function UploadCenter() {
   const [activeTab, setActiveTab] = useState<UploadCenterTab>("application-inventory");
   const [projectId, setProjectId] = useState("");
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
+  const [stateResetToken, setStateResetToken] = useState(0);
+
+  function clearUploadCenterState() {
+    setActiveTab("application-inventory");
+    setProjectId("");
+    setSelectedProject(null);
+    setStateResetToken((currentToken) => currentToken + 1);
+  }
 
   return (
     <section className="upload-center-layout" aria-labelledby="upload-center-heading">
@@ -1613,6 +1618,9 @@ function UploadCenter() {
             <p className="label">Upload Center</p>
             <h2 id="upload-center-heading">Data Loading and Processing</h2>
           </div>
+          <button className="secondary-button" type="button" onClick={clearUploadCenterState}>
+            Clear Upload Center State
+          </button>
         </div>
         <div className="form-grid">
           <CustomerSelector
@@ -1645,17 +1653,23 @@ function UploadCenter() {
         </button>
       </div>
 
-      {activeTab === "application-inventory" ? (
+      <div className="tab-panel" hidden={activeTab !== "application-inventory"}>
         <ApplicationInventory
+          key={`application-inventory-${stateResetToken}`}
           embedded
           projectId={projectId}
           selectedProject={selectedProject}
           onProjectIdChange={setProjectId}
           onProjectChange={setSelectedProject}
         />
-      ) : (
-        <TicketDetailsWorkflow projectId={projectId} selectedProject={selectedProject} />
-      )}
+      </div>
+      <div className="tab-panel" hidden={activeTab !== "ticket-details"}>
+        <TicketDetailsWorkflow
+          key={`ticket-details-${stateResetToken}`}
+          projectId={projectId}
+          selectedProject={selectedProject}
+        />
+      </div>
     </section>
   );
 }

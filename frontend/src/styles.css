@@ -77,6 +77,11 @@ td {
   margin: 0 auto;
 }
 
+.app-view[hidden],
+.tab-panel[hidden] {
+  display: none !important;
+}
+
 .page-heading {
   display: flex;
   align-items: flex-start;
@@ -994,8 +999,15 @@ h2 {
   border-radius: 999px;
   background: #ffffff;
   color: #475569;
+  cursor: pointer;
   font-size: 0.82rem;
   font-weight: 800;
+  text-decoration: none;
+}
+
+.health-pill:hover {
+  box-shadow: 0 10px 22px rgb(31 41 55 / 10%);
+  transform: translateY(-1px);
 }
 
 .health-pill span {
@@ -1025,10 +1037,53 @@ h2 {
   background: #dc2626;
 }
 
+.health-degraded {
+  color: #92400e;
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.health-degraded span {
+  background: #f59e0b;
+}
+
 .health-checking {
   color: #475569;
   border-color: #cbd5e1;
   background: #f8fafc;
+}
+
+.health-details-panel {
+  margin-bottom: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+}
+
+.health-details-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.health-details-grid > div {
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.health-details-grid strong {
+  display: block;
+  margin-top: 8px;
+  color: #111827;
+  font-size: 1rem;
+}
+
+.health-inline {
+  display: inline-flex;
+  margin-top: 8px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: capitalize;
 }
 
 .section-tabs {
@@ -1101,6 +1156,19 @@ h2 {
   color: #64748b;
   font-size: 0.86rem;
   font-weight: 700;
+}
+
+.overview-ticket-card {
+  grid-column: span 2;
+}
+
+.overview-ticket-details {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  color: #475569;
+  font-size: 0.84rem;
+  font-weight: 800;
 }
 
 .caution-card {
@@ -1279,6 +1347,7 @@ h2 {
 @media (max-width: 900px) {
   .status-grid,
   .detail-panel,
+  .health-details-grid,
   .summary-grid,
   .dashboard-filter-grid,
   .multi-filter-grid,
@@ -1327,6 +1396,7 @@ h2 {
 
   .status-grid,
   .detail-panel,
+  .health-details-grid,
   .form-grid,
   .summary-grid,
   .dashboard-filter-grid,
@@ -1339,6 +1409,10 @@ h2 {
   .split-grid,
   .top-list-grid {
     grid-template-columns: 1fr;
+  }
+
+  .overview-ticket-card {
+    grid-column: auto;
   }
 
   .panel-heading,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getBackendHealth } from "./api/health";
 import type { BackendHealth } from "./api/health";
+import { formatDisplayDateTime } from "./utils/dateFormat";
 
 type StatusState = "checking" | "online" | "offline";
 
@@ -90,11 +91,11 @@ function HealthDashboard() {
       <section className="detail-panel" aria-label="Backend details">
         <div>
           <p className="label">Backend checked at</p>
-          <p>{health?.checked_at ? new Date(health.checked_at).toLocaleString() : "Pending"}</p>
+          <p>{health?.checked_at ? formatDisplayDateTime(health.checked_at) : "Pending"}</p>
         </div>
         <div>
           <p className="label">Frontend checked at</p>
-          <p>{lastCheckedAt ? lastCheckedAt.toLocaleString() : "Pending"}</p>
+          <p>{lastCheckedAt ? formatDisplayDateTime(lastCheckedAt) : "Pending"}</p>
         </div>
         <div>
           <p className="label">Storage root</p>

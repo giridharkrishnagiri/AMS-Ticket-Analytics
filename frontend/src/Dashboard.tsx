@@ -20,6 +20,7 @@ import {
   getCreatedResolvedOpenTrend,
   getCreationSourceTrend,
   getDashboardFilterValues,
+  getDashboardOverview,
   getIncidentSlaNameBreakdown,
   getIncidentSlaSummary,
   getIncidentSlaTrend,
@@ -32,6 +33,7 @@ import type {
   CreatedResolvedOpenRow,
   CreationSourceTrendRow,
   DashboardFilterValues,
+  DashboardOverview,
   DashboardQuery,
   IncidentSlaNameBreakdown,
   IncidentSlaTrendRow,
@@ -43,8 +45,13 @@ import type {
   TicketTypeFilter,
   TimeGrain,
 } from "./api/dashboard";
+import {
+  getApplicationInventoryFilterValues,
+  type ApplicationInventoryFilterValues,
+} from "./api/applicationInventory";
 import CustomerSelector from "./CustomerSelector";
 import type { ProjectOption } from "./api/projects";
+import { formatDisplayDateRange, formatDisplayDateTime } from "./utils/dateFormat";
 
 type TicketTypeSelection = "ALL" | TicketTypeFilter;
 type DashboardTab = "overview" | "applications" | "volumetrics";
@@ -83,6 +90,17 @@ const emptyFilterValues: DashboardFilterValues = {
   application_owners: [],
   business_service_ci_names: [],
   parent_application_names: [],
+};
+
+const emptyInventoryFilterValues: ApplicationInventoryFilterValues = {
+  application_owners: [],
+  support_leads: [],
+  functional_tracks: [],
+  ams_owners: [],
+  supported_by_vendors: [],
+  parent_application_names: [],
+  business_service_ci_names: [],
+  assignment_groups: [],
 };
 
 const emptyTechnicalFunctional: TechnicalFunctionalBreakdown = {
@@ -388,6 +406,12 @@ function Dashboard() {
   const [filterValues, setFilterValues] = useState<LoadState<DashboardFilterValues>>(
     createLoadState(emptyFilterValues)
   );
+  const [overview, setOverview] = useState<LoadState<DashboardOverview | null>>(
+    createLoadState<DashboardOverview | null>(null)
+  );
+  const [inventoryFilterValues, setInventoryFilterValues] = useState<
+    LoadState<ApplicationInventoryFilterValues>
+  >(createLoadState(emptyInventoryFilterValues));
   const [createdResolvedOpen, setCreatedResolvedOpen] = useState<
     LoadState<CreatedResolvedOpenRow[]>
   >(createLoadState([]));
@@ -415,6 +439,33 @@ function Dashboard() {
   >(createLoadState(emptyTechnicalFunctional));
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [pageMessage, setPageMessage] = useState<string | null>(null);
+
+  function clearDashboardData() {
+    setOverview(createLoadState<DashboardOverview | null>(null));
+    setFilterValues(createLoadState(emptyFilterValues));
+    setInventoryFilterValues(createLoadState(emptyInventoryFilterValues));
+    setCreatedResolvedOpen(createLoadState([]));
+    setMttrTrend(createLoadState([]));
+    setIncidentSlaTrend(createLoadState([]));
+    setIncidentSlaSummary(createLoadState(emptyIncidentSlaSummary));
+    setIncidentSlaNameBreakdown(createLoadState(emptyIncidentSlaNameBreakdown));
+    setReopenTrend(createLoadState([]));
+    setReassignmentTrend(createLoadState([]));
+    setCreationSourceTrend(createLoadState([]));
+    setTechnicalFunctional(createLoadState(emptyTechnicalFunctional));
+    setLastUpdatedAt(null);
+    setPageMessage(null);
+  }
+
+  const handleProjectIdChange = useCallback(
+    (nextProjectId: string) => {
+      if (nextProjectId !== projectId) {
+        clearDashboardData();
+      }
+      setProjectId(nextProjectId);
+    },
+    [projectId]
+  );
 
   const chartQuery = useMemo<DashboardQuery | null>(() => {
     const cleanedProjectId = projectId.trim();
@@ -546,7 +597,9 @@ function Dashboard() {
     }
 
     setPageMessage(null);
+    setOverview(createLoadState<DashboardOverview | null>(null, "loading"));
     setFilterValues(createLoadState(emptyFilterValues, "loading"));
+    setInventoryFilterValues(createLoadState(emptyInventoryFilterValues, "loading"));
     setCreatedResolvedOpen(createLoadState([], "loading"));
     setMttrTrend(createLoadState([], "loading"));
     setIncidentSlaTrend(
@@ -582,11 +635,23 @@ function Dashboard() {
     }
 
     await Promise.all([
+      loadResource<DashboardOverview | null>(
+        getDashboardOverview(chartQuery.projectId),
+        setOverview,
+        null,
+        "Unable to load dashboard overview"
+      ),
       loadResource(
         getDashboardFilterValues(filterValuesQuery),
         setFilterValues,
         emptyFilterValues,
         "Unable to load filter values"
+      ),
+      loadResource(
+        getApplicationInventoryFilterValues(chartQuery.projectId),
+        setInventoryFilterValues,
+        emptyInventoryFilterValues,
+        "Unable to load Application Inventory values"
       ),
       loadResource(
         getCreatedResolvedOpenTrend(chartQuery),
@@ -637,8 +702,11 @@ function Dashboard() {
         "Unable to load technical/functional breakdown"
       ),
     ]);
-    setLastUpdatedAt(new Date().toLocaleString());
+    setLastUpdatedAt(formatDisplayDateTime(new Date()));
   }, [chartQuery, filterValuesQuery, shouldShowIncidentSla]);
+
+  const overviewInventory = overview.data?.application_inventory;
+  const overviewTickets = overview.data?.tickets;
 
   return (
     <div className="dashboard-layout">
@@ -653,7 +721,7 @@ function Dashboard() {
             <CustomerSelector
               label="Customer / Project"
               projectId={projectId}
-              onProjectIdChange={setProjectId}
+              onProjectIdChange={handleProjectIdChange}
               onProjectChange={setSelectedProject}
             />
           </div>
@@ -664,6 +732,13 @@ function Dashboard() {
             onClick={() => void loadDashboardData()}
           >
             Refresh Dashboard
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={clearDashboardData}
+          >
+            Clear Dashboard Data
           </button>
         </div>
       </section>
@@ -702,45 +777,56 @@ function Dashboard() {
           </div>
           <div className="summary-grid">
             <div>
-              <p className="label">Customer</p>
-              <strong>{selectedProject?.customer_name ?? "Select customer"}</strong>
-              <span className="helper-text">{selectedProject?.name ?? "Refresh after selecting."}</span>
-            </div>
-            <div>
               <p className="label">Total Applications</p>
-              <strong>{formatNumber(filterValues.data.business_service_ci_names.length)}</strong>
+              <strong>{formatNumber(overviewInventory?.total_applications)}</strong>
+              <span className="helper-text">Unique Business Service CI names in active Application Inventory.</span>
             </div>
             <div>
               <p className="label">Functional Tracks</p>
-              <strong>{formatNumber(filterValues.data.functional_tracks.length)}</strong>
+              <strong>{formatNumber(overviewInventory?.functional_track_count)}</strong>
             </div>
             <div>
               <p className="label">AMS Owners</p>
-              <strong>{formatNumber(filterValues.data.ams_owners.length)}</strong>
+              <strong>{formatNumber(overviewInventory?.ams_owner_count)}</strong>
             </div>
             <div>
               <p className="label">Supported Vendors</p>
-              <strong>{formatNumber(filterValues.data.supported_by_vendors.length)}</strong>
+              <strong>{formatNumber(overviewInventory?.supported_vendor_count)}</strong>
             </div>
             <div>
+              <p className="label">Assignment Groups</p>
+              <strong>{formatNumber(overviewInventory?.assignment_group_count)}</strong>
+            </div>
+            <div>
+              <p className="label">Application Owners</p>
+              <strong>{formatNumber(overviewInventory?.application_owner_count)}</strong>
+            </div>
+            <div className="overview-ticket-card">
               <p className="label">In-Scope Tickets</p>
-              <strong>{formatNumber(kpis.totalCreated)}</strong>
-              <span className="helper-text">Created in selected dashboard range.</span>
-            </div>
-            <div>
-              <p className="label">Out-of-Scope Tickets</p>
-              <strong>Coming next</strong>
-              <span className="helper-text">Shown separately from main dashboard counts.</span>
-            </div>
-            <div>
-              <p className="label">Incident SLA Response %</p>
-              <strong>{formatPercent(incidentSlaSummary.data.response_sla_adherence_pct)}</strong>
-            </div>
-            <div>
-              <p className="label">Incident SLA Resolution %</p>
-              <strong>{formatPercent(incidentSlaSummary.data.resolution_sla_adherence_pct)}</strong>
+              <strong>{formatNumber(overviewTickets?.total_in_scope_tickets)}</strong>
+              <div className="overview-ticket-details">
+                <span>Incidents: {formatNumber(overviewTickets?.incident_count)}</span>
+                <span>SC Tasks: {formatNumber(overviewTickets?.sc_task_count)}</span>
+                <span>
+                  Resolved/Closed Date Range:{" "}
+                  {formatDisplayDateRange(
+                    overviewTickets?.completion_date_min,
+                    overviewTickets?.completion_date_max
+                  )}
+                </span>
+              </div>
             </div>
           </div>
+          {overview.status === "loading" ? (
+            <p className="muted-text">Loading dashboard overview...</p>
+          ) : null}
+          {overview.status === "error" ? <p className="error-text">{overview.error}</p> : null}
+          {inventoryFilterValues.status === "loading" ? (
+            <p className="muted-text">Loading Application Inventory summary...</p>
+          ) : null}
+          {inventoryFilterValues.status === "error" ? (
+            <p className="error-text">{inventoryFilterValues.error}</p>
+          ) : null}
         </section>
       ) : null}
 
@@ -760,7 +846,7 @@ function Dashboard() {
             <div className="summary-block">
               <p className="label">Functional Tracks</p>
               <div className="chip-list">
-                {filterValues.data.functional_tracks.slice(0, 10).map((value) => (
+                {inventoryFilterValues.data.functional_tracks.slice(0, 10).map((value) => (
                   <span className="chip" key={value}>{value}</span>
                 ))}
               </div>
@@ -768,7 +854,7 @@ function Dashboard() {
             <div className="summary-block">
               <p className="label">AMS Owners</p>
               <div className="chip-list">
-                {filterValues.data.ams_owners.slice(0, 10).map((value) => (
+                {inventoryFilterValues.data.ams_owners.slice(0, 10).map((value) => (
                   <span className="chip" key={value}>{value}</span>
                 ))}
               </div>
@@ -776,7 +862,7 @@ function Dashboard() {
             <div className="summary-block">
               <p className="label">Supported Vendors</p>
               <div className="chip-list">
-                {filterValues.data.supported_by_vendors.slice(0, 10).map((value) => (
+                {inventoryFilterValues.data.supported_by_vendors.slice(0, 10).map((value) => (
                   <span className="chip" key={value}>{value}</span>
                 ))}
               </div>
@@ -784,12 +870,18 @@ function Dashboard() {
             <div className="summary-block">
               <p className="label">Support Leads</p>
               <div className="chip-list">
-                {filterValues.data.support_leads.slice(0, 10).map((value) => (
+                {inventoryFilterValues.data.support_leads.slice(0, 10).map((value) => (
                   <span className="chip" key={value}>{value}</span>
                 ))}
               </div>
             </div>
           </div>
+          {inventoryFilterValues.status === "loading" ? (
+            <p className="muted-text">Loading Application Inventory values...</p>
+          ) : null}
+          {inventoryFilterValues.status === "error" ? (
+            <p className="error-text">{inventoryFilterValues.error}</p>
+          ) : null}
         </section>
       ) : null}
 

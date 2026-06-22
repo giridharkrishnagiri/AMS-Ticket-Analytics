@@ -160,6 +160,27 @@ export type DashboardFilterValues = {
   parent_application_names: string[];
 };
 
+export type DashboardOverview = {
+  project_id: string;
+  customer_name: string;
+  project_name: string;
+  application_inventory: {
+    total_applications: number;
+    functional_track_count: number;
+    ams_owner_count: number;
+    supported_vendor_count: number;
+    assignment_group_count: number;
+    application_owner_count: number;
+  };
+  tickets: {
+    total_in_scope_tickets: number;
+    incident_count: number;
+    sc_task_count: number;
+    completion_date_min: string | null;
+    completion_date_max: string | null;
+  };
+};
+
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
   for (const value of values ?? []) {
     if (value.trim()) {
@@ -208,6 +229,11 @@ export function getDashboardFilterValues(input: DashboardQuery): Promise<Dashboa
   return requestJson<DashboardFilterValues>(
     `/dashboard/filter-values?${buildDashboardQuery(input)}`
   );
+}
+
+export function getDashboardOverview(projectId: string): Promise<DashboardOverview> {
+  const query = new URLSearchParams({ project_id: projectId.trim() });
+  return requestJson<DashboardOverview>(`/dashboard/overview?${query.toString()}`);
 }
 
 export function getCreatedResolvedOpenTrend(

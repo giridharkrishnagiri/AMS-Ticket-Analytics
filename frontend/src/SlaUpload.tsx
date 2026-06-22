@@ -20,6 +20,7 @@ import type {
   IncidentSlaUploadResponse,
 } from "./api/sla";
 import CustomerSelector from "./CustomerSelector";
+import { formatDisplayDateTime } from "./utils/dateFormat";
 
 const deduplicateConfirmation = "DEDUPLICATE SLA ROWS";
 
@@ -28,11 +29,7 @@ function formatNumber(value: number): string {
 }
 
 function formatDate(value: string): string {
-  const parsedDate = new Date(value);
-  if (Number.isNaN(parsedDate.getTime())) {
-    return value;
-  }
-  return parsedDate.toLocaleString();
+  return formatDisplayDateTime(value);
 }
 
 function ResultList({ title, values }: { title: string; values: string[] }) {

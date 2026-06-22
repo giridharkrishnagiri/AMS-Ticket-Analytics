@@ -14,6 +14,7 @@ import type {
 } from "./api/mappings";
 import { getValidationSummary, listUploadBatches, listUploadedFiles } from "./api/uploads";
 import type { UploadedFile, UploadBatch, ValidationSummary } from "./api/uploads";
+import { formatDisplayDate, formatDisplayMonth } from "./utils/dateFormat";
 
 const ticketTypeOptions = [
   { label: "Incident", value: "INCIDENT" },
@@ -65,10 +66,10 @@ function formatBytes(sizeBytes: number): string {
 
 function formatBatchPeriod(batch: UploadBatch): string {
   if (batch.period_type === "SNAPSHOT") {
-    return `SNAPSHOT - ${batch.snapshot_date ?? "No date"}`;
+    return `SNAPSHOT - ${formatDisplayDate(batch.snapshot_date)}`;
   }
 
-  return `MONTHLY - ${batch.month_key ?? "No month"}`;
+  return `MONTHLY - ${formatDisplayMonth(batch.month_key)}`;
 }
 
 function cleanMapping(mapping: Record<string, string>): Record<string, string> {

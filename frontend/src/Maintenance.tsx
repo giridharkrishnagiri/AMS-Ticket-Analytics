@@ -93,6 +93,29 @@ function Maintenance() {
     !isRunning &&
     (resetMode !== "selected-data" || hasSelectedResetCategory);
 
+  function clearMaintenanceForm() {
+    setResetMode("selected-data");
+    setConfirmation("");
+    setResetIncidents(false);
+    setResetScTasks(false);
+    setResetIncidentSla(false);
+    setResult(null);
+    setScopeSummary(null);
+    setMessage(null);
+    setError(null);
+  }
+
+  function handleProjectIdChange(nextProjectId: string) {
+    if (nextProjectId !== projectId) {
+      setConfirmation("");
+      setResult(null);
+      setScopeSummary(null);
+      setMessage(null);
+      setError(null);
+    }
+    setProjectId(nextProjectId);
+  }
+
   function handleModeChange(nextMode: ResetMode) {
     setResetMode(nextMode);
     setConfirmation("");
@@ -181,20 +204,29 @@ function Maintenance() {
             <p className="label">Maintenance</p>
             <h2 id="maintenance-heading">Reset and Cleanup</h2>
           </div>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => void refreshScopeSummary()}
-            disabled={!projectId.trim() || isLoadingScope}
-          >
-            {isLoadingScope ? "Refreshing..." : "Refresh Scope"}
-          </button>
+          <div className="panel-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={clearMaintenanceForm}
+            >
+              Clear Maintenance Form
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void refreshScopeSummary()}
+              disabled={!projectId.trim() || isLoadingScope}
+            >
+              {isLoadingScope ? "Refreshing..." : "Refresh Scope"}
+            </button>
+          </div>
         </div>
 
         <div className="form-grid">
           <CustomerSelector
             projectId={projectId}
-            onProjectIdChange={setProjectId}
+            onProjectIdChange={handleProjectIdChange}
             onProjectChange={setSelectedProject}
           />
           <div className="info-card compact-info-card caution-card">
