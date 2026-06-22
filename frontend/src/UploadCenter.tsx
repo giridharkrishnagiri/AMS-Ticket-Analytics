@@ -1,13 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, FormEvent } from "react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
 
+import ApplicationInventory from "./ApplicationInventory";
+import CustomerSelector from "./CustomerSelector";
 import {
-  deleteUploadBatch,
-  getRawRowsPreview,
-  getValidationSummary,
+  applyMappingForScope,
+  getSourceColumnsForTicketType,
+  getSuggestedMappingForTicketType,
+  saveMappingTemplate,
+} from "./api/mappings";
+import type {
+  ApplyScope,
+  MappingSource,
+  ScopedApplyMappingResponse,
+  SourceColumn,
+} from "./api/mappings";
+import type { ProjectOption } from "./api/projects";
+import {
+  enrichIncidentSla,
+  getIncidentSlaSummary,
+  getIncidentSlaUploadHistory,
+  uploadIncidentSlaFiles,
+} from "./api/sla";
+import type {
+  IncidentSlaEnrichResponse,
+  IncidentSlaMultiUploadResponse,
+  IncidentSlaSummaryResponse,
+  IncidentSlaUploadHistoryRow,
+} from "./api/sla";
+import {
   getIngestionJob,
+  getValidationSummary,
   ingestUploadBatches,
-  ingestUploadedFile,
   listUploadBatches,
   listUploadedFiles,
   normalizeUploadBatches,
@@ -15,25 +39,91 @@ import {
 } from "./api/uploads";
 import type {
   IngestionJob,
-  RawRowsPreviewResponse,
-  UploadedFile,
   UploadBatch,
   UploadBatchIngestMultipleResponse,
   UploadBatchNormalizeMultipleResponse,
   UploadMultipleResponse,
+  UploadedFile,
   ValidationSummary,
 } from "./api/uploads";
-import CustomerSelector from "./CustomerSelector";
 
-const ticketTypeOptions = [
-  { label: "Incident", value: "INCIDENT" },
-  { label: "Service Catalog Task", value: "SERVICE_CATALOG_TASK" },
+type UploadCenterTab = "application-inventory" | "ticket-details";
+type TicketUploadType = "INCIDENT" | "SERVICE_CATALOG_TASK" | "INCIDENT_SLA";
+type WorkflowStepId = "upload" | "ingest" | "normalize" | "mapping" | "apply" | "summary";
+
+type WorkflowStep = {
+  id: WorkflowStepId;
+  label: string;
+  helper: string;
+};
+
+const ticketUploadTypes: Array<{
+  label: string;
+  value: TicketUploadType;
+  description: string;
+}> = [
+  {
+    label: "Incidents",
+    value: "INCIDENT",
+    description: "ServiceNow Incident extracts",
+  },
+  {
+    label: "SC Tasks",
+    value: "SERVICE_CATALOG_TASK",
+    description: "Service Catalog Task extracts",
+  },
+  {
+    label: "Incident SLAs",
+    value: "INCIDENT_SLA",
+    description: "Incident SLA dump files",
+  },
 ];
 
-const periodTypeOptions = [
-  { label: "Monthly Extract", value: "MONTHLY" },
-  { label: "Snapshot Extract", value: "SNAPSHOT" },
+const futureUploadTypes = [
+  "Problem Tickets",
+  "Change Tickets",
+  "SC Task SLAs",
 ];
+
+const workflowSteps: WorkflowStep[] = [
+  { id: "upload", label: "Upload", helper: "Select type and files" },
+  { id: "ingest", label: "Ingest", helper: "Stage source rows" },
+  { id: "normalize", label: "Normalize", helper: "Split in-scope data" },
+  { id: "mapping", label: "Column Mapping", helper: "Map source columns" },
+  { id: "apply", label: "Apply / Enrich", helper: "Finalize processing" },
+  { id: "summary", label: "Summary", helper: "Review results" },
+];
+
+const normalizedFields = [
+  "ticket_id",
+  "title",
+  "description",
+  "status",
+  "priority",
+  "urgency",
+  "impact",
+  "category",
+  "subcategory",
+  "application",
+  "business_service",
+  "configuration_item",
+  "assignment_group",
+  "assigned_to",
+  "requester",
+  "created_by",
+  "created_channel",
+  "created_at",
+  "resolved_at",
+  "closed_at",
+  "sla_breached",
+  "reopen_count",
+  "reassignment_count",
+  "business_duration_seconds",
+  "resolution_code",
+  "resolution_notes",
+];
+
+const importantFields = ["ticket_id", "title", "created_at"];
 
 function getTodayDateInputValue(): string {
   return new Date().toISOString().slice(0, 10);
@@ -51,45 +141,167 @@ function formatBytes(sizeBytes: number): string {
   return `${(sizeBytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function formatBatchPeriod(batch: UploadBatch): string {
-  if (batch.period_type === "SNAPSHOT") {
-    return `SNAPSHOT - ${batch.snapshot_date ?? "No date"}`;
+function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "Not available";
   }
-
-  return `MONTHLY - ${batch.month_key ?? "No month"}`;
+  return value.toLocaleString();
 }
 
-function UploadCenter() {
-  const [projectId, setProjectId] = useState("");
-  const [ticketType, setTicketType] = useState("INCIDENT");
-  const [periodType, setPeriodType] = useState("MONTHLY");
-  const [monthKey, setMonthKey] = useState("");
-  const [snapshotDate, setSnapshotDate] = useState(getTodayDateInputValue);
-  const [batchName, setBatchName] = useState("");
+function formatDate(value: string | null | undefined): string {
+  if (!value) {
+    return "Not available";
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function formatBatchPeriod(batch: UploadBatch): string {
+  if (batch.period_type === "SNAPSHOT") {
+    return `Snapshot ${batch.snapshot_date ?? "No date"}`;
+  }
+  return `Monthly ${batch.month_key ?? "No month"}`;
+}
+
+function safeBatchNamePart(value: string): string {
+  return value
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function createAutoBatchName(
+  projectLabel: string,
+  ticketType: string,
+  selectedFiles: File[]
+): string {
+  const customerPart = safeBatchNamePart(projectLabel || "Customer");
+  const filePart = safeBatchNamePart(selectedFiles[0]?.name ?? ticketType);
+  const timestamp = new Date().toISOString().slice(0, 19).replace("T", " ").replace(/:/g, "-");
+  return `${customerPart} - ${filePart} - ${timestamp}`;
+}
+
+function cleanMapping(mapping: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(mapping).filter(([, sourceColumn]) => sourceColumn.trim())
+  );
+}
+
+function mappingSourceMessage(mappingSource: MappingSource): string {
+  if (mappingSource === "SAVED_TEMPLATE") {
+    return "Loaded saved mapping for this customer and ticket type.";
+  }
+  return "Loaded built-in suggested mapping.";
+}
+
+function MetricCard({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper?: string;
+}) {
+  return (
+    <div>
+      <p className="label">{label}</p>
+      <strong>{value}</strong>
+      {helper ? <span className="helper-text">{helper}</span> : null}
+    </div>
+  );
+}
+
+function InfoPanel({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="info-panel">
+      <p className="label">{title}</p>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function TicketDetailsWorkflow({
+  projectId,
+  selectedProject,
+}: {
+  projectId: string;
+  selectedProject: ProjectOption | null;
+}) {
+  const [ticketType, setTicketType] = useState<TicketUploadType>("INCIDENT");
+  const [activeStep, setActiveStep] = useState<WorkflowStepId>("upload");
   const [files, setFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [batches, setBatches] = useState<UploadBatch[]>([]);
   const [historicalBatches, setHistoricalBatches] = useState<UploadBatch[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState("");
   const [selectedBatchFiles, setSelectedBatchFiles] = useState<UploadedFile[]>([]);
   const [trackedJobs, setTrackedJobs] = useState<IngestionJob[]>([]);
+  const [validationSummary, setValidationSummary] = useState<ValidationSummary | null>(null);
+
   const [uploadResult, setUploadResult] = useState<UploadMultipleResponse | null>(null);
   const [ingestResult, setIngestResult] = useState<UploadBatchIngestMultipleResponse | null>(null);
   const [normalizeResult, setNormalizeResult] =
     useState<UploadBatchNormalizeMultipleResponse | null>(null);
-  const [rawRowsPreview, setRawRowsPreview] = useState<RawRowsPreviewResponse | null>(null);
-  const [validationSummary, setValidationSummary] = useState<ValidationSummary | null>(null);
+
+  const [sourceColumns, setSourceColumns] = useState<SourceColumn[]>([]);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [mappingSource, setMappingSource] = useState<MappingSource | null>(null);
+  const [mappingSaved, setMappingSaved] = useState(false);
+  const [applyResult, setApplyResult] = useState<ScopedApplyMappingResponse | null>(null);
+
+  const [slaUploadResult, setSlaUploadResult] =
+    useState<IncidentSlaMultiUploadResponse | null>(null);
+  const [slaEnrichResult, setSlaEnrichResult] = useState<IncidentSlaEnrichResponse | null>(null);
+  const [slaSummary, setSlaSummary] = useState<IncidentSlaSummaryResponse | null>(null);
+  const [slaUploadHistory, setSlaUploadHistory] = useState<IncidentSlaUploadHistoryRow[]>([]);
+
   const [isUploading, setIsUploading] = useState(false);
-  const [isIngestingBatches, setIsIngestingBatches] = useState(false);
-  const [isNormalizingBatches, setIsNormalizingBatches] = useState(false);
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [isNormalizing, setIsNormalizing] = useState(false);
   const [isLoadingBatches, setIsLoadingBatches] = useState(false);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
-  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
-  const [isLoadingValidation, setIsLoadingValidation] = useState(false);
-  const [ingestingFileIds, setIngestingFileIds] = useState<Set<string>>(new Set());
+  const [isLoadingColumns, setIsLoadingColumns] = useState(false);
+  const [isLoadingSuggestion, setIsLoadingSuggestion] = useState(false);
+  const [isSavingMapping, setIsSavingMapping] = useState(false);
+  const [isApplyingMapping, setIsApplyingMapping] = useState(false);
+  const [isSlaEnriching, setIsSlaEnriching] = useState(false);
+  const [isLoadingSlaContext, setIsLoadingSlaContext] = useState(false);
+
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const isSlaUpload = ticketType === "INCIDENT_SLA";
+
+  const filteredBatches = useMemo(
+    () =>
+      batches.filter((batch) => !batch.ticket_type || batch.ticket_type === ticketType),
+    [batches, ticketType]
+  );
+  const filteredHistoricalBatches = useMemo(
+    () =>
+      historicalBatches.filter((batch) => !batch.ticket_type || batch.ticket_type === ticketType),
+    [historicalBatches, ticketType]
+  );
+  const selectedBatch = useMemo(
+    () => filteredBatches.find((batch) => batch.id === selectedBatchId) ?? null,
+    [filteredBatches, selectedBatchId]
+  );
+  const uploadedActionBatchIds = useMemo(
+    () =>
+      (uploadResult?.files ?? [])
+        .map((fileResult) => fileResult.upload_batch_id)
+        .filter((batchId): batchId is string => Boolean(batchId)),
+    [uploadResult]
+  );
   const jobByUploadedFileId = useMemo(() => {
     const jobs = new Map<string, IngestionJob>();
     for (const job of trackedJobs) {
@@ -103,60 +315,92 @@ function UploadCenter() {
     () => Object.entries(validationSummary?.duplicate_ticket_ids ?? {}),
     [validationSummary]
   );
-  const uploadedActionBatchIds = useMemo(
-    () =>
-      (uploadResult?.files ?? [])
-        .map((fileResult) => fileResult.upload_batch_id)
-        .filter((batchId): batchId is string => Boolean(batchId)),
-    [uploadResult]
-  );
+  const sourceColumnNames = useMemo(() => {
+    const sourceNames = sourceColumns.map((sourceColumn) => sourceColumn.name);
+    const mappedNames = Object.values(mapping).filter((value): value is string =>
+      Boolean(value)
+    );
+    return Array.from(new Set([...sourceNames, ...mappedNames]));
+  }, [mapping, sourceColumns]);
 
-  function getActionBatchIds(): string[] {
+  const targetBatchIds = useMemo(() => {
     if (uploadedActionBatchIds.length > 0) {
       return uploadedActionBatchIds;
     }
-
     return selectedBatchId ? [selectedBatchId] : [];
-  }
+  }, [selectedBatchId, uploadedActionBatchIds]);
 
-  const hasActionBatchIds = uploadedActionBatchIds.length > 0 || Boolean(selectedBatchId);
+  const mappingWarnings = useMemo(() => {
+    if (isSlaUpload) {
+      return [];
+    }
 
-  const selectedFileContext = `${
-    ticketTypeOptions.find((option) => option.value === ticketType)?.label ?? ticketType
-  } - ${
-    periodType === "MONTHLY"
-      ? `Monthly ${monthKey || "month not selected"}`
-      : `Snapshot ${snapshotDate || "date not selected"}`
-  }`;
+    const warnings: string[] = [];
+    if (!projectId.trim()) {
+      warnings.push("Select a customer before loading or applying a mapping.");
+    }
+    if (targetBatchIds.length === 0) {
+      warnings.push("Upload files or select an active batch before applying a mapping.");
+    }
+    for (const field of importantFields) {
+      if (!mapping[field]) {
+        warnings.push(`${field} is not mapped.`);
+      }
+    }
+    return warnings;
+  }, [isSlaUpload, mapping, projectId, targetBatchIds.length]);
 
-  const handleProjectIdChange = useCallback((nextProjectId: string) => {
-    setProjectId(nextProjectId);
-    setSelectedBatchId("");
-    setSelectedBatchFiles([]);
-    setTrackedJobs([]);
-    setUploadResult(null);
-    setIngestResult(null);
-    setNormalizeResult(null);
-    setRawRowsPreview(null);
-    setValidationSummary(null);
-  }, []);
+  const hasUploaded = isSlaUpload
+    ? Boolean(slaUploadResult || slaUploadHistory.length > 0)
+    : Boolean(uploadResult || selectedBatchId);
+  const hasIngested = isSlaUpload
+    ? hasUploaded
+    : Boolean(
+        ingestResult?.totals.batches_ingested ||
+          selectedBatch?.status === "INGESTED" ||
+          selectedBatch?.status === "NORMALIZED" ||
+          selectedBatch?.status === "COMPLETED" ||
+          selectedBatchFiles.some((file) => file.status === "INGESTED")
+      );
+  const hasNormalized = isSlaUpload
+    ? hasUploaded
+    : Boolean(
+        normalizeResult ||
+          selectedBatch?.status === "NORMALIZED" ||
+          selectedBatch?.status === "COMPLETED"
+      );
+  const hasMappingReady = isSlaUpload
+    ? hasUploaded
+    : sourceColumns.length > 0 || Object.keys(mapping).length > 0 || hasIngested;
+  const hasApplyReady = isSlaUpload
+    ? hasUploaded
+    : Object.keys(cleanMapping(mapping)).length > 0 && targetBatchIds.length > 0;
+  const hasSummary = isSlaUpload
+    ? Boolean(slaUploadResult || slaEnrichResult || slaSummary)
+    : Boolean(uploadResult || ingestResult || normalizeResult || applyResult);
 
-  function handleSelectBatch(batchId: string) {
-    setSelectedBatchId(batchId);
-    setUploadResult(null);
-    setIngestResult(null);
-    setNormalizeResult(null);
-  }
+  const enabledSteps: Record<WorkflowStepId, boolean> = {
+    upload: true,
+    ingest: hasUploaded,
+    normalize: hasIngested,
+    mapping: hasMappingReady,
+    apply: hasApplyReady,
+    summary: hasSummary,
+  };
 
   const refreshBatches = useCallback(async () => {
+    if (!projectId.trim() || isSlaUpload) {
+      setBatches([]);
+      setHistoricalBatches([]);
+      return;
+    }
+
     setIsLoadingBatches(true);
     setError(null);
-
     try {
-      const selectedProjectId = projectId.trim() || undefined;
       const [nextBatches, nextHistoricalBatches] = await Promise.all([
-        listUploadBatches(selectedProjectId, "active"),
-        listUploadBatches(selectedProjectId, "history"),
+        listUploadBatches(projectId.trim(), "active"),
+        listUploadBatches(projectId.trim(), "history"),
       ]);
       setBatches(nextBatches);
       setHistoricalBatches(nextHistoricalBatches);
@@ -165,164 +409,109 @@ function UploadCenter() {
     } finally {
       setIsLoadingBatches(false);
     }
-  }, [projectId]);
+  }, [isSlaUpload, projectId]);
 
-  const refreshSelectedBatchFiles = useCallback(
-    async (batchId: string) => {
-      if (!batchId) {
-        setSelectedBatchFiles([]);
+  const refreshSelectedBatchContext = useCallback(async (batchId: string) => {
+    if (!batchId) {
+      setSelectedBatchFiles([]);
+      setValidationSummary(null);
+      return;
+    }
+
+    setIsLoadingFiles(true);
+    setError(null);
+    try {
+      const [nextFiles, nextValidationSummary] = await Promise.all([
+        listUploadedFiles(batchId),
+        getValidationSummary(batchId).catch(() => null),
+      ]);
+      setSelectedBatchFiles(nextFiles);
+      setValidationSummary(nextValidationSummary);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Unable to load batch details"
+      );
+    } finally {
+      setIsLoadingFiles(false);
+    }
+  }, []);
+
+  const refreshSlaContext = useCallback(
+    async (showMessage = false) => {
+      if (!projectId.trim() || !isSlaUpload) {
+        setSlaSummary(null);
+        setSlaUploadHistory([]);
         return;
       }
 
-      setIsLoadingFiles(true);
+      setIsLoadingSlaContext(true);
       setError(null);
-
       try {
-        const nextFiles = await listUploadedFiles(batchId);
-        setSelectedBatchFiles(nextFiles);
+        const [nextSummary, nextHistory] = await Promise.all([
+          getIncidentSlaSummary(projectId.trim()),
+          getIncidentSlaUploadHistory(projectId.trim()),
+        ]);
+        setSlaSummary(nextSummary);
+        setSlaUploadHistory(nextHistory);
+        if (showMessage) {
+          setMessage("Incident SLA history and summary refreshed.");
+        }
       } catch (requestError) {
-        setError(requestError instanceof Error ? requestError.message : "Unable to load files");
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Unable to load Incident SLA context"
+        );
       } finally {
-        setIsLoadingFiles(false);
+        setIsLoadingSlaContext(false);
       }
     },
-    []
+    [isSlaUpload, projectId]
   );
-
-  const refreshRawRowsPreview = useCallback(async (batchId: string) => {
-    if (!batchId) {
-      setRawRowsPreview(null);
-      return;
-    }
-
-    setIsLoadingPreview(true);
-    setError(null);
-
-    try {
-      const nextPreview = await getRawRowsPreview(batchId, 5);
-      setRawRowsPreview(nextPreview);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Unable to load raw rows");
-      setRawRowsPreview(null);
-    } finally {
-      setIsLoadingPreview(false);
-    }
-  }, []);
-
-  const refreshValidationSummary = useCallback(async (batchId: string) => {
-    if (!batchId) {
-      setValidationSummary(null);
-      return;
-    }
-
-    setIsLoadingValidation(true);
-    setError(null);
-
-    try {
-      const nextSummary = await getValidationSummary(batchId);
-      setValidationSummary(nextSummary);
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error ? requestError.message : "Unable to load validation summary"
-      );
-      setValidationSummary(null);
-    } finally {
-      setIsLoadingValidation(false);
-    }
-  }, []);
-
-  const refreshTrackedJobs = useCallback(async () => {
-    if (trackedJobs.length === 0) {
-      return;
-    }
-
-    setError(null);
-
-    try {
-      const nextJobs = await Promise.all(trackedJobs.map((job) => getIngestionJob(job.id)));
-      setTrackedJobs(nextJobs);
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error ? requestError.message : "Unable to refresh ingestion jobs"
-      );
-    }
-  }, [trackedJobs]);
 
   useEffect(() => {
     void refreshBatches();
   }, [refreshBatches]);
 
   useEffect(() => {
-    void refreshSelectedBatchFiles(selectedBatchId);
-  }, [refreshSelectedBatchFiles, selectedBatchId]);
+    void refreshSelectedBatchContext(selectedBatchId);
+  }, [refreshSelectedBatchContext, selectedBatchId]);
 
   useEffect(() => {
-    void refreshRawRowsPreview(selectedBatchId);
-    void refreshValidationSummary(selectedBatchId);
-  }, [refreshRawRowsPreview, refreshValidationSummary, selectedBatchId]);
+    void refreshSlaContext(false);
+  }, [refreshSlaContext]);
+
+  useEffect(() => {
+    setFiles([]);
+    setUploadResult(null);
+    setIngestResult(null);
+    setNormalizeResult(null);
+    setSelectedBatchId("");
+    setSourceColumns([]);
+    setMapping({});
+    setMappingSource(null);
+    setMappingSaved(false);
+    setApplyResult(null);
+    setSlaUploadResult(null);
+    setSlaEnrichResult(null);
+    setActiveStep("upload");
+    setMessage(null);
+    setError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, [projectId, ticketType]);
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
     setFiles(Array.from(event.target.files ?? []));
   }
 
-  function handleClearSelectedFiles() {
-    setFiles([]);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-    setMessage("Cleared selected files. No uploaded files or database records were deleted.");
-  }
-
-  function handleClearDetails() {
-    setSelectedBatchId("");
-    setSelectedBatchFiles([]);
-    setTrackedJobs([]);
+  function handleSelectBatch(batchId: string) {
+    setSelectedBatchId(batchId);
     setUploadResult(null);
     setIngestResult(null);
     setNormalizeResult(null);
-    setRawRowsPreview(null);
-    setValidationSummary(null);
-    setMessage("Cleared displayed batch details. No uploaded files or database records were deleted.");
-    setError(null);
-  }
-
-  function handleClearPreview() {
-    setRawRowsPreview(null);
-    setMessage("Cleared raw row preview display only.");
-    setError(null);
-  }
-
-  function handleClearValidationSummary() {
-    setValidationSummary(null);
-    setMessage("Cleared validation summary display only.");
-    setError(null);
-  }
-
-  function getBatchFileCount(batch: UploadBatch): number {
-    return batch.uploaded_file_count ?? batch.file_count;
-  }
-
-  async function handleDeleteBatch(batch: UploadBatch) {
-    const confirmed = window.confirm(
-      `Delete staging data for "${batch.batch_name}"? This removes the batch from active worklists but will not delete normalized tickets.`
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setMessage(null);
-    setError(null);
-
-    try {
-      await deleteUploadBatch(batch.id);
-      if (selectedBatchId === batch.id) {
-        handleClearDetails();
-      }
-      setMessage(`Deleted staging batch "${batch.batch_name}".`);
-      await refreshBatches();
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Unable to delete batch");
-    }
+    setApplyResult(null);
   }
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
@@ -331,57 +520,55 @@ function UploadCenter() {
     setError(null);
 
     if (!projectId.trim()) {
-      setError("Project ID is required.");
+      setError("Select a customer before uploading files.");
       return;
     }
-
-    if (periodType === "MONTHLY" && !monthKey) {
-      setError("Month-Year is required for monthly uploads.");
-      return;
-    }
-
-    if (periodType === "SNAPSHOT" && !snapshotDate) {
-      setError("Snapshot date is required for snapshot uploads.");
-      return;
-    }
-
-    if (!batchName.trim()) {
-      setError("Batch name is required.");
-      return;
-    }
-
     if (files.length === 0) {
-      setError("Select at least one CSV or XLSX file.");
+      setError("Select one or more CSV/XLSX files.");
       return;
     }
 
     setIsUploading(true);
-
     try {
+      if (isSlaUpload) {
+        const result = await uploadIncidentSlaFiles(projectId.trim(), files);
+        setSlaUploadResult(result);
+        setSlaEnrichResult(null);
+        setMessage(
+          `Processed ${formatNumber(result.totals.total_files)} SLA file(s), inserted ${formatNumber(
+            result.totals.inserted_rows
+          )} row(s), skipped ${formatNumber(result.totals.duplicate_rows_skipped)} duplicate row(s).`
+        );
+        setFiles([]);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+        await refreshSlaContext(false);
+        setActiveStep("apply");
+        return;
+      }
+
       const uploadResponse = await uploadTicketFilesMultiple({
         projectId: projectId.trim(),
         ticketType,
-        periodType,
-        monthKey,
-        snapshotDate,
-        batchName,
+        periodType: "SNAPSHOT",
+        snapshotDate: getTodayDateInputValue(),
+        batchName: createAutoBatchName(
+          selectedProject?.customer_name ?? selectedProject?.name ?? "Customer",
+          ticketType,
+          files
+        ),
         files,
       });
-
       setUploadResult(uploadResponse);
       setIngestResult(null);
       setNormalizeResult(null);
+      setApplyResult(null);
       const refreshedJobs = await Promise.all(
         uploadResponse.files
           .map((fileResult) => fileResult.ingestion_job_id)
           .filter((jobId): jobId is string => Boolean(jobId))
           .map((jobId) => getIngestionJob(jobId))
-      );
-
-      setMessage(
-        `Uploaded ${uploadResponse.totals.files_uploaded} of ${
-          uploadResponse.totals.files_selected
-        } selected file(s).`
       );
       setTrackedJobs(refreshedJobs);
       const firstUploadedBatchId =
@@ -389,7 +576,16 @@ function UploadCenter() {
           ?.upload_batch_id ?? "";
       setSelectedBatchId(firstUploadedBatchId);
       setFiles([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      setMessage(
+        `Uploaded ${formatNumber(uploadResponse.totals.files_uploaded)} of ${formatNumber(
+          uploadResponse.totals.files_selected
+        )} selected file(s).`
+      );
       await refreshBatches();
+      setActiveStep("ingest");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Upload failed");
     } finally {
@@ -397,219 +593,274 @@ function UploadCenter() {
     }
   }
 
-  async function handleIngestFile(uploadedFile: UploadedFile) {
-    setMessage(null);
-    setError(null);
-    setIngestingFileIds((current) => new Set(current).add(uploadedFile.id));
-
-    try {
-      const ingestionJob = await ingestUploadedFile(uploadedFile.id);
-      setTrackedJobs((currentJobs) => {
-        const nextJobs = currentJobs.filter((job) => job.id !== ingestionJob.id);
-        return [ingestionJob, ...nextJobs];
-      });
-      setMessage(
-        `Ingestion ${ingestionJob.status.toLowerCase()} for ${uploadedFile.original_filename}.`
-      );
-      await Promise.all([
-        refreshSelectedBatchFiles(uploadedFile.upload_batch_id),
-        refreshBatches(),
-        refreshRawRowsPreview(uploadedFile.upload_batch_id),
-        refreshValidationSummary(uploadedFile.upload_batch_id),
-      ]);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "File ingestion failed");
-    } finally {
-      setIngestingFileIds((current) => {
-        const next = new Set(current);
-        next.delete(uploadedFile.id);
-        return next;
-      });
-    }
-  }
-
   async function handleIngestFiles() {
     setMessage(null);
     setError(null);
-
     if (!projectId.trim()) {
-      setError("Customer is required.");
+      setError("Select a customer before ingesting files.");
       return;
     }
-
-    const targetBatchIds = getActionBatchIds();
     if (targetBatchIds.length === 0) {
-      setError("Upload files or select a batch before ingesting.");
+      setError("Upload files or select an active batch first.");
       return;
     }
 
-    setIsIngestingBatches(true);
+    setIsIngesting(true);
     try {
       const result = await ingestUploadBatches(projectId.trim(), targetBatchIds);
       setIngestResult(result);
       setNormalizeResult(null);
       setMessage(
-        `Ingested ${result.totals.batches_ingested} of ${
-          result.totals.batches_requested
-        } batch(es), with ${result.totals.raw_rows_inserted} raw row(s) staged.`
+        `Ingested ${formatNumber(result.totals.batches_ingested)} batch(es), staging ${formatNumber(
+          result.totals.raw_rows_inserted
+        )} raw row(s).`
       );
       await refreshBatches();
-      const firstBatchId = targetBatchIds[0] ?? "";
-      if (firstBatchId) {
-        setSelectedBatchId(firstBatchId);
-        await Promise.all([
-          refreshSelectedBatchFiles(firstBatchId),
-          refreshRawRowsPreview(firstBatchId),
-          refreshValidationSummary(firstBatchId),
-        ]);
+      if (targetBatchIds[0]) {
+        setSelectedBatchId(targetBatchIds[0]);
       }
+      setActiveStep("normalize");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "File ingestion failed");
     } finally {
-      setIsIngestingBatches(false);
+      setIsIngesting(false);
     }
   }
 
   async function handleNormalizeFiles() {
     setMessage(null);
     setError(null);
-
     if (!projectId.trim()) {
-      setError("Customer is required.");
+      setError("Select a customer before normalizing files.");
       return;
     }
-
-    const targetBatchIds = getActionBatchIds();
     if (targetBatchIds.length === 0) {
-      setError("Upload files or select a batch before normalizing.");
+      setError("Upload files or select an active batch first.");
       return;
     }
 
     const confirmed = window.confirm(
-      "This will delete and recreate normalized tickets for the selected/uploaded batch(es). Raw uploaded data will not be deleted."
+      "This will normalize the selected/uploaded batch data. Raw uploaded files are preserved."
     );
     if (!confirmed) {
       return;
     }
 
-    setIsNormalizingBatches(true);
+    setIsNormalizing(true);
     try {
       const result = await normalizeUploadBatches(projectId.trim(), ticketType, targetBatchIds, true);
       setNormalizeResult(result);
       setMessage(
-        `Normalized ${result.totals.in_scope_inserted} in-scope and ${
+        `Normalized ${formatNumber(result.totals.in_scope_inserted)} in-scope and ${formatNumber(
           result.totals.out_of_scope_inserted
-        } out-of-scope ticket(s).`
+        )} out-of-scope ticket(s).`
       );
       await refreshBatches();
-      const firstBatchId = targetBatchIds[0] ?? "";
-      if (firstBatchId) {
-        await Promise.all([
-          refreshSelectedBatchFiles(firstBatchId),
-          refreshRawRowsPreview(firstBatchId),
-          refreshValidationSummary(firstBatchId),
-        ]);
-      }
+      setActiveStep("mapping");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Normalization failed");
     } finally {
-      setIsNormalizingBatches(false);
+      setIsNormalizing(false);
     }
   }
 
-  function getIngestButtonText(uploadedFile: UploadedFile): string {
-    const job = jobByUploadedFileId.get(uploadedFile.id);
-    if (ingestingFileIds.has(uploadedFile.id)) {
-      return "Ingesting...";
+  async function handleLoadSourceColumns() {
+    if (!projectId.trim()) {
+      setError("Select a customer before loading source columns.");
+      return;
     }
 
-    if (job?.status === "COMPLETED" || uploadedFile.status === "INGESTED") {
-      return "Completed";
+    setIsLoadingColumns(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await getSourceColumnsForTicketType(
+        projectId.trim(),
+        ticketType,
+        selectedBatchId || undefined
+      );
+      setSourceColumns(response.source_columns);
+      setMessage(`Loaded ${formatNumber(response.source_columns.length)} source column(s).`);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Unable to load source columns"
+      );
+    } finally {
+      setIsLoadingColumns(false);
     }
-
-    if (job?.status === "FAILED" || uploadedFile.status === "FAILED") {
-      return "Retry Ingest";
-    }
-
-    return "Ingest File";
   }
 
-  return (
-    <div className="upload-layout">
-      <form className="upload-form panel" onSubmit={(event) => void handleUpload(event)}>
-        <div className="panel-heading">
-          <div>
-            <p className="label">Upload Center</p>
-            <h2>Ticket Files</h2>
+  async function handleLoadSuggestedMapping() {
+    if (!projectId.trim()) {
+      setError("Select a customer before loading a suggested mapping.");
+      return;
+    }
+
+    setIsLoadingSuggestion(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await getSuggestedMappingForTicketType(
+        projectId.trim(),
+        ticketType,
+        selectedBatchId || undefined
+      );
+      setSourceColumns(
+        response.source_columns.map((sourceColumn) => ({
+          name: sourceColumn,
+          normalized_name: sourceColumn,
+          occurrence_count: 0,
+        }))
+      );
+      setMapping(response.mapping);
+      setMappingSource(response.mapping_source);
+      setMappingSaved(response.mapping_source === "SAVED_TEMPLATE");
+      setMessage(mappingSourceMessage(response.mapping_source));
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Unable to load suggested mapping"
+      );
+    } finally {
+      setIsLoadingSuggestion(false);
+    }
+  }
+
+  async function handleSaveMappingTemplate() {
+    if (!projectId.trim()) {
+      setError("Select a customer before saving a mapping.");
+      return;
+    }
+
+    setIsSavingMapping(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await saveMappingTemplate({
+        projectId: projectId.trim(),
+        ticketType,
+        mapping: cleanMapping(mapping),
+      });
+      setMappingSource("SAVED_TEMPLATE");
+      setMappingSaved(true);
+      setMessage("Mapping saved for this customer and ticket type.");
+      setActiveStep("apply");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to save mapping");
+    } finally {
+      setIsSavingMapping(false);
+    }
+  }
+
+  async function handleApplyMapping() {
+    if (!projectId.trim()) {
+      setError("Select a customer before applying mapping.");
+      return;
+    }
+    if (targetBatchIds.length === 0) {
+      setError("Upload files or select an active batch before applying mapping.");
+      return;
+    }
+
+    const applyScope: ApplyScope = targetBatchIds.length === 1 ? "BATCH" : "TICKET_TYPE";
+    setIsApplyingMapping(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await applyMappingForScope({
+        projectId: projectId.trim(),
+        ticketType,
+        uploadBatchId: applyScope === "BATCH" ? targetBatchIds[0] : undefined,
+        scope: applyScope,
+        mapping: cleanMapping(mapping),
+        deleteExisting: true,
+        saveAsDefaultForTicketType: true,
+      });
+      setApplyResult(result);
+      setMessage(
+        `Applied mapping and created ${formatNumber(result.normalized_ticket_count)} in-scope ticket(s).`
+      );
+      await refreshBatches();
+      setActiveStep("summary");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to apply mapping");
+    } finally {
+      setIsApplyingMapping(false);
+    }
+  }
+
+  async function handleEnrichSla() {
+    if (!projectId.trim()) {
+      setError("Select a customer before enriching Incident SLAs.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "This will enrich in-scope and out-of-scope Incident tickets with vendor-aware SLA selections. SC Tasks are excluded."
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsSlaEnriching(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await enrichIncidentSla(projectId.trim(), true);
+      setSlaEnrichResult(result);
+      setMessage("Incident SLA enrichment completed.");
+      await refreshSlaContext(false);
+      setActiveStep("summary");
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Incident SLA enrichment failed"
+      );
+    } finally {
+      setIsSlaEnriching(false);
+    }
+  }
+
+  function renderUploadStep() {
+    return (
+      <form className="workflow-step-panel" onSubmit={(event) => void handleUpload(event)}>
+        <div className="upload-type-grid" role="radiogroup" aria-label="Upload type">
+          {ticketUploadTypes.map((option) => (
+            <button
+              className={
+                ticketType === option.value ? "upload-type-card active" : "upload-type-card"
+              }
+              key={option.value}
+              type="button"
+              onClick={() => setTicketType(option.value)}
+            >
+              <strong>{option.label}</strong>
+              <span>{option.description}</span>
+            </button>
+          ))}
+          {futureUploadTypes.map((label) => (
+            <button className="upload-type-card disabled" disabled key={label} type="button">
+              <strong>{label}</strong>
+              <span>Coming later</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="form-grid summary-block">
+          <div className="info-card compact-info-card">
+            <p className="label">Customer</p>
+            <strong>{selectedProject?.customer_name ?? "Select customer above"}</strong>
+            <span>{selectedProject?.name ?? "Ticket uploads use the shared selector."}</span>
+          </div>
+          <div className="info-card compact-info-card">
+            <p className="label">Batch Naming</p>
+            <strong>Generated automatically</strong>
+            <span>Customer + source file + upload date/time</span>
           </div>
         </div>
 
-        <div className="form-grid">
-          <CustomerSelector projectId={projectId} onProjectIdChange={handleProjectIdChange} />
-
-          <label>
-            <span>Ticket Type</span>
-            <select value={ticketType} onChange={(event) => setTicketType(event.target.value)}>
-              {ticketTypeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            <span>Upload Period Type</span>
-            <select value={periodType} onChange={(event) => setPeriodType(event.target.value)}>
-              {periodTypeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {periodType === "MONTHLY" ? (
-            <label>
-              <span>Month-Year</span>
-              <input
-                required
-                type="month"
-                value={monthKey}
-                onChange={(event) => setMonthKey(event.target.value)}
-              />
-            </label>
-          ) : (
-            <label>
-              <span>Snapshot Date</span>
-              <input
-                required
-                type="date"
-                value={snapshotDate}
-                onChange={(event) => setSnapshotDate(event.target.value)}
-              />
-            </label>
-          )}
-
-          <label>
-            <span>Batch Name</span>
-            <input
-              required
-              placeholder={
-                periodType === "SNAPSHOT"
-                  ? `Open Incidents Snapshot - ${snapshotDate}`
-                  : "Incidents Closed June 2026"
-              }
-              value={batchName}
-              onChange={(event) => setBatchName(event.target.value)}
-            />
-          </label>
-        </div>
-
         <label className="file-input">
-          <span>Files</span>
+          <span>{isSlaUpload ? "Incident SLA Files" : "Ticket Files"}</span>
           <input
-            accept=".csv,.xlsx"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             multiple
             ref={fileInputRef}
             type="file"
@@ -618,612 +869,794 @@ function UploadCenter() {
         </label>
 
         {files.length > 0 ? (
-          <ul className="selected-files" aria-label="Selected files">
-            {files.map((file) => (
-              <li key={`${file.name}-${file.size}`}>
-                <span>{file.name}</span>
-                <span>{selectedFileContext}</span>
-                <span>{formatBytes(file.size)}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        <div className="message-stack">
-          {message ? <p className="success-text">{message}</p> : null}
-          {error ? <p className="error-text">{error}</p> : null}
-        </div>
+          <div className="scroll-frame compact-file-frame">
+            <ul className="selected-files" aria-label="Selected files">
+              {files.map((file) => (
+                <li key={`${file.name}-${file.size}`}>
+                  <span>{file.name}</span>
+                  <span>{formatBytes(file.size)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="muted-text summary-block">No files selected.</p>
+        )}
 
         <div className="action-row">
-          <button className="primary-button" disabled={isUploading} type="submit">
-            {isUploading ? "Uploading..." : "Upload Files"}
-          </button>
           <button
-            className="secondary-button"
-            disabled={!hasActionBatchIds || isIngestingBatches}
-            type="button"
-            onClick={() => void handleIngestFiles()}
+            className="primary-button"
+            disabled={isUploading || !projectId.trim() || files.length === 0}
+            type="submit"
           >
-            {isIngestingBatches ? "Ingesting..." : "Ingest Files"}
-          </button>
-          <button
-            className="secondary-button"
-            disabled={!hasActionBatchIds || isNormalizingBatches}
-            type="button"
-            onClick={() => void handleNormalizeFiles()}
-          >
-            {isNormalizingBatches ? "Normalizing..." : "Normalize Ready Files"}
+            {isUploading ? "Uploading..." : isSlaUpload ? "Upload SLA Files" : "Upload Files"}
           </button>
           <button
             className="secondary-button"
             disabled={files.length === 0}
             type="button"
-            onClick={handleClearSelectedFiles}
+            onClick={() => {
+              setFiles([]);
+              if (fileInputRef.current) {
+                fileInputRef.current.value = "";
+              }
+            }}
           >
-            Clear Files
-          </button>
-          <button className="secondary-button" type="button" onClick={() => void refreshBatches()}>
-            {isLoadingBatches ? "Refreshing..." : "Refresh Batches"}
-          </button>
-          <button className="secondary-button" type="button" onClick={handleClearDetails}>
-            Clear Details
+            Clear Selection
           </button>
         </div>
 
-        {hasActionBatchIds ? (
-          <p className="muted-text action-scope-text">
-            Actions will use{" "}
-            {uploadedActionBatchIds.length > 0
-              ? `${uploadedActionBatchIds.length} batch(es) from the latest upload.`
-              : "the selected batch."}
-          </p>
-        ) : null}
-
         {uploadResult ? (
           <div className="summary-block">
-            <p className="label">Upload Results</p>
-            <div className="summary-grid mapping-summary-grid">
-              <div>
-                <p className="label">Selected</p>
-                <strong>{uploadResult.totals.files_selected}</strong>
-              </div>
-              <div>
-                <p className="label">Uploaded</p>
-                <strong>{uploadResult.totals.files_uploaded}</strong>
-              </div>
-              <div>
-                <p className="label">Failed</p>
-                <strong>{uploadResult.totals.files_failed}</strong>
-              </div>
-            </div>
-            <div className="table-wrap summary-block">
-              <table>
-                <thead>
-                  <tr>
-                    <th>File</th>
-                    <th>Status</th>
-                    <th>Size</th>
-                    <th>Batch ID</th>
-                    <th>Message</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {uploadResult.files.map((fileResult) => (
-                    <tr key={`${fileResult.filename}-${fileResult.upload_batch_id ?? fileResult.status}`}>
-                      <td>{fileResult.filename}</td>
-                      <td>{fileResult.status}</td>
-                      <td>
-                        {fileResult.size_bytes === null
-                          ? "Not available"
-                          : formatBytes(fileResult.size_bytes)}
-                      </td>
-                      <td className="mono-text">{fileResult.upload_batch_id ?? "Not available"}</td>
-                      <td>
-                        {fileResult.message ||
-                          fileResult.warnings.join("; ") ||
-                          "No issues reported"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="summary-grid">
+              <MetricCard label="Selected" value={formatNumber(uploadResult.totals.files_selected)} />
+              <MetricCard label="Uploaded" value={formatNumber(uploadResult.totals.files_uploaded)} />
+              <MetricCard label="Failed" value={formatNumber(uploadResult.totals.files_failed)} />
+              <MetricCard label="Next Step" value="Ingest" helper="Use the Ingest Files step." />
             </div>
           </div>
         ) : null}
 
-        {ingestResult ? (
+        {slaUploadResult ? (
           <div className="summary-block">
-            <p className="label">Ingest Results</p>
-            <div className="summary-grid mapping-summary-grid">
-              <div>
-                <p className="label">Requested</p>
-                <strong>{ingestResult.totals.batches_requested}</strong>
-              </div>
-              <div>
-                <p className="label">Ingested</p>
-                <strong>{ingestResult.totals.batches_ingested}</strong>
-              </div>
-              <div>
-                <p className="label">Failed</p>
-                <strong>{ingestResult.totals.batches_failed}</strong>
-              </div>
-              <div>
-                <p className="label">Raw Rows</p>
-                <strong>{ingestResult.totals.raw_rows_inserted.toLocaleString()}</strong>
-              </div>
-            </div>
-            <div className="table-wrap summary-block">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Batch</th>
-                    <th>File</th>
-                    <th>Status</th>
-                    <th>Raw Rows</th>
-                    <th>Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ingestResult.batches.map((batchResult) => (
-                    <tr key={batchResult.upload_batch_id}>
-                      <td>{batchResult.batch_name}</td>
-                      <td>{batchResult.filename ?? "Not available"}</td>
-                      <td>{batchResult.status}</td>
-                      <td>{batchResult.raw_rows_inserted.toLocaleString()}</td>
-                      <td>{batchResult.error ?? "None"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null}
-
-        {normalizeResult ? (
-          <div className="summary-block">
-            <p className="label">Normalization Results</p>
-            <div className="summary-grid mapping-summary-grid">
-              <div>
-                <p className="label">Raw Rows</p>
-                <strong>{normalizeResult.totals.raw_rows.toLocaleString()}</strong>
-              </div>
-              <div>
-                <p className="label">In Scope</p>
-                <strong>{normalizeResult.totals.in_scope_inserted.toLocaleString()}</strong>
-              </div>
-              <div>
-                <p className="label">Out of Scope</p>
-                <strong>{normalizeResult.totals.out_of_scope_inserted.toLocaleString()}</strong>
-              </div>
-              <div>
-                <p className="label">Failed Batches</p>
-                <strong>{normalizeResult.totals.failed_batches}</strong>
-              </div>
-            </div>
-            <div className="table-wrap summary-block">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Batch</th>
-                    <th>File</th>
-                    <th>Status</th>
-                    <th>Raw</th>
-                    <th>In Scope</th>
-                    <th>Out of Scope</th>
-                    <th>Failed Rows</th>
-                    <th>Messages</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {normalizeResult.batches.map((batchResult) => (
-                    <tr key={batchResult.upload_batch_id}>
-                      <td>{batchResult.batch_name}</td>
-                      <td>{batchResult.filename ?? "Not available"}</td>
-                      <td>{batchResult.status}</td>
-                      <td>{batchResult.raw_rows.toLocaleString()}</td>
-                      <td>{batchResult.in_scope_inserted.toLocaleString()}</td>
-                      <td>{batchResult.out_of_scope_inserted.toLocaleString()}</td>
-                      <td>{batchResult.failed_rows.toLocaleString()}</td>
-                      <td>
-                        {[...batchResult.warnings, ...batchResult.errors].join("; ") ||
-                          "No issues reported"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="summary-grid">
+              <MetricCard label="SLA Files" value={formatNumber(slaUploadResult.totals.total_files)} />
+              <MetricCard
+                label="Rows Read"
+                value={formatNumber(slaUploadResult.totals.total_rows_read)}
+              />
+              <MetricCard label="Inserted" value={formatNumber(slaUploadResult.totals.inserted_rows)} />
+              <MetricCard
+                label="Duplicates Skipped"
+                value={formatNumber(slaUploadResult.totals.duplicate_rows_skipped)}
+              />
             </div>
           </div>
         ) : null}
       </form>
+    );
+  }
 
-      <section className="panel" aria-labelledby="active-batch-list-heading">
-        <div className="panel-heading">
+  function renderIngestStep() {
+    if (isSlaUpload) {
+      return (
+        <InfoPanel title="Ingest">
+          <p className="muted-text">
+            Not required for Incident SLA files. SLA upload parses and loads staging rows during
+            upload, then enrichment runs in the Apply / Enrich step.
+          </p>
+        </InfoPanel>
+      );
+    }
+
+    return (
+      <div className="workflow-step-panel">
+        <div className="panel-heading compact-heading">
           <div>
-            <p className="label">Staging</p>
-            <h2 id="active-batch-list-heading">Active Upload Batches</h2>
-          </div>
-        </div>
-
-        {batches.length === 0 ? (
-          <p className="muted-text">No active upload batches found.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Batch</th>
-                  <th>Ticket Type</th>
-                  <th>Period</th>
-                  <th>Status</th>
-                  <th>Files</th>
-                  <th>Size</th>
-                  <th>Created</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {batches.map((batch) => (
-                  <tr
-                    className={batch.id === selectedBatchId ? "selected-row" : ""}
-                    key={batch.id}
-                    onClick={() => handleSelectBatch(batch.id)}
-                  >
-                    <td>
-                      <button className="link-button" type="button">
-                        {batch.batch_name}
-                      </button>
-                    </td>
-                    <td>{batch.ticket_type ?? "Not available"}</td>
-                    <td>{formatBatchPeriod(batch)}</td>
-                    <td>{batch.status}</td>
-                    <td>{getBatchFileCount(batch)}</td>
-                    <td>{formatBytes(batch.total_size_bytes)}</td>
-                    <td>{new Date(batch.created_at).toLocaleString()}</td>
-                    <td>
-                      <button
-                        className="secondary-button table-action-button danger-button"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void handleDeleteBatch(batch);
-                        }}
-                      >
-                        Delete Batch
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="panel" aria-labelledby="historical-batch-list-heading">
-        <div className="panel-heading">
-          <div>
-            <p className="label">History</p>
-            <h2 id="historical-batch-list-heading">Historical Batches</h2>
-          </div>
-        </div>
-
-        {historicalBatches.length === 0 ? (
-          <p className="muted-text">No historical batches found.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Batch</th>
-                  <th>Ticket Type</th>
-                  <th>Period</th>
-                  <th>Status</th>
-                  <th>Files</th>
-                  <th>Raw Rows</th>
-                  <th>Tickets</th>
-                  <th>Normalized</th>
-                </tr>
-              </thead>
-              <tbody>
-                {historicalBatches.map((batch) => (
-                  <tr
-                    className={batch.id === selectedBatchId ? "selected-row" : ""}
-                    key={batch.id}
-                    onClick={() => handleSelectBatch(batch.id)}
-                  >
-                    <td>
-                      <button className="link-button" type="button">
-                        {batch.batch_name}
-                      </button>
-                    </td>
-                    <td>{batch.ticket_type ?? "Not available"}</td>
-                    <td>{formatBatchPeriod(batch)}</td>
-                    <td>{batch.status}</td>
-                    <td>{getBatchFileCount(batch)}</td>
-                    <td>{batch.raw_row_count ?? "Not available"}</td>
-                    <td>{batch.normalized_ticket_count ?? "Not available"}</td>
-                    <td>
-                      {batch.normalized_at
-                        ? new Date(batch.normalized_at).toLocaleString()
-                        : "Not available"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="panel" aria-labelledby="file-list-heading">
-        <div className="panel-heading">
-          <div>
-            <p className="label">Batch Details</p>
-            <h2 id="file-list-heading">Uploaded Files</h2>
+            <p className="label">Ingest</p>
+            <h2>Stage Uploaded Files</h2>
           </div>
           <button
-            className="secondary-button"
-            disabled={!selectedBatchId}
+            className="primary-button"
+            disabled={isIngesting || targetBatchIds.length === 0}
             type="button"
-            onClick={handleClearDetails}
+            onClick={() => void handleIngestFiles()}
           >
-            Clear Details
+            {isIngesting ? "Ingesting..." : "Ingest Files"}
           </button>
         </div>
 
-        {!selectedBatchId ? (
-          <p className="muted-text">No batch selected.</p>
-        ) : isLoadingFiles ? (
-          <p className="muted-text">Loading uploaded files...</p>
-        ) : selectedBatchFiles.length === 0 ? (
-          <p className="muted-text">No files found for this batch.</p>
-        ) : (
-          <div className="table-wrap">
+        <div className="scroll-frame">
+          {selectedBatchFiles.length === 0 ? (
+            <p className="muted-text">
+              {isLoadingFiles ? "Loading uploaded files..." : "No uploaded files selected yet."}
+            </p>
+          ) : (
             <table>
               <thead>
                 <tr>
-                  <th>Original File</th>
-                  <th>Saved File</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Size</th>
-                  <th>Error</th>
-                  <th>Ingestion</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedBatchFiles.map((uploadedFile) => (
-                  <tr key={uploadedFile.id}>
-                    <td>{uploadedFile.original_filename}</td>
-                    <td>{uploadedFile.saved_filename ?? "Not available"}</td>
-                    <td>{uploadedFile.ticket_type}</td>
-                    <td>
-                      {jobByUploadedFileId.get(uploadedFile.id)?.status ?? uploadedFile.status}
-                    </td>
-                    <td>{formatBytes(uploadedFile.size_bytes)}</td>
-                    <td>{uploadedFile.error_message ?? "None"}</td>
-                    <td>
-                      <button
-                        className="secondary-button table-action-button"
-                        disabled={
-                          ingestingFileIds.has(uploadedFile.id) ||
-                          jobByUploadedFileId.get(uploadedFile.id)?.status === "COMPLETED" ||
-                          uploadedFile.status === "INGESTED"
-                        }
-                        type="button"
-                        onClick={() => void handleIngestFile(uploadedFile)}
-                      >
-                        {getIngestButtonText(uploadedFile)}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="panel" aria-labelledby="job-status-heading">
-        <div className="panel-heading">
-          <div>
-            <p className="label">Ingestion</p>
-            <h2 id="job-status-heading">Job Status</h2>
-          </div>
-          <button className="secondary-button" type="button" onClick={() => void refreshTrackedJobs()}>
-            Refresh Jobs
-          </button>
-        </div>
-
-        {trackedJobs.length === 0 ? (
-          <p className="muted-text">No tracked ingestion jobs.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Job ID</th>
-                  <th>File ID</th>
+                  <th>File</th>
                   <th>Status</th>
                   <th>Rows</th>
-                  <th>Error</th>
                   <th>Updated</th>
                 </tr>
               </thead>
               <tbody>
-                {trackedJobs.map((job) => (
-                  <tr key={job.id}>
-                    <td className="mono-text">{job.id}</td>
-                    <td className="mono-text">{job.uploaded_file_id ?? "Not available"}</td>
-                    <td>{job.status}</td>
+                {selectedBatchFiles.map((file) => {
+                  const job = jobByUploadedFileId.get(file.id);
+                  return (
+                    <tr key={file.id}>
+                      <td>{file.original_filename}</td>
+                      <td>{job?.status ?? file.status}</td>
+                      <td>
+                        {job ? `${formatNumber(job.rows_processed)} / ${formatNumber(job.rows_total)}` : "Ready"}
+                      </td>
+                      <td>{formatDate(job?.updated_at ?? file.updated_at)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {ingestResult ? (
+          <div className="summary-grid summary-block">
+            <MetricCard label="Requested" value={formatNumber(ingestResult.totals.batches_requested)} />
+            <MetricCard label="Ingested" value={formatNumber(ingestResult.totals.batches_ingested)} />
+            <MetricCard label="Failed" value={formatNumber(ingestResult.totals.batches_failed)} />
+            <MetricCard label="Rows Staged" value={formatNumber(ingestResult.totals.raw_rows_inserted)} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderNormalizeStep() {
+    if (isSlaUpload) {
+      return (
+        <InfoPanel title="Normalize">
+          <p className="muted-text">
+            Not required for Incident SLA files. SLA enrichment uses uploaded SLA staging rows and
+            does not create SC Task SLA records.
+          </p>
+        </InfoPanel>
+      );
+    }
+
+    return (
+      <div className="workflow-step-panel">
+        <div className="panel-heading compact-heading">
+          <div>
+            <p className="label">Normalize</p>
+            <h2>Split In-Scope and Out-of-Scope Tickets</h2>
+          </div>
+          <button
+            className="primary-button"
+            disabled={isNormalizing || targetBatchIds.length === 0}
+            type="button"
+            onClick={() => void handleNormalizeFiles()}
+          >
+            {isNormalizing ? "Normalizing..." : "Normalize Files"}
+          </button>
+        </div>
+
+        <div className="scroll-frame">
+          {filteredBatches.length === 0 ? (
+            <p className="muted-text">
+              No active {ticketType === "INCIDENT" ? "Incident" : "SC Task"} batches found.
+            </p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Batch</th>
+                  <th>Status</th>
+                  <th>Files</th>
+                  <th>Period</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredBatches.map((batch) => (
+                  <tr
+                    className={batch.id === selectedBatchId ? "selected-row" : ""}
+                    key={batch.id}
+                    onClick={() => handleSelectBatch(batch.id)}
+                  >
                     <td>
-                      {job.rows_processed} / {job.rows_total}
+                      <button className="link-button" type="button">
+                        {batch.batch_name}
+                      </button>
                     </td>
-                    <td>{job.error_message ?? "None"}</td>
-                    <td>{new Date(job.updated_at).toLocaleString()}</td>
+                    <td>{batch.status}</td>
+                    <td>{batch.uploaded_file_count ?? batch.file_count}</td>
+                    <td>{formatBatchPeriod(batch)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-        )}
-      </section>
+          )}
+        </div>
 
-      <section className="panel" aria-labelledby="raw-row-preview-heading">
-        <div className="panel-heading">
+        {normalizeResult ? (
+          <div className="summary-grid summary-block">
+            <MetricCard label="Raw Rows" value={formatNumber(normalizeResult.totals.raw_rows)} />
+            <MetricCard label="In Scope" value={formatNumber(normalizeResult.totals.in_scope_inserted)} />
+            <MetricCard
+              label="Out of Scope"
+              value={formatNumber(normalizeResult.totals.out_of_scope_inserted)}
+            />
+            <MetricCard label="Failed Batches" value={formatNumber(normalizeResult.totals.failed_batches)} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderMappingStep() {
+    if (isSlaUpload) {
+      return (
+        <InfoPanel title="Column Mapping">
+          <p className="muted-text">
+            Column mapping is not required for Incident SLA files. SLA files use fixed SLA parsing
+            and vendor-aware enrichment rules.
+          </p>
+        </InfoPanel>
+      );
+    }
+
+    return (
+      <div className="workflow-step-panel">
+        <div className="panel-heading compact-heading">
           <div>
-            <p className="label">Staging</p>
-            <h2 id="raw-row-preview-heading">Raw Row Preview</h2>
+            <p className="label">Column Mapping</p>
+            <h2>Map Source Columns to Normalized Fields</h2>
           </div>
           <div className="panel-actions">
             <button
               className="secondary-button"
-              disabled={!selectedBatchId}
+              disabled={!projectId.trim() || isLoadingColumns}
               type="button"
-              onClick={() => void refreshRawRowsPreview(selectedBatchId)}
+              onClick={() => void handleLoadSourceColumns()}
             >
-              {isLoadingPreview ? "Refreshing..." : "Refresh Preview"}
+              {isLoadingColumns ? "Loading..." : "Load Source Columns"}
             </button>
             <button
               className="secondary-button"
-              disabled={!rawRowsPreview}
+              disabled={!projectId.trim() || isLoadingSuggestion}
               type="button"
-              onClick={handleClearPreview}
+              onClick={() => void handleLoadSuggestedMapping()}
             >
-              Clear Preview
+              {isLoadingSuggestion ? "Loading..." : "Suggested Mapping"}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => {
+                setMapping({});
+                setMappingSource(null);
+                setMappingSaved(false);
+                setApplyResult(null);
+              }}
+            >
+              Clear Mapping
+            </button>
+            <button
+              className="primary-button"
+              disabled={!projectId.trim() || isSavingMapping}
+              type="button"
+              onClick={() => void handleSaveMappingTemplate()}
+            >
+              {isSavingMapping ? "Saving..." : "Save Mapping"}
             </button>
           </div>
         </div>
 
-        {!selectedBatchId ? (
-          <p className="muted-text">No batch selected.</p>
-        ) : isLoadingPreview ? (
-          <p className="muted-text">Loading raw rows...</p>
-        ) : !rawRowsPreview ? (
-          <p className="muted-text">Raw row preview is cleared or not loaded.</p>
-        ) : rawRowsPreview.rows.length === 0 ? (
-          <p className="muted-text">
-            {rawRowsPreview.message ?? "No raw rows found. Ingest the uploaded file first."}
-          </p>
-        ) : (
-          <div className="raw-preview-list">
-            {rawRowsPreview.rows.map((row) => (
-              <article className="raw-preview-item" key={row.id}>
-                <div className="raw-preview-meta">
-                  <span>Row {row.row_number}</span>
-                  <span>{row.source_filename ?? "Unknown source"}</span>
-                  <span>{row.raw_ticket_number ?? "No ticket ID"}</span>
-                </div>
-                <pre>{JSON.stringify(row.raw_data, null, 2)}</pre>
-              </article>
+        <div className="summary-grid">
+          <MetricCard
+            label="Customer"
+            value={selectedProject?.customer_name ?? "Not selected"}
+            helper={selectedProject?.name}
+          />
+          <MetricCard label="Ticket Type" value={ticketType} />
+          <MetricCard label="Source Columns" value={formatNumber(sourceColumns.length)} />
+          <MetricCard label="Mapping Source" value={mappingSource ?? "Not loaded"} />
+        </div>
+
+        {mappingWarnings.length > 0 ? (
+          <div className="warning-list">
+            {mappingWarnings.map((warning) => (
+              <p key={warning}>{warning}</p>
             ))}
           </div>
-        )}
-      </section>
+        ) : null}
 
-      <section className="panel" aria-labelledby="validation-summary-heading">
-        <div className="panel-heading">
-          <div>
-            <p className="label">Quality</p>
-            <h2 id="validation-summary-heading">Validation Summary</h2>
+        <div className="scroll-frame mapping-scroll-frame summary-block">
+          <table>
+            <thead>
+              <tr>
+                <th>Normalized Field</th>
+                <th>Source Column</th>
+              </tr>
+            </thead>
+            <tbody>
+              {normalizedFields.map((field) => (
+                <tr key={field}>
+                  <td className="mono-text">{field}</td>
+                  <td>
+                    <select
+                      value={mapping[field] ?? ""}
+                      onChange={(event) =>
+                        setMapping((currentMapping) => ({
+                          ...currentMapping,
+                          [field]: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">Unmapped</option>
+                      {sourceColumnNames.map((sourceColumn) => (
+                        <option key={sourceColumn} value={sourceColumn}>
+                          {sourceColumn}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  function renderApplyStep() {
+    if (isSlaUpload) {
+      return (
+        <div className="workflow-step-panel">
+          <div className="panel-heading compact-heading">
+            <div>
+              <p className="label">Enrich SLAs</p>
+              <h2>Vendor-Aware Incident SLA Enrichment</h2>
+            </div>
+            <button
+              className="primary-button"
+              disabled={!projectId.trim() || isSlaEnriching}
+              type="button"
+              onClick={() => void handleEnrichSla()}
+            >
+              {isSlaEnriching ? "Enriching..." : "Enrich Incident SLAs"}
+            </button>
           </div>
-          <div className="panel-actions">
-            <button
-              className="secondary-button"
-              disabled={!selectedBatchId}
-              type="button"
-              onClick={() => void refreshValidationSummary(selectedBatchId)}
-            >
-              {isLoadingValidation ? "Refreshing..." : "Refresh Summary"}
-            </button>
-            <button
-              className="secondary-button"
-              disabled={!validationSummary}
-              type="button"
-              onClick={handleClearValidationSummary}
-            >
-              Clear Summary
-            </button>
+          <p className="muted-text">
+            Uses all uploaded SLA rows for the selected customer. In-scope and out-of-scope
+            Incident tickets are enriched; SC Tasks are excluded.
+          </p>
+          {slaEnrichResult ? (
+            <div className="summary-grid summary-block">
+              <MetricCard
+                label="In-Scope Matched"
+                value={formatNumber(slaEnrichResult.in_scope.incident_tickets_matched_to_sla_rows)}
+              />
+              <MetricCard
+                label="In-Scope Enriched"
+                value={formatNumber(slaEnrichResult.in_scope.incident_tickets_enriched)}
+              />
+              <MetricCard
+                label="Out-of-Scope Matched"
+                value={formatNumber(
+                  slaEnrichResult.out_of_scope.incident_tickets_matched_to_sla_rows
+                )}
+              />
+              <MetricCard
+                label="Out-of-Scope Enriched"
+                value={formatNumber(slaEnrichResult.out_of_scope.incident_tickets_enriched)}
+              />
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    return (
+      <div className="workflow-step-panel">
+        <div className="panel-heading compact-heading">
+          <div>
+            <p className="label">Apply Mapping</p>
+            <h2>Finalize Normalized Ticket Data</h2>
+          </div>
+          <button
+            className="primary-button"
+            disabled={!hasApplyReady || isApplyingMapping}
+            type="button"
+            onClick={() => void handleApplyMapping()}
+          >
+            {isApplyingMapping ? "Applying..." : "Apply Mapping"}
+          </button>
+        </div>
+        <p className="muted-text">
+          Applies the saved/current mapping and re-normalizes the selected batch or ticket type
+          using the Prompt 10.2 scope split rules.
+        </p>
+        {mappingSaved ? (
+          <p className="success-text summary-block">A saved mapping is available for this ticket type.</p>
+        ) : null}
+        {applyResult ? (
+          <div className="summary-grid summary-block">
+            <MetricCard label="Raw Rows" value={formatNumber(applyResult.total_raw_rows)} />
+            <MetricCard
+              label="In Scope"
+              value={formatNumber(applyResult.normalized_ticket_count)}
+            />
+            <MetricCard
+              label="Out of Scope"
+              value={formatNumber(applyResult.out_of_scope_ticket_count)}
+            />
+            <MetricCard label="Failed Rows" value={formatNumber(applyResult.failed_row_count)} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderSummaryStep() {
+    if (isSlaUpload) {
+      return (
+        <div className="workflow-step-panel">
+          <div className="summary-grid">
+            <MetricCard
+              label="SLA Files Uploaded"
+              value={formatNumber(slaUploadResult?.totals.total_files ?? slaUploadHistory.length)}
+            />
+            <MetricCard
+              label="Rows Read"
+              value={formatNumber(slaUploadResult?.totals.total_rows_read ?? slaSummary?.total_sla_rows)}
+            />
+            <MetricCard
+              label="Rows Inserted"
+              value={formatNumber(slaUploadResult?.totals.inserted_rows)}
+            />
+            <MetricCard
+              label="Duplicates Skipped"
+              value={formatNumber(slaUploadResult?.totals.duplicate_rows_skipped)}
+            />
+            <MetricCard
+              label="In-Scope Matched"
+              value={formatNumber(slaEnrichResult?.in_scope.incident_tickets_matched_to_sla_rows)}
+            />
+            <MetricCard
+              label="In-Scope Enriched"
+              value={formatNumber(slaEnrichResult?.in_scope.incident_tickets_enriched)}
+            />
+            <MetricCard
+              label="Out-of-Scope Matched"
+              value={formatNumber(
+                slaEnrichResult?.out_of_scope.incident_tickets_matched_to_sla_rows
+              )}
+            />
+            <MetricCard
+              label="Out-of-Scope Enriched"
+              value={formatNumber(slaEnrichResult?.out_of_scope.incident_tickets_enriched)}
+            />
+            <MetricCard
+              label="Response Vendor / Default / Fallback / Not Found"
+              value={
+                slaEnrichResult
+                  ? `${formatNumber(slaEnrichResult.in_scope.response_vendor_specific + slaEnrichResult.out_of_scope.response_vendor_specific)} / ${formatNumber(
+                      slaEnrichResult.in_scope.response_default + slaEnrichResult.out_of_scope.response_default
+                    )} / ${formatNumber(
+                      slaEnrichResult.in_scope.response_fallback_default +
+                        slaEnrichResult.out_of_scope.response_fallback_default
+                    )} / ${formatNumber(
+                      slaEnrichResult.in_scope.response_not_found + slaEnrichResult.out_of_scope.response_not_found
+                    )}`
+                  : "Not available"
+              }
+            />
+            <MetricCard
+              label="Resolution Vendor / Default / Fallback / Not Found"
+              value={
+                slaEnrichResult
+                  ? `${formatNumber(slaEnrichResult.in_scope.resolution_vendor_specific + slaEnrichResult.out_of_scope.resolution_vendor_specific)} / ${formatNumber(
+                      slaEnrichResult.in_scope.resolution_default + slaEnrichResult.out_of_scope.resolution_default
+                    )} / ${formatNumber(
+                      slaEnrichResult.in_scope.resolution_fallback_default +
+                        slaEnrichResult.out_of_scope.resolution_fallback_default
+                    )} / ${formatNumber(
+                      slaEnrichResult.in_scope.resolution_not_found + slaEnrichResult.out_of_scope.resolution_not_found
+                    )}`
+                  : "Not available"
+              }
+            />
           </div>
         </div>
+      );
+    }
 
-        {!selectedBatchId ? (
-          <p className="muted-text">No batch selected.</p>
-        ) : isLoadingValidation ? (
-          <p className="muted-text">Loading validation summary...</p>
-        ) : !validationSummary ? (
-          <p className="muted-text">Validation summary is cleared or not loaded.</p>
-        ) : (
-          <>
-            {validationSummary.message ? (
-              <p className="muted-text summary-message">{validationSummary.message}</p>
-            ) : null}
-            <div className="summary-grid">
-              <div>
-                <p className="label">Total Raw Rows</p>
-                <strong>{validationSummary.total_raw_rows}</strong>
-              </div>
-              <div>
-                <p className="label">Missing Ticket ID</p>
-                <strong>{validationSummary.missing_ticket_id_count}</strong>
-              </div>
-              <div>
-                <p className="label">Missing Created Date</p>
-                <strong>{validationSummary.missing_created_date_count}</strong>
-              </div>
-              <div>
-                <p className="label">Duplicate Ticket IDs</p>
-                <strong>{validationSummary.duplicate_ticket_id_count}</strong>
-              </div>
+    return (
+      <div className="workflow-step-panel">
+        <div className="summary-grid">
+          <MetricCard
+            label="Files Uploaded"
+            value={formatNumber(uploadResult?.totals.files_uploaded ?? selectedBatchFiles.length)}
+          />
+          <MetricCard
+            label="Files Ingested"
+            value={formatNumber(ingestResult?.totals.batches_ingested)}
+          />
+          <MetricCard
+            label="Files Normalized"
+            value={formatNumber(
+              normalizeResult?.batches.filter((batch) => batch.status === "NORMALIZED").length
+            )}
+          />
+          <MetricCard
+            label="Input Rows"
+            value={formatNumber(
+              applyResult?.total_raw_rows ??
+                normalizeResult?.totals.raw_rows ??
+                validationSummary?.total_raw_rows
+            )}
+          />
+          <MetricCard
+            label="In-Scope Output"
+            value={formatNumber(
+              applyResult?.normalized_ticket_count ?? normalizeResult?.totals.in_scope_inserted
+            )}
+          />
+          <MetricCard
+            label="Out-of-Scope Output"
+            value={formatNumber(
+              applyResult?.out_of_scope_ticket_count ?? normalizeResult?.totals.out_of_scope_inserted
+            )}
+          />
+          <MetricCard
+            label="Blank Assignment Group"
+            value={formatNumber(applyResult?.blank_assignment_group_count)}
+          />
+          <MetricCard
+            label="Not in Application Inventory"
+            value={formatNumber(applyResult?.assignment_group_not_in_inventory_count)}
+          />
+          <MetricCard label="Vendor Populated" value="Covered" helper="Derived during mapping/enrichment." />
+          <MetricCard label="Derived Vendor Populated" value="Covered" helper="Uses Application Inventory." />
+          <MetricCard label="Functional Track Populated" value="Covered" helper="Uses Application Inventory." />
+          <MetricCard label="AMS Owner Populated" value="Covered" helper="Uses Application Inventory." />
+          <MetricCard
+            label="Parent Business Application Populated"
+            value="Covered"
+            helper="Uses Application Inventory."
+          />
+        </div>
+
+        {duplicateTicketEntries.length > 0 ? (
+          <div className="summary-block">
+            <p className="label">Duplicate Ticket ID Sample</p>
+            <div className="chip-list">
+              {duplicateTicketEntries.slice(0, 12).map(([ticketId, count]) => (
+                <span className="chip" key={ticketId}>
+                  {ticketId} ({count})
+                </span>
+              ))}
             </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
-            {duplicateTicketEntries.length > 0 ? (
-              <div className="summary-block">
-                <p className="label">Duplicate IDs</p>
-                <div className="chip-list">
-                  {duplicateTicketEntries.slice(0, 20).map(([ticketId, count]) => (
-                    <span className="chip" key={ticketId}>
-                      {ticketId} ({count})
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+  function renderCurrentStep() {
+    if (activeStep === "upload") {
+      return renderUploadStep();
+    }
+    if (activeStep === "ingest") {
+      return renderIngestStep();
+    }
+    if (activeStep === "normalize") {
+      return renderNormalizeStep();
+    }
+    if (activeStep === "mapping") {
+      return renderMappingStep();
+    }
+    if (activeStep === "apply") {
+      return renderApplyStep();
+    }
+    return renderSummaryStep();
+  }
 
-            <div className="summary-block">
-              <p className="label">Detected Source Columns</p>
-              <div className="chip-list">
-                {validationSummary.detected_source_columns.map((column) => (
-                  <span className="chip" key={column}>
-                    {column}
-                  </span>
-                ))}
-              </div>
-            </div>
+  return (
+    <div className="ticket-workflow">
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Ticket Details</p>
+            <h2>Guided Upload and Processing Workflow</h2>
+          </div>
+          <button
+            className="secondary-button"
+            disabled={isSlaUpload ? isLoadingSlaContext : isLoadingBatches}
+            type="button"
+            onClick={() => {
+              if (isSlaUpload) {
+                void refreshSlaContext(true);
+              } else {
+                void refreshBatches();
+              }
+            }}
+          >
+            {isSlaUpload
+              ? isLoadingSlaContext
+                ? "Refreshing..."
+                : "Refresh SLA Context"
+              : isLoadingBatches
+                ? "Refreshing..."
+                : "Refresh Batches"}
+          </button>
+        </div>
 
-            <div className="summary-block table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Uploaded File</th>
-                    <th>Rows</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {validationSummary.rows_by_uploaded_file.map((fileSummary) => (
-                    <tr key={fileSummary.uploaded_file_id}>
-                      <td>{fileSummary.original_filename}</td>
-                      <td>{fileSummary.row_count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
+        <div className="workflow-steps" aria-label="Ticket processing steps">
+          {workflowSteps.map((step, index) => {
+            const enabled = enabledSteps[step.id];
+            const active = activeStep === step.id;
+            return (
+              <button
+                className={active ? "workflow-step active" : "workflow-step"}
+                disabled={!enabled}
+                key={step.id}
+                type="button"
+                onClick={() => setActiveStep(step.id)}
+              >
+                <span>{index + 1}</span>
+                <strong>{step.label}</strong>
+                <small>{enabled ? step.helper : "Locked"}</small>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="message-stack" role="status" aria-live="polite">
+          {message ? <p className="success-text">{message}</p> : null}
+          {error ? <p className="error-text">{error}</p> : null}
+        </div>
       </section>
+
+      <section className="panel workflow-content-panel">{renderCurrentStep()}</section>
+
+      {!isSlaUpload ? (
+        <section className="panel" aria-labelledby="batch-history-heading">
+          <div className="panel-heading compact-heading">
+            <div>
+              <p className="label">Status History</p>
+              <h2 id="batch-history-heading">Active and Historical Batches</h2>
+            </div>
+          </div>
+          <div className="split-grid">
+            <div>
+              <p className="label">Active Batches</p>
+              <div className="scroll-frame compact-file-frame summary-block">
+                {filteredBatches.length === 0 ? (
+                  <p className="muted-text">No active batches for this upload type.</p>
+                ) : (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Batch</th>
+                        <th>Status</th>
+                        <th>Files</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredBatches.map((batch) => (
+                        <tr
+                          className={batch.id === selectedBatchId ? "selected-row" : ""}
+                          key={batch.id}
+                          onClick={() => handleSelectBatch(batch.id)}
+                        >
+                          <td>
+                            <button className="link-button" type="button">
+                              {batch.batch_name}
+                            </button>
+                          </td>
+                          <td>{batch.status}</td>
+                          <td>{batch.uploaded_file_count ?? batch.file_count}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+            <div>
+              <p className="label">Historical Batches</p>
+              <div className="scroll-frame compact-file-frame summary-block">
+                {filteredHistoricalBatches.length === 0 ? (
+                  <p className="muted-text">No historical batches for this upload type.</p>
+                ) : (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Batch</th>
+                        <th>Status</th>
+                        <th>Tickets</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredHistoricalBatches.map((batch) => (
+                        <tr key={batch.id}>
+                          <td>{batch.batch_name}</td>
+                          <td>{batch.status}</td>
+                          <td>{formatNumber(batch.normalized_ticket_count)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
     </div>
+  );
+}
+
+function UploadCenter() {
+  const [activeTab, setActiveTab] = useState<UploadCenterTab>("application-inventory");
+  const [projectId, setProjectId] = useState("");
+  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
+
+  return (
+    <section className="upload-center-layout" aria-labelledby="upload-center-heading">
+      <div className="panel upload-center-header">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Upload Center</p>
+            <h2 id="upload-center-heading">Data Loading and Processing</h2>
+          </div>
+        </div>
+        <div className="form-grid">
+          <CustomerSelector
+            projectId={projectId}
+            onProjectIdChange={setProjectId}
+            onProjectChange={setSelectedProject}
+          />
+          <div className="info-card compact-info-card">
+            <p className="label">Selected Context</p>
+            <strong>{selectedProject?.customer_name ?? "No customer selected"}</strong>
+            <span>{selectedProject?.name ?? "Choose a customer/project to continue."}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="section-tabs" role="tablist" aria-label="Upload Center sections">
+        <button
+          className={activeTab === "application-inventory" ? "section-tab active" : "section-tab"}
+          type="button"
+          onClick={() => setActiveTab("application-inventory")}
+        >
+          Application Inventory
+        </button>
+        <button
+          className={activeTab === "ticket-details" ? "section-tab active" : "section-tab"}
+          type="button"
+          onClick={() => setActiveTab("ticket-details")}
+        >
+          Ticket Details
+        </button>
+      </div>
+
+      {activeTab === "application-inventory" ? (
+        <ApplicationInventory
+          embedded
+          projectId={projectId}
+          selectedProject={selectedProject}
+          onProjectIdChange={setProjectId}
+          onProjectChange={setSelectedProject}
+        />
+      ) : (
+        <TicketDetailsWorkflow projectId={projectId} selectedProject={selectedProject} />
+      )}
+    </section>
   );
 }
 

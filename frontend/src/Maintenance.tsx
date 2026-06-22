@@ -3,7 +3,6 @@ import { useState } from "react";
 import {
   deleteClientAndRelatedData,
   deleteProjectAndRelatedData,
-  resetOperationalData,
   resetProjectOperationalData,
 } from "./api/admin";
 import type { OperationalDataResetResponse } from "./api/admin";
@@ -12,11 +11,11 @@ import type { ScopeSummary, ScopeSummaryValueCount } from "./api/applicationInve
 import type { ProjectOption } from "./api/projects";
 import CustomerSelector from "./CustomerSelector";
 
-const globalRequiredConfirmation = "RESET OPERATIONAL DATA";
-const deleteProjectConfirmation = "DELETE PROJECT";
-const deleteClientConfirmation = "DELETE CLIENT";
+type ResetMode = "selected-data" | "project-data" | "customer-data";
 
-type ScopedCleanupAction = "project-operational" | "delete-project" | "delete-client";
+const selectedDataConfirmation = "RESET OPERATIONAL DATA";
+const projectDataConfirmation = "RESET PROJECT DATA";
+const customerDataConfirmation = "RESET CUSTOMER DATA";
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -39,7 +38,7 @@ function TopValues({ title, values }: { title: string; values: ScopeSummaryValue
       {values.length === 0 ? (
         <p className="muted-text">No out-of-scope values.</p>
       ) : (
-        <div className="table-wrap">
+        <div className="scroll-frame compact-file-frame">
           <table>
             <thead>
               <tr>
@@ -62,140 +61,56 @@ function TopValues({ title, values }: { title: string; values: ScopeSummaryValue
   );
 }
 
+function resultHasUpdates(result: OperationalDataResetResponse): boolean {
+  return Object.keys(result.updated_counts ?? {}).length > 0;
+}
+
 function Maintenance() {
   const [projectId, setProjectId] = useState("");
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
+  const [resetMode, setResetMode] = useState<ResetMode>("selected-data");
   const [confirmation, setConfirmation] = useState("");
-  const [scopedAction, setScopedAction] =
-    useState<ScopedCleanupAction>("project-operational");
-  const [scopedConfirmation, setScopedConfirmation] = useState("");
   const [resetIncidents, setResetIncidents] = useState(false);
   const [resetScTasks, setResetScTasks] = useState(false);
   const [resetIncidentSla, setResetIncidentSla] = useState(false);
-  const [resetResult, setResetResult] = useState<OperationalDataResetResponse | null>(null);
-  const [scopedResult, setScopedResult] = useState<OperationalDataResetResponse | null>(null);
+  const [result, setResult] = useState<OperationalDataResetResponse | null>(null);
   const [scopeSummary, setScopeSummary] = useState<ScopeSummary | null>(null);
-  const [isResetting, setIsResetting] = useState(false);
-  const [isRunningScopedCleanup, setIsRunningScopedCleanup] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
   const [isLoadingScope, setIsLoadingScope] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const requiredScopedConfirmation =
-    scopedAction === "project-operational"
-      ? globalRequiredConfirmation
-      : scopedAction === "delete-project"
-        ? deleteProjectConfirmation
-        : deleteClientConfirmation;
+  const requiredConfirmation =
+    resetMode === "selected-data"
+      ? selectedDataConfirmation
+      : resetMode === "project-data"
+        ? projectDataConfirmation
+        : customerDataConfirmation;
   const hasSelectedResetCategory = resetIncidents || resetScTasks || resetIncidentSla;
-  const canRunScopedCleanup =
+  const canRun =
     Boolean(projectId.trim()) &&
-    scopedConfirmation === requiredScopedConfirmation &&
-    !isRunningScopedCleanup &&
-    (scopedAction !== "project-operational" || hasSelectedResetCategory);
+    confirmation === requiredConfirmation &&
+    !isRunning &&
+    (resetMode !== "selected-data" || hasSelectedResetCategory);
 
-  const selectedResetDescriptions = [
-    resetIncidents
-      ? "This will delete Incident tickets and related Incident raw/upload/job data for the selected project. Resetting Incidents will also reset Incident SLA data to prevent stale SLA rows."
-      : null,
-    resetScTasks
-      ? "This will delete SC Task tickets and related SC Task raw/upload/job data for the selected project."
-      : null,
-    resetIncidentSla && !resetIncidents
-      ? "This will delete only Incident SLA upload rows/history and clear SLA enrichment fields from Incident tickets. Incident and SC Task ticket records will remain."
-      : null,
-  ].filter((description): description is string => Boolean(description));
-
-  async function handleReset() {
-    if (confirmation !== globalRequiredConfirmation) {
-      setError("Confirmation text must match exactly.");
-      return;
-    }
-
-    const confirmed = window.confirm(
-      "This will clear operational ticket, upload, raw row, and SLA data. Application Inventory, customers, projects, and mapping templates will be preserved."
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setIsResetting(true);
-    setError(null);
+  function handleModeChange(nextMode: ResetMode) {
+    setResetMode(nextMode);
+    setConfirmation("");
+    setResult(null);
     setMessage(null);
-    try {
-      const result = await resetOperationalData(confirmation);
-      setResetResult(result);
-      setMessage("Operational data reset completed.");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Reset failed");
-    } finally {
-      setIsResetting(false);
-    }
-  }
-
-  async function handleScopedCleanup() {
-    if (!projectId.trim() || !selectedProject) {
-      setError("Select a customer/project first.");
-      return;
-    }
-    if (scopedAction === "project-operational" && !hasSelectedResetCategory) {
-      setError("Select at least one operational data category to reset.");
-      return;
-    }
-    if (scopedConfirmation !== requiredScopedConfirmation) {
-      setError(`Confirmation text must match exactly: ${requiredScopedConfirmation}`);
-      return;
-    }
-
-    const actionText =
-      scopedAction === "project-operational"
-        ? "clear operational data for the selected project while preserving Application Inventory and mapping templates"
-        : scopedAction === "delete-project"
-          ? "delete the selected project and all related data/configuration"
-          : "delete the selected customer/client and all related projects/data/configuration";
-    const confirmed = window.confirm(`This will ${actionText}. Continue?`);
-    if (!confirmed) {
-      return;
-    }
-
-    setIsRunningScopedCleanup(true);
     setError(null);
-    setMessage(null);
-    try {
-      const result =
-        scopedAction === "project-operational"
-          ? await resetProjectOperationalData(projectId, scopedConfirmation, {
-              resetIncidents,
-              resetScTasks,
-              resetIncidentSla,
-            })
-          : scopedAction === "delete-project"
-            ? await deleteProjectAndRelatedData(projectId, scopedConfirmation)
-            : await deleteClientAndRelatedData(selectedProject.client_id, scopedConfirmation);
-      setScopedResult(result);
-      setScopeSummary(null);
-      setMessage("Selected maintenance action completed.");
-      if (scopedAction !== "project-operational") {
-        setProjectId("");
-        setSelectedProject(null);
-      }
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Maintenance action failed");
-    } finally {
-      setIsRunningScopedCleanup(false);
-    }
   }
 
   async function refreshScopeSummary() {
     if (!projectId.trim()) {
-      setError("Select a customer first.");
+      setError("Select a customer/project first.");
       return;
     }
 
     setIsLoadingScope(true);
     setError(null);
     try {
-      const summary = await getScopeSummary(projectId);
+      const summary = await getScopeSummary(projectId.trim());
       setScopeSummary(summary);
       setMessage("Scope summary refreshed.");
     } catch (requestError) {
@@ -205,73 +120,66 @@ function Maintenance() {
     }
   }
 
+  async function handleRunReset() {
+    if (!projectId.trim() || !selectedProject) {
+      setError("Select a customer/project first.");
+      return;
+    }
+    if (confirmation !== requiredConfirmation) {
+      setError(`Confirmation text must match exactly: ${requiredConfirmation}`);
+      return;
+    }
+    if (resetMode === "selected-data" && !hasSelectedResetCategory) {
+      setError("Select at least one operational data category to reset.");
+      return;
+    }
+
+    const actionDescription =
+      resetMode === "selected-data"
+        ? "clear the selected operational data categories for this project"
+        : resetMode === "project-data"
+          ? "remove the selected project and all related project data/configuration"
+          : "remove the selected customer and all projects/configuration/data under it";
+    const confirmed = window.confirm(`This will ${actionDescription}. Continue?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setIsRunning(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const nextResult =
+        resetMode === "selected-data"
+          ? await resetProjectOperationalData(projectId.trim(), confirmation, {
+              resetIncidents,
+              resetScTasks,
+              resetIncidentSla,
+            })
+          : resetMode === "project-data"
+            ? await deleteProjectAndRelatedData(projectId.trim(), confirmation)
+            : await deleteClientAndRelatedData(selectedProject.client_id, confirmation);
+      setResult(nextResult);
+      setScopeSummary(null);
+      setMessage("Maintenance reset completed.");
+      if (resetMode !== "selected-data") {
+        setProjectId("");
+        setSelectedProject(null);
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Maintenance reset failed");
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
   return (
-    <section className="upload-layout" aria-labelledby="maintenance-heading">
-      <div className="panel">
+    <section className="maintenance-layout" aria-labelledby="maintenance-heading">
+      <div className="panel maintenance-panel">
         <div className="panel-heading">
           <div>
             <p className="label">Maintenance</p>
-            <h2 id="maintenance-heading">Operational Data Reset</h2>
-          </div>
-        </div>
-        <p className="scope-note">
-          Reset clears operational ticket/upload/SLA data and preserves Application Inventory,
-          customers, projects, and mapping templates.
-        </p>
-        <div className="form-grid">
-          <label>
-            <span>Confirmation</span>
-            <input
-              value={confirmation}
-              onChange={(event) => setConfirmation(event.target.value)}
-              placeholder={globalRequiredConfirmation}
-            />
-          </label>
-        </div>
-        <div className="action-row">
-          <button
-            className="secondary-button danger-button"
-            type="button"
-            onClick={() => void handleReset()}
-            disabled={confirmation !== globalRequiredConfirmation || isResetting}
-          >
-            {isResetting ? "Resetting..." : "Reset Operational Data"}
-          </button>
-        </div>
-
-        {resetResult ? (
-          <div className="summary-block">
-            <p className="label">Deleted Row Counts</p>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Table</th>
-                    <th>Rows Deleted</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(resetResult.deleted_counts).map(([tableName, count]) => (
-                    <tr key={tableName}>
-                      <td>{tableName}</td>
-                      <td>{formatNumber(count)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="muted-text summary-block">
-              Preserved: {resetResult.preserved.join(", ")}
-            </p>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="label">Project / Customer Maintenance</p>
-            <h2>Scoped Cleanup And Scope Summary</h2>
+            <h2 id="maintenance-heading">Reset and Cleanup</h2>
           </div>
           <button
             className="secondary-button"
@@ -282,47 +190,57 @@ function Maintenance() {
             {isLoadingScope ? "Refreshing..." : "Refresh Scope"}
           </button>
         </div>
+
         <div className="form-grid">
           <CustomerSelector
             projectId={projectId}
             onProjectIdChange={setProjectId}
             onProjectChange={setSelectedProject}
           />
-          <label>
-            <span>Cleanup Action</span>
-            <select
-              value={scopedAction}
-              onChange={(event) => {
-                setScopedAction(event.target.value as ScopedCleanupAction);
-                setScopedConfirmation("");
-                setScopedResult(null);
-                setResetIncidents(false);
-                setResetScTasks(false);
-                setResetIncidentSla(false);
-              }}
-            >
-              <option value="project-operational">
-                Clear selected project operational data only
-              </option>
-              <option value="delete-project">Delete selected project and all related data</option>
-              <option value="delete-client">
-                Delete selected customer/client and all related projects
-              </option>
-            </select>
-          </label>
-          <label>
-            <span>Scoped Confirmation</span>
-            <input
-              value={scopedConfirmation}
-              onChange={(event) => setScopedConfirmation(event.target.value)}
-              placeholder={requiredScopedConfirmation}
-            />
-            <span className="helper-text">
-              Required text: {requiredScopedConfirmation}
-            </span>
-          </label>
+          <div className="info-card compact-info-card caution-card">
+            <p className="label">Selected Context</p>
+            <strong>{selectedProject?.customer_name ?? "No customer selected"}</strong>
+            <span>{selectedProject?.name ?? "Choose a customer/project before resetting data."}</span>
+          </div>
         </div>
-        {scopedAction === "project-operational" ? (
+      </div>
+
+      <div className="panel maintenance-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Reset Mode</p>
+            <h2>Choose What to Reset</h2>
+          </div>
+        </div>
+
+        <div className="reset-mode-grid" role="radiogroup" aria-label="Maintenance reset mode">
+          <button
+            className={resetMode === "selected-data" ? "reset-mode-card active" : "reset-mode-card"}
+            type="button"
+            onClick={() => handleModeChange("selected-data")}
+          >
+            <strong>Clear selected data reset</strong>
+            <span>Reset Incidents, SC Tasks, and/or Incident SLA operational data.</span>
+          </button>
+          <button
+            className={resetMode === "project-data" ? "reset-mode-card active" : "reset-mode-card"}
+            type="button"
+            onClick={() => handleModeChange("project-data")}
+          >
+            <strong>Project data reset</strong>
+            <span>Remove the selected project and related project data/configuration.</span>
+          </button>
+          <button
+            className={resetMode === "customer-data" ? "reset-mode-card active" : "reset-mode-card"}
+            type="button"
+            onClick={() => handleModeChange("customer-data")}
+          >
+            <strong>Entire customer data reset</strong>
+            <span>Remove the customer and all related projects/configuration/data.</span>
+          </button>
+        </div>
+
+        {resetMode === "selected-data" ? (
           <div className="summary-block">
             <p className="label">Operational Data Categories</p>
             <div className="checkbox-grid">
@@ -332,7 +250,7 @@ function Maintenance() {
                   checked={resetIncidents}
                   onChange={(event) => setResetIncidents(event.target.checked)}
                 />
-                <span>Reset all Incidents</span>
+                <span>Incidents</span>
               </label>
               <label className="checkbox-label">
                 <input
@@ -340,7 +258,7 @@ function Maintenance() {
                   checked={resetScTasks}
                   onChange={(event) => setResetScTasks(event.target.checked)}
                 />
-                <span>Reset all SC Tasks</span>
+                <span>SC Tasks</span>
               </label>
               <label className="checkbox-label">
                 <input
@@ -348,62 +266,93 @@ function Maintenance() {
                   checked={resetIncidentSla}
                   onChange={(event) => setResetIncidentSla(event.target.checked)}
                 />
-                <span>Reset all Incident SLA data</span>
+                <span>Incident SLA</span>
               </label>
             </div>
             <div className="warning-list">
-              {selectedResetDescriptions.length === 0 ? (
-                <p>Select at least one category. Nothing will be reset until a category is selected.</p>
-              ) : (
-                selectedResetDescriptions.map((description) => (
-                  <p key={description}>{description}</p>
-                ))
-              )}
+              <p>Application Inventory and mapping templates are preserved for selected data reset.</p>
+              <p>Selecting Incidents also clears Incident SLA data to avoid stale enrichment values.</p>
             </div>
           </div>
-        ) : null}
-        <div className="action-row summary-block">
+        ) : resetMode === "project-data" ? (
+          <div className="warning-list">
+            <p>
+              Project data reset removes the selected project and all related project data,
+              including operational data, Application Inventory, and mapping templates.
+            </p>
+          </div>
+        ) : (
+          <div className="warning-list">
+            <p>
+              Entire customer data reset removes the selected customer/client and all
+              projects/configuration/data under that customer.
+            </p>
+          </div>
+        )}
+
+        <div className="form-grid summary-block">
+          <label>
+            <span>Confirmation</span>
+            <input
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              placeholder={requiredConfirmation}
+            />
+            <span className="helper-text">Required text: {requiredConfirmation}</span>
+          </label>
+        </div>
+
+        <div className="action-row">
           <button
             className="secondary-button danger-button"
             type="button"
-            onClick={() => void handleScopedCleanup()}
-            disabled={!canRunScopedCleanup}
+            onClick={() => void handleRunReset()}
+            disabled={!canRun}
           >
-            {isRunningScopedCleanup ? "Running..." : "Run Selected Cleanup"}
+            {isRunning ? "Running..." : "Run Reset"}
           </button>
         </div>
-        <p className="scope-note">
-          Project operational cleanup preserves the selected project, customer, Application
-          Inventory, and mapping templates. Project/client delete removes configuration too.
-        </p>
-        {scopedResult ? (
-          <div className="summary-block">
-            <p className="label">Scoped Deleted Row Counts</p>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Table</th>
-                    <th>Rows Deleted</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(scopedResult.deleted_counts).map(([tableName, count]) => (
-                    <tr key={tableName}>
-                      <td>{tableName}</td>
-                      <td>{formatNumber(count)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+        <div className="message-stack" role="status" aria-live="polite">
+          {message ? <p className="success-text">{message}</p> : null}
+          {error ? <p className="error-text">{error}</p> : null}
+        </div>
+      </div>
+
+      {result ? (
+        <div className="panel maintenance-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="label">Reset Result</p>
+              <h2>Deleted and Updated Rows</h2>
             </div>
-            <p className="muted-text summary-block">
-              Preserved: {scopedResult.preserved.join(", ")}
-            </p>
-            {Object.keys(scopedResult.updated_counts ?? {}).length > 0 ? (
-              <>
-                <p className="label summary-block">Updated Row Counts</p>
-                <div className="table-wrap">
+          </div>
+          <div className="split-grid">
+            <div>
+              <p className="label">Deleted Row Counts</p>
+              <div className="scroll-frame compact-file-frame summary-block">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Table</th>
+                      <th>Rows Deleted</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(result.deleted_counts).map(([tableName, count]) => (
+                      <tr key={tableName}>
+                        <td>{tableName}</td>
+                        <td>{formatNumber(count)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {resultHasUpdates(result) ? (
+              <div>
+                <p className="label">Updated Row Counts</p>
+                <div className="scroll-frame compact-file-frame summary-block">
                   <table>
                     <thead>
                       <tr>
@@ -412,44 +361,52 @@ function Maintenance() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Object.entries(scopedResult.updated_counts ?? {}).map(
-                        ([categoryName, count]) => (
-                          <tr key={categoryName}>
-                            <td>{categoryName}</td>
-                            <td>{formatNumber(count)}</td>
-                          </tr>
-                        )
-                      )}
+                      {Object.entries(result.updated_counts ?? {}).map(([categoryName, count]) => (
+                        <tr key={categoryName}>
+                          <td>{categoryName}</td>
+                          <td>{formatNumber(count)}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
-              </>
-            ) : null}
-            {scopedResult.incident_sla_reset_reason ? (
-              <p className="scope-note">{scopedResult.incident_sla_reset_reason}</p>
+              </div>
             ) : null}
           </div>
-        ) : null}
-        {scopeSummary ? (
-          <>
-            <div className="summary-grid summary-block">
-              <div>
-                <p className="label">In-Scope Tickets</p>
-                <strong>{formatNumber(scopeSummary.in_scope_tickets)}</strong>
-              </div>
-              <div>
-                <p className="label">Out-of-Scope Tickets</p>
-                <strong>{formatNumber(scopeSummary.out_of_scope_tickets)}</strong>
-              </div>
-              <div>
-                <p className="label">In-Scope %</p>
-                <strong>{formatPercent(scopeSummary.in_scope_pct)}</strong>
-              </div>
-              <div>
-                <p className="label">Out-of-Scope %</p>
-                <strong>{formatPercent(scopeSummary.out_of_scope_pct)}</strong>
-              </div>
+          <p className="muted-text summary-block">Preserved: {result.preserved.join(", ")}</p>
+          {result.incident_sla_reset_reason ? (
+            <p className="scope-note">{result.incident_sla_reset_reason}</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {scopeSummary ? (
+        <div className="panel maintenance-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="label">Scope Summary</p>
+              <h2>In-Scope vs Out-of-Scope Reconciliation</h2>
             </div>
+          </div>
+          <div className="summary-grid">
+            <div>
+              <p className="label">In-Scope Tickets</p>
+              <strong>{formatNumber(scopeSummary.in_scope_tickets)}</strong>
+            </div>
+            <div>
+              <p className="label">Out-of-Scope Tickets</p>
+              <strong>{formatNumber(scopeSummary.out_of_scope_tickets)}</strong>
+            </div>
+            <div>
+              <p className="label">In-Scope %</p>
+              <strong>{formatPercent(scopeSummary.in_scope_pct)}</strong>
+            </div>
+            <div>
+              <p className="label">Out-of-Scope %</p>
+              <strong>{formatPercent(scopeSummary.out_of_scope_pct)}</strong>
+            </div>
+          </div>
+          <div className="top-list-grid">
             <TopValues
               title="Top Out-of-Scope Assignment Groups"
               values={scopeSummary.top_out_of_scope_assignment_groups}
@@ -458,16 +415,9 @@ function Maintenance() {
               title="Top Out-of-Scope Business Services"
               values={scopeSummary.top_out_of_scope_business_services}
             />
-          </>
-        ) : (
-          <p className="muted-text summary-block">Refresh scope to view classified ticket counts.</p>
-        )}
-      </div>
-
-      <div className="message-stack">
-        {message ? <p className="success-text">{message}</p> : null}
-        {error ? <p className="error-text">{error}</p> : null}
-      </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
 import {
@@ -17,6 +17,7 @@ import type {
   UnmatchedBusinessServicesResponse,
   ValueCount,
 } from "./api/applicationInventory";
+import type { ProjectOption } from "./api/projects";
 import CustomerSelector from "./CustomerSelector";
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0): string {
@@ -50,7 +51,15 @@ function MessageList({ title, values }: { title: string; values: string[] }) {
   );
 }
 
-function TopValues({ title, values }: { title: string; values: ValueCount[] }) {
+function TopValues({
+  title,
+  values,
+  countLabel = "Tickets",
+}: {
+  title: string;
+  values: ValueCount[];
+  countLabel?: string;
+}) {
   return (
     <div className="summary-block">
       <p className="label">{title}</p>
@@ -62,7 +71,7 @@ function TopValues({ title, values }: { title: string; values: ValueCount[] }) {
             <thead>
               <tr>
                 <th>Value</th>
-                <th>Tickets</th>
+                <th>{countLabel}</th>
               </tr>
             </thead>
             <tbody>
@@ -80,32 +89,44 @@ function TopValues({ title, values }: { title: string; values: ValueCount[] }) {
   );
 }
 
-function FilterPreview({
-  title,
-  values,
-}: {
-  title: string;
-  values: string[] | undefined;
-}) {
-  const previewValues = (values ?? []).slice(0, 12);
-  return (
-    <div className="summary-block">
-      <p className="label">{title}</p>
-      {previewValues.length === 0 ? (
-        <p className="muted-text">No values yet.</p>
-      ) : (
-        <ul className="selected-files">
-          {previewValues.map((value) => (
-            <li key={value}>{value}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+function topValueCounts<T>(
+  items: T[],
+  valueGetter: (item: T) => string | null | undefined,
+  limit = 10
+): ValueCount[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const value = valueGetter(item)?.trim();
+    if (!value) {
+      continue;
+    }
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .map(([value, count]) => ({ value, count }))
+    .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value))
+    .slice(0, limit);
 }
 
-function ApplicationInventory() {
-  const [projectId, setProjectId] = useState("");
+type ApplicationInventoryProps = {
+  projectId?: string;
+  selectedProject?: ProjectOption | null;
+  onProjectIdChange?: (projectId: string) => void;
+  onProjectChange?: (project: ProjectOption | null) => void;
+  embedded?: boolean;
+};
+
+function ApplicationInventory({
+  projectId: externalProjectId,
+  selectedProject,
+  onProjectIdChange,
+  onProjectChange,
+  embedded = false,
+}: ApplicationInventoryProps = {}) {
+  const [localProjectId, setLocalProjectId] = useState("");
+  const projectId = externalProjectId ?? localProjectId;
+  const setProjectId = onProjectIdChange ?? setLocalProjectId;
   const [file, setFile] = useState<File | null>(null);
   const [inventoryItems, setInventoryItems] = useState<ApplicationInventoryItem[]>([]);
   const [uploadResult, setUploadResult] = useState<ApplicationInventoryUploadResponse | null>(null);
@@ -118,6 +139,27 @@ function ApplicationInventory() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const topFunctionalTracks = useMemo(
+    () => topValueCounts(inventoryItems, (item) => item.functional_track),
+    [inventoryItems]
+  );
+  const topAmsOwners = useMemo(
+    () => topValueCounts(inventoryItems, (item) => item.ams_owner),
+    [inventoryItems]
+  );
+  const topSupportedVendors = useMemo(
+    () => topValueCounts(inventoryItems, (item) => item.supported_by_vendor),
+    [inventoryItems]
+  );
+  const topSupportLeads = useMemo(
+    () => topValueCounts(inventoryItems, (item) => item.support_lead),
+    [inventoryItems]
+  );
+  const topApplicationOwners = useMemo(
+    () => topValueCounts(inventoryItems, (item) => item.application_owner),
+    [inventoryItems]
+  );
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
     setFile(event.target.files?.[0] ?? null);
@@ -243,7 +285,19 @@ function ApplicationInventory() {
 
         <form className="upload-form" onSubmit={(event) => void handleUpload(event)}>
           <div className="form-grid">
-            <CustomerSelector projectId={projectId} onProjectIdChange={setProjectId} />
+            {embedded ? (
+              <div className="info-card compact-info-card">
+                <p className="label">Selected Customer</p>
+                <strong>{selectedProject?.customer_name ?? "Select customer above"}</strong>
+                <span>{selectedProject?.name ?? "Application Inventory uses the shared selector."}</span>
+              </div>
+            ) : (
+              <CustomerSelector
+                projectId={projectId}
+                onProjectIdChange={setProjectId}
+                onProjectChange={onProjectChange}
+              />
+            )}
             <label>
               <span>Inventory File</span>
               <input
@@ -436,105 +490,45 @@ function ApplicationInventory() {
               <strong>{formatPercent(coverage.business_service_coverage_pct)}</strong>
             </div>
           </div>
-          {coverage.rows.length === 0 ? (
-            <p className="muted-text summary-block">No unmatched ticket business services found.</p>
-          ) : (
-            <div className="table-wrap summary-block">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Business Service</th>
-                    <th>Tickets</th>
-                    <th>Assignment Groups</th>
-                    <th>Samples</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {coverage.rows.map((row) => (
-                    <tr key={row.business_service}>
-                      <td>{row.business_service}</td>
-                      <td>{formatNumber(row.ticket_count)}</td>
-                      <td>{formatNumber(row.assignment_group_count)}</td>
-                      <td>
-                        <span className="mono-text">
-                          {row.sample_assignment_groups.join(", ") || "No groups"}
-                        </span>
-                        <br />
-                        <span className="muted-text">
-                          {row.sample_ticket_numbers.join(", ") || "No ticket samples"}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
       ) : null}
 
       <div className="panel">
         <div className="panel-heading">
           <div>
-            <p className="label">Inventory Filter Preview</p>
-            <h2>Future Dashboard Filters</h2>
+            <p className="label">Inventory Summary</p>
+            <h2>Top Application Inventory Values</h2>
           </div>
         </div>
-        <div className="form-grid">
-          <FilterPreview title="Functional Track" values={filterValues?.functional_tracks} />
-          <FilterPreview title="AMS Owner" values={filterValues?.ams_owners} />
-          <FilterPreview title="Supported By Vendor" values={filterValues?.supported_by_vendors} />
-          <FilterPreview title="Support Lead (Managed By)" values={filterValues?.support_leads} />
-          <FilterPreview title="Application Owner" values={filterValues?.application_owners} />
-          <FilterPreview title="Parent Application" values={filterValues?.parent_application_names} />
-          <FilterPreview
-            title="Business Service CI Name"
-            values={filterValues?.business_service_ci_names}
+        <div className="summary-grid">
+          <div>
+            <p className="label">Inventory Rows</p>
+            <strong>{formatNumber(inventoryItems.length)}</strong>
+          </div>
+          <div>
+            <p className="label">Functional Tracks</p>
+            <strong>{formatNumber(filterValues?.functional_tracks.length ?? 0)}</strong>
+          </div>
+          <div>
+            <p className="label">AMS Owners</p>
+            <strong>{formatNumber(filterValues?.ams_owners.length ?? 0)}</strong>
+          </div>
+          <div>
+            <p className="label">Supported Vendors</p>
+            <strong>{formatNumber(filterValues?.supported_by_vendors.length ?? 0)}</strong>
+          </div>
+        </div>
+        <div className="top-list-grid">
+          <TopValues title="Top 10 Functional Tracks" values={topFunctionalTracks} countLabel="Rows" />
+          <TopValues title="Top 10 AMS Owners" values={topAmsOwners} countLabel="Rows" />
+          <TopValues title="Top 10 Supported Vendors" values={topSupportedVendors} countLabel="Rows" />
+          <TopValues title="Top 10 Support Leads" values={topSupportLeads} countLabel="Rows" />
+          <TopValues
+            title="Top 10 Application Owners"
+            values={topApplicationOwners}
+            countLabel="Rows"
           />
         </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <div>
-            <p className="label">Configured Inventory</p>
-            <h2>Uploaded Business Services</h2>
-          </div>
-        </div>
-        {inventoryItems.length === 0 ? (
-          <p className="muted-text">No inventory rows loaded yet.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Business Service CI Name</th>
-                  <th>Parent Application</th>
-                  <th>Assignment Group</th>
-                  <th>Support Lead</th>
-                  <th>Functional Track</th>
-                  <th>AMS Owner</th>
-                  <th>Vendor</th>
-                  <th>Active</th>
-                </tr>
-              </thead>
-              <tbody>
-                {inventoryItems.slice(0, 50).map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.business_service_ci_name}</td>
-                    <td>{item.parent_application_name ?? "Not set"}</td>
-                    <td>{item.assignment_group ?? "Not set"}</td>
-                    <td>{item.support_lead ?? "Not set"}</td>
-                    <td>{item.functional_track ?? "Not set"}</td>
-                    <td>{item.ams_owner ?? "Not set"}</td>
-                    <td>{item.supported_by_vendor ?? "Not set"}</td>
-                    <td>{item.active === false ? "No" : "Yes"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
     </section>
   );

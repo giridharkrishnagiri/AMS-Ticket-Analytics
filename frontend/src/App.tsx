@@ -1,94 +1,93 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import ApplicationInventory from "./ApplicationInventory";
 import Dashboard from "./Dashboard";
-import HealthDashboard from "./HealthDashboard";
 import Maintenance from "./Maintenance";
-import MappingWizard from "./MappingWizard";
-import SlaUpload from "./SlaUpload";
 import UploadCenter from "./UploadCenter";
+import { getBackendHealth } from "./api/health";
 
-type AppView =
-  | "application-inventory"
-  | "dashboard"
-  | "health"
-  | "maintenance"
-  | "mapping"
-  | "sla"
-  | "uploads";
+type AppView = "dashboard" | "maintenance" | "uploads";
+type HealthState = "checking" | "healthy" | "offline";
+
+function HealthIndicator() {
+  const [healthState, setHealthState] = useState<HealthState>("checking");
+  const [healthLabel, setHealthLabel] = useState("Checking");
+
+  useEffect(() => {
+    let isMounted = true;
+    const controller = new AbortController();
+
+    getBackendHealth(controller.signal)
+      .then((health) => {
+        if (!isMounted) {
+          return;
+        }
+        const isHealthy = health.status.toLowerCase() === "ok";
+        setHealthState(isHealthy ? "healthy" : "offline");
+        setHealthLabel(isHealthy ? "Healthy" : "Degraded");
+      })
+      .catch(() => {
+        if (isMounted) {
+          setHealthState("offline");
+          setHealthLabel("Offline");
+        }
+      });
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, []);
+
+  return (
+    <div className={`health-pill health-${healthState}`} aria-label={`System health ${healthLabel}`}>
+      <span aria-hidden="true" />
+      <strong>System Health:</strong> {healthLabel}
+    </div>
+  );
+}
 
 function App() {
   const [activeView, setActiveView] = useState<AppView>("dashboard");
 
   return (
     <main className="app-shell">
-      <section className="workspace-panel" aria-labelledby="page-title">
+      <section className={`workspace-panel workspace-${activeView}`} aria-labelledby="page-title">
         <div className="page-heading">
           <div>
             <p className="eyebrow">AMS Consulting</p>
             <h1 id="page-title">AMS Ticket Intelligence</h1>
+            <p className="page-subtitle">Application Support &amp; Maintenance Analytics Cockpit</p>
           </div>
-          <nav className="view-tabs" aria-label="Primary views">
-            <button
-              className={activeView === "dashboard" ? "tab-button active" : "tab-button"}
-              type="button"
-              onClick={() => setActiveView("dashboard")}
-            >
-              Dashboard
-            </button>
-            <button
-              className={activeView === "uploads" ? "tab-button active" : "tab-button"}
-              type="button"
-              onClick={() => setActiveView("uploads")}
-            >
-              Upload Center
-            </button>
-            <button
-              className={activeView === "mapping" ? "tab-button active" : "tab-button"}
-              type="button"
-              onClick={() => setActiveView("mapping")}
-            >
-              Mapping Wizard
-            </button>
-            <button
-              className={activeView === "sla" ? "tab-button active" : "tab-button"}
-              type="button"
-              onClick={() => setActiveView("sla")}
-            >
-              SLA Upload
-            </button>
-            <button
-              className={
-                activeView === "application-inventory" ? "tab-button active" : "tab-button"
-              }
-              type="button"
-              onClick={() => setActiveView("application-inventory")}
-            >
-              Application Inventory
-            </button>
-            <button
-              className={activeView === "health" ? "tab-button active" : "tab-button"}
-              type="button"
-              onClick={() => setActiveView("health")}
-            >
-              Health
-            </button>
-            <button
-              className={activeView === "maintenance" ? "tab-button active" : "tab-button"}
-              type="button"
-              onClick={() => setActiveView("maintenance")}
-            >
-              Maintenance
-            </button>
-          </nav>
+          <div className="shell-actions">
+            <HealthIndicator />
+            <nav className="view-tabs" aria-label="Primary views">
+              <button
+                className={activeView === "dashboard" ? "tab-button active" : "tab-button"}
+                type="button"
+                onClick={() => setActiveView("dashboard")}
+              >
+                Dashboard
+              </button>
+              <button
+                className={activeView === "uploads" ? "tab-button active" : "tab-button"}
+                type="button"
+                onClick={() => setActiveView("uploads")}
+              >
+                Upload Center
+              </button>
+              <button
+                className={activeView === "maintenance" ? "tab-button active" : "tab-button"}
+                type="button"
+                onClick={() => setActiveView("maintenance")}
+              >
+                Maintenance
+              </button>
+            </nav>
+          </div>
         </div>
 
         {activeView === "dashboard" ? <Dashboard /> : null}
         {activeView === "uploads" ? <UploadCenter /> : null}
-        {activeView === "mapping" ? <MappingWizard /> : null}
-        {activeView === "sla" ? <SlaUpload /> : null}
-        {activeView === "application-inventory" ? <ApplicationInventory /> : null}
-        {activeView === "health" ? <HealthDashboard /> : null}
         {activeView === "maintenance" ? <Maintenance /> : null}
       </section>
     </main>

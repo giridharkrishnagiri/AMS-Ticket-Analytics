@@ -43,9 +43,11 @@ import type {
   TicketTypeFilter,
   TimeGrain,
 } from "./api/dashboard";
-import { listUploadBatches } from "./api/uploads";
+import CustomerSelector from "./CustomerSelector";
+import type { ProjectOption } from "./api/projects";
 
 type TicketTypeSelection = "ALL" | TicketTypeFilter;
+type DashboardTab = "overview" | "applications" | "volumetrics";
 type LoadStatus = "idle" | "loading" | "success" | "error";
 
 type LoadState<T> = {
@@ -366,7 +368,8 @@ function trendHasData<T>(rows: T[], value: (row: T) => number | null | undefined
 
 function Dashboard() {
   const [projectId, setProjectId] = useState("");
-  const [knownProjectIds, setKnownProjectIds] = useState<string[]>([]);
+  const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
+  const [activeDashboardTab, setActiveDashboardTab] = useState<DashboardTab>("overview");
   const [ticketType, setTicketType] = useState<TicketTypeSelection>("ALL");
   const [timeGrain, setTimeGrain] = useState<TimeGrain>("MONTHLY");
   const [startDate, setStartDate] = useState("");
@@ -412,7 +415,6 @@ function Dashboard() {
   >(createLoadState(emptyTechnicalFunctional));
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [pageMessage, setPageMessage] = useState<string | null>(null);
-  const [shouldAutoLoad, setShouldAutoLoad] = useState(false);
 
   const chartQuery = useMemo<DashboardQuery | null>(() => {
     const cleanedProjectId = projectId.trim();
@@ -638,36 +640,6 @@ function Dashboard() {
     setLastUpdatedAt(new Date().toLocaleString());
   }, [chartQuery, filterValuesQuery, shouldShowIncidentSla]);
 
-  useEffect(() => {
-    async function loadKnownProjects() {
-      try {
-        const batches = await listUploadBatches(undefined, "all");
-        const projectIds = Array.from(new Set(batches.map((batch) => batch.project_id)));
-        setKnownProjectIds(projectIds);
-        if (projectIds.length === 1) {
-          setProjectId((currentProjectId) => {
-            if (currentProjectId.trim()) {
-              return currentProjectId;
-            }
-            setShouldAutoLoad(true);
-            return projectIds[0];
-          });
-        }
-      } catch {
-        setKnownProjectIds([]);
-      }
-    }
-
-    void loadKnownProjects();
-  }, []);
-
-  useEffect(() => {
-    if (chartQuery && shouldAutoLoad) {
-      setShouldAutoLoad(false);
-      void loadDashboardData();
-    }
-  }, [chartQuery, loadDashboardData, shouldAutoLoad]);
-
   return (
     <div className="dashboard-layout">
       <section className="dashboard-header panel" aria-labelledby="dashboard-heading">
@@ -678,8 +650,12 @@ function Dashboard() {
         </div>
         <div className="dashboard-header-actions">
           <div>
-            <p className="label">Selected Project</p>
-            <strong className="mono-text">{projectId.trim() || "Not selected"}</strong>
+            <CustomerSelector
+              label="Customer / Project"
+              projectId={projectId}
+              onProjectIdChange={setProjectId}
+              onProjectChange={setSelectedProject}
+            />
           </div>
           <button
             className="primary-button"
@@ -692,6 +668,133 @@ function Dashboard() {
         </div>
       </section>
 
+      <div className="section-tabs" role="tablist" aria-label="Dashboard sections">
+        <button
+          className={activeDashboardTab === "overview" ? "section-tab active" : "section-tab"}
+          type="button"
+          onClick={() => setActiveDashboardTab("overview")}
+        >
+          Overview
+        </button>
+        <button
+          className={activeDashboardTab === "applications" ? "section-tab active" : "section-tab"}
+          type="button"
+          onClick={() => setActiveDashboardTab("applications")}
+        >
+          Applications
+        </button>
+        <button
+          className={activeDashboardTab === "volumetrics" ? "section-tab active" : "section-tab"}
+          type="button"
+          onClick={() => setActiveDashboardTab("volumetrics")}
+        >
+          Volumetrics &amp; SLA
+        </button>
+      </div>
+
+      {activeDashboardTab === "overview" ? (
+        <section className="panel" aria-labelledby="dashboard-overview-heading">
+          <div className="panel-heading">
+            <div>
+              <p className="label">Overview</p>
+              <h2 id="dashboard-overview-heading">Executive Summary</h2>
+            </div>
+          </div>
+          <div className="summary-grid">
+            <div>
+              <p className="label">Customer</p>
+              <strong>{selectedProject?.customer_name ?? "Select customer"}</strong>
+              <span className="helper-text">{selectedProject?.name ?? "Refresh after selecting."}</span>
+            </div>
+            <div>
+              <p className="label">Total Applications</p>
+              <strong>{formatNumber(filterValues.data.business_service_ci_names.length)}</strong>
+            </div>
+            <div>
+              <p className="label">Functional Tracks</p>
+              <strong>{formatNumber(filterValues.data.functional_tracks.length)}</strong>
+            </div>
+            <div>
+              <p className="label">AMS Owners</p>
+              <strong>{formatNumber(filterValues.data.ams_owners.length)}</strong>
+            </div>
+            <div>
+              <p className="label">Supported Vendors</p>
+              <strong>{formatNumber(filterValues.data.supported_by_vendors.length)}</strong>
+            </div>
+            <div>
+              <p className="label">In-Scope Tickets</p>
+              <strong>{formatNumber(kpis.totalCreated)}</strong>
+              <span className="helper-text">Created in selected dashboard range.</span>
+            </div>
+            <div>
+              <p className="label">Out-of-Scope Tickets</p>
+              <strong>Coming next</strong>
+              <span className="helper-text">Shown separately from main dashboard counts.</span>
+            </div>
+            <div>
+              <p className="label">Incident SLA Response %</p>
+              <strong>{formatPercent(incidentSlaSummary.data.response_sla_adherence_pct)}</strong>
+            </div>
+            <div>
+              <p className="label">Incident SLA Resolution %</p>
+              <strong>{formatPercent(incidentSlaSummary.data.resolution_sla_adherence_pct)}</strong>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {activeDashboardTab === "applications" ? (
+        <section className="panel" aria-labelledby="dashboard-applications-heading">
+          <div className="panel-heading">
+            <div>
+              <p className="label">Applications</p>
+              <h2 id="dashboard-applications-heading">Application Inventory Slice-and-Dice</h2>
+            </div>
+          </div>
+          <p className="muted-text">
+            Detailed application analytics will be expanded in the next dashboard prompt. This tab
+            is intentionally view-only and uses compact aggregate/filter data already available.
+          </p>
+          <div className="top-list-grid summary-block">
+            <div className="summary-block">
+              <p className="label">Functional Tracks</p>
+              <div className="chip-list">
+                {filterValues.data.functional_tracks.slice(0, 10).map((value) => (
+                  <span className="chip" key={value}>{value}</span>
+                ))}
+              </div>
+            </div>
+            <div className="summary-block">
+              <p className="label">AMS Owners</p>
+              <div className="chip-list">
+                {filterValues.data.ams_owners.slice(0, 10).map((value) => (
+                  <span className="chip" key={value}>{value}</span>
+                ))}
+              </div>
+            </div>
+            <div className="summary-block">
+              <p className="label">Supported Vendors</p>
+              <div className="chip-list">
+                {filterValues.data.supported_by_vendors.slice(0, 10).map((value) => (
+                  <span className="chip" key={value}>{value}</span>
+                ))}
+              </div>
+            </div>
+            <div className="summary-block">
+              <p className="label">Support Leads</p>
+              <div className="chip-list">
+                {filterValues.data.support_leads.slice(0, 10).map((value) => (
+                  <span className="chip" key={value}>{value}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {activeDashboardTab === "volumetrics" ? (
+        <>
       <section className="panel dashboard-filter-panel" aria-labelledby="dashboard-filters-heading">
         <div className="panel-heading">
           <div>
@@ -702,21 +805,6 @@ function Dashboard() {
         </div>
 
         <div className="dashboard-filter-grid">
-          <label>
-            <span>Project ID</span>
-            <input
-              list="dashboard-project-options"
-              placeholder="Paste project UUID"
-              value={projectId}
-              onChange={(event) => setProjectId(event.target.value)}
-            />
-            <datalist id="dashboard-project-options">
-              {knownProjectIds.map((knownProjectId) => (
-                <option key={knownProjectId} value={knownProjectId} />
-              ))}
-            </datalist>
-          </label>
-
           <label>
             <span>Ticket Type</span>
             <select
@@ -1343,6 +1431,8 @@ function Dashboard() {
           </ChartBox>
         </ChartCard>
       </div>
+        </>
+      ) : null}
     </div>
   );
 }
