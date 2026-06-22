@@ -45,10 +45,7 @@ import type {
   TicketTypeFilter,
   TimeGrain,
 } from "./api/dashboard";
-import {
-  getApplicationInventoryFilterValues,
-  type ApplicationInventoryFilterValues,
-} from "./api/applicationInventory";
+import ApplicationsDashboard from "./ApplicationsDashboard";
 import CustomerSelector from "./CustomerSelector";
 import type { ProjectOption } from "./api/projects";
 import { formatDisplayDateRange, formatDisplayDateTime } from "./utils/dateFormat";
@@ -90,17 +87,6 @@ const emptyFilterValues: DashboardFilterValues = {
   application_owners: [],
   business_service_ci_names: [],
   parent_application_names: [],
-};
-
-const emptyInventoryFilterValues: ApplicationInventoryFilterValues = {
-  application_owners: [],
-  support_leads: [],
-  functional_tracks: [],
-  ams_owners: [],
-  supported_by_vendors: [],
-  parent_application_names: [],
-  business_service_ci_names: [],
-  assignment_groups: [],
 };
 
 const emptyTechnicalFunctional: TechnicalFunctionalBreakdown = {
@@ -409,9 +395,6 @@ function Dashboard() {
   const [overview, setOverview] = useState<LoadState<DashboardOverview | null>>(
     createLoadState<DashboardOverview | null>(null)
   );
-  const [inventoryFilterValues, setInventoryFilterValues] = useState<
-    LoadState<ApplicationInventoryFilterValues>
-  >(createLoadState(emptyInventoryFilterValues));
   const [createdResolvedOpen, setCreatedResolvedOpen] = useState<
     LoadState<CreatedResolvedOpenRow[]>
   >(createLoadState([]));
@@ -439,11 +422,11 @@ function Dashboard() {
   >(createLoadState(emptyTechnicalFunctional));
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [pageMessage, setPageMessage] = useState<string | null>(null);
+  const [overviewShapeRefreshAttempted, setOverviewShapeRefreshAttempted] = useState(false);
 
   function clearDashboardData() {
     setOverview(createLoadState<DashboardOverview | null>(null));
     setFilterValues(createLoadState(emptyFilterValues));
-    setInventoryFilterValues(createLoadState(emptyInventoryFilterValues));
     setCreatedResolvedOpen(createLoadState([]));
     setMttrTrend(createLoadState([]));
     setIncidentSlaTrend(createLoadState([]));
@@ -455,6 +438,7 @@ function Dashboard() {
     setTechnicalFunctional(createLoadState(emptyTechnicalFunctional));
     setLastUpdatedAt(null);
     setPageMessage(null);
+    setOverviewShapeRefreshAttempted(false);
   }
 
   const handleProjectIdChange = useCallback(
@@ -599,7 +583,6 @@ function Dashboard() {
     setPageMessage(null);
     setOverview(createLoadState<DashboardOverview | null>(null, "loading"));
     setFilterValues(createLoadState(emptyFilterValues, "loading"));
-    setInventoryFilterValues(createLoadState(emptyInventoryFilterValues, "loading"));
     setCreatedResolvedOpen(createLoadState([], "loading"));
     setMttrTrend(createLoadState([], "loading"));
     setIncidentSlaTrend(
@@ -646,12 +629,6 @@ function Dashboard() {
         setFilterValues,
         emptyFilterValues,
         "Unable to load filter values"
-      ),
-      loadResource(
-        getApplicationInventoryFilterValues(chartQuery.projectId),
-        setInventoryFilterValues,
-        emptyInventoryFilterValues,
-        "Unable to load Application Inventory values"
       ),
       loadResource(
         getCreatedResolvedOpenTrend(chartQuery),
@@ -705,8 +682,25 @@ function Dashboard() {
     setLastUpdatedAt(formatDisplayDateTime(new Date()));
   }, [chartQuery, filterValuesQuery, shouldShowIncidentSla]);
 
+  useEffect(() => {
+    if (
+      overview.status === "success" &&
+      overview.data &&
+      !overview.data.ingested_volume &&
+      !overviewShapeRefreshAttempted
+    ) {
+      setOverviewShapeRefreshAttempted(true);
+      void loadDashboardData();
+    }
+  }, [loadDashboardData, overview.data, overview.status, overviewShapeRefreshAttempted]);
+
   const overviewInventory = overview.data?.application_inventory;
+  const overviewIngestedVolume = overview.data?.ingested_volume;
   const overviewTickets = overview.data?.tickets;
+  const overviewCompletionDateRange = formatDisplayDateRange(
+    overviewTickets?.completion_date_min,
+    overviewTickets?.completion_date_max
+  );
 
   return (
     <div className="dashboard-layout">
@@ -801,89 +795,37 @@ function Dashboard() {
               <p className="label">Application Owners</p>
               <strong>{formatNumber(overviewInventory?.application_owner_count)}</strong>
             </div>
-            <div className="overview-ticket-card">
+            <div className="overview-slab-card">
+              <p className="label">Total Tickets Data Ingested</p>
+              <div className="overview-ticket-details">
+                <span>Incidents: {formatNumber(overviewIngestedVolume?.incident_rows)}</span>
+                <span>SC Tasks: {formatNumber(overviewIngestedVolume?.sc_task_rows)}</span>
+                <span>Incident SLA: {formatNumber(overviewIngestedVolume?.incident_sla_rows)}</span>
+              </div>
+            </div>
+            <div className="overview-slab-card">
               <p className="label">In-Scope Tickets</p>
               <strong>{formatNumber(overviewTickets?.total_in_scope_tickets)}</strong>
               <div className="overview-ticket-details">
                 <span>Incidents: {formatNumber(overviewTickets?.incident_count)}</span>
                 <span>SC Tasks: {formatNumber(overviewTickets?.sc_task_count)}</span>
-                <span>
-                  Resolved/Closed Date Range:{" "}
-                  {formatDisplayDateRange(
-                    overviewTickets?.completion_date_min,
-                    overviewTickets?.completion_date_max
-                  )}
-                </span>
               </div>
             </div>
           </div>
+          <p className="overview-date-note">Resolved/Closed Date Range: {overviewCompletionDateRange}</p>
           {overview.status === "loading" ? (
             <p className="muted-text">Loading dashboard overview...</p>
           ) : null}
           {overview.status === "error" ? <p className="error-text">{overview.error}</p> : null}
-          {inventoryFilterValues.status === "loading" ? (
-            <p className="muted-text">Loading Application Inventory summary...</p>
-          ) : null}
-          {inventoryFilterValues.status === "error" ? (
-            <p className="error-text">{inventoryFilterValues.error}</p>
-          ) : null}
         </section>
       ) : null}
 
-      {activeDashboardTab === "applications" ? (
-        <section className="panel" aria-labelledby="dashboard-applications-heading">
-          <div className="panel-heading">
-            <div>
-              <p className="label">Applications</p>
-              <h2 id="dashboard-applications-heading">Application Inventory Slice-and-Dice</h2>
-            </div>
-          </div>
-          <p className="muted-text">
-            Detailed application analytics will be expanded in the next dashboard prompt. This tab
-            is intentionally view-only and uses compact aggregate/filter data already available.
-          </p>
-          <div className="top-list-grid summary-block">
-            <div className="summary-block">
-              <p className="label">Functional Tracks</p>
-              <div className="chip-list">
-                {inventoryFilterValues.data.functional_tracks.slice(0, 10).map((value) => (
-                  <span className="chip" key={value}>{value}</span>
-                ))}
-              </div>
-            </div>
-            <div className="summary-block">
-              <p className="label">AMS Owners</p>
-              <div className="chip-list">
-                {inventoryFilterValues.data.ams_owners.slice(0, 10).map((value) => (
-                  <span className="chip" key={value}>{value}</span>
-                ))}
-              </div>
-            </div>
-            <div className="summary-block">
-              <p className="label">Supported Vendors</p>
-              <div className="chip-list">
-                {inventoryFilterValues.data.supported_by_vendors.slice(0, 10).map((value) => (
-                  <span className="chip" key={value}>{value}</span>
-                ))}
-              </div>
-            </div>
-            <div className="summary-block">
-              <p className="label">Support Leads</p>
-              <div className="chip-list">
-                {inventoryFilterValues.data.support_leads.slice(0, 10).map((value) => (
-                  <span className="chip" key={value}>{value}</span>
-                ))}
-              </div>
-            </div>
-          </div>
-          {inventoryFilterValues.status === "loading" ? (
-            <p className="muted-text">Loading Application Inventory values...</p>
-          ) : null}
-          {inventoryFilterValues.status === "error" ? (
-            <p className="error-text">{inventoryFilterValues.error}</p>
-          ) : null}
-        </section>
-      ) : null}
+      <div hidden={activeDashboardTab !== "applications"}>
+        <ApplicationsDashboard
+          isActive={activeDashboardTab === "applications"}
+          projectId={projectId}
+        />
+      </div>
 
       {activeDashboardTab === "volumetrics" ? (
         <>

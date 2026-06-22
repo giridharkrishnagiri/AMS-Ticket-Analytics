@@ -172,6 +172,12 @@ export type DashboardOverview = {
     assignment_group_count: number;
     application_owner_count: number;
   };
+  ingested_volume: {
+    total_rows: number;
+    incident_rows: number;
+    sc_task_rows: number;
+    incident_sla_rows: number;
+  };
   tickets: {
     total_in_scope_tickets: number;
     incident_count: number;
@@ -179,6 +185,129 @@ export type DashboardOverview = {
     completion_date_min: string | null;
     completion_date_max: string | null;
   };
+};
+
+export type ApplicationCombinedFilterValue = {
+  label: string;
+  left_value: string;
+  right_value: string;
+  count: number;
+};
+
+export type ApplicationFilterValue = {
+  label: string;
+  value: string;
+  count: number;
+};
+
+export type DashboardApplicationsFilterValues = {
+  functional_track_ams_owner: ApplicationCombinedFilterValue[];
+  assignment_group_owner: ApplicationCombinedFilterValue[];
+  parent_application_name: ApplicationFilterValue[];
+  application_owner: ApplicationFilterValue[];
+  supported_by_vendor: ApplicationFilterValue[];
+  architecture_type: ApplicationFilterValue[];
+  application_type: ApplicationFilterValue[];
+  business_critical: ApplicationFilterValue[];
+  install_status: ApplicationFilterValue[];
+  install_type: ApplicationFilterValue[];
+  lifecycle_status_stage: ApplicationCombinedFilterValue[];
+};
+
+export type DashboardApplicationsFilters = {
+  functional_track_ams_owner: string[];
+  assignment_group_owner: string[];
+  parent_application_name: string[];
+  application_owner: string[];
+  supported_by_vendor: string[];
+  architecture_type: string[];
+  application_type: string[];
+  business_critical: string[];
+  install_status: string[];
+  install_type: string[];
+  lifecycle_status_stage: string[];
+};
+
+export type DashboardApplicationsSort = {
+  column: string;
+  direction: "asc" | "desc";
+};
+
+export type DashboardApplicationsRequest = {
+  project_id: string;
+  filters: DashboardApplicationsFilters;
+  sort: DashboardApplicationsSort;
+  limit: number;
+  offset: number;
+};
+
+export type DashboardApplicationsFilterValuesRequest = {
+  project_id: string;
+  filters: DashboardApplicationsFilters;
+};
+
+export type DashboardApplicationsSummary = {
+  applications: number;
+  functional_groups: number;
+  assignment_groups: number;
+  parent_business_apps: number;
+  business_applications: number;
+  technical_applications: number;
+  very_critical_applications: number;
+  critical_applications: number;
+  show_functional_groups: boolean;
+  show_assignment_groups: boolean;
+  show_parent_business_apps: boolean;
+};
+
+export type DashboardApplicationRow = {
+  business_service_ci_name: string;
+  parent_application_name: string;
+  assignment_group: string;
+  assignment_group_owner: string;
+  application_owner: string;
+  support_lead: string;
+  functional_track: string;
+  ams_owner: string;
+  supported_by_vendor: string;
+  app_family: string;
+  biz_process: string;
+  app_category: string;
+  org_unit_level_1: string;
+  org_unit_level_2: string;
+  org_unit_level_3: string;
+  app_type: string;
+  architecture_type: string;
+  biz_capabilities: string;
+  business_reason_for_maintain_applications: string;
+  business_units: string;
+  biz_criticality: string;
+  biz_owner: string;
+  company: string;
+  install_status: string;
+  install_type: string;
+  lifecycle_status: string;
+  operating_system: string;
+  sox_audited: string;
+  sox_scope: string;
+  strategic: string;
+};
+
+export type DashboardApplicationsList = {
+  total: number;
+  rows: DashboardApplicationRow[];
+};
+
+export type DashboardApplicationsChartDatum = {
+  label: string;
+  count: number;
+};
+
+export type DashboardApplicationsCharts = {
+  lifecycle_stage: DashboardApplicationsChartDatum[];
+  operating_system: DashboardApplicationsChartDatum[];
+  sox_scope: DashboardApplicationsChartDatum[];
+  strategic: DashboardApplicationsChartDatum[];
 };
 
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
@@ -234,6 +363,54 @@ export function getDashboardFilterValues(input: DashboardQuery): Promise<Dashboa
 export function getDashboardOverview(projectId: string): Promise<DashboardOverview> {
   const query = new URLSearchParams({ project_id: projectId.trim() });
   return requestJson<DashboardOverview>(`/dashboard/overview?${query.toString()}`);
+}
+
+export function getDashboardApplicationsFilterValues(
+  input: DashboardApplicationsFilterValuesRequest
+): Promise<DashboardApplicationsFilterValues> {
+  return requestJson<DashboardApplicationsFilterValues>(
+    "/dashboard/applications/filter-values",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+function postApplicationsRequest<T>(
+  path: string,
+  input: DashboardApplicationsRequest
+): Promise<T> {
+  return requestJson<T>(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function getDashboardApplicationsSummary(
+  input: DashboardApplicationsRequest
+): Promise<DashboardApplicationsSummary> {
+  return postApplicationsRequest<DashboardApplicationsSummary>(
+    "/dashboard/applications/summary",
+    input
+  );
+}
+
+export function getDashboardApplicationsList(
+  input: DashboardApplicationsRequest
+): Promise<DashboardApplicationsList> {
+  return postApplicationsRequest<DashboardApplicationsList>("/dashboard/applications/list", input);
+}
+
+export function getDashboardApplicationsCharts(
+  input: DashboardApplicationsRequest
+): Promise<DashboardApplicationsCharts> {
+  return postApplicationsRequest<DashboardApplicationsCharts>(
+    "/dashboard/applications/charts",
+    input
+  );
 }
 
 export function getCreatedResolvedOpenTrend(

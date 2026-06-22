@@ -9,6 +9,13 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+html,
+body,
+#root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -68,13 +75,18 @@ td {
 }
 
 .app-shell {
+  width: 100%;
+  max-width: 100%;
   min-height: 100vh;
-  padding: 32px;
+  overflow-x: hidden;
+  padding: 12px;
 }
 
 .workspace-panel {
-  width: min(1120px, 100%);
+  width: 100%;
+  max-width: 100%;
   margin: 0 auto;
+  overflow-x: hidden;
 }
 
 .app-view[hidden],
@@ -544,6 +556,9 @@ h2 {
 
 .dashboard-layout {
   display: grid;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   gap: 16px;
 }
 
@@ -1158,17 +1173,23 @@ h2 {
   font-weight: 700;
 }
 
-.overview-ticket-card {
-  grid-column: span 2;
-}
-
 .overview-ticket-details {
   display: grid;
-  gap: 5px;
-  margin-top: 10px;
+  gap: 4px;
+  margin-top: 8px;
   color: #475569;
-  font-size: 0.84rem;
+  font-size: 0.76rem;
   font-weight: 800;
+  line-height: 1.25;
+}
+
+.overview-date-note {
+  margin: 10px 0 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-style: italic;
+  font-weight: 700;
+  text-align: right;
 }
 
 .caution-card {
@@ -1339,6 +1360,252 @@ h2 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.applications-dashboard-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  align-items: start;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+  gap: 14px;
+}
+
+.applications-filter-pane {
+  position: sticky;
+  top: 12px;
+  min-width: 0;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+
+.applications-filter-heading {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.applications-filter-heading h2 {
+  font-size: 1.2rem;
+}
+
+.applications-filter-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.applications-main-pane {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  gap: 16px;
+}
+
+.applications-main-pane > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.applications-summary-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.excel-filter {
+  position: relative;
+  min-width: 0;
+}
+
+.excel-filter-trigger {
+  display: grid;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  color: #334155;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.excel-filter-trigger span {
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.excel-filter-trigger strong {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 0.76rem;
+}
+
+.excel-filter-trigger.active {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
+}
+
+.excel-filter-menu {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 28px rgb(31 41 55 / 10%);
+}
+
+.excel-filter-menu input[type="text"],
+.excel-filter-menu input:not([type]) {
+  min-height: 34px;
+}
+
+.excel-filter-select-all,
+.excel-filter-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: max-content;
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.excel-filter-select-all input,
+.excel-filter-options input {
+  width: 15px;
+  min-height: 0;
+  height: 15px;
+  flex: 0 0 15px;
+  margin-top: 3px;
+  padding: 0;
+}
+
+.excel-filter-options {
+  display: grid;
+  max-height: 150px;
+  gap: 7px;
+  overflow: auto;
+  padding: 2px 2px 4px;
+}
+
+.applications-table-frame {
+  width: 100%;
+  max-width: 100%;
+  max-height: 390px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.applications-table {
+  width: max-content;
+  min-width: 2600px;
+  max-width: none;
+  font-size: 0.82rem;
+}
+
+.applications-table th,
+.applications-table td {
+  padding: 7px 9px;
+  white-space: nowrap;
+}
+
+.applications-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  color: #475569;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.applications-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  max-width: 100%;
+  gap: 16px;
+}
+
+.applications-chart-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.applications-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.applications-chart-card h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 1.05rem;
+}
+
+.chart-copy-button {
+  width: auto;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
+.applications-chart-plot {
+  display: grid;
+  min-height: 344px;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.applications-chart-scroll {
+  display: grid;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 322px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.applications-chart-stage {
+  width: max-content;
+  margin: 0 auto;
+}
+
+.chart-copy-status {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .maintenance-panel {
   border-color: #fed7aa;
   background: linear-gradient(180deg, #ffffff, #fffbeb);
@@ -1349,14 +1616,25 @@ h2 {
   .detail-panel,
   .health-details-grid,
   .summary-grid,
+  .applications-summary-grid,
   .dashboard-filter-grid,
   .multi-filter-grid,
   .dashboard-chart-grid,
+  .applications-chart-grid,
   .workflow-steps,
   .upload-type-grid,
   .reset-mode-grid,
   .top-list-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .applications-dashboard-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .applications-filter-pane {
+    position: static;
+    max-height: none;
   }
 
   .kpi-grid {
@@ -1399,9 +1677,11 @@ h2 {
   .health-details-grid,
   .form-grid,
   .summary-grid,
+  .applications-summary-grid,
   .dashboard-filter-grid,
   .multi-filter-grid,
   .dashboard-chart-grid,
+  .applications-chart-grid,
   .kpi-grid,
   .workflow-steps,
   .upload-type-grid,
@@ -1411,9 +1691,6 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .overview-ticket-card {
-    grid-column: auto;
-  }
 
   .panel-heading,
   .selected-files li,
