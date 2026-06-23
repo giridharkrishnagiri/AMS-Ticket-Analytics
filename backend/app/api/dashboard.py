@@ -4,13 +4,21 @@ from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.dashboard import (
+    ApplicationsChartsResponse,
+    ApplicationsDataRequest,
+    ApplicationsFilterValueCountsResponse,
+    ApplicationsFilterValuesRequest,
+    ApplicationsFilterValuesResponse,
+    ApplicationsListResponse,
+    ApplicationsSummaryResponse,
     CreatedResolvedOpenRow,
     CreationSourceTrendRow,
+    DashboardOverviewResponse,
     FilterValuesResponse,
     IncidentSlaNameBreakdownResponse,
     IncidentSlaSummaryResponse,
@@ -20,11 +28,20 @@ from app.schemas.dashboard import (
     ReopenTrendRow,
     SlaTrendRow,
     TechnicalFunctionalBreakdownResponse,
+    VolumetricsCreatedResolvedBacklogResponse,
+    VolumetricsFilterValuesResponse,
+    VolumetricsRequest,
+    VolumetricsSummaryResponse,
 )
 from app.services.dashboard import (
     DashboardFilters,
     DateFilterBasis,
     TimeGrain,
+    applications_charts,
+    applications_filter_value_counts,
+    applications_filter_values,
+    applications_list,
+    applications_summary,
     created_resolved_open_trend,
     creation_source_trend,
     filter_values,
@@ -32,10 +49,14 @@ from app.services.dashboard import (
     incident_sla_summary,
     incident_sla_trend,
     mttr_trend,
+    overview_summary,
     reassignment_trend,
     reopen_trend,
     sla_trend,
     technical_functional_breakdown,
+    volumetrics_created_resolved_backlog,
+    volumetrics_filter_value_counts,
+    volumetrics_summary,
 )
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -109,6 +130,105 @@ def dashboard_filters(
 
 
 DashboardFilterDependency = Annotated[DashboardFilters, Depends(dashboard_filters)]
+
+
+@router.get("/overview", response_model=DashboardOverviewResponse)
+def get_dashboard_overview(
+    project_id: Annotated[UUID, Query(...)],
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return overview_summary(db, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/applications/filter-values",
+    response_model=ApplicationsFilterValuesResponse,
+)
+def get_dashboard_applications_filter_values(
+    project_id: Annotated[UUID, Query(...)],
+    db: DbSession,
+) -> dict[str, object]:
+    return applications_filter_values(db, project_id)
+
+
+@router.post(
+    "/applications/filter-values",
+    response_model=ApplicationsFilterValueCountsResponse,
+)
+def get_dashboard_applications_filter_value_counts(
+    request: ApplicationsFilterValuesRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    return applications_filter_value_counts(db, request)
+
+
+@router.post("/applications/summary", response_model=ApplicationsSummaryResponse)
+def get_dashboard_applications_summary(
+    request: ApplicationsDataRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    return applications_summary(db, request)
+
+
+@router.post("/applications/list", response_model=ApplicationsListResponse)
+def get_dashboard_applications_list(
+    request: ApplicationsDataRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return applications_list(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/applications/charts", response_model=ApplicationsChartsResponse)
+def get_dashboard_applications_charts(
+    request: ApplicationsDataRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    return applications_charts(db, request)
+
+
+@router.post(
+    "/volumetrics/filter-values",
+    response_model=VolumetricsFilterValuesResponse,
+)
+def get_dashboard_volumetrics_filter_values(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_filter_value_counts(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/volumetrics/summary", response_model=VolumetricsSummaryResponse)
+def get_dashboard_volumetrics_summary(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_summary(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/created-resolved-backlog",
+    response_model=VolumetricsCreatedResolvedBacklogResponse,
+)
+def get_dashboard_volumetrics_created_resolved_backlog(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_created_resolved_backlog(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(

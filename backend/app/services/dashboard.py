@@ -6,14 +6,23 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Float, and_, case, cast, func, or_, select
+from sqlalchemy import Float, and_, case, cast, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session
 
-from app.models import Ticket
+from app.models import (
+    ApplicationInventoryItem,
+    AssessmentOutOfScopeTicket,
+    Client,
+    IncidentSlaRow,
+    Project,
+    Ticket,
+    TicketRawRow,
+)
 
 SECONDS_PER_DAY = 86400
 SECONDS_PER_HOUR = 3600
 FILTER_VALUE_LIMIT = 2000
+BLANK_LABEL = "(blank)"
 FINAL_STATES = {"closed", "resolved", "complete", "completed", "cancelled", "canceled"}
 DATE_TRUNC_GRAIN = {
     "DAILY": "day",
@@ -21,6 +30,148 @@ DATE_TRUNC_GRAIN = {
     "MONTHLY": "month",
     "QUARTERLY": "quarter",
     "YEARLY": "year",
+}
+
+DIRECT_APPLICATION_FIELDS = {
+    "business_service_ci_name": ApplicationInventoryItem.business_service_ci_name,
+    "parent_application_name": ApplicationInventoryItem.parent_application_name,
+    "assignment_group": ApplicationInventoryItem.assignment_group,
+    "assignment_group_owner": ApplicationInventoryItem.assignment_group_owner,
+    "application_owner": ApplicationInventoryItem.application_owner,
+    "support_lead": ApplicationInventoryItem.support_lead,
+    "functional_track": ApplicationInventoryItem.functional_track,
+    "ams_owner": ApplicationInventoryItem.ams_owner,
+    "supported_by_vendor": ApplicationInventoryItem.supported_by_vendor,
+}
+
+CMDB_APPLICATION_FIELDS = {
+    "app_family": ("Application family", "App Family"),
+    "biz_process": ("Business process", "Biz Process"),
+    "app_category": ("Application category", "App Category"),
+    "org_unit_level_1": ("Organization Unit Level 1", "Org Unit Level 1"),
+    "org_unit_level_2": ("Organization Unit Level 2", "Org Unit Level 2"),
+    "org_unit_level_3": ("Organization Unit Level 3", "Org Unit Level 3"),
+    "app_type": ("Application type", "Application Type"),
+    "architecture_type": ("Architecture type", "Architecture Type"),
+    "biz_capabilities": ("Business Capabilities", "Biz Capabilities"),
+    "business_reason_for_maintain_applications": (
+        "Business Reason for Maintain Applications",
+    ),
+    "business_units": ("Business Units",),
+    "biz_criticality": (
+        "Business criticality",
+        "Biz Criticality",
+        "Business Criticality",
+        "Business Critical",
+    ),
+    "biz_owner": ("Business owner", "Biz Owner"),
+    "company": ("Company",),
+    "install_status": ("Install Status",),
+    "install_type": ("Install type", "Install Type"),
+    "lifecycle_status": ("Life Cycle Stage", "Lifecycle Status"),
+    "lifecycle_stage_status": ("Life Cycle Stage Status", "Lifecycle Stage Status"),
+    "operating_system": ("Operating System",),
+    "sox_audited": ("SOX Audited - ever", "SOX Audited"),
+    "sox_scope": ("SOX Scope",),
+    "strategic": ("Strategic",),
+}
+
+APPLICATION_LIST_FIELDS = (
+    "business_service_ci_name",
+    "parent_application_name",
+    "assignment_group",
+    "assignment_group_owner",
+    "application_owner",
+    "support_lead",
+    "functional_track",
+    "ams_owner",
+    "supported_by_vendor",
+    "app_family",
+    "biz_process",
+    "app_category",
+    "org_unit_level_1",
+    "org_unit_level_2",
+    "org_unit_level_3",
+    "app_type",
+    "architecture_type",
+    "biz_capabilities",
+    "business_reason_for_maintain_applications",
+    "business_units",
+    "biz_criticality",
+    "biz_owner",
+    "company",
+    "install_status",
+    "install_type",
+    "lifecycle_status",
+    "operating_system",
+    "sox_audited",
+    "sox_scope",
+    "strategic",
+)
+
+SINGLE_APPLICATION_FILTER_FIELDS = {
+    "parent_application_name": "parent_application_name",
+    "application_owner": "application_owner",
+    "supported_by_vendor": "supported_by_vendor",
+    "architecture_type": "architecture_type",
+    "application_type": "app_type",
+    "business_critical": "biz_criticality",
+    "install_status": "install_status",
+    "install_type": "install_type",
+}
+
+COMBINED_APPLICATION_FILTER_FIELDS = {
+    "functional_track_ams_owner": ("functional_track", "ams_owner"),
+    "assignment_group_owner": ("assignment_group", "assignment_group_owner"),
+    "lifecycle_status_stage": ("lifecycle_status", "lifecycle_stage_status"),
+}
+
+APPLICATION_FILTER_CUSTOM_SORTS = {
+    "business_critical": (BLANK_LABEL, "Very Critical", "Critical", "High", "Medium", "Low"),
+    "install_status": (
+        BLANK_LABEL,
+        "In production",
+        "Retire in progress",
+        "Archived",
+        "Pilot",
+    ),
+    "lifecycle_status_stage": (BLANK_LABEL, "Operational", "End of Life", "Ideation"),
+}
+
+VOLUMETRICS_SCOPES = {"in_scope", "out_of_scope", "all"}
+VOLUMETRICS_TICKET_TYPES = {"all", "incident", "sc_task"}
+VOLUMETRICS_TIME_GRAINS = {"monthly", "weekly"}
+VOLUMETRICS_SCOPE_LABELS = {
+    "all": "All",
+    "in_scope": "In-scope",
+    "out_of_scope": "Out-of-scope",
+}
+VOLUMETRICS_TICKET_TYPE_LABELS = {
+    "all": "All",
+    "incident": "Incidents",
+    "sc_task": "SC Tasks",
+}
+VOLUMETRICS_TICKET_TYPE_VALUES = {
+    "incident": "INCIDENT",
+    "sc_task": "SERVICE_CATALOG_TASK",
+}
+VOLUMETRICS_CANCELLED_STATES = {
+    "cancelled",
+    "canceled",
+    "closed cancelled",
+    "closed canceled",
+    "closed incomplete",
+}
+
+SINGLE_VOLUMETRICS_FILTER_FIELDS = {
+    "parent_application_name": "parent_application_name",
+    "application_owner": "application_owner",
+    "supported_by_vendor": "supported_by_vendor",
+}
+
+COMBINED_VOLUMETRICS_FILTER_FIELDS = {
+    "functional_track_ams_owner": ("functional_track", "ams_owner"),
+    "assignment_group_support_lead": ("assignment_group", "support_lead"),
 }
 
 
@@ -87,6 +238,13 @@ class Period:
         if self.start.day == 1 and self.next_start.day == 1:
             return f"{self.start:%Y-%m}"
         return f"{self.start:%Y-%m-%d}"
+
+
+@dataclass(frozen=True)
+class VolumetricsPeriod:
+    start: datetime
+    end: datetime
+    label: str
 
 
 def normalize_ticket_type(ticket_type: str | None) -> str:
@@ -229,6 +387,1400 @@ def effective_completion_expression() -> Any:
         (Ticket.ticket_type == "SERVICE_CATALOG_TASK", Ticket.closed_at),
         else_=func.coalesce(Ticket.resolved_at, Ticket.closed_at),
     )
+
+
+def distinct_nonblank_count(column: Any) -> Any:
+    return func.count(func.distinct(func.nullif(func.trim(column), "")))
+
+
+def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
+    project_statement = (
+        select(Project, Client)
+        .join(Client, Project.client_id == Client.id)
+        .where(Project.id == project_id)
+    )
+    project_row = db.execute(project_statement).one_or_none()
+    if project_row is None:
+        raise ValueError("Project not found")
+
+    project, client = project_row
+
+    inventory_statement = select(
+        distinct_nonblank_count(ApplicationInventoryItem.business_service_ci_name).label(
+            "total_applications",
+        ),
+        distinct_nonblank_count(ApplicationInventoryItem.functional_track).label(
+            "functional_track_count",
+        ),
+        distinct_nonblank_count(ApplicationInventoryItem.ams_owner).label("ams_owner_count"),
+        distinct_nonblank_count(ApplicationInventoryItem.supported_by_vendor).label(
+            "supported_vendor_count",
+        ),
+        distinct_nonblank_count(ApplicationInventoryItem.assignment_group).label(
+            "assignment_group_count",
+        ),
+        distinct_nonblank_count(ApplicationInventoryItem.application_owner).label(
+            "application_owner_count",
+        ),
+    ).where(
+        ApplicationInventoryItem.project_id == project_id,
+        ApplicationInventoryItem.active.is_(True),
+    )
+    inventory_row = db.execute(inventory_statement).mappings().one()
+
+    completion_expression = effective_completion_expression()
+    ticket_statement = select(
+        func.count(Ticket.id).label("total_in_scope_tickets"),
+        func.sum(case((Ticket.ticket_type == "INCIDENT", 1), else_=0)).label("incident_count"),
+        func.sum(case((Ticket.ticket_type == "SERVICE_CATALOG_TASK", 1), else_=0)).label(
+            "sc_task_count",
+        ),
+        func.min(completion_expression).label("completion_date_min"),
+        func.max(completion_expression).label("completion_date_max"),
+    ).where(Ticket.project_id == project_id)
+    ticket_row = db.execute(ticket_statement).mappings().one()
+
+    raw_ticket_statement = select(
+        func.count(TicketRawRow.id).label("total_ticket_rows"),
+        func.sum(case((TicketRawRow.ticket_type == "INCIDENT", 1), else_=0)).label(
+            "incident_rows",
+        ),
+        func.sum(case((TicketRawRow.ticket_type == "SERVICE_CATALOG_TASK", 1), else_=0)).label(
+            "sc_task_rows",
+        ),
+    ).where(TicketRawRow.project_id == project_id)
+    raw_ticket_row = db.execute(raw_ticket_statement).mappings().one()
+
+    incident_sla_rows = db.scalar(
+        select(func.count(IncidentSlaRow.id)).where(IncidentSlaRow.project_id == project_id),
+    )
+
+    raw_incident_rows = int(raw_ticket_row["incident_rows"] or 0)
+    raw_sc_task_rows = int(raw_ticket_row["sc_task_rows"] or 0)
+    raw_incident_sla_rows = int(incident_sla_rows or 0)
+
+    return {
+        "project_id": project.id,
+        "customer_name": client.name,
+        "project_name": project.name,
+        "application_inventory": {
+            "total_applications": int(inventory_row["total_applications"] or 0),
+            "functional_track_count": int(inventory_row["functional_track_count"] or 0),
+            "ams_owner_count": int(inventory_row["ams_owner_count"] or 0),
+            "supported_vendor_count": int(inventory_row["supported_vendor_count"] or 0),
+            "assignment_group_count": int(inventory_row["assignment_group_count"] or 0),
+            "application_owner_count": int(inventory_row["application_owner_count"] or 0),
+        },
+        "ingested_volume": {
+            "total_rows": raw_incident_rows + raw_sc_task_rows + raw_incident_sla_rows,
+            "incident_rows": raw_incident_rows,
+            "sc_task_rows": raw_sc_task_rows,
+            "incident_sla_rows": raw_incident_sla_rows,
+        },
+        "tickets": {
+            "total_in_scope_tickets": int(ticket_row["total_in_scope_tickets"] or 0),
+            "incident_count": int(ticket_row["incident_count"] or 0),
+            "sc_task_count": int(ticket_row["sc_task_count"] or 0),
+            "completion_date_min": ticket_row["completion_date_min"],
+            "completion_date_max": ticket_row["completion_date_max"],
+        },
+    }
+
+
+def nonblank_text_expression(expression: Any) -> Any:
+    return func.nullif(func.trim(expression), "")
+
+
+def cmdb_payload_text_expression(*keys: str) -> Any:
+    expressions = [
+        nonblank_text_expression(ApplicationInventoryItem.cmdb_payload.op("->>")(key))
+        for key in keys
+    ]
+    if len(expressions) == 1:
+        return expressions[0]
+    return func.coalesce(*expressions)
+
+
+def application_field_expression(field_name: str) -> Any:
+    if field_name in DIRECT_APPLICATION_FIELDS:
+        return nonblank_text_expression(DIRECT_APPLICATION_FIELDS[field_name])
+    if field_name in CMDB_APPLICATION_FIELDS:
+        return cmdb_payload_text_expression(*CMDB_APPLICATION_FIELDS[field_name])
+    raise ValueError(f"Unsupported application field: {field_name}")
+
+
+def application_display_expression(field_name: str) -> Any:
+    return func.coalesce(application_field_expression(field_name), literal(BLANK_LABEL))
+
+
+def combined_application_display_expression(left_field: str, right_field: str) -> Any:
+    return func.concat(
+        application_display_expression(left_field),
+        literal(" - "),
+        application_display_expression(right_field),
+    )
+
+
+def applications_base_conditions(project_id: UUID) -> list[Any]:
+    return [
+        ApplicationInventoryItem.project_id == project_id,
+        ApplicationInventoryItem.active.is_(True),
+    ]
+
+
+def selected_application_filter_values(filters: Any, filter_name: str) -> list[str]:
+    values = getattr(filters, filter_name, []) or []
+    return [value.strip() for value in values if value and value.strip()]
+
+
+def applications_filter_conditions(
+    project_id: UUID,
+    filters: Any,
+    *,
+    excluded_filter_name: str | None = None,
+) -> list[Any]:
+    conditions = applications_base_conditions(project_id)
+
+    for filter_name, field_name in SINGLE_APPLICATION_FILTER_FIELDS.items():
+        if filter_name == excluded_filter_name:
+            continue
+        selected_values = selected_application_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(application_display_expression(field_name).in_(selected_values))
+
+    for filter_name, fields in COMBINED_APPLICATION_FILTER_FIELDS.items():
+        if filter_name == excluded_filter_name:
+            continue
+        selected_values = selected_application_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(combined_application_display_expression(*fields).in_(selected_values))
+
+    return conditions
+
+
+def distinct_application_filter_values(
+    db: Session,
+    project_id: UUID,
+    field_name: str,
+    *,
+    filter_name: str | None = None,
+) -> list[str]:
+    expression = application_display_expression(field_name)
+    statement = (
+        select(expression.label("label"))
+        .where(*applications_base_conditions(project_id))
+        .group_by(expression)
+        .order_by(expression.asc())
+    )
+    values = [row.label for row in db.execute(statement).all()]
+    if filter_name is not None:
+        values = sorted(values, key=lambda value: application_filter_sort_key(filter_name, value))
+    return values
+
+
+def distinct_combined_application_filter_values(
+    db: Session,
+    project_id: UUID,
+    left_field: str,
+    right_field: str,
+    *,
+    filter_name: str | None = None,
+) -> list[dict[str, str]]:
+    left_expression = application_display_expression(left_field)
+    right_expression = application_display_expression(right_field)
+    label_expression = combined_application_display_expression(left_field, right_field)
+    statement = (
+        select(
+            label_expression.label("label"),
+            left_expression.label("left_value"),
+            right_expression.label("right_value"),
+        )
+        .where(*applications_base_conditions(project_id))
+        .group_by(label_expression, left_expression, right_expression)
+        .order_by(label_expression.asc())
+    )
+    rows = [dict(row._mapping) for row in db.execute(statement).all()]
+    if filter_name is not None:
+        rows = sort_filter_count_rows(rows, filter_name=filter_name)
+    return rows
+
+
+def applications_filter_values(db: Session, project_id: UUID) -> dict[str, Any]:
+    return {
+        "functional_track_ams_owner": distinct_combined_application_filter_values(
+            db,
+            project_id,
+            "functional_track",
+            "ams_owner",
+        ),
+        "assignment_group_owner": distinct_combined_application_filter_values(
+            db,
+            project_id,
+            "assignment_group",
+            "assignment_group_owner",
+        ),
+        "parent_application_name": distinct_application_filter_values(
+            db,
+            project_id,
+            "parent_application_name",
+        ),
+        "application_owner": distinct_application_filter_values(
+            db,
+            project_id,
+            "application_owner",
+        ),
+        "supported_by_vendor": distinct_application_filter_values(
+            db,
+            project_id,
+            "supported_by_vendor",
+        ),
+        "architecture_type": distinct_application_filter_values(
+            db,
+            project_id,
+            "architecture_type",
+        ),
+        "application_type": distinct_application_filter_values(db, project_id, "app_type"),
+        "business_critical": distinct_application_filter_values(
+            db,
+            project_id,
+            "biz_criticality",
+            filter_name="business_critical",
+        ),
+        "install_status": distinct_application_filter_values(
+            db,
+            project_id,
+            "install_status",
+            filter_name="install_status",
+        ),
+        "install_type": distinct_application_filter_values(db, project_id, "install_type"),
+        "lifecycle_status_stage": distinct_combined_application_filter_values(
+            db,
+            project_id,
+            "lifecycle_status",
+            "lifecycle_stage_status",
+            filter_name="lifecycle_status_stage",
+        ),
+    }
+
+
+def normalize_custom_sort_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def application_filter_sort_key(
+    filter_name: str | None,
+    value: Any,
+    *,
+    secondary_value: Any | None = None,
+) -> tuple[int, str, str]:
+    normalized_value = normalize_custom_sort_text(value)
+    sort_order = APPLICATION_FILTER_CUSTOM_SORTS.get(filter_name or "")
+    if not sort_order:
+        return (0, normalized_value, normalize_custom_sort_text(secondary_value))
+
+    normalized_order = {
+        normalize_custom_sort_text(order_value): index
+        for index, order_value in enumerate(sort_order)
+    }
+    rank = normalized_order.get(normalized_value, len(normalized_order))
+    return (rank, normalized_value, normalize_custom_sort_text(secondary_value))
+
+
+def sort_filter_count_rows(
+    rows: list[dict[str, Any]],
+    *,
+    filter_name: str | None = None,
+) -> list[dict[str, Any]]:
+    return sorted(
+        rows,
+        key=lambda row: application_filter_sort_key(
+            filter_name,
+            row.get("left_value") if filter_name == "lifecycle_status_stage" else row["label"],
+            secondary_value=row["label"],
+        ),
+    )
+
+
+def add_missing_selected_single_filter_values(
+    rows: list[dict[str, Any]],
+    selected_values: list[str],
+    *,
+    filter_name: str,
+) -> list[dict[str, Any]]:
+    existing_labels = {str(row["label"]) for row in rows}
+    for selected_value in selected_values:
+        if selected_value not in existing_labels:
+            rows.append({"label": selected_value, "value": selected_value, "count": 0})
+            existing_labels.add(selected_value)
+    return sort_filter_count_rows(rows, filter_name=filter_name)
+
+
+def split_combined_filter_label(label: str) -> tuple[str, str]:
+    left_value, separator, right_value = label.partition(" - ")
+    if not separator:
+        return label, BLANK_LABEL
+    return left_value or BLANK_LABEL, right_value or BLANK_LABEL
+
+
+def add_missing_selected_combined_filter_values(
+    rows: list[dict[str, Any]],
+    selected_values: list[str],
+    *,
+    filter_name: str,
+) -> list[dict[str, Any]]:
+    existing_labels = {str(row["label"]) for row in rows}
+    for selected_value in selected_values:
+        if selected_value not in existing_labels:
+            left_value, right_value = split_combined_filter_label(selected_value)
+            rows.append(
+                {
+                    "label": selected_value,
+                    "left_value": left_value,
+                    "right_value": right_value,
+                    "count": 0,
+                },
+            )
+            existing_labels.add(selected_value)
+    return sort_filter_count_rows(rows, filter_name=filter_name)
+
+
+def application_filter_value_count_rows(
+    db: Session,
+    request: Any,
+    filter_name: str,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    expression = application_display_expression(field_name)
+    statement = (
+        select(
+            expression.label("label"),
+            expression.label("value"),
+            func.count(ApplicationInventoryItem.id).label("count"),
+        )
+        .where(
+            *applications_filter_conditions(
+                request.project_id,
+                request.filters,
+                excluded_filter_name=filter_name,
+            ),
+        )
+        .group_by(expression)
+        .order_by(expression.asc())
+    )
+    rows = [
+        {"label": row["label"], "value": row["value"], "count": int(row["count"] or 0)}
+        for row in db.execute(statement).mappings().all()
+    ]
+    return add_missing_selected_single_filter_values(
+        rows,
+        selected_application_filter_values(request.filters, filter_name),
+        filter_name=filter_name,
+    )
+
+
+def combined_application_filter_value_count_rows(
+    db: Session,
+    request: Any,
+    filter_name: str,
+    left_field: str,
+    right_field: str,
+) -> list[dict[str, Any]]:
+    left_expression = application_display_expression(left_field)
+    right_expression = application_display_expression(right_field)
+    label_expression = combined_application_display_expression(left_field, right_field)
+    statement = (
+        select(
+            label_expression.label("label"),
+            left_expression.label("left_value"),
+            right_expression.label("right_value"),
+            func.count(ApplicationInventoryItem.id).label("count"),
+        )
+        .where(
+            *applications_filter_conditions(
+                request.project_id,
+                request.filters,
+                excluded_filter_name=filter_name,
+            ),
+        )
+        .group_by(label_expression, left_expression, right_expression)
+        .order_by(label_expression.asc())
+    )
+    rows = [
+        {
+            "label": row["label"],
+            "left_value": row["left_value"],
+            "right_value": row["right_value"],
+            "count": int(row["count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return add_missing_selected_combined_filter_values(
+        rows,
+        selected_application_filter_values(request.filters, filter_name),
+        filter_name=filter_name,
+    )
+
+
+def applications_filter_value_counts(db: Session, request: Any) -> dict[str, Any]:
+    return {
+        "functional_track_ams_owner": combined_application_filter_value_count_rows(
+            db,
+            request,
+            "functional_track_ams_owner",
+            "functional_track",
+            "ams_owner",
+        ),
+        "assignment_group_owner": combined_application_filter_value_count_rows(
+            db,
+            request,
+            "assignment_group_owner",
+            "assignment_group",
+            "assignment_group_owner",
+        ),
+        "parent_application_name": application_filter_value_count_rows(
+            db,
+            request,
+            "parent_application_name",
+            "parent_application_name",
+        ),
+        "application_owner": application_filter_value_count_rows(
+            db,
+            request,
+            "application_owner",
+            "application_owner",
+        ),
+        "supported_by_vendor": application_filter_value_count_rows(
+            db,
+            request,
+            "supported_by_vendor",
+            "supported_by_vendor",
+        ),
+        "architecture_type": application_filter_value_count_rows(
+            db,
+            request,
+            "architecture_type",
+            "architecture_type",
+        ),
+        "application_type": application_filter_value_count_rows(
+            db,
+            request,
+            "application_type",
+            "app_type",
+        ),
+        "business_critical": application_filter_value_count_rows(
+            db,
+            request,
+            "business_critical",
+            "biz_criticality",
+        ),
+        "install_status": application_filter_value_count_rows(
+            db,
+            request,
+            "install_status",
+            "install_status",
+        ),
+        "install_type": application_filter_value_count_rows(
+            db,
+            request,
+            "install_type",
+            "install_type",
+        ),
+        "lifecycle_status_stage": combined_application_filter_value_count_rows(
+            db,
+            request,
+            "lifecycle_status_stage",
+            "lifecycle_status",
+            "lifecycle_stage_status",
+        ),
+    }
+
+
+def applications_summary(db: Session, request: Any) -> dict[str, Any]:
+    filters = request.filters
+    conditions = applications_filter_conditions(request.project_id, filters)
+    app_type_lower = func.lower(application_field_expression("app_type"))
+    criticality_lower = func.lower(application_field_expression("biz_criticality"))
+    statement = select(
+        distinct_nonblank_count(ApplicationInventoryItem.business_service_ci_name).label(
+            "applications",
+        ),
+        distinct_nonblank_count(ApplicationInventoryItem.functional_track).label(
+            "functional_groups",
+        ),
+        distinct_nonblank_count(ApplicationInventoryItem.assignment_group).label(
+            "assignment_groups",
+        ),
+        distinct_nonblank_count(ApplicationInventoryItem.parent_application_name).label(
+            "parent_business_apps",
+        ),
+        func.sum(
+            case((app_type_lower.in_(("business", "business application")), 1), else_=0),
+        ).label("business_applications"),
+        func.sum(
+            case((app_type_lower.in_(("technical", "technical application")), 1), else_=0),
+        ).label("technical_applications"),
+        func.sum(case((criticality_lower == "very critical", 1), else_=0)).label(
+            "very_critical_applications",
+        ),
+        func.sum(case((criticality_lower == "critical", 1), else_=0)).label(
+            "critical_applications",
+        ),
+    ).where(*conditions)
+    row = db.execute(statement).mappings().one()
+    return {
+        "applications": int(row["applications"] or 0),
+        "functional_groups": int(row["functional_groups"] or 0),
+        "assignment_groups": int(row["assignment_groups"] or 0),
+        "parent_business_apps": int(row["parent_business_apps"] or 0),
+        "business_applications": int(row["business_applications"] or 0),
+        "technical_applications": int(row["technical_applications"] or 0),
+        "very_critical_applications": int(row["very_critical_applications"] or 0),
+        "critical_applications": int(row["critical_applications"] or 0),
+        "show_functional_groups": not selected_application_filter_values(
+            filters,
+            "functional_track_ams_owner",
+        ),
+        "show_assignment_groups": not selected_application_filter_values(
+            filters,
+            "assignment_group_owner",
+        ),
+        "show_parent_business_apps": not selected_application_filter_values(
+            filters,
+            "parent_application_name",
+        ),
+    }
+
+
+def applications_sort_expression(column_name: str) -> Any:
+    if column_name not in APPLICATION_LIST_FIELDS:
+        raise ValueError(f"Unsupported application sort column: {column_name}")
+    return application_display_expression(column_name)
+
+
+def applications_list(db: Session, request: Any) -> dict[str, Any]:
+    conditions = applications_filter_conditions(request.project_id, request.filters)
+    total_statement = select(func.count(ApplicationInventoryItem.id)).where(*conditions)
+    total = int(db.scalar(total_statement) or 0)
+
+    sort_expression = applications_sort_expression(request.sort.column)
+    sort_direction = request.sort.direction.lower()
+    if sort_direction not in {"asc", "desc"}:
+        raise ValueError("Sort direction must be asc or desc")
+    order_expression = sort_expression.desc() if sort_direction == "desc" else sort_expression.asc()
+
+    columns = [
+        application_display_expression(field_name).label(field_name)
+        for field_name in APPLICATION_LIST_FIELDS
+    ]
+    statement = (
+        select(*columns)
+        .where(*conditions)
+        .order_by(
+            order_expression,
+            application_display_expression("business_service_ci_name").asc(),
+        )
+        .limit(request.limit)
+        .offset(request.offset)
+    )
+    rows = [dict(row._mapping) for row in db.execute(statement).all()]
+    return {"total": total, "rows": rows}
+
+
+def applications_chart_counts(
+    db: Session,
+    request: Any,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    expression = application_display_expression(field_name)
+    statement = (
+        select(
+            expression.label("label"),
+            func.count(ApplicationInventoryItem.id).label("count"),
+        )
+        .where(*applications_filter_conditions(request.project_id, request.filters))
+        .group_by(expression)
+        .order_by(func.count(ApplicationInventoryItem.id).desc(), expression.asc())
+    )
+    return [
+        {"label": row.label, "count": int(row.count or 0)}
+        for row in db.execute(statement).all()
+    ]
+
+
+def applications_charts(db: Session, request: Any) -> dict[str, list[dict[str, Any]]]:
+    lifecycle_selected = bool(
+        selected_application_filter_values(request.filters, "lifecycle_status_stage"),
+    )
+    return {
+        "lifecycle_stage": []
+        if lifecycle_selected
+        else applications_chart_counts(db, request, "lifecycle_stage_status"),
+        "operating_system": applications_chart_counts(db, request, "operating_system"),
+        "sox_scope": applications_chart_counts(db, request, "sox_scope"),
+        "strategic": applications_chart_counts(db, request, "strategic"),
+    }
+
+
+def normalize_volumetrics_scope(value: str | None) -> str:
+    normalized = (value or "in_scope").strip().lower()
+    if normalized not in VOLUMETRICS_SCOPES:
+        raise ValueError("Scope must be one of in_scope, out_of_scope, or all")
+    return normalized
+
+
+def normalize_volumetrics_ticket_type(value: str | None) -> str:
+    normalized = (value or "all").strip().lower()
+    if normalized not in VOLUMETRICS_TICKET_TYPES:
+        raise ValueError("Ticket type must be one of all, incident, or sc_task")
+    return normalized
+
+
+def normalize_volumetrics_time_grain(value: str | None) -> str:
+    normalized = (value or "monthly").strip().lower()
+    if normalized not in VOLUMETRICS_TIME_GRAINS:
+        raise ValueError("Time grain must be monthly or weekly")
+    return normalized
+
+
+def normalize_dashboard_datetime(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def volumetrics_completion_expression(model: Any) -> Any:
+    cancelled_state = volumetrics_cancelled_state_expression(model)
+    return case(
+        (cancelled_state, func.coalesce(model.resolved_at, model.closed_at)),
+        (model.ticket_type == "INCIDENT", model.resolved_at),
+        (model.ticket_type == "SERVICE_CATALOG_TASK", model.closed_at),
+        else_=func.coalesce(model.resolved_at, model.closed_at),
+    )
+
+
+def volumetrics_cancelled_state_expression(model: Any) -> Any:
+    return func.lower(func.trim(func.coalesce(model.state, ""))).in_(VOLUMETRICS_CANCELLED_STATES)
+
+
+def volumetrics_exit_expression(model: Any) -> Any:
+    completion_expression = volumetrics_completion_expression(model)
+    # Cancelled rows with no resolved/closed timestamp should not remain backlog forever.
+    return case(
+        (
+            and_(
+                volumetrics_cancelled_state_expression(model),
+                completion_expression.is_(None),
+            ),
+            model.created_at,
+        ),
+        else_=completion_expression,
+    )
+
+
+def volumetrics_supported_vendor_expression(model: Any) -> Any:
+    return func.coalesce(
+        nonblank_text_expression(model.supported_by_vendor),
+        nonblank_text_expression(model.derived_vendor),
+    )
+
+
+def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) -> Any:
+    return select(
+        literal(scope_label).label("scope"),
+        model.id.label("id"),
+        model.ticket_type.label("ticket_type"),
+        model.created_at.label("created_at"),
+        volumetrics_completion_expression(model).label("completion_at"),
+        volumetrics_exit_expression(model).label("exit_at"),
+        model.state.label("state"),
+        model.assignment_group.label("assignment_group"),
+        model.support_lead.label("support_lead"),
+        model.functional_track.label("functional_track"),
+        model.ams_owner.label("ams_owner"),
+        model.parent_application_name.label("parent_application_name"),
+        model.application_owner.label("application_owner"),
+        volumetrics_supported_vendor_expression(model).label("supported_by_vendor"),
+        model.response_sla_breached.label("response_sla_breached"),
+        model.resolution_sla_breached.label("resolution_sla_breached"),
+    ).where(model.project_id == project_id)
+
+
+def volumetrics_source_subquery(request: Any, *, scope_override: str | None = None) -> Any:
+    scope = normalize_volumetrics_scope(scope_override or request.scope)
+    in_scope_select = volumetrics_source_select(Ticket, "in_scope", request.project_id)
+    out_of_scope_select = volumetrics_source_select(
+        AssessmentOutOfScopeTicket,
+        "out_of_scope",
+        request.project_id,
+    )
+    if scope == "in_scope":
+        return in_scope_select.subquery("volumetrics_source")
+    if scope == "out_of_scope":
+        return out_of_scope_select.subquery("volumetrics_source")
+    return union_all(in_scope_select, out_of_scope_select).subquery("volumetrics_source")
+
+
+def volumetrics_display_expression(expression: Any) -> Any:
+    return func.coalesce(nonblank_text_expression(expression), literal(BLANK_LABEL))
+
+
+def combined_volumetrics_display_expression(source: Any, left_field: str, right_field: str) -> Any:
+    return func.concat(
+        volumetrics_display_expression(getattr(source.c, left_field)),
+        literal(" - "),
+        volumetrics_display_expression(getattr(source.c, right_field)),
+    )
+
+
+def selected_volumetrics_filter_values(filters: Any, filter_name: str) -> list[str]:
+    values = getattr(filters, filter_name, []) or []
+    return [value.strip() for value in values if value and value.strip()]
+
+
+def volumetrics_ticket_type_condition(source: Any, ticket_type: str) -> Any | None:
+    normalized = normalize_volumetrics_ticket_type(ticket_type)
+    mapped_value = VOLUMETRICS_TICKET_TYPE_VALUES.get(normalized)
+    if mapped_value is None:
+        return None
+    return source.c.ticket_type == mapped_value
+
+
+def volumetrics_created_date_conditions(source: Any, request: Any) -> list[Any]:
+    start_datetime = normalize_dashboard_datetime(request.start_datetime)
+    end_datetime = normalize_dashboard_datetime(request.end_datetime)
+    return [
+        source.c.created_at.is_not(None),
+        source.c.created_at >= start_datetime,
+        source.c.created_at <= end_datetime,
+    ]
+
+
+def volumetrics_filter_conditions(
+    source: Any,
+    filters: Any,
+    *,
+    excluded_filter_name: str | None = None,
+) -> list[Any]:
+    conditions: list[Any] = []
+    for filter_name, field_name in SINGLE_VOLUMETRICS_FILTER_FIELDS.items():
+        if filter_name == excluded_filter_name:
+            continue
+        selected_values = selected_volumetrics_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(
+                volumetrics_display_expression(getattr(source.c, field_name)).in_(
+                    selected_values,
+                ),
+            )
+
+    for filter_name, fields in COMBINED_VOLUMETRICS_FILTER_FIELDS.items():
+        if filter_name == excluded_filter_name:
+            continue
+        selected_values = selected_volumetrics_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(
+                combined_volumetrics_display_expression(source, *fields).in_(selected_values),
+            )
+    return conditions
+
+
+def volumetrics_base_conditions(
+    source: Any,
+    request: Any,
+    *,
+    excluded_filter_name: str | None = None,
+    exclude_ticket_type: bool = False,
+    include_date_bounds: bool = True,
+) -> list[Any]:
+    conditions: list[Any] = []
+    ticket_condition = (
+        None
+        if exclude_ticket_type
+        else volumetrics_ticket_type_condition(source, request.ticket_type)
+    )
+    if ticket_condition is not None:
+        conditions.append(ticket_condition)
+    if include_date_bounds:
+        conditions.extend(volumetrics_created_date_conditions(source, request))
+    conditions.extend(
+        volumetrics_filter_conditions(
+            source,
+            request.filters,
+            excluded_filter_name=excluded_filter_name,
+        ),
+    )
+    return conditions
+
+
+def add_missing_selected_volumetrics_single_values(
+    rows: list[dict[str, Any]],
+    selected_values: list[str],
+) -> list[dict[str, Any]]:
+    existing = {str(row["label"]) for row in rows}
+    for selected_value in selected_values:
+        if selected_value not in existing:
+            rows.append({"label": selected_value, "value": selected_value, "count": 0})
+            existing.add(selected_value)
+    return sorted(rows, key=lambda row: str(row["label"]).casefold())
+
+
+def add_missing_selected_volumetrics_combined_values(
+    rows: list[dict[str, Any]],
+    selected_values: list[str],
+) -> list[dict[str, Any]]:
+    existing = {str(row["label"]) for row in rows}
+    for selected_value in selected_values:
+        if selected_value not in existing:
+            left_value, right_value = split_combined_filter_label(selected_value)
+            rows.append(
+                {
+                    "label": selected_value,
+                    "left_value": left_value,
+                    "right_value": right_value,
+                    "count": 0,
+                },
+            )
+            existing.add(selected_value)
+    return sorted(rows, key=lambda row: str(row["label"]).casefold())
+
+
+def volumetrics_filter_value_count_rows(
+    db: Session,
+    request: Any,
+    filter_name: str,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    expression = volumetrics_display_expression(getattr(source.c, field_name))
+    statement = (
+        select(
+            expression.label("label"),
+            expression.label("value"),
+            func.count(source.c.id).label("count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                request,
+                excluded_filter_name=filter_name,
+            ),
+        )
+        .group_by(expression)
+        .order_by(expression.asc())
+    )
+    rows = [
+        {"label": row["label"], "value": row["value"], "count": int(row["count"] or 0)}
+        for row in db.execute(statement).mappings().all()
+    ]
+    return add_missing_selected_volumetrics_single_values(
+        rows,
+        selected_volumetrics_filter_values(request.filters, filter_name),
+    )
+
+
+def combined_volumetrics_filter_value_count_rows(
+    db: Session,
+    request: Any,
+    filter_name: str,
+    left_field: str,
+    right_field: str,
+) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    left_expression = volumetrics_display_expression(getattr(source.c, left_field))
+    right_expression = volumetrics_display_expression(getattr(source.c, right_field))
+    label_expression = combined_volumetrics_display_expression(source, left_field, right_field)
+    statement = (
+        select(
+            label_expression.label("label"),
+            left_expression.label("left_value"),
+            right_expression.label("right_value"),
+            func.count(source.c.id).label("count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                request,
+                excluded_filter_name=filter_name,
+            ),
+        )
+        .group_by(label_expression, left_expression, right_expression)
+        .order_by(label_expression.asc())
+    )
+    rows = [
+        {
+            "label": row["label"],
+            "left_value": row["left_value"],
+            "right_value": row["right_value"],
+            "count": int(row["count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return add_missing_selected_volumetrics_combined_values(
+        rows,
+        selected_volumetrics_filter_values(request.filters, filter_name),
+    )
+
+
+def count_volumetrics_rows(
+    db: Session,
+    request: Any,
+    *,
+    scope_override: str | None = None,
+    ticket_type_override: str | None = None,
+    exclude_ticket_type: bool = False,
+) -> int:
+    source = volumetrics_source_subquery(request, scope_override=scope_override)
+    effective_request = request
+    if ticket_type_override is not None:
+        effective_request = replace_request_value(request, "ticket_type", ticket_type_override)
+    statement = (
+        select(func.count(source.c.id))
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                effective_request,
+                exclude_ticket_type=exclude_ticket_type,
+            ),
+        )
+    )
+    return int(db.scalar(statement) or 0)
+
+
+def replace_request_value(request: Any, field_name: str, value: Any) -> Any:
+    # Pydantic v1/v2 compatibility keeps tests and runtime aligned across local installs.
+    if hasattr(request, "model_copy"):
+        return request.model_copy(update={field_name: value})
+    return request.copy(update={field_name: value})
+
+
+def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]:
+    normalize_volumetrics_scope(request.scope)
+    normalize_volumetrics_ticket_type(request.ticket_type)
+    normalize_volumetrics_time_grain(request.time_grain)
+    scope_rows = []
+    for scope_key in ("all", "in_scope", "out_of_scope"):
+        scope_rows.append(
+            {
+                "label": VOLUMETRICS_SCOPE_LABELS[scope_key],
+                "value": scope_key,
+                "count": count_volumetrics_rows(db, request, scope_override=scope_key),
+            },
+        )
+
+    ticket_type_rows = []
+    for ticket_type_key in ("all", "incident", "sc_task"):
+        ticket_type_rows.append(
+            {
+                "label": VOLUMETRICS_TICKET_TYPE_LABELS[ticket_type_key],
+                "value": ticket_type_key,
+                "count": count_volumetrics_rows(
+                    db,
+                    request,
+                    ticket_type_override=ticket_type_key,
+                    exclude_ticket_type=ticket_type_key == "all",
+                ),
+            },
+        )
+
+    return {
+        "scope": scope_rows,
+        "ticket_type": ticket_type_rows,
+        "functional_track_ams_owner": combined_volumetrics_filter_value_count_rows(
+            db,
+            request,
+            "functional_track_ams_owner",
+            "functional_track",
+            "ams_owner",
+        ),
+        "assignment_group_support_lead": combined_volumetrics_filter_value_count_rows(
+            db,
+            request,
+            "assignment_group_support_lead",
+            "assignment_group",
+            "support_lead",
+        ),
+        "parent_application_name": volumetrics_filter_value_count_rows(
+            db,
+            request,
+            "parent_application_name",
+            "parent_application_name",
+        ),
+        "application_owner": volumetrics_filter_value_count_rows(
+            db,
+            request,
+            "application_owner",
+            "application_owner",
+        ),
+        "supported_by_vendor": volumetrics_filter_value_count_rows(
+            db,
+            request,
+            "supported_by_vendor",
+            "supported_by_vendor",
+        ),
+    }
+
+
+def add_month(value: datetime) -> datetime:
+    if value.month == 12:
+        return datetime(value.year + 1, 1, 1, tzinfo=value.tzinfo)
+    return datetime(value.year, value.month + 1, 1, tzinfo=value.tzinfo)
+
+
+def build_volumetrics_periods(request: Any) -> list[VolumetricsPeriod]:
+    grain = normalize_volumetrics_time_grain(request.time_grain)
+    start_datetime = normalize_dashboard_datetime(request.start_datetime)
+    end_datetime = normalize_dashboard_datetime(request.end_datetime)
+    if start_datetime > end_datetime:
+        raise ValueError("Start datetime must be before end datetime")
+
+    periods: list[VolumetricsPeriod] = []
+    if grain == "monthly":
+        current = datetime(
+            start_datetime.year,
+            start_datetime.month,
+            1,
+            tzinfo=start_datetime.tzinfo,
+        )
+        while current <= end_datetime:
+            next_start = add_month(current)
+            period_end = min(next_start - timedelta(microseconds=1), end_datetime)
+            periods.append(
+                VolumetricsPeriod(
+                    start=current,
+                    end=period_end,
+                    label=f"{current:%b-%y}",
+                ),
+            )
+            current = next_start
+        return periods
+
+    current_date = start_datetime.date() - timedelta(days=start_datetime.weekday())
+    current = datetime.combine(current_date, time.min, tzinfo=start_datetime.tzinfo)
+    while current <= end_datetime:
+        next_start = current + timedelta(days=7)
+        period_end = min(next_start - timedelta(microseconds=1), end_datetime)
+        periods.append(
+            VolumetricsPeriod(
+                start=current,
+                end=period_end,
+                label=f"{current:%d-%b-%y}",
+            ),
+        )
+        current = next_start
+    return periods
+
+
+def volumetrics_cancelled_expression(source: Any) -> Any:
+    state_expression = func.lower(func.trim(func.coalesce(source.c.state, "")))
+    return state_expression.in_(VOLUMETRICS_CANCELLED_STATES)
+
+
+def scalar_count(db: Session, source: Any, conditions: list[Any]) -> int:
+    statement = select(func.count(source.c.id)).select_from(source).where(*conditions)
+    return int(db.scalar(statement) or 0)
+
+
+def volumetrics_period_start_expression(date_expression: Any, grain: str) -> Any:
+    return func.date_trunc("month" if grain == "monthly" else "week", date_expression)
+
+
+def normalize_volumetrics_period_key(value: datetime | None, grain: str) -> datetime | None:
+    if value is None:
+        return None
+    value = normalize_dashboard_datetime(value)
+    if grain == "monthly":
+        return datetime(value.year, value.month, 1, tzinfo=value.tzinfo)
+    week_date = value.date() - timedelta(days=value.weekday())
+    return datetime.combine(week_date, time.min, tzinfo=value.tzinfo)
+
+
+def volumetrics_period_lookup_key(value: datetime, grain: str) -> str:
+    normalized = normalize_volumetrics_period_key(value, grain)
+    if normalized is None:
+        return ""
+    if grain == "monthly":
+        return f"{normalized.year:04d}-{normalized.month:02d}"
+    return f"{normalized.year:04d}-{normalized.month:02d}-{normalized.day:02d}"
+
+
+def volumetrics_aggregate_by_period(
+    db: Session,
+    request: Any,
+    source: Any,
+    date_expression: Any,
+    columns: list[Any],
+    extra_conditions: list[Any] | None = None,
+    *,
+    override_request: Any | None = None,
+) -> dict[str, dict[str, Any]]:
+    effective_request = override_request or request
+    grain = normalize_volumetrics_time_grain(effective_request.time_grain)
+    period_expression = volumetrics_period_start_expression(date_expression, grain).label(
+        "period_start",
+    )
+    conditions = [
+        *volumetrics_base_conditions(
+            source,
+            effective_request,
+            include_date_bounds=False,
+        ),
+        date_expression.is_not(None),
+        date_expression >= normalize_dashboard_datetime(effective_request.start_datetime),
+        date_expression <= normalize_dashboard_datetime(effective_request.end_datetime),
+    ]
+    if extra_conditions:
+        conditions.extend(extra_conditions)
+
+    statement = (
+        select(period_expression, *columns)
+        .select_from(source)
+        .where(*conditions)
+        .group_by(period_expression)
+        .order_by(period_expression)
+    )
+    rows_by_period: dict[str, dict[str, Any]] = {}
+    for row in db.execute(statement).mappings().all():
+        key = normalize_volumetrics_period_key(row["period_start"], grain)
+        if key is not None:
+            rows_by_period[volumetrics_period_lookup_key(key, grain)] = dict(row)
+    return rows_by_period
+
+
+def average(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def period_adherence_percentages(rows: list[dict[str, Any]], prefix: str) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        applicable = int(row[f"{prefix}_applicable_count"])
+        met = int(row[f"{prefix}_met_count"])
+        percentage_value = percentage(met, applicable)
+        if percentage_value is not None:
+            values.append(percentage_value)
+    return values
+
+
+def volumetrics_period_metrics(
+    db: Session,
+    request: Any,
+    *,
+    include_backlog: bool = True,
+    include_cancelled: bool = True,
+    include_sla: bool = True,
+) -> list[dict[str, Any]]:
+    normalize_volumetrics_scope(request.scope)
+    normalize_volumetrics_ticket_type(request.ticket_type)
+    periods = build_volumetrics_periods(request)
+    source = volumetrics_source_subquery(request)
+    base_conditions = volumetrics_base_conditions(
+        source,
+        request,
+        include_date_bounds=False,
+    )
+    cancelled_condition = volumetrics_cancelled_expression(source)
+
+    created_rows = volumetrics_aggregate_by_period(
+        db,
+        request,
+        source,
+        source.c.created_at,
+        [func.count(source.c.id).label("created_count")],
+    )
+    completed_rows = volumetrics_aggregate_by_period(
+        db,
+        request,
+        source,
+        source.c.completion_at,
+        [func.count(source.c.id).label("resolved_closed_count")],
+        [~cancelled_condition],
+    )
+    cancelled_rows = (
+        volumetrics_aggregate_by_period(
+            db,
+            request,
+            source,
+            source.c.completion_at,
+            [func.count(source.c.id).label("cancelled_count")],
+            [cancelled_condition],
+        )
+        if include_cancelled
+        else {}
+    )
+    exit_rows = (
+        volumetrics_aggregate_by_period(
+            db,
+            request,
+            source,
+            source.c.exit_at,
+            [func.count(source.c.id).label("exit_count")],
+        )
+        if include_backlog
+        else {}
+    )
+    incident_request = replace_request_value(request, "ticket_type", "incident")
+    sla_rows = (
+        volumetrics_aggregate_by_period(
+            db,
+            request,
+            source,
+            source.c.created_at,
+            [
+                func.count(source.c.id)
+                .filter(source.c.response_sla_breached.is_not(None))
+                .label("response_applicable_count"),
+                func.count(source.c.id)
+                .filter(source.c.response_sla_breached.is_(False))
+                .label("response_met_count"),
+                func.count(source.c.id)
+                .filter(source.c.resolution_sla_breached.is_not(None))
+                .label("resolution_applicable_count"),
+                func.count(source.c.id)
+                .filter(source.c.resolution_sla_breached.is_(False))
+                .label("resolution_met_count"),
+            ],
+            override_request=incident_request,
+        )
+        if include_sla
+        else {}
+    )
+
+    first_period_start = periods[0].start if periods else None
+    running_created = 0
+    running_exits = 0
+    if include_backlog and first_period_start is not None:
+        running_created = scalar_count(
+            db,
+            source,
+            [
+                *base_conditions,
+                source.c.created_at.is_not(None),
+                source.c.created_at < first_period_start,
+            ],
+        )
+        running_exits = scalar_count(
+            db,
+            source,
+            [
+                *base_conditions,
+                source.c.exit_at.is_not(None),
+                source.c.exit_at < first_period_start,
+            ],
+        )
+
+    rows: list[dict[str, Any]] = []
+    for period in periods:
+        period_key = volumetrics_period_lookup_key(
+            period.start,
+            normalize_volumetrics_time_grain(request.time_grain),
+        )
+        created_values = created_rows.get(period_key, {})
+        completed_values = completed_rows.get(period_key, {})
+        cancelled_values = cancelled_rows.get(period_key, {})
+        exit_values = exit_rows.get(period_key, {})
+        sla_values = sla_rows.get(period_key, {})
+        created_count = int_count(created_values.get("created_count"))
+        exit_count = int_count(exit_values.get("exit_count"))
+        if include_backlog:
+            running_created += created_count
+            running_exits += exit_count
+
+        rows.append(
+            {
+                "period_start": period.start,
+                "period_end": period.end,
+                "period_label": period.label,
+                "created_count": created_count,
+                "resolved_closed_count": int_count(
+                    completed_values.get("resolved_closed_count"),
+                ),
+                "cancelled_count": int_count(cancelled_values.get("cancelled_count")),
+                "backlog_open_count": (
+                    max(running_created - running_exits, 0) if include_backlog else 0
+                ),
+                "response_applicable_count": int_count(
+                    sla_values.get("response_applicable_count"),
+                ),
+                "response_met_count": int_count(sla_values.get("response_met_count")),
+                "resolution_applicable_count": int_count(
+                    sla_values.get("resolution_applicable_count"),
+                ),
+                "resolution_met_count": int_count(sla_values.get("resolution_met_count")),
+            },
+        )
+    return rows
+
+
+def volumetrics_summary(db: Session, request: Any) -> dict[str, Any]:
+    rows = volumetrics_period_metrics(db, request, include_backlog=False)
+    period_count = len(rows)
+    total_created = sum(row["created_count"] for row in rows)
+    total_resolved_closed = sum(row["resolved_closed_count"] for row in rows)
+    total_cancelled = sum(row["cancelled_count"] for row in rows)
+    response_applicable = sum(row["response_applicable_count"] for row in rows)
+    response_met = sum(row["response_met_count"] for row in rows)
+    resolution_applicable = sum(row["resolution_applicable_count"] for row in rows)
+    resolution_met = sum(row["resolution_met_count"] for row in rows)
+    sla_not_applicable = normalize_volumetrics_ticket_type(request.ticket_type) == "sc_task"
+
+    return {
+        "period_count": period_count,
+        "created": {
+            "total": total_created,
+            "average_per_period": total_created / period_count if period_count else None,
+        },
+        "resolved_closed": {
+            "total": total_resolved_closed,
+            "average_per_period": total_resolved_closed / period_count if period_count else None,
+        },
+        "cancelled": {
+            "total": total_cancelled,
+            "average_per_period": total_cancelled / period_count if period_count else None,
+            "cancelled_pct_of_resolved_cancelled": percentage(
+                total_cancelled,
+                total_resolved_closed + total_cancelled,
+            ),
+        },
+        "response_sla": {
+            "average_adherence_pct": None
+            if sla_not_applicable
+            else average(period_adherence_percentages(rows, "response")),
+            "applicable_count": 0 if sla_not_applicable else response_applicable,
+            "met_count": 0 if sla_not_applicable else response_met,
+        },
+        "resolution_sla": {
+            "average_adherence_pct": None
+            if sla_not_applicable
+            else average(period_adherence_percentages(rows, "resolution")),
+            "applicable_count": 0 if sla_not_applicable else resolution_applicable,
+            "met_count": 0 if sla_not_applicable else resolution_met,
+        },
+    }
+
+
+def volumetrics_created_resolved_backlog(db: Session, request: Any) -> dict[str, Any]:
+    rows = volumetrics_period_metrics(
+        db,
+        request,
+        include_cancelled=False,
+        include_sla=False,
+    )
+    backlog_values = [float(row["backlog_open_count"]) for row in rows]
+    average_backlog = average(backlog_values)
+    chart_rows = [
+        {
+            "period_start": row["period_start"],
+            "period_end": row["period_end"],
+            "period_label": row["period_label"],
+            "created_count": row["created_count"],
+            "resolved_closed_count": row["resolved_closed_count"],
+            "backlog_open_count": row["backlog_open_count"],
+            "average_backlog_open": average_backlog,
+        }
+        for row in rows
+    ]
+    return {"average_backlog_open": average_backlog, "rows": chart_rows}
 
 
 def date_filter_basis_expression(filters: DashboardFilters) -> Any:

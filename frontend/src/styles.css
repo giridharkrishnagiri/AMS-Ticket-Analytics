@@ -1335,6 +1335,25 @@ h2 {
   max-height: 240px;
 }
 
+.workflow-file-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compact-checkbox-row {
+  color: #475569;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
 .mapping-scroll-frame {
   max-height: 430px;
 }

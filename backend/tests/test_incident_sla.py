@@ -771,3 +771,74 @@ def test_incident_sla_enrichment_rejects_sc_task_request() -> None:
         assert "Only INCIDENT tickets" in response.json()["detail"]
     finally:
         cleanup_client(db, client_id)
+
+
+def test_incident_sla_enrichment_rerun_updates_new_incidents_from_existing_sla_rows() -> None:
+    db, client_id, project_id, batch_id, file_id = create_sla_project()
+    try:
+        add_ticket(db, project_id, batch_id, file_id, "INC-RERUN-OLD")
+        add_sla_row(
+            db,
+            project_id,
+            "INC-RERUN-OLD",
+            "Response",
+            "Default_Standard-Response-P3-1hr",
+            breached=False,
+            business_seconds=120,
+            row_number=10,
+        )
+        add_sla_row(
+            db,
+            project_id,
+            "INC-RERUN-NEW",
+            "Response",
+            "Default_Standard-Response-P3-1hr",
+            breached=False,
+            business_seconds=90,
+            row_number=11,
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            first_response = client.post(
+                "/api/sla/incidents/enrich",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "replace_existing": True,
+                },
+            )
+
+        assert first_response.status_code == 200
+        assert first_response.json()["response_sla_updated_count"] == 1
+
+        add_ticket(db, project_id, batch_id, file_id, "INC-RERUN-NEW")
+        db.commit()
+
+        with TestClient(app) as client:
+            second_response = client.post(
+                "/api/sla/incidents/enrich",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "replace_existing": True,
+                },
+            )
+
+        assert second_response.status_code == 200
+        payload = second_response.json()
+        assert payload["in_scope"]["incident_tickets_considered"] == 2
+        assert payload["in_scope"]["incident_tickets_matched_to_sla_rows"] == 2
+        assert payload["response_sla_updated_count"] == 2
+
+        new_incident = db.scalar(
+            select(Ticket).where(
+                Ticket.project_id == project_id,
+                Ticket.ticket_number == "INC-RERUN-NEW",
+            )
+        )
+        assert new_incident is not None
+        assert new_incident.response_sla_name == "Default_Standard-Response-P3-1hr"
+        assert new_incident.response_sla_business_elapsed_seconds == 90
+    finally:
+        cleanup_client(db, client_id)

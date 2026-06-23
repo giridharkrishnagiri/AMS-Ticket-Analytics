@@ -1,6 +1,7 @@
 from datetime import datetime
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PeriodMetricRow(BaseModel):
@@ -111,6 +112,39 @@ class TechnicalFunctionalBreakdownResponse(BaseModel):
     not_applicable_count: int
 
 
+class DashboardOverviewInventorySummary(BaseModel):
+    total_applications: int
+    functional_track_count: int
+    ams_owner_count: int
+    supported_vendor_count: int
+    assignment_group_count: int
+    application_owner_count: int
+
+
+class DashboardOverviewTicketSummary(BaseModel):
+    total_in_scope_tickets: int
+    incident_count: int
+    sc_task_count: int
+    completion_date_min: datetime | None
+    completion_date_max: datetime | None
+
+
+class DashboardOverviewIngestedVolumeSummary(BaseModel):
+    total_rows: int
+    incident_rows: int
+    sc_task_rows: int
+    incident_sla_rows: int
+
+
+class DashboardOverviewResponse(BaseModel):
+    project_id: UUID
+    customer_name: str
+    project_name: str
+    application_inventory: DashboardOverviewInventorySummary
+    ingested_volume: DashboardOverviewIngestedVolumeSummary
+    tickets: DashboardOverviewTicketSummary
+
+
 class FilterValuesResponse(BaseModel):
     ticket_types: list[str]
     priorities: list[str]
@@ -132,3 +166,210 @@ class FilterValuesResponse(BaseModel):
     application_owners: list[str]
     business_service_ci_names: list[str]
     parent_application_names: list[str]
+
+
+class ApplicationCombinedFilterValue(BaseModel):
+    label: str
+    left_value: str
+    right_value: str
+
+
+class ApplicationFilterCountValue(BaseModel):
+    label: str
+    value: str
+    count: int
+
+
+class ApplicationCombinedFilterCountValue(ApplicationCombinedFilterValue):
+    count: int
+
+
+class ApplicationsFilterValuesResponse(BaseModel):
+    functional_track_ams_owner: list[ApplicationCombinedFilterValue]
+    assignment_group_owner: list[ApplicationCombinedFilterValue]
+    parent_application_name: list[str]
+    application_owner: list[str]
+    supported_by_vendor: list[str]
+    architecture_type: list[str]
+    application_type: list[str]
+    business_critical: list[str]
+    install_status: list[str]
+    install_type: list[str]
+    lifecycle_status_stage: list[ApplicationCombinedFilterValue]
+
+
+class ApplicationsFilters(BaseModel):
+    functional_track_ams_owner: list[str] = Field(default_factory=list)
+    assignment_group_owner: list[str] = Field(default_factory=list)
+    parent_application_name: list[str] = Field(default_factory=list)
+    application_owner: list[str] = Field(default_factory=list)
+    supported_by_vendor: list[str] = Field(default_factory=list)
+    architecture_type: list[str] = Field(default_factory=list)
+    application_type: list[str] = Field(default_factory=list)
+    business_critical: list[str] = Field(default_factory=list)
+    install_status: list[str] = Field(default_factory=list)
+    install_type: list[str] = Field(default_factory=list)
+    lifecycle_status_stage: list[str] = Field(default_factory=list)
+
+
+class ApplicationsFilterValuesRequest(BaseModel):
+    project_id: UUID
+    filters: ApplicationsFilters = Field(default_factory=ApplicationsFilters)
+
+
+class ApplicationsFilterValueCountsResponse(BaseModel):
+    functional_track_ams_owner: list[ApplicationCombinedFilterCountValue]
+    assignment_group_owner: list[ApplicationCombinedFilterCountValue]
+    parent_application_name: list[ApplicationFilterCountValue]
+    application_owner: list[ApplicationFilterCountValue]
+    supported_by_vendor: list[ApplicationFilterCountValue]
+    architecture_type: list[ApplicationFilterCountValue]
+    application_type: list[ApplicationFilterCountValue]
+    business_critical: list[ApplicationFilterCountValue]
+    install_status: list[ApplicationFilterCountValue]
+    install_type: list[ApplicationFilterCountValue]
+    lifecycle_status_stage: list[ApplicationCombinedFilterCountValue]
+
+
+class ApplicationsSort(BaseModel):
+    column: str = "business_service_ci_name"
+    direction: str = "asc"
+
+
+class ApplicationsDataRequest(BaseModel):
+    project_id: UUID
+    filters: ApplicationsFilters = Field(default_factory=ApplicationsFilters)
+    sort: ApplicationsSort = Field(default_factory=ApplicationsSort)
+    limit: int = Field(default=500, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)
+
+
+class ApplicationsSummaryResponse(BaseModel):
+    applications: int
+    functional_groups: int
+    assignment_groups: int
+    parent_business_apps: int
+    business_applications: int
+    technical_applications: int
+    very_critical_applications: int
+    critical_applications: int
+    show_functional_groups: bool
+    show_assignment_groups: bool
+    show_parent_business_apps: bool
+
+
+class ApplicationsListRow(BaseModel):
+    business_service_ci_name: str
+    parent_application_name: str
+    assignment_group: str
+    assignment_group_owner: str
+    application_owner: str
+    support_lead: str
+    functional_track: str
+    ams_owner: str
+    supported_by_vendor: str
+    app_family: str
+    biz_process: str
+    app_category: str
+    org_unit_level_1: str
+    org_unit_level_2: str
+    org_unit_level_3: str
+    app_type: str
+    architecture_type: str
+    biz_capabilities: str
+    business_reason_for_maintain_applications: str
+    business_units: str
+    biz_criticality: str
+    biz_owner: str
+    company: str
+    install_status: str
+    install_type: str
+    lifecycle_status: str
+    operating_system: str
+    sox_audited: str
+    sox_scope: str
+    strategic: str
+
+
+class ApplicationsListResponse(BaseModel):
+    total: int
+    rows: list[ApplicationsListRow]
+
+
+class ApplicationsChartDatum(BaseModel):
+    label: str
+    count: int
+
+
+class ApplicationsChartsResponse(BaseModel):
+    lifecycle_stage: list[ApplicationsChartDatum]
+    operating_system: list[ApplicationsChartDatum]
+    sox_scope: list[ApplicationsChartDatum]
+    strategic: list[ApplicationsChartDatum]
+
+
+class VolumetricsFilters(BaseModel):
+    functional_track_ams_owner: list[str] = Field(default_factory=list)
+    assignment_group_support_lead: list[str] = Field(default_factory=list)
+    parent_application_name: list[str] = Field(default_factory=list)
+    application_owner: list[str] = Field(default_factory=list)
+    supported_by_vendor: list[str] = Field(default_factory=list)
+
+
+class VolumetricsRequest(BaseModel):
+    project_id: UUID
+    scope: str = "in_scope"
+    ticket_type: str = "all"
+    time_grain: str = "monthly"
+    start_datetime: datetime
+    end_datetime: datetime
+    filters: VolumetricsFilters = Field(default_factory=VolumetricsFilters)
+
+
+class VolumetricsFilterValuesResponse(BaseModel):
+    scope: list[ApplicationFilterCountValue]
+    ticket_type: list[ApplicationFilterCountValue]
+    functional_track_ams_owner: list[ApplicationCombinedFilterCountValue]
+    assignment_group_support_lead: list[ApplicationCombinedFilterCountValue]
+    parent_application_name: list[ApplicationFilterCountValue]
+    application_owner: list[ApplicationFilterCountValue]
+    supported_by_vendor: list[ApplicationFilterCountValue]
+
+
+class VolumetricsSummaryMetric(BaseModel):
+    total: int
+    average_per_period: float | None
+
+
+class VolumetricsSlaMetric(BaseModel):
+    average_adherence_pct: float | None
+    applicable_count: int
+    met_count: int
+
+
+class VolumetricsCancelledMetric(VolumetricsSummaryMetric):
+    cancelled_pct_of_resolved_cancelled: float | None
+
+
+class VolumetricsSummaryResponse(BaseModel):
+    period_count: int
+    created: VolumetricsSummaryMetric
+    resolved_closed: VolumetricsSummaryMetric
+    cancelled: VolumetricsCancelledMetric
+    response_sla: VolumetricsSlaMetric
+    resolution_sla: VolumetricsSlaMetric
+
+
+class VolumetricsCreatedResolvedBacklogRow(BaseModel):
+    period_start: datetime
+    period_end: datetime
+    period_label: str
+    created_count: int
+    resolved_closed_count: int
+    backlog_open_count: int
+    average_backlog_open: float | None
+
+
+class VolumetricsCreatedResolvedBacklogResponse(BaseModel):
+    average_backlog_open: float | None
+    rows: list[VolumetricsCreatedResolvedBacklogRow]

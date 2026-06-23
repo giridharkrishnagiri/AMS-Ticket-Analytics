@@ -13,11 +13,23 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import IngestionJob, Project, TicketRawRow, UploadBatch, UploadedFile
+from app.models import (
+    AssessmentOutOfScopeTicket,
+    IngestionJob,
+    Project,
+    Ticket,
+    TicketRawRow,
+    UploadBatch,
+    UploadedFile,
+)
 from app.schemas.upload import (
     IngestionJobResponse,
     RawRowsPreviewResponse,
     UploadBatchActionRequest,
+    UploadBatchApplyMappingFileResponse,
+    UploadBatchApplyMappingMultipleResponse,
+    UploadBatchApplyMappingRequest,
+    UploadBatchApplyMappingTotalsResponse,
     UploadBatchIngestMultipleResponse,
     UploadBatchIngestResultResponse,
     UploadBatchIngestTotalsResponse,
@@ -41,7 +53,12 @@ from app.services.ingestion import (
     ingest_uploaded_file,
     recalculate_upload_batch_status,
 )
-from app.services.mapping import MappingError, apply_mapping_to_batch
+from app.services.mapping import (
+    MappingError,
+    apply_mapping_to_batch,
+    resolve_mapping_for_project_ticket_type,
+    save_mapping_template,
+)
 from app.services.upload_lifecycle import (
     BATCH_STATUS_ARCHIVED,
     BATCH_STATUS_DELETED,
@@ -63,6 +80,10 @@ PERIOD_TYPE_SNAPSHOT = "SNAPSHOT"
 BATCH_VIEW_ACTIVE = "active"
 BATCH_VIEW_HISTORY = "history"
 BATCH_VIEW_ALL = "all"
+APPLY_STATUS_APPLIED = "APPLIED"
+APPLY_STATUS_ALREADY_APPLIED = "SKIPPED_ALREADY_APPLIED"
+APPLY_STATUS_PARTIAL_OUTPUT = "FAILED_PARTIAL_OUTPUT"
+APPLY_STATUS_FAILED = "FAILED"
 
 
 def get_batch_ticket_type(db: Session, upload_batch_id: UUID) -> str | None:
@@ -77,6 +98,73 @@ def get_batch_ticket_type(db: Session, upload_batch_id: UUID) -> str | None:
 
 def get_count(db: Session, statement) -> int:
     return int(db.scalar(statement) or 0)
+
+
+def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
+    raw_rows = get_count(
+        db,
+        select(func.count(TicketRawRow.id)).where(
+            TicketRawRow.upload_batch_id == upload_batch_id
+        ),
+    )
+    in_scope_rows = get_count(
+        db,
+        select(func.count(Ticket.id)).where(Ticket.upload_batch_id == upload_batch_id),
+    )
+    out_of_scope_rows = get_count(
+        db,
+        select(func.count(AssessmentOutOfScopeTicket.id)).where(
+            AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id
+        ),
+    )
+    blank_assignment_group_rows = get_count(
+        db,
+        select(func.count(AssessmentOutOfScopeTicket.id)).where(
+            AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id,
+            AssessmentOutOfScopeTicket.out_of_scope_reason == "blank_assignment_group",
+        ),
+    )
+    assignment_group_not_in_inventory_rows = get_count(
+        db,
+        select(func.count(AssessmentOutOfScopeTicket.id)).where(
+            AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id,
+            AssessmentOutOfScopeTicket.out_of_scope_reason
+            == "assignment_group_not_in_application_inventory",
+        ),
+    )
+    output_rows = in_scope_rows + out_of_scope_rows
+    return {
+        "raw_rows": raw_rows,
+        "in_scope_rows": in_scope_rows,
+        "out_of_scope_rows": out_of_scope_rows,
+        "blank_assignment_group_rows": blank_assignment_group_rows,
+        "assignment_group_not_in_inventory_rows": assignment_group_not_in_inventory_rows,
+        "failed_rows": max(raw_rows - output_rows, 0),
+        "output_rows": output_rows,
+    }
+
+
+def build_apply_mapping_totals(
+    files: list[UploadBatchApplyMappingFileResponse],
+) -> UploadBatchApplyMappingTotalsResponse:
+    return UploadBatchApplyMappingTotalsResponse(
+        total_files=len(files),
+        applied=sum(1 for file in files if file.status == APPLY_STATUS_APPLIED),
+        skipped=sum(1 for file in files if file.status == APPLY_STATUS_ALREADY_APPLIED),
+        failed=sum(
+            1
+            for file in files
+            if file.status in {APPLY_STATUS_FAILED, APPLY_STATUS_PARTIAL_OUTPUT}
+        ),
+        input_rows=sum(file.input_rows for file in files),
+        in_scope_rows=sum(file.in_scope_rows for file in files),
+        out_of_scope_rows=sum(file.out_of_scope_rows for file in files),
+        blank_assignment_group_rows=sum(file.blank_assignment_group_rows for file in files),
+        assignment_group_not_in_inventory_rows=sum(
+            file.assignment_group_not_in_inventory_rows for file in files
+        ),
+        failed_rows=sum(file.failed_rows for file in files),
+    )
 
 
 def build_upload_batch_response(db: Session, upload_batch: UploadBatch) -> UploadBatchResponse:
@@ -834,6 +922,201 @@ def normalize_upload_batches(
                 if result.status == BATCH_STATUS_NORMALIZATION_FAILED or result.failed_rows > 0
             ),
         ),
+    )
+
+
+@router.post(
+    "/batches/apply-mapping-multiple",
+    response_model=UploadBatchApplyMappingMultipleResponse,
+)
+def apply_mapping_to_upload_batches(
+    request: UploadBatchApplyMappingRequest,
+    db: DbSession,
+) -> UploadBatchApplyMappingMultipleResponse:
+    project = db.get(Project, request.project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {request.project_id} was not found.",
+        )
+
+    if not request.upload_batch_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select at least one upload batch before applying mapping.",
+        )
+
+    normalized_ticket_type = request.ticket_type.strip().upper()
+    try:
+        resolved_mapping, _mapping_source = resolve_mapping_for_project_ticket_type(
+            db=db,
+            project_id=request.project_id,
+            ticket_type=normalized_ticket_type,
+            mapping=request.mapping,
+        )
+        if request.save_as_default_for_ticket_type:
+            save_mapping_template(
+                db=db,
+                project_id=request.project_id,
+                ticket_type=normalized_ticket_type,
+                mapping=resolved_mapping,
+            )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except MappingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    files: list[UploadBatchApplyMappingFileResponse] = []
+    seen_batch_ids: set[UUID] = set()
+    for upload_batch_id in request.upload_batch_ids:
+        if upload_batch_id in seen_batch_ids:
+            continue
+        seen_batch_ids.add(upload_batch_id)
+
+        upload_batch = db.get(UploadBatch, upload_batch_id)
+        if (
+            upload_batch is None
+            or upload_batch.project_id != request.project_id
+            or batch_is_deleted(upload_batch)
+        ):
+            files.append(
+                UploadBatchApplyMappingFileResponse(
+                    upload_batch_id=upload_batch_id,
+                    batch_name="Unknown batch",
+                    status=APPLY_STATUS_FAILED,
+                    input_rows=0,
+                    in_scope_rows=0,
+                    out_of_scope_rows=0,
+                    error="Upload batch was not found for the selected project.",
+                )
+            )
+            continue
+
+        filename = batch_file_label(db, upload_batch.id)
+        batch_ticket_type = get_batch_ticket_type(db, upload_batch.id)
+        if batch_ticket_type and batch_ticket_type != normalized_ticket_type:
+            counts = batch_output_counts(db, upload_batch.id)
+            files.append(
+                UploadBatchApplyMappingFileResponse(
+                    upload_batch_id=upload_batch.id,
+                    batch_name=upload_batch.batch_name,
+                    filename=filename,
+                    status=APPLY_STATUS_FAILED,
+                    input_rows=counts["raw_rows"],
+                    in_scope_rows=counts["in_scope_rows"],
+                    out_of_scope_rows=counts["out_of_scope_rows"],
+                    blank_assignment_group_rows=counts["blank_assignment_group_rows"],
+                    assignment_group_not_in_inventory_rows=counts[
+                        "assignment_group_not_in_inventory_rows"
+                    ],
+                    failed_rows=counts["failed_rows"],
+                    error=(
+                        f"Batch ticket type is {batch_ticket_type}, not "
+                        f"{normalized_ticket_type}."
+                    ),
+                )
+            )
+            continue
+
+        counts = batch_output_counts(db, upload_batch.id)
+        if request.skip_already_applied and counts["output_rows"] > 0:
+            if counts["raw_rows"] == counts["output_rows"]:
+                files.append(
+                    UploadBatchApplyMappingFileResponse(
+                        upload_batch_id=upload_batch.id,
+                        batch_name=upload_batch.batch_name,
+                        filename=filename,
+                        status=APPLY_STATUS_ALREADY_APPLIED,
+                        input_rows=counts["raw_rows"],
+                        in_scope_rows=counts["in_scope_rows"],
+                        out_of_scope_rows=counts["out_of_scope_rows"],
+                        blank_assignment_group_rows=counts["blank_assignment_group_rows"],
+                        assignment_group_not_in_inventory_rows=counts[
+                            "assignment_group_not_in_inventory_rows"
+                        ],
+                        failed_rows=0,
+                        warnings=["Batch already has complete mapped output and was skipped."],
+                    )
+                )
+            else:
+                files.append(
+                    UploadBatchApplyMappingFileResponse(
+                        upload_batch_id=upload_batch.id,
+                        batch_name=upload_batch.batch_name,
+                        filename=filename,
+                        status=APPLY_STATUS_PARTIAL_OUTPUT,
+                        input_rows=counts["raw_rows"],
+                        in_scope_rows=counts["in_scope_rows"],
+                        out_of_scope_rows=counts["out_of_scope_rows"],
+                        blank_assignment_group_rows=counts["blank_assignment_group_rows"],
+                        assignment_group_not_in_inventory_rows=counts[
+                            "assignment_group_not_in_inventory_rows"
+                        ],
+                        failed_rows=counts["failed_rows"],
+                        error=(
+                            "Batch has partial mapped output. It was not reprocessed "
+                            "automatically to avoid hiding a data repair issue."
+                        ),
+                    )
+                )
+            continue
+
+        try:
+            result = apply_mapping_to_batch(
+                db=db,
+                upload_batch_id=upload_batch.id,
+                mapping=resolved_mapping,
+                delete_existing=request.delete_existing,
+            )
+            files.append(
+                UploadBatchApplyMappingFileResponse(
+                    upload_batch_id=upload_batch.id,
+                    batch_name=upload_batch.batch_name,
+                    filename=filename,
+                    status=APPLY_STATUS_APPLIED,
+                    input_rows=result.total_raw_rows,
+                    in_scope_rows=result.normalized_ticket_count,
+                    out_of_scope_rows=result.out_of_scope_ticket_count,
+                    blank_assignment_group_rows=result.blank_assignment_group_count,
+                    assignment_group_not_in_inventory_rows=(
+                        result.assignment_group_not_in_inventory_count
+                    ),
+                    failed_rows=result.failed_row_count,
+                    warnings=result.warnings,
+                    errors=[
+                        f"Row {error.row_number}: {error.message}"
+                        for error in result.errors[:10]
+                    ],
+                )
+            )
+        except (FileNotFoundError, MappingError, SQLAlchemyError) as exc:
+            failed_counts = batch_output_counts(db, upload_batch.id)
+            files.append(
+                UploadBatchApplyMappingFileResponse(
+                    upload_batch_id=upload_batch.id,
+                    batch_name=upload_batch.batch_name,
+                    filename=filename,
+                    status=APPLY_STATUS_FAILED,
+                    input_rows=failed_counts["raw_rows"],
+                    in_scope_rows=failed_counts["in_scope_rows"],
+                    out_of_scope_rows=failed_counts["out_of_scope_rows"],
+                    blank_assignment_group_rows=failed_counts["blank_assignment_group_rows"],
+                    assignment_group_not_in_inventory_rows=failed_counts[
+                        "assignment_group_not_in_inventory_rows"
+                    ],
+                    failed_rows=failed_counts["failed_rows"],
+                    error=str(exc),
+                )
+            )
+
+    return UploadBatchApplyMappingMultipleResponse(
+        project_id=request.project_id,
+        ticket_type=normalized_ticket_type,
+        files=files,
+        totals=build_apply_mapping_totals(files),
     )
 
 

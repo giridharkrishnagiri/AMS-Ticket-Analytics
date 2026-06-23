@@ -4,17 +4,11 @@ import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import ApplicationInventory from "./ApplicationInventory";
 import CustomerSelector from "./CustomerSelector";
 import {
-  applyMappingForScope,
   getSourceColumnsForTicketType,
   getSuggestedMappingForTicketType,
   saveMappingTemplate,
 } from "./api/mappings";
-import type {
-  ApplyScope,
-  MappingSource,
-  ScopedApplyMappingResponse,
-  SourceColumn,
-} from "./api/mappings";
+import type { MappingSource, SourceColumn } from "./api/mappings";
 import type { ProjectOption } from "./api/projects";
 import {
   enrichIncidentSla,
@@ -29,6 +23,7 @@ import type {
   IncidentSlaUploadHistoryRow,
 } from "./api/sla";
 import {
+  applyMappingToUploadBatches,
   getIngestionJob,
   getValidationSummary,
   ingestUploadBatches,
@@ -39,6 +34,7 @@ import {
 } from "./api/uploads";
 import type {
   IngestionJob,
+  UploadBatchApplyMappingMultipleResponse,
   UploadBatch,
   UploadBatchIngestMultipleResponse,
   UploadBatchNormalizeMultipleResponse,
@@ -46,7 +42,6 @@ import type {
   UploadedFile,
   ValidationSummary,
 } from "./api/uploads";
-import { formatDisplayDate, formatDisplayDateTime, formatDisplayMonth } from "./utils/dateFormat";
 
 type UploadCenterTab = "application-inventory" | "ticket-details";
 type TicketUploadType = "INCIDENT" | "SERVICE_CATALOG_TASK" | "INCIDENT_SLA";
@@ -149,17 +144,6 @@ function formatNumber(value: number | null | undefined): string {
   return value.toLocaleString();
 }
 
-function formatDate(value: string | null | undefined): string {
-  return formatDisplayDateTime(value);
-}
-
-function formatBatchPeriod(batch: UploadBatch): string {
-  if (batch.period_type === "SNAPSHOT") {
-    return `Snapshot ${formatDisplayDate(batch.snapshot_date)}`;
-  }
-  return `Monthly ${formatDisplayMonth(batch.month_key)}`;
-}
-
 function safeBatchNamePart(value: string): string {
   return value
     .replace(/\.[^.]+$/, "")
@@ -225,6 +209,20 @@ function InfoPanel({
   );
 }
 
+type WorkflowBatchRow = {
+  batchId: string;
+  batchName: string;
+  filename: string | null;
+  uploadStatus: string;
+  ingestStatus: string;
+  normalizeStatus: string;
+  applyStatus: string;
+  inputRows: number | null;
+  inScopeRows: number | null;
+  outOfScopeRows: number | null;
+  error: string | null;
+};
+
 function TicketDetailsWorkflow({
   projectId,
   selectedProject,
@@ -253,7 +251,9 @@ function TicketDetailsWorkflow({
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [mappingSource, setMappingSource] = useState<MappingSource | null>(null);
   const [mappingSaved, setMappingSaved] = useState(false);
-  const [applyResult, setApplyResult] = useState<ScopedApplyMappingResponse | null>(null);
+  const [applyResult, setApplyResult] =
+    useState<UploadBatchApplyMappingMultipleResponse | null>(null);
+  const [selectedActionBatchIds, setSelectedActionBatchIds] = useState<string[]>([]);
 
   const [slaUploadResult, setSlaUploadResult] =
     useState<IncidentSlaMultiUploadResponse | null>(null);
@@ -265,7 +265,7 @@ function TicketDetailsWorkflow({
   const [isIngesting, setIsIngesting] = useState(false);
   const [isNormalizing, setIsNormalizing] = useState(false);
   const [isLoadingBatches, setIsLoadingBatches] = useState(false);
-  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [, setIsLoadingFiles] = useState(false);
   const [isLoadingColumns, setIsLoadingColumns] = useState(false);
   const [isLoadingSuggestion, setIsLoadingSuggestion] = useState(false);
   const [isSavingMapping, setIsSavingMapping] = useState(false);
@@ -299,15 +299,6 @@ function TicketDetailsWorkflow({
         .filter((batchId): batchId is string => Boolean(batchId)),
     [uploadResult]
   );
-  const jobByUploadedFileId = useMemo(() => {
-    const jobs = new Map<string, IngestionJob>();
-    for (const job of trackedJobs) {
-      if (job.uploaded_file_id) {
-        jobs.set(job.uploaded_file_id, job);
-      }
-    }
-    return jobs;
-  }, [trackedJobs]);
   const duplicateTicketEntries = useMemo(
     () => Object.entries(validationSummary?.duplicate_ticket_ids ?? {}),
     [validationSummary]
@@ -326,6 +317,92 @@ function TicketDetailsWorkflow({
     }
     return selectedBatchId ? [selectedBatchId] : [];
   }, [selectedBatchId, uploadedActionBatchIds]);
+  const targetBatchKey = targetBatchIds.join("|");
+  const actionBatchIds = useMemo(
+    () => selectedActionBatchIds.filter((batchId) => targetBatchIds.includes(batchId)),
+    [selectedActionBatchIds, targetBatchIds]
+  );
+  const workflowRows = useMemo<WorkflowBatchRow[]>(() => {
+    const batchById = new Map<string, UploadBatch>();
+    for (const batch of [...filteredBatches, ...filteredHistoricalBatches]) {
+      batchById.set(batch.id, batch);
+    }
+    if (selectedBatch) {
+      batchById.set(selectedBatch.id, selectedBatch);
+    }
+
+    const uploadByBatchId = new Map(
+      (uploadResult?.files ?? [])
+        .filter((fileResult) => fileResult.upload_batch_id)
+        .map((fileResult) => [fileResult.upload_batch_id as string, fileResult])
+    );
+    const ingestByBatchId = new Map(
+      (ingestResult?.batches ?? []).map((batchResult) => [
+        batchResult.upload_batch_id,
+        batchResult,
+      ])
+    );
+    const jobByBatchId = new Map(trackedJobs.map((job) => [job.upload_batch_id, job]));
+    const normalizeByBatchId = new Map(
+      (normalizeResult?.batches ?? []).map((batchResult) => [
+        batchResult.upload_batch_id,
+        batchResult,
+      ])
+    );
+    const applyByBatchId = new Map(
+      (applyResult?.files ?? []).map((fileResult) => [
+        fileResult.upload_batch_id,
+        fileResult,
+      ])
+    );
+    const selectedBatchFilename =
+      selectedBatchFiles.map((file) => file.original_filename).join(", ") || null;
+
+    return targetBatchIds.map((batchId) => {
+      const batch = batchById.get(batchId);
+      const upload = uploadByBatchId.get(batchId);
+      const ingest = ingestByBatchId.get(batchId);
+      const job = jobByBatchId.get(batchId);
+      const normalize = normalizeByBatchId.get(batchId);
+      const apply = applyByBatchId.get(batchId);
+
+      return {
+        batchId,
+        batchName: batch?.batch_name ?? upload?.filename ?? "Selected batch",
+        filename: upload?.filename ?? (batchId === selectedBatchId ? selectedBatchFilename : null),
+        uploadStatus: upload?.status ?? batch?.status ?? "Selected",
+        ingestStatus: ingest?.status ?? job?.status ?? batch?.status ?? "Pending",
+        normalizeStatus: normalize?.status ?? batch?.status ?? "Pending",
+        applyStatus: apply?.status ?? (applyResult ? "Not selected" : "Pending"),
+        inputRows:
+          apply?.input_rows ??
+          normalize?.raw_rows ??
+          ingest?.raw_rows_inserted ??
+          job?.rows_processed ??
+          batch?.raw_row_count ??
+          null,
+        inScopeRows:
+          apply?.in_scope_rows ??
+          normalize?.in_scope_inserted ??
+          batch?.normalized_ticket_count ??
+          null,
+        outOfScopeRows: apply?.out_of_scope_rows ?? normalize?.out_of_scope_inserted ?? null,
+        error: apply?.error ?? normalize?.errors?.[0] ?? ingest?.error ?? upload?.message ?? null,
+      };
+    });
+  }, [
+    applyResult,
+    filteredBatches,
+    filteredHistoricalBatches,
+    ingestResult,
+    normalizeResult,
+    selectedBatch,
+    selectedBatchFiles,
+    selectedBatchId,
+    targetBatchIds,
+    trackedJobs,
+    uploadResult,
+  ]);
 
   const mappingWarnings = useMemo(() => {
     if (isSlaUpload) {
@@ -371,7 +448,7 @@ function TicketDetailsWorkflow({
     : sourceColumns.length > 0 || Object.keys(mapping).length > 0 || hasIngested;
   const hasApplyReady = isSlaUpload
     ? hasUploaded
-    : Object.keys(cleanMapping(mapping)).length > 0 && targetBatchIds.length > 0;
+    : Object.keys(cleanMapping(mapping)).length > 0 && actionBatchIds.length > 0;
   const hasSummary = isSlaUpload
     ? Boolean(slaUploadResult || slaEnrichResult || slaSummary)
     : Boolean(uploadResult || ingestResult || normalizeResult || applyResult);
@@ -479,11 +556,16 @@ function TicketDetailsWorkflow({
   }, [refreshSlaContext]);
 
   useEffect(() => {
+    setSelectedActionBatchIds(targetBatchIds);
+  }, [targetBatchKey]);
+
+  useEffect(() => {
     setFiles([]);
     setUploadResult(null);
     setIngestResult(null);
     setNormalizeResult(null);
     setSelectedBatchId("");
+    setSelectedActionBatchIds([]);
     setSourceColumns([]);
     setMapping({});
     setMappingSource(null);
@@ -505,10 +587,23 @@ function TicketDetailsWorkflow({
 
   function handleSelectBatch(batchId: string) {
     setSelectedBatchId(batchId);
+    setSelectedActionBatchIds(batchId ? [batchId] : []);
     setUploadResult(null);
     setIngestResult(null);
     setNormalizeResult(null);
     setApplyResult(null);
+  }
+
+  function toggleActionBatch(batchId: string) {
+    setSelectedActionBatchIds((currentBatchIds) =>
+      currentBatchIds.includes(batchId)
+        ? currentBatchIds.filter((currentBatchId) => currentBatchId !== batchId)
+        : [...currentBatchIds, batchId]
+    );
+  }
+
+  function setAllActionBatches(selected: boolean) {
+    setSelectedActionBatchIds(selected ? targetBatchIds : []);
   }
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
@@ -597,14 +692,14 @@ function TicketDetailsWorkflow({
       setError("Select a customer before ingesting files.");
       return;
     }
-    if (targetBatchIds.length === 0) {
-      setError("Upload files or select an active batch first.");
+    if (actionBatchIds.length === 0) {
+      setError("Select at least one uploaded batch before ingesting files.");
       return;
     }
 
     setIsIngesting(true);
     try {
-      const result = await ingestUploadBatches(projectId.trim(), targetBatchIds);
+      const result = await ingestUploadBatches(projectId.trim(), actionBatchIds);
       setIngestResult(result);
       setNormalizeResult(null);
       setMessage(
@@ -613,8 +708,8 @@ function TicketDetailsWorkflow({
         )} raw row(s).`
       );
       await refreshBatches();
-      if (targetBatchIds[0]) {
-        setSelectedBatchId(targetBatchIds[0]);
+      if (actionBatchIds[0]) {
+        setSelectedBatchId(actionBatchIds[0]);
       }
       setActiveStep("normalize");
     } catch (requestError) {
@@ -631,8 +726,8 @@ function TicketDetailsWorkflow({
       setError("Select a customer before normalizing files.");
       return;
     }
-    if (targetBatchIds.length === 0) {
-      setError("Upload files or select an active batch first.");
+    if (actionBatchIds.length === 0) {
+      setError("Select at least one ingested batch before normalizing files.");
       return;
     }
 
@@ -645,7 +740,7 @@ function TicketDetailsWorkflow({
 
     setIsNormalizing(true);
     try {
-      const result = await normalizeUploadBatches(projectId.trim(), ticketType, targetBatchIds, true);
+      const result = await normalizeUploadBatches(projectId.trim(), ticketType, actionBatchIds, true);
       setNormalizeResult(result);
       setMessage(
         `Normalized ${formatNumber(result.totals.in_scope_inserted)} in-scope and ${formatNumber(
@@ -753,28 +848,30 @@ function TicketDetailsWorkflow({
       setError("Select a customer before applying mapping.");
       return;
     }
-    if (targetBatchIds.length === 0) {
-      setError("Upload files or select an active batch before applying mapping.");
+    if (actionBatchIds.length === 0) {
+      setError("Select at least one normalized batch before applying mapping.");
       return;
     }
 
-    const applyScope: ApplyScope = targetBatchIds.length === 1 ? "BATCH" : "TICKET_TYPE";
     setIsApplyingMapping(true);
     setError(null);
     setMessage(null);
     try {
-      const result = await applyMappingForScope({
-        projectId: projectId.trim(),
+      const result = await applyMappingToUploadBatches(
+        projectId.trim(),
         ticketType,
-        uploadBatchId: applyScope === "BATCH" ? targetBatchIds[0] : undefined,
-        scope: applyScope,
-        mapping: cleanMapping(mapping),
-        deleteExisting: true,
-        saveAsDefaultForTicketType: true,
-      });
+        actionBatchIds,
+        cleanMapping(mapping),
+        true,
+        true
+      );
       setApplyResult(result);
       setMessage(
-        `Applied mapping and created ${formatNumber(result.normalized_ticket_count)} in-scope ticket(s).`
+        `Applied mapping to ${formatNumber(result.totals.applied)} batch(es), skipped ${formatNumber(
+          result.totals.skipped
+        )} already-applied batch(es), and produced ${formatNumber(
+          result.totals.in_scope_rows
+        )} in-scope ticket(s).`
       );
       await refreshBatches();
       setActiveStep("summary");
@@ -814,6 +911,81 @@ function TicketDetailsWorkflow({
     } finally {
       setIsSlaEnriching(false);
     }
+  }
+
+  function renderWorkflowFileTable({
+    title,
+    selectable = true,
+  }: {
+    title: string;
+    selectable?: boolean;
+  }) {
+    const allSelected = targetBatchIds.length > 0 && actionBatchIds.length === targetBatchIds.length;
+    return (
+      <div className="summary-block">
+        <div className="workflow-file-heading">
+          <p className="label">{title}</p>
+          {selectable && workflowRows.length > 0 ? (
+            <label className="checkbox-row compact-checkbox-row">
+              <input
+                checked={allSelected}
+                type="checkbox"
+                onChange={(event) => setAllActionBatches(event.target.checked)}
+              />
+              Select all files
+            </label>
+          ) : null}
+        </div>
+        <div className="scroll-frame compact-file-frame">
+          {workflowRows.length === 0 ? (
+            <p className="muted-text">No workflow files selected.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  {selectable ? <th>Select</th> : null}
+                  <th>Filename</th>
+                  <th>Batch Name</th>
+                  <th>Upload</th>
+                  <th>Ingest</th>
+                  <th>Normalize</th>
+                  <th>Apply Mapping</th>
+                  <th>Input Rows</th>
+                  <th>In-Scope</th>
+                  <th>Out-of-Scope</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {workflowRows.map((row) => (
+                  <tr key={row.batchId}>
+                    {selectable ? (
+                      <td>
+                        <input
+                          checked={actionBatchIds.includes(row.batchId)}
+                          type="checkbox"
+                          onChange={() => toggleActionBatch(row.batchId)}
+                        />
+                      </td>
+                    ) : null}
+                    <td>{row.filename ?? "-"}</td>
+                    <td>{row.batchName}</td>
+                    <td>{row.uploadStatus}</td>
+                    <td>{row.ingestStatus}</td>
+                    <td>{row.normalizeStatus}</td>
+                    <td>{row.applyStatus}</td>
+                    <td>{formatNumber(row.inputRows)}</td>
+                    <td>{formatNumber(row.inScopeRows)}</td>
+                    <td>{formatNumber(row.outOfScopeRows)}</td>
+                    <td>{row.error ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    );
   }
 
   function renderUploadStep() {
@@ -955,7 +1127,7 @@ function TicketDetailsWorkflow({
           </div>
           <button
             className="primary-button"
-            disabled={isIngesting || targetBatchIds.length === 0}
+            disabled={isIngesting || actionBatchIds.length === 0}
             type="button"
             onClick={() => void handleIngestFiles()}
           >
@@ -963,39 +1135,7 @@ function TicketDetailsWorkflow({
           </button>
         </div>
 
-        <div className="scroll-frame">
-          {selectedBatchFiles.length === 0 ? (
-            <p className="muted-text">
-              {isLoadingFiles ? "Loading uploaded files..." : "No uploaded files selected yet."}
-            </p>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>File</th>
-                  <th>Status</th>
-                  <th>Rows</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedBatchFiles.map((file) => {
-                  const job = jobByUploadedFileId.get(file.id);
-                  return (
-                    <tr key={file.id}>
-                      <td>{file.original_filename}</td>
-                      <td>{job?.status ?? file.status}</td>
-                      <td>
-                        {job ? `${formatNumber(job.rows_processed)} / ${formatNumber(job.rows_total)}` : "Ready"}
-                      </td>
-                      <td>{formatDate(job?.updated_at ?? file.updated_at)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+        {renderWorkflowFileTable({ title: "Files Ready for Ingest" })}
 
         {ingestResult ? (
           <div className="summary-grid summary-block">
@@ -1030,7 +1170,7 @@ function TicketDetailsWorkflow({
           </div>
           <button
             className="primary-button"
-            disabled={isNormalizing || targetBatchIds.length === 0}
+            disabled={isNormalizing || actionBatchIds.length === 0}
             type="button"
             onClick={() => void handleNormalizeFiles()}
           >
@@ -1038,42 +1178,7 @@ function TicketDetailsWorkflow({
           </button>
         </div>
 
-        <div className="scroll-frame">
-          {filteredBatches.length === 0 ? (
-            <p className="muted-text">
-              No active {ticketType === "INCIDENT" ? "Incident" : "SC Task"} batches found.
-            </p>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Batch</th>
-                  <th>Status</th>
-                  <th>Files</th>
-                  <th>Period</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredBatches.map((batch) => (
-                  <tr
-                    className={batch.id === selectedBatchId ? "selected-row" : ""}
-                    key={batch.id}
-                    onClick={() => handleSelectBatch(batch.id)}
-                  >
-                    <td>
-                      <button className="link-button" type="button">
-                        {batch.batch_name}
-                      </button>
-                    </td>
-                    <td>{batch.status}</td>
-                    <td>{batch.uploaded_file_count ?? batch.file_count}</td>
-                    <td>{formatBatchPeriod(batch)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        {renderWorkflowFileTable({ title: "Files Ready for Normalize" })}
 
         {normalizeResult ? (
           <div className="summary-grid summary-block">
@@ -1159,6 +1264,12 @@ function TicketDetailsWorkflow({
           <MetricCard label="Source Columns" value={formatNumber(sourceColumns.length)} />
           <MetricCard label="Mapping Source" value={mappingSource ?? "Not loaded"} />
         </div>
+
+        {renderWorkflowFileTable({ title: "Files in This Workflow", selectable: false })}
+        <p className="muted-text summary-block">
+          Source columns are loaded from the selected representative batch when one is selected.
+          The saved mapping is applied to all checked ready files in the Apply Mapping step.
+        </p>
 
         {mappingWarnings.length > 0 ? (
           <div className="warning-list">
@@ -1268,28 +1379,32 @@ function TicketDetailsWorkflow({
             type="button"
             onClick={() => void handleApplyMapping()}
           >
-            {isApplyingMapping ? "Applying..." : "Apply Mapping"}
+            {isApplyingMapping ? "Applying..." : "Apply Mapping to Files"}
           </button>
         </div>
         <p className="muted-text">
-          Applies the saved/current mapping and re-normalizes the selected batch or ticket type
-          using the Prompt 10.2 scope split rules.
+          Applies the saved/current mapping only to the checked files below. Already-applied files
+          are skipped so historical batches are not duplicated.
         </p>
+        {renderWorkflowFileTable({ title: "Files Ready for Mapping" })}
         {mappingSaved ? (
           <p className="success-text summary-block">A saved mapping is available for this ticket type.</p>
         ) : null}
         {applyResult ? (
           <div className="summary-grid summary-block">
-            <MetricCard label="Raw Rows" value={formatNumber(applyResult.total_raw_rows)} />
+            <MetricCard label="Files Applied" value={formatNumber(applyResult.totals.applied)} />
+            <MetricCard label="Already Applied" value={formatNumber(applyResult.totals.skipped)} />
+            <MetricCard label="Failed" value={formatNumber(applyResult.totals.failed)} />
+            <MetricCard label="Raw Rows" value={formatNumber(applyResult.totals.input_rows)} />
             <MetricCard
               label="In Scope"
-              value={formatNumber(applyResult.normalized_ticket_count)}
+              value={formatNumber(applyResult.totals.in_scope_rows)}
             />
             <MetricCard
               label="Out of Scope"
-              value={formatNumber(applyResult.out_of_scope_ticket_count)}
+              value={formatNumber(applyResult.totals.out_of_scope_rows)}
             />
-            <MetricCard label="Failed Rows" value={formatNumber(applyResult.failed_row_count)} />
+            <MetricCard label="Failed Rows" value={formatNumber(applyResult.totals.failed_rows)} />
           </div>
         ) : null}
       </div>
@@ -1388,9 +1503,17 @@ function TicketDetailsWorkflow({
             )}
           />
           <MetricCard
+            label="Files Mapping Applied"
+            value={formatNumber(
+              applyResult
+                ? applyResult.totals.applied + applyResult.totals.skipped
+                : undefined
+            )}
+          />
+          <MetricCard
             label="Input Rows"
             value={formatNumber(
-              applyResult?.total_raw_rows ??
+              applyResult?.totals.input_rows ??
                 normalizeResult?.totals.raw_rows ??
                 validationSummary?.total_raw_rows
             )}
@@ -1398,22 +1521,22 @@ function TicketDetailsWorkflow({
           <MetricCard
             label="In-Scope Output"
             value={formatNumber(
-              applyResult?.normalized_ticket_count ?? normalizeResult?.totals.in_scope_inserted
+              applyResult?.totals.in_scope_rows ?? normalizeResult?.totals.in_scope_inserted
             )}
           />
           <MetricCard
             label="Out-of-Scope Output"
             value={formatNumber(
-              applyResult?.out_of_scope_ticket_count ?? normalizeResult?.totals.out_of_scope_inserted
+              applyResult?.totals.out_of_scope_rows ?? normalizeResult?.totals.out_of_scope_inserted
             )}
           />
           <MetricCard
             label="Blank Assignment Group"
-            value={formatNumber(applyResult?.blank_assignment_group_count)}
+            value={formatNumber(applyResult?.totals.blank_assignment_group_rows)}
           />
           <MetricCard
             label="Not in Application Inventory"
-            value={formatNumber(applyResult?.assignment_group_not_in_inventory_count)}
+            value={formatNumber(applyResult?.totals.assignment_group_not_in_inventory_rows)}
           />
           <MetricCard label="Vendor Populated" value="Covered" helper="Derived during mapping/enrichment." />
           <MetricCard label="Derived Vendor Populated" value="Covered" helper="Uses Application Inventory." />
@@ -1424,7 +1547,11 @@ function TicketDetailsWorkflow({
             value="Covered"
             helper="Uses Application Inventory."
           />
+          <MetricCard label="Application Owner Populated" value="Covered" helper="Uses Application Inventory." />
+          <MetricCard label="Support Lead Populated" value="Covered" helper="Uses Application Inventory." />
         </div>
+
+        {renderWorkflowFileTable({ title: "Per-File Processing Summary", selectable: false })}
 
         {duplicateTicketEntries.length > 0 ? (
           <div className="summary-block">

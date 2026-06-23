@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -163,6 +164,26 @@ class IncidentSlaSummary:
 class UnmatchedIncidentSlaRow:
     inc_number: str
     row_count: int
+
+
+@dataclass(frozen=True)
+class IncidentSlaCandidate:
+    row_id: UUID
+    inc_number: str
+    stage: str | None
+    business_duration_seconds: int | None
+    has_breached: bool | None
+    sla_name: str | None
+    sla_type: str | None
+    sla_target: str | None
+    source_row_number: int
+
+
+@dataclass(frozen=True)
+class SelectedIncidentSlaCandidate:
+    candidate: IncidentSlaCandidate
+    selection_source: str
+    effective_vendor: str | None
 
 
 def append_sample_message(messages: list[str], message: str) -> None:
@@ -559,6 +580,182 @@ def reset_incident_sla_columns(db: Session, project_id: UUID) -> None:
             .where(model.project_id == project_id, model.ticket_type == INCIDENT_TICKET_TYPE)
             .values(**reset_values)
         )
+
+
+def normalized_text(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def normalized_optional_text(value: str | None) -> str | None:
+    cleaned = (value or "").strip()
+    return cleaned or None
+
+
+def sla_candidate_matches_target(candidate: IncidentSlaCandidate, sla_target: str) -> bool:
+    target = sla_target.lower()
+    return (
+        target in normalized_text(candidate.sla_target)
+        or target in normalized_text(candidate.sla_type)
+        or target in normalized_text(candidate.sla_name)
+    )
+
+
+def load_incident_sla_candidates(
+    db: Session,
+    project_id: UUID,
+) -> dict[str, dict[str, list[IncidentSlaCandidate]]]:
+    candidates_by_target: dict[str, dict[str, list[IncidentSlaCandidate]]] = {
+        SLA_TARGET_RESPONSE: defaultdict(list),
+        SLA_TARGET_RESOLUTION: defaultdict(list),
+    }
+    statement = (
+        select(
+            IncidentSlaRow.id,
+            IncidentSlaRow.inc_number,
+            IncidentSlaRow.taskslatable_stage,
+            IncidentSlaRow.taskslatable_business_duration_seconds,
+            IncidentSlaRow.taskslatable_has_breached,
+            IncidentSlaRow.taskslatable_sla_name,
+            IncidentSlaRow.taskslatable_sla_type,
+            IncidentSlaRow.taskslatable_sla_target,
+            IncidentSlaRow.source_row_number,
+        )
+        .where(IncidentSlaRow.project_id == project_id)
+        .order_by(IncidentSlaRow.inc_number.asc(), IncidentSlaRow.source_row_number.asc())
+    )
+    for row in db.execute(statement).yield_per(INGESTION_BATCH_SIZE):
+        candidate = IncidentSlaCandidate(
+            row_id=row.id,
+            inc_number=row.inc_number,
+            stage=row.taskslatable_stage,
+            business_duration_seconds=row.taskslatable_business_duration_seconds,
+            has_breached=row.taskslatable_has_breached,
+            sla_name=row.taskslatable_sla_name,
+            sla_type=row.taskslatable_sla_type,
+            sla_target=row.taskslatable_sla_target,
+            source_row_number=row.source_row_number,
+        )
+        if sla_candidate_matches_target(candidate, SLA_TARGET_RESPONSE):
+            candidates_by_target[SLA_TARGET_RESPONSE][candidate.inc_number].append(candidate)
+        if sla_candidate_matches_target(candidate, SLA_TARGET_RESOLUTION):
+            candidates_by_target[SLA_TARGET_RESOLUTION][candidate.inc_number].append(candidate)
+
+    return candidates_by_target
+
+
+def select_incident_sla_candidate(
+    candidates: list[IncidentSlaCandidate],
+    *,
+    ticket_vendor: str | None,
+    derived_vendor: str | None,
+) -> SelectedIncidentSlaCandidate | None:
+    effective_vendor = normalized_optional_text(ticket_vendor) or normalized_optional_text(
+        derived_vendor
+    )
+    vendor_source = "ticket_vendor" if normalized_optional_text(ticket_vendor) else "derived_vendor"
+
+    def preference(candidate: IncidentSlaCandidate) -> tuple[int, int, int, str]:
+        sla_name = normalized_text(candidate.sla_name)
+        if effective_vendor and effective_vendor.lower() in sla_name:
+            preference_rank = 0
+        elif "default" in sla_name:
+            preference_rank = 1
+        else:
+            preference_rank = 2
+
+        stage_rank = 0 if normalized_text(candidate.stage) == "completed" else 1
+        return (
+            preference_rank,
+            stage_rank,
+            candidate.source_row_number,
+            str(candidate.row_id),
+        )
+
+    if not candidates:
+        return None
+
+    selected = sorted(candidates, key=preference)[0]
+    preference_rank = preference(selected)[0]
+    if preference_rank not in {0, 1}:
+        return None
+
+    if preference_rank == 0:
+        selection_source = vendor_source
+    elif effective_vendor is None:
+        selection_source = "default"
+    else:
+        selection_source = "fallback_default"
+
+    return SelectedIncidentSlaCandidate(
+        candidate=selected,
+        selection_source=selection_source,
+        effective_vendor=effective_vendor,
+    )
+
+
+def bulk_update_incident_sla_target(
+    db: Session,
+    project_id: UUID,
+    model,
+    *,
+    candidates_by_incident: dict[str, list[IncidentSlaCandidate]],
+    breached_column: str,
+    business_elapsed_column: str,
+    name_column: str,
+    definition_column: str,
+    selection_source_column: str,
+    vendor_used_column: str,
+    updated_at_column: str,
+    replace_existing: bool,
+) -> int:
+    statement = select(
+        model.id,
+        model.ticket_number,
+        model.vendor,
+        model.derived_vendor,
+    ).where(
+        model.project_id == project_id,
+        model.ticket_type == INCIDENT_TICKET_TYPE,
+    )
+    if not replace_existing:
+        statement = statement.where(getattr(model, name_column).is_(None))
+
+    now = datetime.now(UTC)
+    updated_count = 0
+    pending_updates: list[dict[str, object]] = []
+    for row in db.execute(statement).yield_per(INGESTION_BATCH_SIZE):
+        selected = select_incident_sla_candidate(
+            candidates_by_incident.get(row.ticket_number, []),
+            ticket_vendor=row.vendor,
+            derived_vendor=row.derived_vendor,
+        )
+        if selected is None:
+            continue
+
+        candidate = selected.candidate
+        pending_updates.append(
+            {
+                "id": row.id,
+                breached_column: candidate.has_breached,
+                business_elapsed_column: candidate.business_duration_seconds,
+                name_column: candidate.sla_name,
+                definition_column: candidate.sla_name,
+                selection_source_column: selected.selection_source,
+                vendor_used_column: selected.effective_vendor,
+                updated_at_column: now,
+                "sla_enriched_at": now,
+            }
+        )
+        if len(pending_updates) >= INGESTION_BATCH_SIZE:
+            db.bulk_update_mappings(model, pending_updates)
+            updated_count += len(pending_updates)
+            pending_updates.clear()
+
+    if pending_updates:
+        db.bulk_update_mappings(model, pending_updates)
+        updated_count += len(pending_updates)
+
+    return updated_count
 
 
 def update_incident_sla_target(
@@ -1005,13 +1202,18 @@ def enrich_incident_sla(
     if replace_existing:
         reset_incident_sla_columns(db, project_id)
 
+    sla_candidates = load_incident_sla_candidates(db, project_id)
     response_count = 0
     resolution_count = 0
-    for table_name in ("tickets", "assessment_out_of_scope_tickets"):
-        response_count += update_incident_sla_target(
+    for model, table_name in (
+        (Ticket, "tickets"),
+        (AssessmentOutOfScopeTicket, "assessment_out_of_scope_tickets"),
+    ):
+        response_count += bulk_update_incident_sla_target(
             db,
             project_id,
-            sla_target=SLA_TARGET_RESPONSE,
+            model,
+            candidates_by_incident=sla_candidates[SLA_TARGET_RESPONSE],
             breached_column="response_sla_breached",
             business_elapsed_column="response_sla_business_elapsed_seconds",
             name_column="response_sla_name",
@@ -1020,12 +1222,12 @@ def enrich_incident_sla(
             vendor_used_column="response_sla_vendor_used",
             updated_at_column="response_sla_updated_at",
             replace_existing=replace_existing,
-            table_name=table_name,
         )
-        resolution_count += update_incident_sla_target(
+        resolution_count += bulk_update_incident_sla_target(
             db,
             project_id,
-            sla_target=SLA_TARGET_RESOLUTION,
+            model,
+            candidates_by_incident=sla_candidates[SLA_TARGET_RESOLUTION],
             breached_column="resolution_sla_breached",
             business_elapsed_column="resolution_sla_business_elapsed_seconds",
             name_column="resolution_sla_name",
@@ -1034,7 +1236,6 @@ def enrich_incident_sla(
             vendor_used_column="resolution_sla_vendor_used",
             updated_at_column="resolution_sla_updated_at",
             replace_existing=replace_existing,
-            table_name=table_name,
         )
         mark_missing_incident_sla_target(
             db,

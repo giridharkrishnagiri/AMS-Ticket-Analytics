@@ -151,14 +151,14 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
                 "Application Number (APM),Parent Business Application,Support group name,"
                 "Support group's owner,Application Owner,Business Service CI Name,"
                 "Support Lead (Managed by),Functional Track,AMS Owner,Supported By Vendor,"
-                "Active,Application family,Business criticality",
+                "Active,Application family,Business criticality,Total USD$",
                 " APM-1 , Parent App , AMS Claims , Group Owner , Owner One , "
                 "Claims Service , Lead One , Claims , AMS Owner , Vendor A , true , "
-                "Claims Family , High",
+                "Claims Family , High , #N/A",
                 "APM-1,Parent App,AMS Claims,Group Owner,Owner Two,Claims Service,"
-                "Lead Two,Claims,AMS Owner,Vendor A,true,Claims Family,High",
+                "Lead Two,Claims,AMS Owner,Vendor A,true,Claims Family,#N/A,#N/A",
                 "APM-2,Parent App,AMS Claims,Group Owner,Owner Missing,,Lead,Claims,"
-                "AMS Owner,Vendor A,true,Family,Low",
+                "AMS Owner,Vendor A,true,Family,Low,#N/A",
             ]
         )
 
@@ -190,7 +190,8 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
         assert item.active is True
         assert item.cmdb_payload == {
             "Application family": "Claims Family",
-            "Business criticality": "High",
+            "Business criticality": None,
+            "Total USD$": None,
         }
     finally:
         cleanup_client(db, client_id)

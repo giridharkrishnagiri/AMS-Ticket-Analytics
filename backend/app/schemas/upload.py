@@ -159,6 +159,52 @@ class UploadBatchNormalizeMultipleResponse(BaseModel):
     totals: UploadBatchNormalizeTotalsResponse
 
 
+class UploadBatchApplyMappingRequest(BaseModel):
+    project_id: UUID
+    ticket_type: str
+    upload_batch_ids: list[UUID]
+    mapping: dict[str, str] | None = None
+    delete_existing: bool = True
+    save_as_default_for_ticket_type: bool = True
+    skip_already_applied: bool = True
+
+
+class UploadBatchApplyMappingFileResponse(BaseModel):
+    upload_batch_id: UUID
+    batch_name: str
+    filename: str | None = None
+    status: str
+    input_rows: int
+    in_scope_rows: int
+    out_of_scope_rows: int
+    blank_assignment_group_rows: int = 0
+    assignment_group_not_in_inventory_rows: int = 0
+    failed_rows: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class UploadBatchApplyMappingTotalsResponse(BaseModel):
+    total_files: int
+    applied: int
+    skipped: int
+    failed: int
+    input_rows: int
+    in_scope_rows: int
+    out_of_scope_rows: int
+    blank_assignment_group_rows: int
+    assignment_group_not_in_inventory_rows: int
+    failed_rows: int
+
+
+class UploadBatchApplyMappingMultipleResponse(BaseModel):
+    project_id: UUID
+    ticket_type: str
+    files: list[UploadBatchApplyMappingFileResponse]
+    totals: UploadBatchApplyMappingTotalsResponse
+
+
 class RawRowPreviewItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -133,6 +133,40 @@ export type UploadBatchNormalizeMultipleResponse = {
   };
 };
 
+export type UploadBatchApplyMappingFile = {
+  upload_batch_id: string;
+  batch_name: string;
+  filename: string | null;
+  status: string;
+  input_rows: number;
+  in_scope_rows: number;
+  out_of_scope_rows: number;
+  blank_assignment_group_rows: number;
+  assignment_group_not_in_inventory_rows: number;
+  failed_rows: number;
+  warnings: string[];
+  errors: string[];
+  error: string | null;
+};
+
+export type UploadBatchApplyMappingMultipleResponse = {
+  project_id: string;
+  ticket_type: string;
+  files: UploadBatchApplyMappingFile[];
+  totals: {
+    total_files: number;
+    applied: number;
+    skipped: number;
+    failed: number;
+    input_rows: number;
+    in_scope_rows: number;
+    out_of_scope_rows: number;
+    blank_assignment_group_rows: number;
+    assignment_group_not_in_inventory_rows: number;
+    failed_rows: number;
+  };
+};
+
 export type RawRowPreviewItem = {
   id: string;
   upload_batch_id: string;
@@ -303,6 +337,34 @@ export function normalizeUploadBatches(
         ticket_type: ticketType,
         upload_batch_ids: uploadBatchIds,
         delete_existing: deleteExisting,
+      }),
+    }
+  );
+}
+
+export function applyMappingToUploadBatches(
+  projectId: string,
+  ticketType: string,
+  uploadBatchIds: string[],
+  mapping: Record<string, string>,
+  deleteExisting = true,
+  skipAlreadyApplied = true
+): Promise<UploadBatchApplyMappingMultipleResponse> {
+  return requestJson<UploadBatchApplyMappingMultipleResponse>(
+    "/uploads/batches/apply-mapping-multiple",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        project_id: projectId,
+        ticket_type: ticketType,
+        upload_batch_ids: uploadBatchIds,
+        mapping,
+        delete_existing: deleteExisting,
+        save_as_default_for_ticket_type: true,
+        skip_already_applied: skipAlreadyApplied,
       }),
     }
   );

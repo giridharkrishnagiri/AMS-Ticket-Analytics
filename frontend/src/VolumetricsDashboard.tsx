@@ -469,6 +469,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   }
 
   const averageLabel = timeGrain === "monthly" ? "Avg monthly" : "Avg weekly";
+  const canceledMetricLabel = cancellationMetricLabel(ticketType);
 
   return (
     <section className="volumetrics-dashboard-layout" aria-labelledby="volumetrics-tab-heading">
@@ -626,10 +627,10 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
               )}`}
             />
             <MetricCard
-              label="Cancelled"
+              label={canceledMetricLabel}
               primary={`Total: ${formatNumber(summary.data.cancelled.total)}`}
               secondary={`${averageLabel}: ${formatNumber(summary.data.cancelled.average_per_period, 1)}`}
-              tertiary={`% of Resolved+Cancelled: ${formatPercent(
+              tertiary={`% of Resolved+${canceledMetricLabel}: ${formatPercent(
                 summary.data.cancelled.cancelled_pct_of_resolved_cancelled
               )}`}
             />
@@ -666,6 +667,16 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       </div>
     </section>
   );
+}
+
+function cancellationMetricLabel(ticketType: VolumetricsTicketType): string {
+  if (ticketType === "incident") {
+    return "Canceled";
+  }
+  if (ticketType === "sc_task") {
+    return "Closed Incomplete";
+  }
+  return "Canceled / Closed Incomplete";
 }
 
 function MetricCard({

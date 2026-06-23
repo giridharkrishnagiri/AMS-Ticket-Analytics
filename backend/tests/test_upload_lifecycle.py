@@ -2,12 +2,13 @@ from datetime import date
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentOutOfScopeTicket,
     Client,
     Project,
     Ticket,
@@ -362,6 +363,123 @@ def test_normalize_multiple_handles_sc_task_open_snapshot_duplicate_replacement(
         assert ticket.state == "Open"
         assert ticket.closed_at is None
         assert ticket.business_duration_seconds is None
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_apply_mapping_multiple_uses_selected_batches_and_skips_existing_outputs() -> None:
+    db, client_id, project_id = create_project_fixture()
+
+    try:
+        save_mapping_template(
+            db,
+            project_id,
+            "INCIDENT",
+            {
+                "ticket_id": "number",
+                "title": "short_description",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
+                "created_at": "sys_created_on",
+            },
+        )
+        first_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="Apply Multi First",
+            ticket_type="INCIDENT",
+            rows=[
+                {
+                    "number": "INC-APPLY-MULTI-1",
+                    "short_description": "Selected first",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-01",
+                }
+            ],
+        )
+        second_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="Apply Multi Second",
+            ticket_type="INCIDENT",
+            rows=[
+                {
+                    "number": "INC-APPLY-MULTI-2",
+                    "short_description": "Selected second",
+                    "assignment_group": "Not In Inventory",
+                    "business_service": "Unknown Service",
+                    "sys_created_on": "2026-06-02",
+                }
+            ],
+        )
+        third_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="Apply Multi Historical Unselected",
+            ticket_type="INCIDENT",
+            rows=[
+                {
+                    "number": "INC-APPLY-MULTI-3",
+                    "short_description": "Should stay untouched",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-03",
+                }
+            ],
+        )
+
+        with TestClient(app) as client:
+            first_response = client.post(
+                "/api/uploads/batches/apply-mapping-multiple",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "upload_batch_ids": [str(first_batch_id), str(second_batch_id)],
+                    "skip_already_applied": True,
+                },
+            )
+            second_response = client.post(
+                "/api/uploads/batches/apply-mapping-multiple",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "upload_batch_ids": [str(first_batch_id), str(second_batch_id)],
+                    "skip_already_applied": True,
+                },
+            )
+
+        assert first_response.status_code == 200
+        first_payload = first_response.json()
+        assert first_payload["totals"]["total_files"] == 2
+        assert first_payload["totals"]["applied"] == 2
+        assert first_payload["totals"]["skipped"] == 0
+        assert first_payload["totals"]["in_scope_rows"] == 1
+        assert first_payload["totals"]["out_of_scope_rows"] == 1
+
+        assert second_response.status_code == 200
+        second_payload = second_response.json()
+        assert second_payload["totals"]["applied"] == 0
+        assert second_payload["totals"]["skipped"] == 2
+        assert {row["status"] for row in second_payload["files"]} == {
+            "SKIPPED_ALREADY_APPLIED"
+        }
+
+        selected_ticket_count = db.scalar(
+            select(func.count(Ticket.id)).where(Ticket.upload_batch_id == first_batch_id)
+        )
+        selected_out_of_scope_count = db.scalar(
+            select(func.count(AssessmentOutOfScopeTicket.id)).where(
+                AssessmentOutOfScopeTicket.upload_batch_id == second_batch_id
+            )
+        )
+        unselected_ticket_count = db.scalar(
+            select(func.count(Ticket.id)).where(Ticket.upload_batch_id == third_batch_id)
+        )
+
+        assert selected_ticket_count == 1
+        assert selected_out_of_scope_count == 1
+        assert unselected_ticket_count == 0
     finally:
         cleanup_client(db, client_id)
 

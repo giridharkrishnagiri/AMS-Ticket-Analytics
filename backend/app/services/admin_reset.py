@@ -29,7 +29,9 @@ from app.models import (
 RESET_CONFIRMATION = "RESET OPERATIONAL DATA"
 PROJECT_RESET_CONFIRMATION = "RESET PROJECT OPERATIONAL DATA"
 PROJECT_DELETE_CONFIRMATION = "DELETE PROJECT"
+PROJECT_DATA_RESET_CONFIRMATION = "RESET PROJECT DATA"
 CLIENT_DELETE_CONFIRMATION = "DELETE CLIENT"
+CUSTOMER_DATA_RESET_CONFIRMATION = "RESET CUSTOMER DATA"
 PRESERVED_TABLES = [
     "clients",
     "projects",
@@ -525,8 +527,10 @@ def delete_project_and_related_data(
     project_id: UUID,
     confirmation: str,
 ) -> OperationalResetResult:
-    if confirmation != PROJECT_DELETE_CONFIRMATION:
-        raise AdminResetError("Confirmation text must exactly match DELETE PROJECT.")
+    if confirmation not in {PROJECT_DELETE_CONFIRMATION, PROJECT_DATA_RESET_CONFIRMATION}:
+        raise AdminResetError(
+            "Confirmation text must exactly match RESET PROJECT DATA."
+        )
     project = db.get(Project, project_id)
     if project is None:
         raise AdminResetError(f"Project {project_id} was not found.")
@@ -552,8 +556,10 @@ def delete_client_and_related_data(
     client_id: UUID,
     confirmation: str,
 ) -> OperationalResetResult:
-    if confirmation != CLIENT_DELETE_CONFIRMATION:
-        raise AdminResetError("Confirmation text must exactly match DELETE CLIENT.")
+    if confirmation not in {CLIENT_DELETE_CONFIRMATION, CUSTOMER_DATA_RESET_CONFIRMATION}:
+        raise AdminResetError(
+            "Confirmation text must exactly match RESET CUSTOMER DATA."
+        )
     client = db.get(Client, client_id)
     if client is None:
         raise AdminResetError(f"Client {client_id} was not found.")

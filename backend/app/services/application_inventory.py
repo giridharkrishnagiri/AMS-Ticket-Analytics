@@ -29,6 +29,7 @@ MAX_MESSAGE_SAMPLES = 50
 TOP_UNMATCHED_LIMIT = 25
 UNMATCHED_SAMPLE_LIMIT = 5
 TARGET_WORKSHEET_NAME = "Group-App-BizService"
+CMDB_BLANK_MARKERS = {"#N/A"}
 
 CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "application_number_apm": (
@@ -184,8 +185,17 @@ def build_cmdb_payload(raw_data: dict[str, Any]) -> dict[str, Any]:
         normalized_name = normalize_source_column_name(column_name)
         if CORE_ALIAS_TO_FIELD.get(normalized_name) in CORE_FIELD_NAMES:
             continue
-        payload[column_name] = text_or_none(value) if isinstance(value, str) else value
+        payload[column_name] = cmdb_payload_value_or_none(value)
     return payload
+
+
+def cmdb_payload_value_or_none(value: Any) -> Any:
+    if isinstance(value, str):
+        text = text_or_none(value)
+        if text is None or text.upper() in CMDB_BLANK_MARKERS:
+            return None
+        return text
+    return value
 
 
 def parse_active(value: Any, row_number: int, result: InventoryUploadResult) -> bool | None:
