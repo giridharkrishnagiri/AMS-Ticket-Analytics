@@ -11,6 +11,7 @@ type ExcelMultiSelectFilterProps = {
   options: ExcelFilterOption[];
   selectedValues: string[];
   onChange: (values: string[]) => void;
+  selectionMode?: "multiple" | "single";
 };
 
 function ExcelMultiSelectFilter({
@@ -18,6 +19,7 @@ function ExcelMultiSelectFilter({
   options,
   selectedValues,
   onChange,
+  selectionMode = "multiple",
 }: ExcelMultiSelectFilterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -31,10 +33,22 @@ function ExcelMultiSelectFilter({
   }, [options, searchText]);
 
   const selectedSet = useMemo(() => new Set(selectedValues), [selectedValues]);
+  const selectedSummary =
+    selectionMode === "single"
+      ? options.find((option) => option.value === selectedValues[0])?.label ?? "Select"
+      : selectedValues.length === 0
+        ? "All"
+        : `${selectedValues.length} selected`;
   const allVisibleSelected =
     visibleOptions.length > 0 && visibleOptions.every((option) => selectedSet.has(option.value));
 
   function toggleValue(value: string) {
+    if (selectionMode === "single") {
+      onChange([value]);
+      setIsOpen(false);
+      return;
+    }
+
     if (selectedSet.has(value)) {
       onChange(selectedValues.filter((selectedValue) => selectedValue !== value));
       return;
@@ -64,7 +78,7 @@ function ExcelMultiSelectFilter({
         onClick={() => setIsOpen((current) => !current)}
       >
         <span>{label}</span>
-        <strong>{selectedValues.length === 0 ? "All" : `${selectedValues.length} selected`}</strong>
+        <strong>{selectedSummary}</strong>
       </button>
 
       {isOpen ? (
@@ -79,10 +93,16 @@ function ExcelMultiSelectFilter({
             <input
               type="checkbox"
               checked={allVisibleSelected}
-              disabled={visibleOptions.length === 0}
+              disabled={visibleOptions.length === 0 || selectionMode === "single"}
               onChange={toggleVisibleValues}
             />
-            <span>{allVisibleSelected ? "Deselect visible" : "Select visible"}</span>
+            <span>
+              {selectionMode === "single"
+                ? "Single selection"
+                : allVisibleSelected
+                  ? "Deselect visible"
+                  : "Select visible"}
+            </span>
           </label>
           <div className="excel-filter-options">
             {visibleOptions.length === 0 ? (

@@ -47,6 +47,7 @@ import type {
 } from "./api/dashboard";
 import ApplicationsDashboard from "./ApplicationsDashboard";
 import CustomerSelector from "./CustomerSelector";
+import VolumetricsDashboard from "./VolumetricsDashboard";
 import type { ProjectOption } from "./api/projects";
 import { formatDisplayDateRange, formatDisplayDateTime } from "./utils/dateFormat";
 
@@ -827,8 +828,13 @@ function Dashboard() {
         />
       </div>
 
-      {activeDashboardTab === "volumetrics" ? (
-        <>
+      <div hidden={activeDashboardTab !== "volumetrics"}>
+        <VolumetricsDashboard
+          isActive={activeDashboardTab === "volumetrics"}
+          projectId={projectId}
+        />
+        {false ? (
+          <>
       <section className="panel dashboard-filter-panel" aria-labelledby="dashboard-filters-heading">
         <div className="panel-heading">
           <div>
@@ -1465,8 +1471,9 @@ function Dashboard() {
           </ChartBox>
         </ChartCard>
       </div>
-        </>
-      ) : null}
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }

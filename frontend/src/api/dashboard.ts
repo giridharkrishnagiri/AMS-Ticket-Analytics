@@ -310,6 +310,74 @@ export type DashboardApplicationsCharts = {
   strategic: DashboardApplicationsChartDatum[];
 };
 
+export type VolumetricsScope = "in_scope" | "out_of_scope" | "all";
+export type VolumetricsTicketType = "all" | "incident" | "sc_task";
+export type VolumetricsTimeGrain = "monthly" | "weekly";
+
+export type DashboardVolumetricsFilters = {
+  functional_track_ams_owner: string[];
+  assignment_group_support_lead: string[];
+  parent_application_name: string[];
+  application_owner: string[];
+  supported_by_vendor: string[];
+};
+
+export type DashboardVolumetricsRequest = {
+  project_id: string;
+  scope: VolumetricsScope;
+  ticket_type: VolumetricsTicketType;
+  time_grain: VolumetricsTimeGrain;
+  start_datetime: string;
+  end_datetime: string;
+  filters: DashboardVolumetricsFilters;
+};
+
+export type DashboardVolumetricsFilterValues = {
+  scope: ApplicationFilterValue[];
+  ticket_type: ApplicationFilterValue[];
+  functional_track_ams_owner: ApplicationCombinedFilterValue[];
+  assignment_group_support_lead: ApplicationCombinedFilterValue[];
+  parent_application_name: ApplicationFilterValue[];
+  application_owner: ApplicationFilterValue[];
+  supported_by_vendor: ApplicationFilterValue[];
+};
+
+export type DashboardVolumetricsSummaryMetric = {
+  total: number;
+  average_per_period: number | null;
+};
+
+export type DashboardVolumetricsCancelledMetric = DashboardVolumetricsSummaryMetric & {
+  cancelled_pct_of_resolved_cancelled: number | null;
+};
+
+export type DashboardVolumetricsSlaMetric = {
+  average_adherence_pct: number | null;
+  applicable_count: number;
+  met_count: number;
+};
+
+export type DashboardVolumetricsSummary = {
+  period_count: number;
+  created: DashboardVolumetricsSummaryMetric;
+  resolved_closed: DashboardVolumetricsSummaryMetric;
+  cancelled: DashboardVolumetricsCancelledMetric;
+  response_sla: DashboardVolumetricsSlaMetric;
+  resolution_sla: DashboardVolumetricsSlaMetric;
+};
+
+export type DashboardVolumetricsBacklogRow = PeriodMetricRow & {
+  created_count: number;
+  resolved_closed_count: number;
+  backlog_open_count: number;
+  average_backlog_open: number | null;
+};
+
+export type DashboardVolumetricsBacklog = {
+  average_backlog_open: number | null;
+  rows: DashboardVolumetricsBacklogRow[];
+};
+
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
   for (const value of values ?? []) {
     if (value.trim()) {
@@ -409,6 +477,44 @@ export function getDashboardApplicationsCharts(
 ): Promise<DashboardApplicationsCharts> {
   return postApplicationsRequest<DashboardApplicationsCharts>(
     "/dashboard/applications/charts",
+    input
+  );
+}
+
+function postVolumetricsRequest<T>(
+  path: string,
+  input: DashboardVolumetricsRequest
+): Promise<T> {
+  return requestJson<T>(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function getDashboardVolumetricsFilterValues(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsFilterValues> {
+  return postVolumetricsRequest<DashboardVolumetricsFilterValues>(
+    "/dashboard/volumetrics/filter-values",
+    input
+  );
+}
+
+export function getDashboardVolumetricsSummary(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsSummary> {
+  return postVolumetricsRequest<DashboardVolumetricsSummary>(
+    "/dashboard/volumetrics/summary",
+    input
+  );
+}
+
+export function getDashboardVolumetricsCreatedResolvedBacklog(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsBacklog> {
+  return postVolumetricsRequest<DashboardVolumetricsBacklog>(
+    "/dashboard/volumetrics/created-resolved-backlog",
     input
   );
 }

@@ -1606,6 +1606,118 @@ h2 {
   font-weight: 800;
 }
 
+.volumetrics-dashboard-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  align-items: start;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+  gap: 14px;
+}
+
+.volumetrics-main-pane {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  gap: 14px;
+}
+
+.volumetrics-main-pane > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.volumetrics-date-note {
+  margin: 0 4px -2px;
+  color: #64748b;
+  font-size: 0.84rem;
+  font-style: italic;
+  font-weight: 800;
+  text-align: right;
+}
+
+.volumetrics-selected-range {
+  color: #64748b;
+  font-size: 0.84rem;
+  font-style: italic;
+  font-weight: 800;
+  text-align: right;
+}
+
+.volumetrics-controls {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 220px) minmax(150px, 220px);
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.volumetrics-controls label {
+  display: grid;
+  gap: 4px;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.segmented-control {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  min-height: 38px;
+  padding: 3px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.segmented-control button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  color: #475569;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.segmented-control button.active {
+  color: #0f766e;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 12%);
+}
+
+.volumetrics-summary-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.volumetrics-summary-grid strong {
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.volumetrics-chart-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.volumetrics-chart-card h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 1.05rem;
+}
+
+.volumetrics-chart-plot {
+  min-height: 406px;
+}
+
 .maintenance-panel {
   border-color: #fed7aa;
   background: linear-gradient(180deg, #ffffff, #fffbeb);
@@ -1628,7 +1740,8 @@ h2 {
     grid-template-columns: 1fr 1fr;
   }
 
-  .applications-dashboard-layout {
+  .applications-dashboard-layout,
+  .volumetrics-dashboard-layout {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1643,6 +1756,10 @@ h2 {
 
   .status-card-main {
     grid-column: 1 / -1;
+  }
+
+  .volumetrics-controls {
+    grid-template-columns: 1fr;
   }
 }
 
