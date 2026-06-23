@@ -22,6 +22,7 @@ from app.models import (
     UploadedFile,
 )
 from app.services.ingestion import INGESTION_BATCH_SIZE, normalize_source_column_name
+from app.services.sap_classification import derive_sap_non_sap
 from app.services.upload_lifecycle import (
     BATCH_STATUS_DELETED,
     mark_upload_batch_normalization_failed,
@@ -985,6 +986,7 @@ def build_out_of_scope_ticket(
         ams_owner=ticket.ams_owner,
         supported_by_vendor=ticket.supported_by_vendor,
         assignment_group_owner=ticket.assignment_group_owner,
+        sap_non_sap=ticket.sap_non_sap,
         out_of_scope_reason=reason,
     )
 
@@ -1067,6 +1069,7 @@ def build_ticket_from_raw_row(
         business_service=text_or_none(normalized_values.get("business_service")),
         cmdb_ci=text_or_none(normalized_values.get("configuration_item")),
         assignment_group=text_or_none(normalized_values.get("assignment_group")),
+        sap_non_sap=derive_sap_non_sap(normalized_values.get("assignment_group")),
         assigned_to=text_or_none(normalized_values.get("assigned_to")),
         requester=text_or_none(normalized_values.get("requester")),
         opened_by=text_or_none(normalized_values.get("created_by")),

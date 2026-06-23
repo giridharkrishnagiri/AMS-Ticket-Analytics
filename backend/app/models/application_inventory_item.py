@@ -54,6 +54,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
         ),
         Index("ix_application_inventory_project_ams_owner", "project_id", "ams_owner"),
         Index("ix_application_inventory_project_vendor", "project_id", "supported_by_vendor"),
+        Index("ix_application_inventory_project_sap_non_sap", "project_id", "sap_non_sap"),
     )
 
     project_id: Mapped[UUID] = mapped_column(
@@ -71,6 +72,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     functional_track: Mapped[str | None] = mapped_column(Text, nullable=True)
     ams_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     supported_by_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     cmdb_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     source_filename: Mapped[str | None] = mapped_column(Text, nullable=True)

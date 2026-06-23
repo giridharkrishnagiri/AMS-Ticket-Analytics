@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
+  BarChart,
   CartesianGrid,
   ComposedChart,
   LabelList,
@@ -13,12 +14,17 @@ import {
 } from "recharts";
 
 import {
-  getDashboardVolumetricsCreatedResolvedBacklog,
+  getDashboardVolumetricsBacklog,
+  getDashboardVolumetricsCreatedPattern,
+  getDashboardVolumetricsCreatedResolvedCanceled,
   getDashboardVolumetricsFilterValues,
   getDashboardVolumetricsSummary,
 } from "./api/dashboard";
 import type {
-  DashboardVolumetricsBacklog,
+  CreatedPatternType,
+  DashboardVolumetricsBacklogOnly,
+  DashboardVolumetricsCreatedPattern,
+  DashboardVolumetricsCreatedResolvedCanceled,
   DashboardVolumetricsFilterValues,
   DashboardVolumetricsFilters,
   DashboardVolumetricsRequest,
@@ -58,6 +64,7 @@ const emptyFilters: DashboardVolumetricsFilters = {
   parent_application_name: [],
   application_owner: [],
   supported_by_vendor: [],
+  sap_non_sap: [],
 };
 
 const emptyFilterValues: DashboardVolumetricsFilterValues = {
@@ -68,6 +75,7 @@ const emptyFilterValues: DashboardVolumetricsFilterValues = {
   parent_application_name: [],
   application_owner: [],
   supported_by_vendor: [],
+  sap_non_sap: [],
 };
 
 const emptySummary: DashboardVolumetricsSummary = {
@@ -83,16 +91,30 @@ const emptySummary: DashboardVolumetricsSummary = {
   resolution_sla: { average_adherence_pct: null, applicable_count: 0, met_count: 0 },
 };
 
-const emptyBacklog: DashboardVolumetricsBacklog = {
-  average_backlog_open: null,
-  rows: [],
+const emptyVolumeTrend: DashboardVolumetricsCreatedResolvedCanceled = {
+  time_grain: "monthly",
+  points: [],
+};
+
+const emptyBacklog: DashboardVolumetricsBacklogOnly = {
+  time_grain: "monthly",
+  average_backlog: null,
+  points: [],
+};
+
+const emptyCreatedPattern: DashboardVolumetricsCreatedPattern = {
+  pattern_type: "day_of_month",
+  points: [],
 };
 
 const chartColors = {
   created: "#0f766e",
   resolved: "#2563eb",
+  canceled: "#dc2626",
   backlog: "#d97706",
   average: "#7c3aed",
+  pattern: "#0891b2",
+  patternAlt: "#7c3aed",
 };
 
 const chartImagePadding = 18;
@@ -318,6 +340,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [endMonth, setEndMonth] = useState(defaultEndMonth);
   const [startWeek, setStartWeek] = useState(defaultStartWeek);
   const [endWeek, setEndWeek] = useState(defaultEndWeek);
+  const [createdPatternType, setCreatedPatternType] =
+    useState<CreatedPatternType>("day_of_month");
   const [filters, setFilters] = useState<DashboardVolumetricsFilters>(emptyFilters);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardVolumetricsFilterValues>>(
     createLoadState(emptyFilterValues)
@@ -325,9 +349,15 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [summary, setSummary] = useState<LoadState<DashboardVolumetricsSummary>>(
     createLoadState(emptySummary)
   );
-  const [backlog, setBacklog] = useState<LoadState<DashboardVolumetricsBacklog>>(
+  const [volumeTrend, setVolumeTrend] = useState<
+    LoadState<DashboardVolumetricsCreatedResolvedCanceled>
+  >(createLoadState(emptyVolumeTrend));
+  const [backlog, setBacklog] = useState<LoadState<DashboardVolumetricsBacklogOnly>>(
     createLoadState(emptyBacklog)
   );
+  const [createdPattern, setCreatedPattern] = useState<
+    LoadState<DashboardVolumetricsCreatedPattern>
+  >(createLoadState(emptyCreatedPattern));
   const [loadedProjectId, setLoadedProjectId] = useState("");
 
   const effectiveRange = useMemo(() => {
@@ -365,6 +395,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       parent_application_name: singleOptions(filterValues.data.parent_application_name),
       application_owner: singleOptions(filterValues.data.application_owner),
       supported_by_vendor: singleOptions(filterValues.data.supported_by_vendor),
+      sap_non_sap: singleOptions(filterValues.data.sap_non_sap),
     }),
     [filterValues.data]
   );
@@ -398,7 +429,9 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
 
     setFilterValues(createLoadState(emptyFilterValues, "loading"));
     setSummary(createLoadState(emptySummary, "loading"));
+    setVolumeTrend(createLoadState(emptyVolumeTrend, "loading"));
     setBacklog(createLoadState(emptyBacklog, "loading"));
+    setCreatedPattern(createLoadState(emptyCreatedPattern, "loading"));
 
     void getDashboardVolumetricsSummary(requestBody)
       .then((nextSummary) => {
@@ -412,7 +445,19 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
         });
       });
 
-    void getDashboardVolumetricsCreatedResolvedBacklog(requestBody)
+    void getDashboardVolumetricsCreatedResolvedCanceled(requestBody)
+      .then((nextVolumeTrend) => {
+        setVolumeTrend({ status: "success", data: nextVolumeTrend, error: null });
+      })
+      .catch((error) => {
+        setVolumeTrend({
+          status: "error",
+          data: emptyVolumeTrend,
+          error: errorMessage(error, "Unable to load Created/Resolved/Canceled chart"),
+        });
+      });
+
+    void getDashboardVolumetricsBacklog(requestBody)
       .then((nextBacklog) => {
         setBacklog({ status: "success", data: nextBacklog, error: null });
       })
@@ -421,6 +466,18 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
           status: "error",
           data: emptyBacklog,
           error: errorMessage(error, "Unable to load backlog chart"),
+        });
+      });
+
+    void getDashboardVolumetricsCreatedPattern(requestBody, createdPatternType)
+      .then((nextCreatedPattern) => {
+        setCreatedPattern({ status: "success", data: nextCreatedPattern, error: null });
+      })
+      .catch((error) => {
+        setCreatedPattern({
+          status: "error",
+          data: emptyCreatedPattern,
+          error: errorMessage(error, "Unable to load created pattern chart"),
         });
       });
 
@@ -435,7 +492,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
           error: errorMessage(error, "Unable to load Volumetrics filters"),
         });
       });
-  }, [requestBody]);
+  }, [createdPatternType, requestBody]);
 
   useEffect(() => {
     if (projectId !== loadedProjectId) {
@@ -445,7 +502,9 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       setFilters(emptyFilters);
       setFilterValues(createLoadState(emptyFilterValues));
       setSummary(createLoadState(emptySummary));
+      setVolumeTrend(createLoadState(emptyVolumeTrend));
       setBacklog(createLoadState(emptyBacklog));
+      setCreatedPattern(createLoadState(emptyCreatedPattern));
     }
   }, [loadedProjectId, projectId]);
 
@@ -511,6 +570,12 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
             options={filterOptions.functional_track_ams_owner}
             selectedValues={filters.functional_track_ams_owner}
             onChange={(values) => updateFilter("functional_track_ams_owner", values)}
+          />
+          <ExcelMultiSelectFilter
+            label="SAP / Non-SAP"
+            options={filterOptions.sap_non_sap}
+            selectedValues={filters.sap_non_sap}
+            onChange={(values) => updateFilter("sap_non_sap", values)}
           />
           <ExcelMultiSelectFilter
             label="Assignment Group - Support Lead"
@@ -658,11 +723,27 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
           {summary.status === "error" ? <p className="error-text">{summary.error}</p> : null}
         </section>
 
-        <CreatedResolvedBacklogChart
+        <CreatedResolvedCanceledChart
+          data={volumeTrend.data}
+          status={volumeTrend.status}
+          error={volumeTrend.error}
+          ticketType={ticketType}
+          timeGrain={timeGrain}
+        />
+
+        <BacklogChart
           data={backlog.data}
           status={backlog.status}
           error={backlog.error}
           timeGrain={timeGrain}
+        />
+
+        <CreatedPatternChart
+          data={createdPattern.data}
+          status={createdPattern.status}
+          error={createdPattern.error}
+          patternType={createdPatternType}
+          onPatternTypeChange={setCreatedPatternType}
         />
       </div>
     </section>
@@ -702,21 +783,49 @@ function MetricCard({
   );
 }
 
-function CreatedResolvedBacklogChart({
+function resolvedClosedMetricLabel(ticketType: VolumetricsTicketType): string {
+  if (ticketType === "incident") {
+    return "Resolved";
+  }
+  if (ticketType === "sc_task") {
+    return "Closed";
+  }
+  return "Resolved/Closed";
+}
+
+function createdResolvedCanceledTitle(ticketType: VolumetricsTicketType): string {
+  if (ticketType === "incident") {
+    return "Created vs Resolved vs Canceled";
+  }
+  if (ticketType === "sc_task") {
+    return "Created vs Closed vs Closed Incomplete";
+  }
+  return "Created vs Resolved/Closed vs Canceled / Closed Incomplete";
+}
+
+function CreatedResolvedCanceledChart({
   data,
   error,
   status,
+  ticketType,
   timeGrain,
 }: {
-  data: DashboardVolumetricsBacklog;
+  data: DashboardVolumetricsCreatedResolvedCanceled;
   error: string | null;
   status: LoadStatus;
+  ticketType: VolumetricsTicketType;
   timeGrain: VolumetricsTimeGrain;
 }) {
-  const title = "Created vs Resolved/Closed vs Backlog(Open)";
+  const title = createdResolvedCanceledTitle(ticketType);
+  const resolvedLabel = resolvedClosedMetricLabel(ticketType);
+  const canceledLabel = cancellationMetricLabel(ticketType);
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
-  const hasRows = data.rows.length > 0;
-  const chartWidth = Math.max(820, plotWidth - 24, data.rows.length * (timeGrain === "monthly" ? 74 : 92));
+  const hasRows = data.points.length > 0;
+  const chartWidth = Math.max(
+    820,
+    plotWidth - 24,
+    data.points.length * (timeGrain === "monthly" ? 82 : 96)
+  );
   const canCopy = status !== "loading" && hasRows;
 
   return (
@@ -724,7 +833,9 @@ function CreatedResolvedBacklogChart({
       <div className="applications-chart-header">
         <div>
           <h3>{title}</h3>
-          <p className="muted-text">Created and resolved/closed volumes with period-end backlog.</p>
+          <p className="muted-text">
+            Period movement for created, completed, and canceled/closed incomplete tickets.
+          </p>
         </div>
         <button
           className="secondary-button chart-copy-button"
@@ -747,7 +858,7 @@ function CreatedResolvedBacklogChart({
           <div className="applications-chart-scroll">
             <div className="applications-chart-stage">
               <ComposedChart
-                data={data.rows}
+                data={data.points}
                 width={chartWidth}
                 height={380}
                 margin={{ top: 34, right: 64, bottom: 82, left: 42 }}
@@ -762,7 +873,6 @@ function CreatedResolvedBacklogChart({
                   tickMargin={12}
                 />
                 <YAxis yAxisId="volume" hide />
-                <YAxis yAxisId="backlog" orientation="right" hide />
                 <Tooltip />
                 <Legend />
                 <Bar
@@ -777,29 +887,119 @@ function CreatedResolvedBacklogChart({
                 <Bar
                   dataKey="resolved_closed_count"
                   fill={chartColors.resolved}
-                  name="Resolved/Closed"
+                  name={resolvedLabel}
                   radius={[4, 4, 0, 0]}
                   yAxisId="volume"
                 >
                   <LabelList dataKey="resolved_closed_count" position="top" fontSize={11} />
                 </Bar>
+                <Bar
+                  dataKey="canceled_closed_incomplete_count"
+                  fill={chartColors.canceled}
+                  name={canceledLabel}
+                  radius={[4, 4, 0, 0]}
+                  yAxisId="volume"
+                >
+                  <LabelList
+                    dataKey="canceled_closed_incomplete_count"
+                    position="top"
+                    fontSize={11}
+                  />
+                </Bar>
+              </ComposedChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function BacklogChart({
+  data,
+  error,
+  status,
+  timeGrain,
+}: {
+  data: DashboardVolumetricsBacklogOnly;
+  error: string | null;
+  status: LoadStatus;
+  timeGrain: VolumetricsTimeGrain;
+}) {
+  const title = "Backlog(Open)";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.points.length > 0;
+  const chartWidth = Math.max(
+    820,
+    plotWidth - 24,
+    data.points.length * (timeGrain === "monthly" ? 74 : 92)
+  );
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">Open ticket backlog at each period end.</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <ComposedChart
+                data={data.points}
+                width={chartWidth}
+                height={340}
+                margin={{ top: 34, right: 64, bottom: 82, left: 42 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="period_label"
+                  angle={-35}
+                  height={86}
+                  interval={0}
+                  textAnchor="end"
+                  tickMargin={12}
+                />
+                <YAxis hide />
+                <Tooltip />
+                <Legend />
                 <Line
-                  dataKey="backlog_open_count"
+                  dataKey="backlog_open"
                   dot={{ r: 3 }}
                   name="Backlog(Open)"
                   stroke={chartColors.backlog}
                   strokeWidth={2.5}
                   type="monotone"
-                  yAxisId="backlog"
-                />
-                {data.average_backlog_open !== null ? (
+                >
+                  <LabelList dataKey="backlog_open" position="top" fontSize={11} />
+                </Line>
+                {data.average_backlog !== null ? (
                   <ReferenceLine
-                    y={data.average_backlog_open}
-                    yAxisId="backlog"
+                    y={data.average_backlog}
                     stroke={chartColors.average}
                     strokeDasharray="6 4"
                     label={{
-                      value: `Avg backlog: ${formatNumber(data.average_backlog_open, 0)}`,
+                      value: `Avg backlog: ${formatNumber(data.average_backlog, 0)}`,
                       position: "insideTopRight",
                       fill: chartColors.average,
                       fontSize: 12,
@@ -807,6 +1007,120 @@ function CreatedResolvedBacklogChart({
                   />
                 ) : null}
               </ComposedChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+const createdPatternOptions: Array<{ value: CreatedPatternType; label: string }> = [
+  { value: "day_of_month", label: "Created by day of month" },
+  { value: "day_of_week", label: "Created by day of week" },
+  { value: "hour_weekdays", label: "Created by hour - weekdays" },
+  { value: "hour_weekends", label: "Created by hour - weekends" },
+];
+
+function CreatedPatternChart({
+  data,
+  error,
+  onPatternTypeChange,
+  patternType,
+  status,
+}: {
+  data: DashboardVolumetricsCreatedPattern;
+  error: string | null;
+  onPatternTypeChange: (value: CreatedPatternType) => void;
+  patternType: CreatedPatternType;
+  status: LoadStatus;
+}) {
+  const selectedOption =
+    createdPatternOptions.find((option) => option.value === patternType) ??
+    createdPatternOptions[0];
+  const title = selectedOption.label;
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.points.length > 0;
+  const chartWidth = Math.max(820, plotWidth - 24, data.points.length * 42);
+  const canCopy = status !== "loading" && hasRows;
+  const barColor =
+    patternType === "hour_weekdays" || patternType === "hour_weekends"
+      ? chartColors.patternAlt
+      : chartColors.pattern;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>Created Pattern</h3>
+          <p className="muted-text">Average created/opened tickets across the selected range.</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      <div className="segmented-control volumetrics-pattern-control" aria-label="Created pattern">
+        {createdPatternOptions.map((option) => (
+          <button
+            className={patternType === option.value ? "active" : ""}
+            key={option.value}
+            type="button"
+            onClick={() => onPatternTypeChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={data.points}
+                width={chartWidth}
+                height={330}
+                margin={{ top: 34, right: 42, bottom: 72, left: 36 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  angle={patternType === "day_of_week" ? 0 : -25}
+                  height={72}
+                  interval={0}
+                  textAnchor={patternType === "day_of_week" ? "middle" : "end"}
+                  tickMargin={12}
+                />
+                <YAxis hide />
+                <Tooltip />
+                <Bar
+                  dataKey="average_created"
+                  fill={barColor}
+                  name="Average Created"
+                  radius={[4, 4, 0, 0]}
+                >
+                  <LabelList
+                    dataKey="average_created"
+                    position="top"
+                    fontSize={11}
+                    formatter={(value) => formatNumber(Number(value ?? 0), 1)}
+                  />
+                </Bar>
+              </BarChart>
             </div>
           </div>
         </div>

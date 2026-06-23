@@ -190,6 +190,7 @@ class ApplicationsFilterValuesResponse(BaseModel):
     parent_application_name: list[str]
     application_owner: list[str]
     supported_by_vendor: list[str]
+    sap_non_sap: list[str]
     architecture_type: list[str]
     application_type: list[str]
     business_critical: list[str]
@@ -204,6 +205,7 @@ class ApplicationsFilters(BaseModel):
     parent_application_name: list[str] = Field(default_factory=list)
     application_owner: list[str] = Field(default_factory=list)
     supported_by_vendor: list[str] = Field(default_factory=list)
+    sap_non_sap: list[str] = Field(default_factory=list)
     architecture_type: list[str] = Field(default_factory=list)
     application_type: list[str] = Field(default_factory=list)
     business_critical: list[str] = Field(default_factory=list)
@@ -223,6 +225,7 @@ class ApplicationsFilterValueCountsResponse(BaseModel):
     parent_application_name: list[ApplicationFilterCountValue]
     application_owner: list[ApplicationFilterCountValue]
     supported_by_vendor: list[ApplicationFilterCountValue]
+    sap_non_sap: list[ApplicationFilterCountValue]
     architecture_type: list[ApplicationFilterCountValue]
     application_type: list[ApplicationFilterCountValue]
     business_critical: list[ApplicationFilterCountValue]
@@ -262,6 +265,7 @@ class ApplicationsListRow(BaseModel):
     business_service_ci_name: str
     parent_application_name: str
     assignment_group: str
+    sap_non_sap: str
     assignment_group_owner: str
     application_owner: str
     support_lead: str
@@ -314,6 +318,7 @@ class VolumetricsFilters(BaseModel):
     parent_application_name: list[str] = Field(default_factory=list)
     application_owner: list[str] = Field(default_factory=list)
     supported_by_vendor: list[str] = Field(default_factory=list)
+    sap_non_sap: list[str] = Field(default_factory=list)
 
 
 class VolumetricsRequest(BaseModel):
@@ -334,6 +339,7 @@ class VolumetricsFilterValuesResponse(BaseModel):
     parent_application_name: list[ApplicationFilterCountValue]
     application_owner: list[ApplicationFilterCountValue]
     supported_by_vendor: list[ApplicationFilterCountValue]
+    sap_non_sap: list[ApplicationFilterCountValue]
 
 
 class VolumetricsSummaryMetric(BaseModel):
@@ -373,3 +379,40 @@ class VolumetricsCreatedResolvedBacklogRow(BaseModel):
 class VolumetricsCreatedResolvedBacklogResponse(BaseModel):
     average_backlog_open: float | None
     rows: list[VolumetricsCreatedResolvedBacklogRow]
+
+
+class VolumetricsCreatedResolvedCanceledRow(PeriodMetricRow):
+    created_count: int
+    resolved_closed_count: int
+    canceled_closed_incomplete_count: int
+
+
+class VolumetricsCreatedResolvedCanceledResponse(BaseModel):
+    time_grain: str
+    points: list[VolumetricsCreatedResolvedCanceledRow]
+
+
+class VolumetricsBacklogRow(PeriodMetricRow):
+    backlog_open: int
+
+
+class VolumetricsBacklogResponse(BaseModel):
+    time_grain: str
+    average_backlog: float | None
+    points: list[VolumetricsBacklogRow]
+
+
+class VolumetricsCreatedPatternRequest(VolumetricsRequest):
+    pattern_type: str = "day_of_month"
+
+
+class VolumetricsCreatedPatternPoint(BaseModel):
+    label: str
+    average_created: float
+    total_created: int
+    denominator: int
+
+
+class VolumetricsCreatedPatternResponse(BaseModel):
+    pattern_type: str
+    points: list[VolumetricsCreatedPatternPoint]

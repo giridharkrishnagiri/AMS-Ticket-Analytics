@@ -28,7 +28,11 @@ from app.schemas.dashboard import (
     ReopenTrendRow,
     SlaTrendRow,
     TechnicalFunctionalBreakdownResponse,
+    VolumetricsBacklogResponse,
+    VolumetricsCreatedPatternRequest,
+    VolumetricsCreatedPatternResponse,
     VolumetricsCreatedResolvedBacklogResponse,
+    VolumetricsCreatedResolvedCanceledResponse,
     VolumetricsFilterValuesResponse,
     VolumetricsRequest,
     VolumetricsSummaryResponse,
@@ -54,7 +58,10 @@ from app.services.dashboard import (
     reopen_trend,
     sla_trend,
     technical_functional_breakdown,
+    volumetrics_backlog,
+    volumetrics_created_pattern,
     volumetrics_created_resolved_backlog,
+    volumetrics_created_resolved_cancelled,
     volumetrics_filter_value_counts,
     volumetrics_summary,
 )
@@ -227,6 +234,45 @@ def get_dashboard_volumetrics_created_resolved_backlog(
 ) -> dict[str, object]:
     try:
         return volumetrics_created_resolved_backlog(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/created-resolved-canceled",
+    response_model=VolumetricsCreatedResolvedCanceledResponse,
+)
+def get_dashboard_volumetrics_created_resolved_canceled(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_created_resolved_cancelled(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/volumetrics/backlog", response_model=VolumetricsBacklogResponse)
+def get_dashboard_volumetrics_backlog(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_backlog(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/created-pattern",
+    response_model=VolumetricsCreatedPatternResponse,
+)
+def get_dashboard_volumetrics_created_pattern(
+    request: VolumetricsCreatedPatternRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_created_pattern(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -83,6 +83,7 @@ class Ticket(Base):
         Index("ix_tickets_project_functional_track", "project_id", "functional_track"),
         Index("ix_tickets_project_ams_owner", "project_id", "ams_owner"),
         Index("ix_tickets_project_supported_by_vendor", "project_id", "supported_by_vendor"),
+        Index("ix_tickets_project_sap_non_sap", "project_id", "sap_non_sap"),
         Index("ix_tickets_project_vendor", "project_id", "vendor"),
         Index("ix_tickets_project_derived_vendor", "project_id", "derived_vendor"),
         Index("ix_tickets_project_type_sla_breached", "project_id", "ticket_type", "sla_breached"),
@@ -193,6 +194,7 @@ class Ticket(Base):
     ams_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     supported_by_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
     assignment_group_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
     derived_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
 

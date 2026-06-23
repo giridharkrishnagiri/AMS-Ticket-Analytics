@@ -42,6 +42,7 @@ DIRECT_APPLICATION_FIELDS = {
     "functional_track": ApplicationInventoryItem.functional_track,
     "ams_owner": ApplicationInventoryItem.ams_owner,
     "supported_by_vendor": ApplicationInventoryItem.supported_by_vendor,
+    "sap_non_sap": ApplicationInventoryItem.sap_non_sap,
 }
 
 CMDB_APPLICATION_FIELDS = {
@@ -80,6 +81,7 @@ APPLICATION_LIST_FIELDS = (
     "business_service_ci_name",
     "parent_application_name",
     "assignment_group",
+    "sap_non_sap",
     "assignment_group_owner",
     "application_owner",
     "support_lead",
@@ -113,6 +115,7 @@ SINGLE_APPLICATION_FILTER_FIELDS = {
     "parent_application_name": "parent_application_name",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
+    "sap_non_sap": "sap_non_sap",
     "architecture_type": "architecture_type",
     "application_type": "app_type",
     "business_critical": "biz_criticality",
@@ -141,6 +144,12 @@ APPLICATION_FILTER_CUSTOM_SORTS = {
 VOLUMETRICS_SCOPES = {"in_scope", "out_of_scope", "all"}
 VOLUMETRICS_TICKET_TYPES = {"all", "incident", "sc_task"}
 VOLUMETRICS_TIME_GRAINS = {"monthly", "weekly"}
+VOLUMETRICS_CREATED_PATTERN_TYPES = {
+    "day_of_month",
+    "day_of_week",
+    "hour_weekdays",
+    "hour_weekends",
+}
 VOLUMETRICS_SCOPE_LABELS = {
     "all": "All",
     "in_scope": "In-scope",
@@ -167,6 +176,7 @@ SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "parent_application_name": "parent_application_name",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
+    "sap_non_sap": "sap_non_sap",
 }
 
 COMBINED_VOLUMETRICS_FILTER_FIELDS = {
@@ -634,6 +644,7 @@ def applications_filter_values(db: Session, project_id: UUID) -> dict[str, Any]:
             project_id,
             "supported_by_vendor",
         ),
+        "sap_non_sap": distinct_application_filter_values(db, project_id, "sap_non_sap"),
         "architecture_type": distinct_application_filter_values(
             db,
             project_id,
@@ -854,6 +865,12 @@ def applications_filter_value_counts(db: Session, request: Any) -> dict[str, Any
             request,
             "supported_by_vendor",
             "supported_by_vendor",
+        ),
+        "sap_non_sap": application_filter_value_count_rows(
+            db,
+            request,
+            "sap_non_sap",
+            "sap_non_sap",
         ),
         "architecture_type": application_filter_value_count_rows(
             db,
@@ -1098,6 +1115,7 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         model.parent_application_name.label("parent_application_name"),
         model.application_owner.label("application_owner"),
         volumetrics_supported_vendor_expression(model).label("supported_by_vendor"),
+        model.sap_non_sap.label("sap_non_sap"),
         model.response_sla_breached.label("response_sla_breached"),
         model.resolution_sla_breached.label("resolution_sla_breached"),
     ).where(model.project_id == project_id)
@@ -1417,6 +1435,12 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
             request,
             "supported_by_vendor",
             "supported_by_vendor",
+        ),
+        "sap_non_sap": volumetrics_filter_value_count_rows(
+            db,
+            request,
+            "sap_non_sap",
+            "sap_non_sap",
         ),
     }
 
@@ -1781,6 +1805,212 @@ def volumetrics_created_resolved_backlog(db: Session, request: Any) -> dict[str,
         for row in rows
     ]
     return {"average_backlog_open": average_backlog, "rows": chart_rows}
+
+
+def volumetrics_created_resolved_cancelled(db: Session, request: Any) -> dict[str, Any]:
+    rows = volumetrics_period_metrics(db, request, include_backlog=False, include_sla=False)
+    return {
+        "time_grain": normalize_volumetrics_time_grain(request.time_grain),
+        "points": [
+            {
+                "period_start": row["period_start"],
+                "period_end": row["period_end"],
+                "period_label": row["period_label"],
+                "created_count": row["created_count"],
+                "resolved_closed_count": row["resolved_closed_count"],
+                "canceled_closed_incomplete_count": row["cancelled_count"],
+            }
+            for row in rows
+        ],
+    }
+
+
+def volumetrics_backlog(db: Session, request: Any) -> dict[str, Any]:
+    rows = volumetrics_period_metrics(
+        db,
+        request,
+        include_cancelled=False,
+        include_sla=False,
+    )
+    backlog_values = [float(row["backlog_open_count"]) for row in rows]
+    return {
+        "time_grain": normalize_volumetrics_time_grain(request.time_grain),
+        "average_backlog": average(backlog_values),
+        "points": [
+            {
+                "period_start": row["period_start"],
+                "period_end": row["period_end"],
+                "period_label": row["period_label"],
+                "backlog_open": row["backlog_open_count"],
+            }
+            for row in rows
+        ],
+    }
+
+
+def normalize_volumetrics_created_pattern_type(value: str | None) -> str:
+    normalized = (value or "day_of_month").strip().lower()
+    if normalized not in VOLUMETRICS_CREATED_PATTERN_TYPES:
+        raise ValueError(
+            "Created pattern type must be day_of_month, day_of_week, "
+            "hour_weekdays, or hour_weekends"
+        )
+    return normalized
+
+
+def date_counts_by_day_of_month(start_date: date, end_date: date) -> dict[int, int]:
+    counts = {day: 0 for day in range(1, 31)}
+    current = start_date
+    while current <= end_date:
+        if current.day <= 30:
+            counts[current.day] += 1
+        current += timedelta(days=1)
+    return counts
+
+
+def date_counts_by_weekday(start_date: date, end_date: date) -> dict[int, int]:
+    counts = {weekday: 0 for weekday in range(7)}
+    current = start_date
+    while current <= end_date:
+        counts[current.weekday()] += 1
+        current += timedelta(days=1)
+    return counts
+
+
+def day_count_for_week_part(start_date: date, end_date: date, *, weekdays: bool) -> int:
+    allowed_weekdays = {0, 1, 2, 3, 4} if weekdays else {5, 6}
+    current = start_date
+    count = 0
+    while current <= end_date:
+        if current.weekday() in allowed_weekdays:
+            count += 1
+        current += timedelta(days=1)
+    return count
+
+
+def volumetrics_created_counts_by_bucket(
+    db: Session,
+    request: Any,
+    source: Any,
+    bucket_expression: Any,
+    extra_conditions: list[Any] | None = None,
+) -> dict[int, int]:
+    conditions = volumetrics_base_conditions(source, request)
+    if extra_conditions:
+        conditions.extend(extra_conditions)
+
+    statement = (
+        select(
+            bucket_expression.label("bucket"),
+            func.count(source.c.id).label("created_count"),
+        )
+        .select_from(source)
+        .where(*conditions)
+        .group_by(bucket_expression)
+        .order_by(bucket_expression)
+    )
+    return {
+        int(row["bucket"]): int(row["created_count"] or 0)
+        for row in db.execute(statement).mappings().all()
+        if row["bucket"] is not None
+    }
+
+
+def volumetrics_created_pattern(db: Session, request: Any) -> dict[str, Any]:
+    pattern_type = normalize_volumetrics_created_pattern_type(request.pattern_type)
+    start_date = normalize_dashboard_datetime(request.start_datetime).date()
+    end_date = normalize_dashboard_datetime(request.end_datetime).date()
+    source = volumetrics_source_subquery(request)
+
+    if pattern_type == "day_of_month":
+        day_expression = cast(func.extract("day", source.c.created_at), Float)
+        counts = volumetrics_created_counts_by_bucket(
+            db,
+            request,
+            source,
+            day_expression,
+            [day_expression <= 30],
+        )
+        denominators = date_counts_by_day_of_month(start_date, end_date)
+        points = []
+        for day in range(1, 31):
+            total_created = counts.get(day, 0)
+            denominator = denominators.get(day, 0)
+            points.append(
+                {
+                    "label": str(day),
+                    "average_created": total_created / denominator if denominator else 0,
+                    "total_created": total_created,
+                    "denominator": denominator,
+                },
+            )
+        return {"pattern_type": pattern_type, "points": points}
+
+    if pattern_type == "day_of_week":
+        # PostgreSQL EXTRACT(DOW) returns Sunday as 0. Convert to Monday-first labels.
+        dow_expression = cast(func.extract("dow", source.c.created_at), Float)
+        counts = volumetrics_created_counts_by_bucket(db, request, source, dow_expression)
+        denominators = date_counts_by_weekday(start_date, end_date)
+        labels = (
+            ("Mon", 1, 0),
+            ("Tue", 2, 1),
+            ("Wed", 3, 2),
+            ("Thu", 4, 3),
+            ("Fri", 5, 4),
+            ("Sat", 6, 5),
+            ("Sun", 0, 6),
+        )
+        return {
+            "pattern_type": pattern_type,
+            "points": [
+                {
+                    "label": label,
+                    "average_created": (
+                        counts.get(postgres_dow, 0) / denominators.get(python_weekday, 0)
+                        if denominators.get(python_weekday, 0)
+                        else 0
+                    ),
+                    "total_created": counts.get(postgres_dow, 0),
+                    "denominator": denominators.get(python_weekday, 0),
+                }
+                for label, postgres_dow, python_weekday in labels
+            ],
+        }
+
+    hour_expression = cast(func.extract("hour", source.c.created_at), Float)
+    dow_expression = cast(func.extract("dow", source.c.created_at), Float)
+    include_weekdays = pattern_type == "hour_weekdays"
+    day_denominator = day_count_for_week_part(
+        start_date,
+        end_date,
+        weekdays=include_weekdays,
+    )
+    dow_condition = (
+        dow_expression.between(1, 5)
+        if include_weekdays
+        else dow_expression.in_((0, 6))
+    )
+    counts = volumetrics_created_counts_by_bucket(
+        db,
+        request,
+        source,
+        hour_expression,
+        [dow_condition],
+    )
+    return {
+        "pattern_type": pattern_type,
+        "points": [
+            {
+                "label": f"{hour:02d}",
+                "average_created": counts.get(hour, 0) / day_denominator
+                if day_denominator
+                else 0,
+                "total_created": counts.get(hour, 0),
+                "denominator": day_denominator,
+            }
+            for hour in range(24)
+        ],
+    }
 
 
 def date_filter_basis_expression(filters: DashboardFilters) -> Any:

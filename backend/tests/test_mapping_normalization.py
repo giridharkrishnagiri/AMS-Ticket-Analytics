@@ -7,6 +7,7 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentOutOfScopeTicket,
     Client,
     IngestionJob,
     Project,
@@ -771,6 +772,65 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
         assert ticket.sla_breached is False
         assert ticket.business_duration_seconds == 172800
         assert ticket.reassignment_count == 3
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_apply_mapping_derives_sap_non_sap_for_in_scope_and_out_of_scope_rows() -> None:
+    rows = [
+        {
+            "number": "INC-SAP",
+            "short_description": "SAP application issue",
+            "state": "Resolved",
+            "priority": "High",
+            "assignment_group": "IT-SAP-Mapping",
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
+            "sys_created_on": "2026-06-03 09:15:00",
+            "resolved_at": "2026-06-03 10:30:00",
+        },
+        {
+            "number": "INC-NSA-OOS",
+            "short_description": "Non-SAP unmapped issue",
+            "state": "Open",
+            "priority": "Low",
+            "assignment_group": "it-nsa-unmapped",
+            "business_service": "Unknown Service",
+            "sys_created_on": "2026-06-04 09:15:00",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(rows)
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "priority": "priority",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+        "resolved_at": "resolved_at",
+    }
+
+    try:
+        add_application_inventory_scope(
+            db,
+            project_id,
+            assignment_group="IT-SAP-Mapping",
+        )
+        db.commit()
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        in_scope_ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "INC-SAP"))
+        out_of_scope_ticket = db.scalar(
+            select(AssessmentOutOfScopeTicket).where(
+                AssessmentOutOfScopeTicket.ticket_number == "INC-NSA-OOS",
+            ),
+        )
+
+        assert result.normalized_ticket_count == 1
+        assert result.out_of_scope_ticket_count == 1
+        assert in_scope_ticket is not None
+        assert in_scope_ticket.sap_non_sap == "SAP"
+        assert out_of_scope_ticket is not None
+        assert out_of_scope_ticket.sap_non_sap == "Non-SAP"
     finally:
         cleanup_client(db, client_id)
 

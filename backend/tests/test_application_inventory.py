@@ -152,12 +152,12 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
                 "Support group's owner,Application Owner,Business Service CI Name,"
                 "Support Lead (Managed by),Functional Track,AMS Owner,Supported By Vendor,"
                 "Active,Application family,Business criticality,Total USD$",
-                " APM-1 , Parent App , AMS Claims , Group Owner , Owner One , "
+                " APM-1 , Parent App , IT-SAP-Claims , Group Owner , Owner One , "
                 "Claims Service , Lead One , Claims , AMS Owner , Vendor A , true , "
                 "Claims Family , High , #N/A",
-                "APM-1,Parent App,AMS Claims,Group Owner,Owner Two,Claims Service,"
+                "APM-1,Parent App,IT-SAP-Claims,Group Owner,Owner Two,Claims Service,"
                 "Lead Two,Claims,AMS Owner,Vendor A,true,Claims Family,#N/A,#N/A",
-                "APM-2,Parent App,AMS Claims,Group Owner,Owner Missing,,Lead,Claims,"
+                "APM-2,Parent App,IT-SAP-Claims,Group Owner,Owner Missing,,Lead,Claims,"
                 "AMS Owner,Vendor A,true,Family,Low,#N/A",
             ]
         )
@@ -186,6 +186,8 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
         )
         assert item is not None
         assert item.application_owner == "Owner Two"
+        assert item.assignment_group == "IT-SAP-Claims"
+        assert item.sap_non_sap == "SAP"
         assert item.business_service_ci_name == "Claims Service"
         assert item.active is True
         assert item.cmdb_payload == {

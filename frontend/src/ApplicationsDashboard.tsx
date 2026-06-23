@@ -53,6 +53,7 @@ const emptyFilters: DashboardApplicationsFilters = {
   parent_application_name: [],
   application_owner: [],
   supported_by_vendor: [],
+  sap_non_sap: [],
   architecture_type: [],
   application_type: [],
   business_critical: [],
@@ -67,6 +68,7 @@ const emptyFilterValues: DashboardApplicationsFilterValues = {
   parent_application_name: [],
   application_owner: [],
   supported_by_vendor: [],
+  sap_non_sap: [],
   architecture_type: [],
   application_type: [],
   business_critical: [],
@@ -110,6 +112,7 @@ const tableColumns: Array<{ key: TableColumnKey; label: string }> = [
   { key: "business_service_ci_name", label: "Business Service CI Name (Application)" },
   { key: "parent_application_name", label: "Parent Business Application" },
   { key: "assignment_group", label: "Assignment Group" },
+  { key: "sap_non_sap", label: "SAP / Non-SAP" },
   { key: "assignment_group_owner", label: "Group Owner" },
   { key: "application_owner", label: "App Owner" },
   { key: "support_lead", label: "Support Lead" },
@@ -341,6 +344,7 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
       parent_application_name: singleFilterOptions(filterValues.data.parent_application_name),
       application_owner: singleFilterOptions(filterValues.data.application_owner),
       supported_by_vendor: singleFilterOptions(filterValues.data.supported_by_vendor),
+      sap_non_sap: singleFilterOptions(filterValues.data.sap_non_sap),
       architecture_type: singleFilterOptions(filterValues.data.architecture_type),
       application_type: singleFilterOptions(filterValues.data.application_type),
       business_critical: singleFilterOptions(filterValues.data.business_critical),
@@ -506,6 +510,12 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
             options={filterOptions.functional_track_ams_owner}
             selectedValues={filters.functional_track_ams_owner}
             onChange={(values) => updateFilter("functional_track_ams_owner", values)}
+          />
+          <ExcelMultiSelectFilter
+            label="SAP / Non-SAP"
+            options={filterOptions.sap_non_sap}
+            selectedValues={filters.sap_non_sap}
+            onChange={(values) => updateFilter("sap_non_sap", values)}
           />
           <ExcelMultiSelectFilter
             label="Assignment Group - Support Group Owner"

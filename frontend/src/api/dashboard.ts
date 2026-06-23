@@ -206,6 +206,7 @@ export type DashboardApplicationsFilterValues = {
   parent_application_name: ApplicationFilterValue[];
   application_owner: ApplicationFilterValue[];
   supported_by_vendor: ApplicationFilterValue[];
+  sap_non_sap: ApplicationFilterValue[];
   architecture_type: ApplicationFilterValue[];
   application_type: ApplicationFilterValue[];
   business_critical: ApplicationFilterValue[];
@@ -220,6 +221,7 @@ export type DashboardApplicationsFilters = {
   parent_application_name: string[];
   application_owner: string[];
   supported_by_vendor: string[];
+  sap_non_sap: string[];
   architecture_type: string[];
   application_type: string[];
   business_critical: string[];
@@ -264,6 +266,7 @@ export type DashboardApplicationRow = {
   business_service_ci_name: string;
   parent_application_name: string;
   assignment_group: string;
+  sap_non_sap: string;
   assignment_group_owner: string;
   application_owner: string;
   support_lead: string;
@@ -320,6 +323,7 @@ export type DashboardVolumetricsFilters = {
   parent_application_name: string[];
   application_owner: string[];
   supported_by_vendor: string[];
+  sap_non_sap: string[];
 };
 
 export type DashboardVolumetricsRequest = {
@@ -340,6 +344,7 @@ export type DashboardVolumetricsFilterValues = {
   parent_application_name: ApplicationFilterValue[];
   application_owner: ApplicationFilterValue[];
   supported_by_vendor: ApplicationFilterValue[];
+  sap_non_sap: ApplicationFilterValue[];
 };
 
 export type DashboardVolumetricsSummaryMetric = {
@@ -376,6 +381,45 @@ export type DashboardVolumetricsBacklogRow = PeriodMetricRow & {
 export type DashboardVolumetricsBacklog = {
   average_backlog_open: number | null;
   rows: DashboardVolumetricsBacklogRow[];
+};
+
+export type DashboardVolumetricsCreatedResolvedCanceledRow = PeriodMetricRow & {
+  created_count: number;
+  resolved_closed_count: number;
+  canceled_closed_incomplete_count: number;
+};
+
+export type DashboardVolumetricsCreatedResolvedCanceled = {
+  time_grain: VolumetricsTimeGrain;
+  points: DashboardVolumetricsCreatedResolvedCanceledRow[];
+};
+
+export type DashboardVolumetricsBacklogPoint = PeriodMetricRow & {
+  backlog_open: number;
+};
+
+export type DashboardVolumetricsBacklogOnly = {
+  time_grain: VolumetricsTimeGrain;
+  average_backlog: number | null;
+  points: DashboardVolumetricsBacklogPoint[];
+};
+
+export type CreatedPatternType =
+  | "day_of_month"
+  | "day_of_week"
+  | "hour_weekdays"
+  | "hour_weekends";
+
+export type DashboardVolumetricsCreatedPatternPoint = {
+  label: string;
+  average_created: number;
+  total_created: number;
+  denominator: number;
+};
+
+export type DashboardVolumetricsCreatedPattern = {
+  pattern_type: CreatedPatternType;
+  points: DashboardVolumetricsCreatedPatternPoint[];
 };
 
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
@@ -516,6 +560,36 @@ export function getDashboardVolumetricsCreatedResolvedBacklog(
   return postVolumetricsRequest<DashboardVolumetricsBacklog>(
     "/dashboard/volumetrics/created-resolved-backlog",
     input
+  );
+}
+
+export function getDashboardVolumetricsCreatedResolvedCanceled(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsCreatedResolvedCanceled> {
+  return postVolumetricsRequest<DashboardVolumetricsCreatedResolvedCanceled>(
+    "/dashboard/volumetrics/created-resolved-canceled",
+    input
+  );
+}
+
+export function getDashboardVolumetricsBacklog(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsBacklogOnly> {
+  return postVolumetricsRequest<DashboardVolumetricsBacklogOnly>(
+    "/dashboard/volumetrics/backlog",
+    input
+  );
+}
+
+export function getDashboardVolumetricsCreatedPattern(
+  input: DashboardVolumetricsRequest,
+  patternType: CreatedPatternType
+): Promise<DashboardVolumetricsCreatedPattern> {
+  return postVolumetricsRequest<DashboardVolumetricsCreatedPattern>(
+    "/dashboard/volumetrics/created-pattern",
+    { ...input, pattern_type: patternType } as DashboardVolumetricsRequest & {
+      pattern_type: CreatedPatternType;
+    }
   );
 }
 

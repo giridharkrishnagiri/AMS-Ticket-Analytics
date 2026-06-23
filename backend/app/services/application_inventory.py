@@ -24,6 +24,7 @@ from app.services.ingestion import (
     row_has_any_value,
 )
 from app.services.mapping import parse_bool_value, text_or_none
+from app.services.sap_classification import derive_sap_non_sap
 
 MAX_MESSAGE_SAMPLES = 50
 TOP_UNMATCHED_LIMIT = 25
@@ -218,6 +219,7 @@ def clean_inventory_values(
     parsed_row: ParsedSourceRow,
     result: InventoryUploadResult,
 ) -> dict[str, Any] | None:
+    assignment_group = text_or_none(get_raw_value(parsed_row.raw_data, "assignment_group"))
     values: dict[str, Any] = {
         "project_id": project_id,
         "application_number_apm": text_or_none(
@@ -226,7 +228,7 @@ def clean_inventory_values(
         "parent_application_name": text_or_none(
             get_raw_value(parsed_row.raw_data, "parent_application_name")
         ),
-        "assignment_group": text_or_none(get_raw_value(parsed_row.raw_data, "assignment_group")),
+        "assignment_group": assignment_group,
         "assignment_group_owner": text_or_none(
             get_raw_value(parsed_row.raw_data, "assignment_group_owner")
         ),
@@ -242,6 +244,7 @@ def clean_inventory_values(
         "supported_by_vendor": text_or_none(
             get_raw_value(parsed_row.raw_data, "supported_by_vendor")
         ),
+        "sap_non_sap": derive_sap_non_sap(assignment_group),
         "active": parse_active(
             get_raw_value(parsed_row.raw_data, "active"),
             parsed_row.row_number,
@@ -488,6 +491,7 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             ams_owner=None,
             supported_by_vendor=None,
             assignment_group_owner=None,
+            sap_non_sap=None,
             derived_vendor=None,
         )
     )
@@ -575,6 +579,11 @@ def update_tickets_from_inventory(
             ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
             assignment_group_owner = candidates.assignment_group_owner,
+            sap_non_sap = CASE
+                WHEN upper(btrim(coalesce(t.assignment_group, ''))) LIKE 'IT-SAP%' THEN 'SAP'
+                WHEN upper(btrim(coalesce(t.assignment_group, ''))) LIKE 'IT-NSA%' THEN 'Non-SAP'
+                ELSE NULL
+            END,
             derived_vendor = candidates.supported_by_vendor
         FROM candidates
         WHERE candidates.row_rank = 1

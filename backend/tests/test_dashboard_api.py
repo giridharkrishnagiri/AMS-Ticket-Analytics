@@ -20,6 +20,7 @@ from app.models import (
     UploadedFile,
 )
 from app.services import dashboard as dashboard_service
+from app.services.sap_classification import derive_sap_non_sap
 
 
 def dt(value: str) -> datetime:
@@ -113,7 +114,11 @@ def add_ticket(
     is_system_created: bool | None = None,
     is_technical: bool | None = None,
     technical_functional_type: str | None = None,
+    sap_non_sap: str | None = None,
 ) -> Ticket:
+    resolved_sap_non_sap = (
+        sap_non_sap if sap_non_sap is not None else derive_sap_non_sap(assignment_group)
+    )
     ticket = Ticket(
         project_id=project_id,
         upload_batch_id=upload_batch_id,
@@ -134,6 +139,7 @@ def add_ticket(
         state=state,
         priority=priority,
         assignment_group=assignment_group,
+        sap_non_sap=resolved_sap_non_sap,
         application=application,
         sla_breached=sla_breached,
         reopen_count=reopen_count,
@@ -171,6 +177,7 @@ def add_inventory_item(
         functional_track=functional_track,
         ams_owner=ams_owner,
         assignment_group=assignment_group,
+        sap_non_sap=derive_sap_non_sap(assignment_group),
         application_owner=application_owner,
         parent_application_name=parent_application_name,
         active=active,
@@ -363,7 +370,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             supported_by_vendor="Vendor A",
             functional_track="Data & Analytics",
             ams_owner="Seshu Avala",
-            assignment_group="Group A",
+            assignment_group="IT-SAP-Group A",
             application_owner="App Owner A",
             parent_application_name="Parent A",
             cmdb_payload={
@@ -398,7 +405,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             supported_by_vendor="",
             functional_track="Data & Analytics",
             ams_owner="Seshu Avala",
-            assignment_group="Group B",
+            assignment_group="IT-NSA-Group B",
             application_owner="App Owner B",
             parent_application_name="Parent A",
             cmdb_payload={
@@ -483,6 +490,14 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
                     "limit": 10,
                 },
             )
+            sap_filtered_response = client.post(
+                "/api/dashboard/applications/list",
+                json={
+                    **request_body,
+                    "filters": {"sap_non_sap": ["SAP"]},
+                    "limit": 10,
+                },
+            )
             filtered_summary_response = client.post(
                 "/api/dashboard/applications/summary",
                 json={
@@ -516,10 +531,11 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             "Run - Another Owner",
         ]
         assert [row["label"] for row in filter_payload["assignment_group_owner"]] == [
-            "Group A - (blank)",
-            "Group B - (blank)",
             "Group C - (blank)",
+            "IT-NSA-Group B - (blank)",
+            "IT-SAP-Group A - (blank)",
         ]
+        assert filter_payload["sap_non_sap"] == ["(blank)", "Non-SAP", "SAP"]
         assert "(blank)" in filter_payload["supported_by_vendor"]
         assert filter_payload["lifecycle_status_stage"] == [
             {
@@ -553,6 +569,11 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             {"label": "(blank)", "value": "(blank)", "count": 1},
             {"label": "Vendor A", "value": "Vendor A", "count": 1},
             {"label": "Vendor C", "value": "Vendor C", "count": 1},
+        ]
+        assert filter_count_payload["sap_non_sap"] == [
+            {"label": "(blank)", "value": "(blank)", "count": 1},
+            {"label": "Non-SAP", "value": "Non-SAP", "count": 1},
+            {"label": "SAP", "value": "SAP", "count": 1},
         ]
         assert filtered_filter_count_response.status_code == 200
         filtered_filter_counts = filtered_filter_count_response.json()
@@ -597,12 +618,17 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         assert list_payload["total"] == 3
         assert len(list_payload["rows"]) == 1
         assert list_payload["rows"][0]["business_service_ci_name"] == "Service C"
+        assert list_payload["rows"][0]["sap_non_sap"] == "(blank)"
         assert "cmdb_payload" not in list_payload["rows"][0]
         assert list_payload["rows"][0]["app_type"] == "Business"
 
         assert blank_vendor_response.status_code == 200
         blank_vendor_rows = blank_vendor_response.json()["rows"]
         assert [row["business_service_ci_name"] for row in blank_vendor_rows] == ["Service B"]
+
+        assert sap_filtered_response.status_code == 200
+        sap_rows = sap_filtered_response.json()["rows"]
+        assert [row["business_service_ci_name"] for row in sap_rows] == ["Service A"]
 
         assert chart_response.status_code == 200
         chart_payload = chart_response.json()
@@ -775,10 +801,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             dt("2026-01-10T00:00:00"),
             state="Resolved",
             resolved_at=dt("2026-02-03T00:00:00"),
+            assignment_group="IT-SAP-Group A",
         )
         incident.functional_track = "Data"
         incident.ams_owner = "Owner A"
-        incident.assignment_group = "Group A"
         incident.support_lead = "Lead A"
         incident.parent_application_name = "Parent A"
         incident.application_owner = "App Owner A"
@@ -796,10 +822,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             dt("2026-01-20T00:00:00"),
             state="Closed",
             closed_at=dt("2026-01-25T00:00:00"),
+            assignment_group="IT-SAP-Group A",
         )
         sc_task.functional_track = "Data"
         sc_task.ams_owner = "Owner A"
-        sc_task.assignment_group = "Group A"
         sc_task.support_lead = "Lead A"
         sc_task.parent_application_name = "Parent A"
         sc_task.application_owner = "App Owner A"
@@ -815,10 +841,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             dt("2026-01-15T00:00:00"),
             state="Cancelled",
             closed_at=dt("2026-01-18T00:00:00"),
+            assignment_group="IT-NSA-Group B",
         )
         cancelled.functional_track = "Run"
         cancelled.ams_owner = "Owner B"
-        cancelled.assignment_group = "Group B"
         cancelled.support_lead = "Lead B"
         cancelled.parent_application_name = "Parent B"
         cancelled.application_owner = "App Owner B"
@@ -833,6 +859,7 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                 created_at=dt("2026-01-05T00:00:00"),
                 state="In Progress",
                 assignment_group="Group OOS",
+                sap_non_sap=None,
                 support_lead="Lead OOS",
                 functional_track="Out",
                 ams_owner="Owner OOS",
@@ -865,6 +892,30 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                 "/api/dashboard/volumetrics/created-resolved-backlog",
                 json=request_body,
             )
+            created_resolved_cancelled_response = client.post(
+                "/api/dashboard/volumetrics/created-resolved-canceled",
+                json=request_body,
+            )
+            backlog_response = client.post(
+                "/api/dashboard/volumetrics/backlog",
+                json=request_body,
+            )
+            day_of_month_pattern_response = client.post(
+                "/api/dashboard/volumetrics/created-pattern",
+                json={**request_body, "pattern_type": "day_of_month"},
+            )
+            day_of_week_pattern_response = client.post(
+                "/api/dashboard/volumetrics/created-pattern",
+                json={**request_body, "pattern_type": "day_of_week"},
+            )
+            weekday_hour_pattern_response = client.post(
+                "/api/dashboard/volumetrics/created-pattern",
+                json={**request_body, "pattern_type": "hour_weekdays"},
+            )
+            weekend_hour_pattern_response = client.post(
+                "/api/dashboard/volumetrics/created-pattern",
+                json={**request_body, "pattern_type": "hour_weekends"},
+            )
             sc_task_summary_response = client.post(
                 "/api/dashboard/volumetrics/summary",
                 json={**request_body, "ticket_type": "sc_task"},
@@ -878,6 +929,13 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                 json={
                     **request_body,
                     "filters": {"supported_by_vendor": ["Vendor A"]},
+                },
+            )
+            sap_filtered_chart_response = client.post(
+                "/api/dashboard/volumetrics/created-resolved-canceled",
+                json={
+                    **request_body,
+                    "filters": {"sap_non_sap": ["SAP"]},
                 },
             )
 
@@ -903,6 +961,54 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         assert chart_payload["rows"][0]["backlog_open_count"] == 1
         assert chart_payload["rows"][1]["resolved_closed_count"] == 1
         assert chart_payload["rows"][1]["backlog_open_count"] == 0
+
+        assert created_resolved_cancelled_response.status_code == 200
+        created_resolved_cancelled_payload = created_resolved_cancelled_response.json()
+        assert "average_backlog_open" not in created_resolved_cancelled_payload
+        assert "backlog_open_count" not in created_resolved_cancelled_payload["points"][0]
+        assert created_resolved_cancelled_payload["points"][0]["created_count"] == 3
+        assert created_resolved_cancelled_payload["points"][0]["resolved_closed_count"] == 1
+        assert (
+            created_resolved_cancelled_payload["points"][0][
+                "canceled_closed_incomplete_count"
+            ]
+            == 1
+        )
+
+        assert backlog_response.status_code == 200
+        backlog_payload = backlog_response.json()
+        assert backlog_payload["average_backlog"] == 0.5
+        assert [point["backlog_open"] for point in backlog_payload["points"]] == [1, 0]
+
+        assert day_of_month_pattern_response.status_code == 200
+        day_of_month_points = day_of_month_pattern_response.json()["points"]
+        assert [point["label"] for point in day_of_month_points] == [
+            str(day) for day in range(1, 31)
+        ]
+        assert "31" not in {point["label"] for point in day_of_month_points}
+        assert day_of_month_points[9]["total_created"] == 1
+        assert day_of_month_points[14]["total_created"] == 1
+        assert day_of_month_points[19]["total_created"] == 1
+
+        assert day_of_week_pattern_response.status_code == 200
+        assert [point["label"] for point in day_of_week_pattern_response.json()["points"]] == [
+            "Mon",
+            "Tue",
+            "Wed",
+            "Thu",
+            "Fri",
+            "Sat",
+            "Sun",
+        ]
+
+        assert weekday_hour_pattern_response.status_code == 200
+        assert [point["label"] for point in weekday_hour_pattern_response.json()["points"]] == [
+            f"{hour:02d}" for hour in range(24)
+        ]
+        assert weekend_hour_pattern_response.status_code == 200
+        assert [point["label"] for point in weekend_hour_pattern_response.json()["points"]] == [
+            f"{hour:02d}" for hour in range(24)
+        ]
 
         assert sc_task_summary_response.status_code == 200
         sc_task_summary = sc_task_summary_response.json()
@@ -933,15 +1039,28 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             row["label"]: row["count"]
             for row in filter_values["assignment_group_support_lead"]
         } == {
-            "Group A - Lead A": 2,
-            "Group B - Lead B": 1,
             "Group OOS - Lead OOS": 1,
+            "IT-NSA-Group B - Lead B": 1,
+            "IT-SAP-Group A - Lead A": 2,
+        }
+        assert {
+            row["label"]: row["count"] for row in filter_values["sap_non_sap"]
+        } == {
+            "(blank)": 1,
+            "Non-SAP": 1,
+            "SAP": 2,
         }
 
         assert filtered_summary_response.status_code == 200
         filtered_summary = filtered_summary_response.json()
         assert filtered_summary["created"]["total"] == 2
         assert filtered_summary["resolved_closed"]["total"] == 2
+
+        assert sap_filtered_chart_response.status_code == 200
+        sap_points = sap_filtered_chart_response.json()["points"]
+        assert sap_points[0]["created_count"] == 2
+        assert sap_points[0]["resolved_closed_count"] == 1
+        assert sap_points[0]["canceled_closed_incomplete_count"] == 0
     finally:
         cleanup_client(db, client_id)
 
@@ -1016,6 +1135,18 @@ def test_volumetrics_sc_task_closed_incomplete_counts_as_cancelled() -> None:
                     "filters": {},
                 },
             )
+            chart_response = client.post(
+                "/api/dashboard/volumetrics/created-resolved-canceled",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "in_scope",
+                    "ticket_type": "sc_task",
+                    "time_grain": "monthly",
+                    "start_datetime": "2026-01-01T00:00:00+00:00",
+                    "end_datetime": "2026-01-31T23:59:59+00:00",
+                    "filters": {},
+                },
+            )
 
         assert response.status_code == 200
         summary = response.json()
@@ -1025,6 +1156,10 @@ def test_volumetrics_sc_task_closed_incomplete_counts_as_cancelled() -> None:
         assert summary["cancelled"]["cancelled_pct_of_resolved_cancelled"] == 100
         assert summary["response_sla"]["average_adherence_pct"] is None
         assert summary["resolution_sla"]["average_adherence_pct"] is None
+        assert chart_response.status_code == 200
+        chart_point = chart_response.json()["points"][0]
+        assert chart_point["resolved_closed_count"] == 0
+        assert chart_point["canceled_closed_incomplete_count"] == 1
     finally:
         cleanup_client(db, client_id)
 
