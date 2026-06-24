@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
   CartesianGrid,
   ComposedChart,
+  Customized,
   LabelList,
   Legend,
   Line,
@@ -17,6 +18,7 @@ import {
   getDashboardVolumetricsBacklog,
   getDashboardVolumetricsCreatedPattern,
   getDashboardVolumetricsCreatedResolvedCanceled,
+  getDashboardVolumetricsDataRange,
   getDashboardVolumetricsFilterValues,
   getDashboardVolumetricsSummary,
 } from "./api/dashboard";
@@ -25,6 +27,7 @@ import type {
   DashboardVolumetricsBacklogOnly,
   DashboardVolumetricsCreatedPattern,
   DashboardVolumetricsCreatedResolvedCanceled,
+  DashboardVolumetricsDataRange,
   DashboardVolumetricsFilterValues,
   DashboardVolumetricsFilters,
   DashboardVolumetricsRequest,
@@ -55,8 +58,7 @@ const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep
 
 const defaultStartMonth = "2025-01";
 const defaultEndMonth = "2026-06";
-const defaultStartWeek = "2025-01-06";
-const defaultEndWeek = "2026-06-15";
+const maxWeeklyRangeWeeks = 15;
 
 const emptyFilters: DashboardVolumetricsFilters = {
   functional_track_ams_owner: [],
@@ -89,6 +91,11 @@ const emptySummary: DashboardVolumetricsSummary = {
   },
   response_sla: { average_adherence_pct: null, applicable_count: 0, met_count: 0 },
   resolution_sla: { average_adherence_pct: null, applicable_count: 0, met_count: 0 },
+};
+
+const emptyDataRange: DashboardVolumetricsDataRange = {
+  completion_date_min: null,
+  completion_date_max: null,
 };
 
 const emptyVolumeTrend: DashboardVolumetricsCreatedResolvedCanceled = {
@@ -139,6 +146,13 @@ function formatNumber(value: number | null | undefined, maximumFractionDigits = 
   return value.toLocaleString(undefined, { maximumFractionDigits });
 }
 
+function formatRoundedNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "N/A";
+  }
+  return Math.ceil(value).toLocaleString();
+}
+
 function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "N/A";
@@ -148,6 +162,47 @@ function formatPercent(value: number | null | undefined): string {
 
 function formatDateShort(date: Date): string {
   return `${pad(date.getDate())}-${monthNames[date.getMonth()]}-${date.getFullYear().toString().slice(-2)}`;
+}
+
+function parseApiDateValue(value: string | null): Date | null {
+  if (!value) {
+    return null;
+  }
+  const [datePart] = value.split("T");
+  const [year, month, day] = datePart.split("-").map(Number);
+  if (!year || !month || !day) {
+    return null;
+  }
+  return new Date(year, month - 1, day, 0, 0, 0, 0);
+}
+
+function formatApiDateLong(value: string | null): string {
+  const date = parseApiDateValue(value);
+  if (!date) {
+    return "Not available";
+  }
+  return `${pad(date.getDate())}-${monthNames[date.getMonth()]}-${date.getFullYear()}`;
+}
+
+function formatDataAvailabilityRange(dataRange: DashboardVolumetricsDataRange): string {
+  if (!dataRange.completion_date_min || !dataRange.completion_date_max) {
+    return "Data availability: Not available";
+  }
+  return `Data available from ${formatApiDateLong(
+    dataRange.completion_date_min
+  )} to ${formatApiDateLong(dataRange.completion_date_max)}`;
+}
+
+function trendChartWidth(
+  pointCount: number,
+  timeGrain: VolumetricsTimeGrain,
+  plotWidth: number
+): number {
+  const availableWidth = Math.max(760, plotWidth - 24);
+  if (timeGrain === "monthly") {
+    return availableWidth;
+  }
+  return Math.max(availableWidth, pointCount * 56);
 }
 
 function monthStartDate(monthValue: string): Date {
@@ -178,6 +233,59 @@ function weekEndDate(value: string): Date {
   date.setDate(date.getDate() + 6);
   date.setHours(23, 59, 59, 999);
   return date;
+}
+
+function dateInputValue(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function monthInputValue(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+}
+
+function subtractMonths(date: Date, months: number): Date {
+  const nextDate = new Date(date);
+  const originalDay = nextDate.getDate();
+  nextDate.setMonth(nextDate.getMonth() - months);
+  if (nextDate.getDate() !== originalDay) {
+    nextDate.setDate(0);
+  }
+  return nextDate;
+}
+
+function defaultWeeklyRange() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return {
+    start: dateInputValue(weekStartDate(dateInputValue(subtractMonths(today, 3)))),
+    end: dateInputValue(weekStartDate(dateInputValue(today))),
+  };
+}
+
+function weeksBetween(startDate: Date, endDate: Date): number {
+  return Math.floor((endDate.getTime() - startDate.getTime()) / (7 * 24 * 60 * 60 * 1000));
+}
+
+function clampWeeklyStart(startValue: string, endValue: string): string {
+  const startDate = weekStartDate(startValue);
+  const endDate = weekStartDate(endValue);
+  if (weeksBetween(startDate, endDate) <= maxWeeklyRangeWeeks - 1) {
+    return dateInputValue(startDate);
+  }
+  const clampedStart = new Date(endDate);
+  clampedStart.setDate(endDate.getDate() - (maxWeeklyRangeWeeks - 1) * 7);
+  return dateInputValue(clampedStart);
+}
+
+function clampWeeklyEnd(startValue: string, endValue: string): string {
+  const startDate = weekStartDate(startValue);
+  const endDate = weekStartDate(endValue);
+  if (weeksBetween(startDate, endDate) <= maxWeeklyRangeWeeks - 1) {
+    return dateInputValue(endDate);
+  }
+  const clampedEnd = new Date(startDate);
+  clampedEnd.setDate(startDate.getDate() + (maxWeeklyRangeWeeks - 1) * 7);
+  return dateInputValue(clampedEnd);
 }
 
 function apiDateTime(date: Date, endOfDay = false): string {
@@ -297,37 +405,40 @@ async function copyChartToClipboard(chartElement: HTMLElement, title: string) {
 }
 
 function useChartFrame(title: string) {
-  const chartRef = useRef<HTMLDivElement>(null);
+  const [chartElement, setChartElement] = useState<HTMLDivElement | null>(null);
   const [plotWidth, setPlotWidth] = useState(0);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
+  const chartRef = useCallback((element: HTMLDivElement | null) => {
+    setChartElement(element);
+  }, []);
+
   useEffect(() => {
-    const element = chartRef.current;
-    if (!element) {
+    if (!chartElement) {
       return undefined;
     }
 
     const updatePlotWidth = () => {
-      setPlotWidth(Math.floor(element.clientWidth));
+      setPlotWidth(Math.floor(chartElement.clientWidth));
     };
     updatePlotWidth();
 
     const resizeObserver = new ResizeObserver(updatePlotWidth);
-    resizeObserver.observe(element);
+    resizeObserver.observe(chartElement);
     return () => resizeObserver.disconnect();
-  }, []);
+  }, [chartElement]);
 
   const handleCopy = useCallback(async () => {
-    if (!chartRef.current) {
+    if (!chartElement) {
       return;
     }
     try {
-      await copyChartToClipboard(chartRef.current, title);
+      await copyChartToClipboard(chartElement, title);
       setCopyMessage("Copied chart image to clipboard.");
     } catch (error) {
       setCopyMessage(errorMessage(error, "This browser could not copy the chart image."));
     }
-  }, [title]);
+  }, [chartElement, title]);
 
   return { chartRef, copyMessage, handleCopy, plotWidth };
 }
@@ -338,8 +449,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [timeGrain, setTimeGrain] = useState<VolumetricsTimeGrain>("monthly");
   const [startMonth, setStartMonth] = useState(defaultStartMonth);
   const [endMonth, setEndMonth] = useState(defaultEndMonth);
-  const [startWeek, setStartWeek] = useState(defaultStartWeek);
-  const [endWeek, setEndWeek] = useState(defaultEndWeek);
+  const [startWeek, setStartWeek] = useState(() => defaultWeeklyRange().start);
+  const [endWeek, setEndWeek] = useState(() => defaultWeeklyRange().end);
   const [createdPatternType, setCreatedPatternType] =
     useState<CreatedPatternType>("day_of_month");
   const [filters, setFilters] = useState<DashboardVolumetricsFilters>(emptyFilters);
@@ -348,6 +459,9 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   );
   const [summary, setSummary] = useState<LoadState<DashboardVolumetricsSummary>>(
     createLoadState(emptySummary)
+  );
+  const [dataRange, setDataRange] = useState<LoadState<DashboardVolumetricsDataRange>>(
+    createLoadState(emptyDataRange)
   );
   const [volumeTrend, setVolumeTrend] = useState<
     LoadState<DashboardVolumetricsCreatedResolvedCanceled>
@@ -359,6 +473,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     LoadState<DashboardVolumetricsCreatedPattern>
   >(createLoadState(emptyCreatedPattern));
   const [loadedProjectId, setLoadedProjectId] = useState("");
+  const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
 
   const effectiveRange = useMemo(() => {
     if (timeGrain === "monthly") {
@@ -421,6 +536,25 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     [requestBody]
   );
   const hasActiveProjectContext = Boolean(projectId.trim()) && projectId === loadedProjectId;
+  const isDateRangeReady = dataRange.status === "error" || rangeInitializedProjectId === projectId;
+
+  const loadDataRange = useCallback(async () => {
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedProjectId) {
+      return;
+    }
+    setDataRange(createLoadState(emptyDataRange, "loading"));
+    try {
+      const nextDataRange = await getDashboardVolumetricsDataRange(cleanedProjectId);
+      setDataRange({ status: "success", data: nextDataRange, error: null });
+    } catch (error) {
+      setDataRange({
+        status: "error",
+        data: emptyDataRange,
+        error: errorMessage(error, "Unable to load available data range"),
+      });
+    }
+  }, [projectId]);
 
   const loadVolumetricsData = useCallback(async () => {
     if (!requestBody) {
@@ -502,17 +636,73 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       setFilters(emptyFilters);
       setFilterValues(createLoadState(emptyFilterValues));
       setSummary(createLoadState(emptySummary));
+      setDataRange(createLoadState(emptyDataRange));
       setVolumeTrend(createLoadState(emptyVolumeTrend));
       setBacklog(createLoadState(emptyBacklog));
       setCreatedPattern(createLoadState(emptyCreatedPattern));
+      setRangeInitializedProjectId("");
     }
   }, [loadedProjectId, projectId]);
 
   useEffect(() => {
-    if (isActive && hasActiveProjectContext && requestBody) {
+    if (isActive && hasActiveProjectContext && dataRange.status === "idle") {
+      void loadDataRange();
+    }
+  }, [dataRange.status, hasActiveProjectContext, isActive, loadDataRange]);
+
+  useEffect(() => {
+    if (
+      dataRange.status !== "success" ||
+      !projectId.trim() ||
+      rangeInitializedProjectId === projectId
+    ) {
+      return;
+    }
+
+    const availableStart = parseApiDateValue(dataRange.data.completion_date_min);
+    const availableEnd = parseApiDateValue(dataRange.data.completion_date_max);
+    if (!availableStart || !availableEnd) {
+      setRangeInitializedProjectId(projectId);
+      return;
+    }
+
+    setStartMonth(monthInputValue(availableStart));
+    setEndMonth(monthInputValue(availableEnd));
+
+    const latestWeekStart = weekStartDate(dateInputValue(availableEnd));
+    const earliestAvailableWeekStart = weekStartDate(dateInputValue(availableStart));
+    const earliestAllowedWeekStart = new Date(latestWeekStart);
+    earliestAllowedWeekStart.setDate(
+      latestWeekStart.getDate() - (maxWeeklyRangeWeeks - 1) * 7
+    );
+    const nextWeeklyStart =
+      earliestAvailableWeekStart > earliestAllowedWeekStart
+        ? earliestAvailableWeekStart
+        : earliestAllowedWeekStart;
+
+    setStartWeek(dateInputValue(nextWeeklyStart));
+    setEndWeek(dateInputValue(availableEnd));
+    setRangeInitializedProjectId(projectId);
+  }, [
+    dataRange.data.completion_date_max,
+    dataRange.data.completion_date_min,
+    dataRange.status,
+    projectId,
+    rangeInitializedProjectId,
+  ]);
+
+  useEffect(() => {
+    if (isActive && hasActiveProjectContext && isDateRangeReady && requestBody) {
       void loadVolumetricsData();
     }
-  }, [hasActiveProjectContext, isActive, loadVolumetricsData, requestBody, requestSignature]);
+  }, [
+    hasActiveProjectContext,
+    isActive,
+    isDateRangeReady,
+    loadVolumetricsData,
+    requestBody,
+    requestSignature,
+  ]);
 
   function updateFilter(filterName: FilterKey, values: string[]) {
     setFilters((currentFilters) => ({
@@ -525,6 +715,22 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     setScope("in_scope");
     setTicketType("all");
     setFilters(emptyFilters);
+  }
+
+  function handleStartWeekChange(value: string) {
+    const nextStartWeek = clampWeeklyStart(value, endWeek);
+    setStartWeek(nextStartWeek);
+    if (weekStartDate(nextStartWeek) > weekStartDate(endWeek)) {
+      setEndWeek(nextStartWeek);
+    }
+  }
+
+  function handleEndWeekChange(value: string) {
+    const nextEndWeek = clampWeeklyEnd(startWeek, value);
+    setEndWeek(nextEndWeek);
+    if (weekStartDate(nextEndWeek) < weekStartDate(startWeek)) {
+      setStartWeek(nextEndWeek);
+    }
   }
 
   const averageLabel = timeGrain === "monthly" ? "Avg monthly" : "Avg weekly";
@@ -606,8 +812,13 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
 
       <div className="volumetrics-main-pane">
         <p className="volumetrics-date-note">
-          Data range: {formatDateShort(effectiveRange.startDate)} to {formatDateShort(effectiveRange.endDate)}
+          {dataRange.status === "loading"
+            ? "Loading available data range..."
+            : formatDataAvailabilityRange(dataRange.data)}
         </p>
+        {dataRange.status === "error" ? (
+          <p className="error-text volumetrics-date-note">{dataRange.error}</p>
+        ) : null}
 
         <section className="panel" aria-labelledby="volumetrics-tab-heading">
           <div className="panel-heading">
@@ -662,7 +873,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   <input
                     type="date"
                     value={startWeek}
-                    onChange={(event) => setStartWeek(event.target.value)}
+                    onChange={(event) => handleStartWeekChange(event.target.value)}
                   />
                 </label>
                 <label>
@@ -670,9 +881,12 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   <input
                     type="date"
                     value={endWeek}
-                    onChange={(event) => setEndWeek(event.target.value)}
+                    onChange={(event) => handleEndWeekChange(event.target.value)}
                   />
                 </label>
+                <p className="volumetrics-range-note">
+                  Weekly view is limited to 3 months, about 15 weeks, to keep charts easy to read.
+                </p>
               </>
             )}
           </div>
@@ -821,11 +1035,7 @@ function CreatedResolvedCanceledChart({
   const canceledLabel = cancellationMetricLabel(ticketType);
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
   const hasRows = data.points.length > 0;
-  const chartWidth = Math.max(
-    820,
-    plotWidth - 24,
-    data.points.length * (timeGrain === "monthly" ? 82 : 96)
-  );
+  const chartWidth = trendChartWidth(data.points.length, timeGrain, plotWidth);
   const canCopy = status !== "loading" && hasRows;
 
   return (
@@ -861,7 +1071,7 @@ function CreatedResolvedCanceledChart({
                 data={data.points}
                 width={chartWidth}
                 height={380}
-                margin={{ top: 34, right: 64, bottom: 82, left: 42 }}
+                margin={{ top: 58, right: 44, bottom: 82, left: 34 }}
               >
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis
@@ -882,7 +1092,13 @@ function CreatedResolvedCanceledChart({
                   radius={[4, 4, 0, 0]}
                   yAxisId="volume"
                 >
-                  <LabelList dataKey="created_count" position="top" fontSize={11} />
+                  <LabelList
+                    angle={-90}
+                    dataKey="created_count"
+                    fontSize={10}
+                    offset={14}
+                    position="top"
+                  />
                 </Bar>
                 <Bar
                   dataKey="resolved_closed_count"
@@ -891,7 +1107,13 @@ function CreatedResolvedCanceledChart({
                   radius={[4, 4, 0, 0]}
                   yAxisId="volume"
                 >
-                  <LabelList dataKey="resolved_closed_count" position="top" fontSize={11} />
+                  <LabelList
+                    angle={-90}
+                    dataKey="resolved_closed_count"
+                    fontSize={10}
+                    offset={14}
+                    position="top"
+                  />
                 </Bar>
                 <Bar
                   dataKey="canceled_closed_incomplete_count"
@@ -901,9 +1123,11 @@ function CreatedResolvedCanceledChart({
                   yAxisId="volume"
                 >
                   <LabelList
+                    angle={-90}
                     dataKey="canceled_closed_incomplete_count"
+                    fontSize={10}
+                    offset={14}
                     position="top"
-                    fontSize={11}
                   />
                 </Bar>
               </ComposedChart>
@@ -931,11 +1155,7 @@ function BacklogChart({
   const title = "Backlog(Open)";
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
   const hasRows = data.points.length > 0;
-  const chartWidth = Math.max(
-    820,
-    plotWidth - 24,
-    data.points.length * (timeGrain === "monthly" ? 74 : 92)
-  );
+  const chartWidth = trendChartWidth(data.points.length, timeGrain, plotWidth);
   const canCopy = status !== "loading" && hasRows;
 
   return (
@@ -969,7 +1189,7 @@ function BacklogChart({
                 data={data.points}
                 width={chartWidth}
                 height={340}
-                margin={{ top: 34, right: 64, bottom: 82, left: 42 }}
+                margin={{ top: 42, right: 44, bottom: 82, left: 34 }}
               >
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis
@@ -998,12 +1218,22 @@ function BacklogChart({
                     y={data.average_backlog}
                     stroke={chartColors.average}
                     strokeDasharray="6 4"
-                    label={{
-                      value: `Avg backlog: ${formatNumber(data.average_backlog, 0)}`,
-                      position: "insideTopRight",
-                      fill: chartColors.average,
-                      fontSize: 12,
-                    }}
+                  />
+                ) : null}
+                {data.average_backlog !== null ? (
+                  <Customized
+                    component={() => (
+                      <text
+                        x={chartWidth - 48}
+                        y={22}
+                        fill={chartColors.average}
+                        fontSize={13}
+                        fontWeight={900}
+                        textAnchor="end"
+                      >
+                        {`Avg backlog: ${formatNumber(data.average_backlog, 0)}`}
+                      </text>
+                    )}
                   />
                 ) : null}
               </ComposedChart>
@@ -1043,7 +1273,11 @@ function CreatedPatternChart({
   const title = selectedOption.label;
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
   const hasRows = data.points.length > 0;
-  const chartWidth = Math.max(820, plotWidth - 24, data.points.length * 42);
+  const availablePatternWidth = Math.max(760, plotWidth - 24);
+  const chartWidth =
+    patternType === "day_of_month"
+      ? availablePatternWidth
+      : Math.max(availablePatternWidth, data.points.length * 42);
   const canCopy = status !== "loading" && hasRows;
   const barColor =
     patternType === "hour_weekdays" || patternType === "hour_weekends"
@@ -1117,7 +1351,7 @@ function CreatedPatternChart({
                     dataKey="average_created"
                     position="top"
                     fontSize={11}
-                    formatter={(value) => formatNumber(Number(value ?? 0), 1)}
+                    formatter={(value) => formatRoundedNumber(Number(value ?? 0))}
                   />
                 </Bar>
               </BarChart>

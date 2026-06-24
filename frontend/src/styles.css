@@ -1682,6 +1682,15 @@ h2 {
   font-weight: 800;
 }
 
+.volumetrics-range-note {
+  grid-column: 2 / -1;
+  margin: -4px 0 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-style: italic;
+  font-weight: 700;
+}
+
 .segmented-control {
   display: inline-flex;
   align-items: center;
@@ -1709,6 +1718,31 @@ h2 {
   color: #0f766e;
   background: #ffffff;
   box-shadow: 0 1px 4px rgb(15 23 42 / 12%);
+}
+
+.volumetrics-pattern-control {
+  flex-wrap: wrap;
+  gap: 10px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.volumetrics-pattern-control button {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
+}
+
+.volumetrics-pattern-control button.active {
+  border-color: #0f766e;
+  color: #ffffff;
+  background: #0f766e;
+  box-shadow: 0 2px 7px rgb(15 118 110 / 24%);
 }
 
 .volumetrics-summary-grid {

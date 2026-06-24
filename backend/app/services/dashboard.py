@@ -144,6 +144,7 @@ APPLICATION_FILTER_CUSTOM_SORTS = {
 VOLUMETRICS_SCOPES = {"in_scope", "out_of_scope", "all"}
 VOLUMETRICS_TICKET_TYPES = {"all", "incident", "sc_task"}
 VOLUMETRICS_TIME_GRAINS = {"monthly", "weekly"}
+VOLUMETRICS_MAX_WEEKLY_PERIODS = 15
 VOLUMETRICS_CREATED_PATTERN_TYPES = {
     "day_of_month",
     "day_of_week",
@@ -1073,6 +1074,14 @@ def volumetrics_completion_expression(model: Any) -> Any:
     )
 
 
+def volumetrics_availability_completion_expression(model: Any) -> Any:
+    return case(
+        (model.ticket_type == "INCIDENT", model.resolved_at),
+        (model.ticket_type == "SERVICE_CATALOG_TASK", model.closed_at),
+        else_=func.coalesce(model.resolved_at, model.closed_at),
+    )
+
+
 def volumetrics_cancelled_state_expression(model: Any) -> Any:
     return func.lower(func.trim(func.coalesce(model.state, ""))).in_(VOLUMETRICS_CANCELLED_STATES)
 
@@ -1445,6 +1454,30 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
     }
 
 
+def volumetrics_data_range(db: Session, project_id: UUID) -> dict[str, Any]:
+    in_scope_select = select(
+        volumetrics_availability_completion_expression(Ticket).label("completion_at"),
+    ).where(Ticket.project_id == project_id)
+    out_of_scope_select = select(
+        volumetrics_availability_completion_expression(AssessmentOutOfScopeTicket).label(
+            "completion_at",
+        ),
+    ).where(
+        AssessmentOutOfScopeTicket.project_id == project_id,
+    )
+    source = union_all(in_scope_select, out_of_scope_select).subquery("volumetrics_source")
+    row = db.execute(
+        select(
+            func.min(source.c.completion_at).label("completion_date_min"),
+            func.max(source.c.completion_at).label("completion_date_max"),
+        ).where(source.c.completion_at.is_not(None)),
+    ).mappings().one()
+    return {
+        "completion_date_min": row["completion_date_min"],
+        "completion_date_max": row["completion_date_max"],
+    }
+
+
 def add_month(value: datetime) -> datetime:
     if value.month == 12:
         return datetime(value.year + 1, 1, 1, tzinfo=value.tzinfo)
@@ -1492,6 +1525,8 @@ def build_volumetrics_periods(request: Any) -> list[VolumetricsPeriod]:
             ),
         )
         current = next_start
+    if len(periods) > VOLUMETRICS_MAX_WEEKLY_PERIODS:
+        raise ValueError("Weekly view is limited to 15 weeks. Select a range of 3 months or less.")
     return periods
 
 

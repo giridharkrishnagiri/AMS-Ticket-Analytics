@@ -366,6 +366,11 @@ class VolumetricsSummaryResponse(BaseModel):
     resolution_sla: VolumetricsSlaMetric
 
 
+class VolumetricsDataRangeResponse(BaseModel):
+    completion_date_min: datetime | None
+    completion_date_max: datetime | None
+
+
 class VolumetricsCreatedResolvedBacklogRow(BaseModel):
     period_start: datetime
     period_end: datetime

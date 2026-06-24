@@ -850,6 +850,19 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         cancelled.application_owner = "App Owner B"
         cancelled.supported_by_vendor = "Vendor B"
 
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-VOL-LATE-CANCELLED",
+            "INCIDENT",
+            dt("2026-03-20T00:00:00"),
+            state="Cancelled",
+            closed_at=dt("2026-03-23T00:00:00"),
+            assignment_group="IT-NSA-Group B",
+        )
+
         db.add(
             AssessmentOutOfScopeTicket(
                 project_id=project_id,
@@ -857,7 +870,8 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                 ticket_number="INC-VOL-OOS",
                 ticket_type="INCIDENT",
                 created_at=dt("2026-01-05T00:00:00"),
-                state="In Progress",
+                resolved_at=dt("2026-03-05T00:00:00"),
+                state="Resolved",
                 assignment_group="Group OOS",
                 sap_non_sap=None,
                 support_lead="Lead OOS",
@@ -887,6 +901,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             summary_response = client.post(
                 "/api/dashboard/volumetrics/summary",
                 json=request_body,
+            )
+            data_range_response = client.get(
+                "/api/dashboard/volumetrics/data-range",
+                params={"project_id": str(project_id)},
             )
             chart_response = client.post(
                 "/api/dashboard/volumetrics/created-resolved-backlog",
@@ -951,6 +969,11 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         assert summary["response_sla"]["met_count"] == 1
         assert summary["response_sla"]["average_adherence_pct"] == 100
         assert summary["resolution_sla"]["average_adherence_pct"] == 0
+
+        assert data_range_response.status_code == 200
+        data_range = data_range_response.json()
+        assert data_range["completion_date_min"].startswith("2026-01-25")
+        assert data_range["completion_date_max"].startswith("2026-03-05")
 
         assert chart_response.status_code == 200
         chart_payload = chart_response.json()
@@ -1102,6 +1125,42 @@ def test_volumetrics_weekly_buckets_start_on_monday() -> None:
         assert rows[0]["backlog_open_count"] == 1
         assert rows[1]["resolved_closed_count"] == 1
         assert rows[1]["backlog_open_count"] == 0
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_volumetrics_weekly_range_is_limited_to_fifteen_weeks() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-WEEKLY-LIMIT",
+            "INCIDENT",
+            dt("2026-01-07T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-14T00:00:00"),
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/summary",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "in_scope",
+                    "ticket_type": "incident",
+                    "time_grain": "weekly",
+                    "start_datetime": "2026-01-01T00:00:00+00:00",
+                    "end_datetime": "2026-05-31T23:59:59+00:00",
+                    "filters": {},
+                },
+            )
+
+        assert response.status_code == 400
+        assert "15 weeks" in response.json()["detail"]
     finally:
         cleanup_client(db, client_id)
 

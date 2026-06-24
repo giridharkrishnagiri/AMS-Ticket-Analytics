@@ -33,6 +33,7 @@ from app.schemas.dashboard import (
     VolumetricsCreatedPatternResponse,
     VolumetricsCreatedResolvedBacklogResponse,
     VolumetricsCreatedResolvedCanceledResponse,
+    VolumetricsDataRangeResponse,
     VolumetricsFilterValuesResponse,
     VolumetricsRequest,
     VolumetricsSummaryResponse,
@@ -62,6 +63,7 @@ from app.services.dashboard import (
     volumetrics_created_pattern,
     volumetrics_created_resolved_backlog,
     volumetrics_created_resolved_cancelled,
+    volumetrics_data_range,
     volumetrics_filter_value_counts,
     volumetrics_summary,
 )
@@ -222,6 +224,17 @@ def get_dashboard_volumetrics_summary(
         return volumetrics_summary(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/volumetrics/data-range",
+    response_model=VolumetricsDataRangeResponse,
+)
+def get_dashboard_volumetrics_data_range(
+    project_id: Annotated[UUID, Query(...)],
+    db: DbSession,
+) -> dict[str, object]:
+    return volumetrics_data_range(db, project_id)
 
 
 @router.post(

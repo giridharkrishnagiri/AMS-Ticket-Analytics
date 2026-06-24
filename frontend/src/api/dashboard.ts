@@ -371,6 +371,11 @@ export type DashboardVolumetricsSummary = {
   resolution_sla: DashboardVolumetricsSlaMetric;
 };
 
+export type DashboardVolumetricsDataRange = {
+  completion_date_min: string | null;
+  completion_date_max: string | null;
+};
+
 export type DashboardVolumetricsBacklogRow = PeriodMetricRow & {
   created_count: number;
   resolved_closed_count: number;
@@ -551,6 +556,15 @@ export function getDashboardVolumetricsSummary(
   return postVolumetricsRequest<DashboardVolumetricsSummary>(
     "/dashboard/volumetrics/summary",
     input
+  );
+}
+
+export function getDashboardVolumetricsDataRange(
+  projectId: string
+): Promise<DashboardVolumetricsDataRange> {
+  const query = new URLSearchParams({ project_id: projectId.trim() });
+  return requestJson<DashboardVolumetricsDataRange>(
+    `/dashboard/volumetrics/data-range?${query.toString()}`
   );
 }
 
