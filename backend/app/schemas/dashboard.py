@@ -483,3 +483,63 @@ class VolumetricsSlaTrendsResponse(BaseModel):
     response: list[VolumetricsSlaTrendRow]
     resolution: list[VolumetricsSlaTrendRow]
     logic: VolumetricsSlaTrendLogic
+
+
+class VolumetricsTopApplicationsRequest(VolumetricsRequest):
+    top_n: int = Field(default=10, ge=10, le=20)
+
+
+class VolumetricsRankingWindow(BaseModel):
+    start_month: str
+    end_month: str
+    description: str
+
+
+class VolumetricsTopApplicationPoint(BaseModel):
+    application_name: str
+    average_created: float
+    average_canceled_closed_incomplete: float
+    created_label: int
+    canceled_label: int
+    pareto_cumulative_pct: float | None
+
+
+class VolumetricsTopApplicationsResponse(BaseModel):
+    ranking_window: VolumetricsRankingWindow
+    top_n: int
+    points: list[VolumetricsTopApplicationPoint]
+
+
+class VolumetricsBatchRule(BaseModel):
+    field: str
+    rule_description: str
+
+
+class VolumetricsIncidentBatchTrendPoint(BaseModel):
+    period_key: str
+    period_label: str
+    batch_created_count: int
+
+
+class VolumetricsIncidentBatchTrendResponse(BaseModel):
+    applicable: bool
+    message: str
+    batch_rule: VolumetricsBatchRule
+    points: list[VolumetricsIncidentBatchTrendPoint]
+
+
+class VolumetricsTopIncidentBatchApplicationPoint(BaseModel):
+    application_name: str
+    average_batch_created: float
+    average_batch_canceled: float
+    batch_created_label: int
+    batch_canceled_label: int
+    pareto_cumulative_pct: float | None
+
+
+class VolumetricsTopIncidentBatchApplicationsResponse(BaseModel):
+    applicable: bool
+    message: str
+    ranking_window: VolumetricsRankingWindow
+    top_n: int
+    points: list[VolumetricsTopIncidentBatchApplicationPoint]

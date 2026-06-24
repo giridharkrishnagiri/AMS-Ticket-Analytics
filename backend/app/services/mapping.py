@@ -21,6 +21,7 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
+from app.services.batch_classification import derive_is_batch_related
 from app.services.ingestion import INGESTION_BATCH_SIZE, normalize_source_column_name
 from app.services.sap_classification import derive_sap_non_sap
 from app.services.upload_lifecycle import (
@@ -987,6 +988,7 @@ def build_out_of_scope_ticket(
         supported_by_vendor=ticket.supported_by_vendor,
         assignment_group_owner=ticket.assignment_group_owner,
         sap_non_sap=ticket.sap_non_sap,
+        is_batch_related=ticket.is_batch_related,
         out_of_scope_reason=reason,
     )
 
@@ -1044,6 +1046,7 @@ def build_ticket_from_raw_row(
     source_system = (
         text_or_none(normalized_values.get("source_system")) or upload_batch.source_system
     )
+    short_description = text_or_none(normalized_values.get("title"))
 
     return Ticket(
         project_id=raw_row.project_id,
@@ -1059,7 +1062,7 @@ def build_ticket_from_raw_row(
         closed_at=parse_datetime_value(normalized_values.get("closed_at")),
         due_at=parse_datetime_value(normalized_values.get("sla_due_at")),
         sla_due_at=parse_datetime_value(normalized_values.get("sla_due_at")),
-        short_description=text_or_none(normalized_values.get("title")),
+        short_description=short_description,
         description=text_or_none(normalized_values.get("description")),
         state=text_or_none(normalized_values.get("status")),
         priority=normalize_priority(normalized_values.get("priority")),
@@ -1070,6 +1073,7 @@ def build_ticket_from_raw_row(
         cmdb_ci=text_or_none(normalized_values.get("configuration_item")),
         assignment_group=text_or_none(normalized_values.get("assignment_group")),
         sap_non_sap=derive_sap_non_sap(normalized_values.get("assignment_group")),
+        is_batch_related=derive_is_batch_related(ticket_type, short_description),
         assigned_to=text_or_none(normalized_values.get("assigned_to")),
         requester=text_or_none(normalized_values.get("requester")),
         opened_by=text_or_none(normalized_values.get("created_by")),

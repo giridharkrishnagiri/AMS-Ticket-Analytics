@@ -161,3 +161,11 @@ def test_scope_split_vendor_sla_columns_exist() -> None:
     assert "business_service_ci_name" in out_of_scope_columns
     assert "response_sla_selection_source" in out_of_scope_columns
     assert "resolution_sla_selection_source" in out_of_scope_columns
+
+
+def test_incident_batch_classification_columns_exist() -> None:
+    ticket_columns = Base.metadata.tables["tickets"].columns.keys()
+    out_of_scope_columns = Base.metadata.tables["assessment_out_of_scope_tickets"].columns.keys()
+
+    assert "is_batch_related" in ticket_columns
+    assert "is_batch_related" in out_of_scope_columns

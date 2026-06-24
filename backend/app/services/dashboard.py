@@ -1281,9 +1281,11 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         model.functional_track.label("functional_track"),
         model.ams_owner.label("ams_owner"),
         model.parent_application_name.label("parent_application_name"),
+        model.business_service_ci_name.label("business_service_ci_name"),
         model.application_owner.label("application_owner"),
         volumetrics_supported_vendor_expression(model).label("supported_by_vendor"),
         model.sap_non_sap.label("sap_non_sap"),
+        model.is_batch_related.label("is_batch_related"),
         model.response_sla_breached.label("response_sla_breached"),
         model.resolution_sla_breached.label("resolution_sla_breached"),
     ).where(model.project_id == project_id)
@@ -2500,6 +2502,271 @@ def volumetrics_sla_trends(db: Session, request: Any) -> dict[str, Any]:
     response["response"] = response_rows
     response["resolution"] = resolution_rows
     return response
+
+
+TOP_APPLICATIONS_WINDOW_DESCRIPTION = "Last 6 complete months excluding current month"
+BATCH_RULE_DESCRIPTION = (
+    "Incident is batch-related when short_description contains Automic, case-insensitive."
+)
+BATCH_APPLICABLE_MESSAGE = (
+    "Batch-related charts are Incident-only and use Incident tickets within the selected filters."
+)
+BATCH_NOT_APPLICABLE_MESSAGE = (
+    "Batch-related ticket charts are applicable only for Incidents. "
+    "SC Task catalog item charts will be added separately."
+)
+
+
+def subtract_months(value: datetime, month_count: int) -> datetime:
+    month_index = value.year * 12 + (value.month - 1) - month_count
+    return datetime(month_index // 12, month_index % 12 + 1, 1, tzinfo=value.tzinfo)
+
+
+def rolling_six_complete_month_window(
+    reference_datetime: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    reference = normalize_dashboard_datetime(reference_datetime or datetime.now(UTC))
+    current_month_start = datetime(reference.year, reference.month, 1, tzinfo=reference.tzinfo)
+    previous_month_end = current_month_start - timedelta(microseconds=1)
+    previous_month_start = datetime(
+        previous_month_end.year,
+        previous_month_end.month,
+        1,
+        tzinfo=previous_month_end.tzinfo,
+    )
+    return subtract_months(previous_month_start, 5), previous_month_end
+
+
+def ranking_window_payload(start_datetime: datetime, end_datetime: datetime) -> dict[str, str]:
+    return {
+        "start_month": f"{start_datetime.year:04d}-{start_datetime.month:02d}",
+        "end_month": f"{end_datetime.year:04d}-{end_datetime.month:02d}",
+        "description": TOP_APPLICATIONS_WINDOW_DESCRIPTION,
+    }
+
+
+def normalized_top_n(value: int | None) -> int:
+    top_n = int(value or 10)
+    if top_n not in {10, 20}:
+        raise ValueError("top_n must be either 10 or 20")
+    return top_n
+
+
+def batch_rule_payload() -> dict[str, str]:
+    return {
+        "field": "short_description",
+        "rule_description": BATCH_RULE_DESCRIPTION,
+    }
+
+
+def is_batch_chart_not_applicable(request: Any) -> bool:
+    return normalize_volumetrics_ticket_type(request.ticket_type) == "sc_task"
+
+
+def application_name_expression(source: Any) -> Any:
+    return volumetrics_display_expression(source.c.business_service_ci_name)
+
+
+def pareto_top_application_points(
+    rows: list[dict[str, Any]],
+    *,
+    created_key: str,
+    canceled_key: str,
+    created_label_key: str,
+    canceled_label_key: str,
+    output_created_key: str,
+    output_canceled_key: str,
+) -> list[dict[str, Any]]:
+    total_created = sum(float(row[created_key] or 0) for row in rows)
+    running_created = 0.0
+    points: list[dict[str, Any]] = []
+    for row in rows:
+        created_value = float(row[created_key] or 0)
+        canceled_value = float(row[canceled_key] or 0)
+        running_created += created_value
+        points.append(
+            {
+                "application_name": str(row["application_name"]),
+                output_created_key: created_value,
+                output_canceled_key: canceled_value,
+                created_label_key: math.ceil(created_value),
+                canceled_label_key: math.ceil(canceled_value),
+                "pareto_cumulative_pct": percentage(
+                    int(round(running_created * 1000)),
+                    int(round(total_created * 1000)),
+                ),
+            },
+        )
+    return points
+
+
+def volumetrics_top_application_rows(
+    db: Session,
+    request: Any,
+    *,
+    top_n: int,
+    incident_batch_only: bool = False,
+) -> list[dict[str, Any]]:
+    window_start, window_end = rolling_six_complete_month_window()
+    effective_request = (
+        replace_request_value(request, "ticket_type", "incident")
+        if incident_batch_only
+        else request
+    )
+    source = volumetrics_source_subquery(request)
+    application_expression = application_name_expression(source)
+    cancelled_condition = volumetrics_cancelled_expression(source)
+    created_count_expression = (func.count(source.c.id) / 6.0).label("average_created")
+    canceled_count_expression = (
+        func.count(source.c.id).filter(cancelled_condition) / 6.0
+    ).label("average_canceled")
+    conditions = [
+        *volumetrics_base_conditions(
+            source,
+            effective_request,
+            include_date_bounds=False,
+        ),
+        source.c.created_at.is_not(None),
+        source.c.created_at >= window_start,
+        source.c.created_at <= window_end,
+    ]
+    if incident_batch_only:
+        conditions.append(source.c.is_batch_related.is_(True))
+
+    statement = (
+        select(
+            application_expression.label("application_name"),
+            created_count_expression,
+            canceled_count_expression,
+        )
+        .select_from(source)
+        .where(*conditions)
+        .group_by(application_expression)
+        .order_by(created_count_expression.desc(), application_expression.asc())
+        .limit(top_n)
+    )
+    return [dict(row) for row in db.execute(statement).mappings().all()]
+
+
+def volumetrics_top_applications(db: Session, request: Any) -> dict[str, Any]:
+    top_n = normalized_top_n(getattr(request, "top_n", 10))
+    window_start, window_end = rolling_six_complete_month_window()
+    rows = volumetrics_top_application_rows(db, request, top_n=top_n)
+    points = pareto_top_application_points(
+        rows,
+        created_key="average_created",
+        canceled_key="average_canceled",
+        created_label_key="created_label",
+        canceled_label_key="canceled_label",
+        output_created_key="average_created",
+        output_canceled_key="average_canceled_closed_incomplete",
+    )
+    return {
+        "ranking_window": ranking_window_payload(window_start, window_end),
+        "top_n": top_n,
+        "points": points,
+    }
+
+
+def monthly_batch_request(request: Any) -> Any:
+    return replace_request_value(
+        replace_request_value(request, "ticket_type", "incident"),
+        "time_grain",
+        "monthly",
+    )
+
+
+def volumetrics_incident_batch_trend(db: Session, request: Any) -> dict[str, Any]:
+    if is_batch_chart_not_applicable(request):
+        return {
+            "applicable": False,
+            "message": BATCH_NOT_APPLICABLE_MESSAGE,
+            "batch_rule": batch_rule_payload(),
+            "points": [],
+        }
+
+    effective_request = monthly_batch_request(request)
+    periods = build_volumetrics_periods(effective_request)
+    source = volumetrics_source_subquery(request)
+    period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
+    statement = (
+        select(
+            period_expression.label("period_start"),
+            func.count(source.c.id).label("batch_created_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                effective_request,
+                include_date_bounds=True,
+            ),
+            source.c.is_batch_related.is_(True),
+        )
+        .group_by(period_expression)
+        .order_by(period_expression)
+    )
+    rows_by_period = {}
+    for row in db.execute(statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], "monthly")
+        if period_start is None:
+            continue
+        rows_by_period[volumetrics_period_lookup_key(period_start, "monthly")] = int_count(
+            row["batch_created_count"],
+        )
+
+    return {
+        "applicable": True,
+        "message": BATCH_APPLICABLE_MESSAGE,
+        "batch_rule": batch_rule_payload(),
+        "points": [
+            {
+                "period_key": volumetrics_period_lookup_key(period.start, "monthly"),
+                "period_label": period.label,
+                "batch_created_count": rows_by_period.get(
+                    volumetrics_period_lookup_key(period.start, "monthly"),
+                    0,
+                ),
+            }
+            for period in periods
+        ],
+    }
+
+
+def volumetrics_top_incident_batch_applications(db: Session, request: Any) -> dict[str, Any]:
+    top_n = normalized_top_n(getattr(request, "top_n", 10))
+    window_start, window_end = rolling_six_complete_month_window()
+    if is_batch_chart_not_applicable(request):
+        return {
+            "applicable": False,
+            "message": BATCH_NOT_APPLICABLE_MESSAGE,
+            "ranking_window": ranking_window_payload(window_start, window_end),
+            "top_n": top_n,
+            "points": [],
+        }
+
+    rows = volumetrics_top_application_rows(
+        db,
+        request,
+        top_n=top_n,
+        incident_batch_only=True,
+    )
+    points = pareto_top_application_points(
+        rows,
+        created_key="average_created",
+        canceled_key="average_canceled",
+        created_label_key="batch_created_label",
+        canceled_label_key="batch_canceled_label",
+        output_created_key="average_batch_created",
+        output_canceled_key="average_batch_canceled",
+    )
+    return {
+        "applicable": True,
+        "message": BATCH_APPLICABLE_MESSAGE,
+        "ranking_window": ranking_window_payload(window_start, window_end),
+        "top_n": top_n,
+        "points": points,
+    }
 
 
 def date_filter_basis_expression(filters: DashboardFilters) -> Any:

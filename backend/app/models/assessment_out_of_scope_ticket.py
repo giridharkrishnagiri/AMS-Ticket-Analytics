@@ -46,6 +46,7 @@ class AssessmentOutOfScopeTicket(Base):
         Index("ix_oos_tickets_business_service_ci_name", "business_service_ci_name"),
         Index("ix_oos_tickets_support_lead", "support_lead"),
         Index("ix_oos_tickets_project_sap_non_sap", "project_id", "sap_non_sap"),
+        Index("ix_oos_tickets_project_is_batch_related", "project_id", "is_batch_related"),
         Index("ix_oos_tickets_created_at", "created_at"),
         Index("ix_oos_tickets_resolved_at", "resolved_at"),
         Index("ix_oos_tickets_closed_at", "closed_at"),
@@ -136,6 +137,7 @@ class AssessmentOutOfScopeTicket(Base):
     supported_by_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
     assignment_group_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_batch_related: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     response_sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     resolution_sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

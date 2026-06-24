@@ -38,10 +38,14 @@ from app.schemas.dashboard import (
     VolumetricsFilterValuesResponse,
     VolumetricsHourlyCreatedResolvedRequest,
     VolumetricsHourlyCreatedResolvedResponse,
+    VolumetricsIncidentBatchTrendResponse,
     VolumetricsPriorityDistributionResponse,
     VolumetricsRequest,
     VolumetricsSlaTrendsResponse,
     VolumetricsSummaryResponse,
+    VolumetricsTopApplicationsRequest,
+    VolumetricsTopApplicationsResponse,
+    VolumetricsTopIncidentBatchApplicationsResponse,
 )
 from app.services.dashboard import (
     DashboardFilters,
@@ -71,9 +75,12 @@ from app.services.dashboard import (
     volumetrics_data_range,
     volumetrics_filter_value_counts,
     volumetrics_hourly_created_resolved,
+    volumetrics_incident_batch_trend,
     volumetrics_priority_distribution,
     volumetrics_sla_trends,
     volumetrics_summary,
+    volumetrics_top_applications,
+    volumetrics_top_incident_batch_applications,
 )
 from app.services.offline_dashboard_export import build_offline_dashboard_export
 
@@ -337,6 +344,48 @@ def get_dashboard_volumetrics_sla_trends(
 ) -> dict[str, object]:
     try:
         return volumetrics_sla_trends(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/top-applications",
+    response_model=VolumetricsTopApplicationsResponse,
+)
+def get_dashboard_volumetrics_top_applications(
+    request: VolumetricsTopApplicationsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_top_applications(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/incident-batch-trend",
+    response_model=VolumetricsIncidentBatchTrendResponse,
+)
+def get_dashboard_volumetrics_incident_batch_trend(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_incident_batch_trend(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/top-incident-batch-applications",
+    response_model=VolumetricsTopIncidentBatchApplicationsResponse,
+)
+def get_dashboard_volumetrics_top_incident_batch_applications(
+    request: VolumetricsTopApplicationsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_top_incident_batch_applications(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

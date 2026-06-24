@@ -84,6 +84,7 @@ class Ticket(Base):
         Index("ix_tickets_project_ams_owner", "project_id", "ams_owner"),
         Index("ix_tickets_project_supported_by_vendor", "project_id", "supported_by_vendor"),
         Index("ix_tickets_project_sap_non_sap", "project_id", "sap_non_sap"),
+        Index("ix_tickets_project_is_batch_related", "project_id", "is_batch_related"),
         Index("ix_tickets_project_vendor", "project_id", "vendor"),
         Index("ix_tickets_project_derived_vendor", "project_id", "derived_vendor"),
         Index("ix_tickets_project_type_sla_breached", "project_id", "ticket_type", "sla_breached"),
@@ -197,6 +198,7 @@ class Ticket(Base):
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
     derived_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_batch_related: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     sla_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

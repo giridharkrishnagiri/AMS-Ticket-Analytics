@@ -480,6 +480,60 @@ export type DashboardVolumetricsSlaTrends = {
   };
 };
 
+export type DashboardVolumetricsRankingWindow = {
+  start_month: string;
+  end_month: string;
+  description: string;
+};
+
+export type DashboardVolumetricsTopApplicationPoint = {
+  application_name: string;
+  average_created: number;
+  average_canceled_closed_incomplete: number;
+  created_label: number;
+  canceled_label: number;
+  pareto_cumulative_pct: number | null;
+};
+
+export type DashboardVolumetricsTopApplications = {
+  ranking_window: DashboardVolumetricsRankingWindow;
+  top_n: number;
+  points: DashboardVolumetricsTopApplicationPoint[];
+};
+
+export type DashboardVolumetricsIncidentBatchTrendPoint = {
+  period_key: string;
+  period_label: string;
+  batch_created_count: number;
+};
+
+export type DashboardVolumetricsIncidentBatchTrend = {
+  applicable: boolean;
+  message: string;
+  batch_rule: {
+    field: string;
+    rule_description: string;
+  };
+  points: DashboardVolumetricsIncidentBatchTrendPoint[];
+};
+
+export type DashboardVolumetricsTopIncidentBatchApplicationPoint = {
+  application_name: string;
+  average_batch_created: number;
+  average_batch_canceled: number;
+  batch_created_label: number;
+  batch_canceled_label: number;
+  pareto_cumulative_pct: number | null;
+};
+
+export type DashboardVolumetricsTopIncidentBatchApplications = {
+  applicable: boolean;
+  message: string;
+  ranking_window: DashboardVolumetricsRankingWindow;
+  top_n: number;
+  points: DashboardVolumetricsTopIncidentBatchApplicationPoint[];
+};
+
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
   for (const value of values ?? []) {
     if (value.trim()) {
@@ -731,6 +785,35 @@ export function getDashboardVolumetricsSlaTrends(
   return postVolumetricsRequest<DashboardVolumetricsSlaTrends>(
     "/dashboard/volumetrics/sla-trends",
     input
+  );
+}
+
+export function getDashboardVolumetricsTopApplications(
+  input: DashboardVolumetricsRequest,
+  topN: 10 | 20
+): Promise<DashboardVolumetricsTopApplications> {
+  return postVolumetricsRequest<DashboardVolumetricsTopApplications>(
+    "/dashboard/volumetrics/top-applications",
+    { ...input, top_n: topN } as DashboardVolumetricsRequest & { top_n: 10 | 20 }
+  );
+}
+
+export function getDashboardVolumetricsIncidentBatchTrend(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsIncidentBatchTrend> {
+  return postVolumetricsRequest<DashboardVolumetricsIncidentBatchTrend>(
+    "/dashboard/volumetrics/incident-batch-trend",
+    input
+  );
+}
+
+export function getDashboardVolumetricsTopIncidentBatchApplications(
+  input: DashboardVolumetricsRequest,
+  topN: 10 | 20
+): Promise<DashboardVolumetricsTopIncidentBatchApplications> {
+  return postVolumetricsRequest<DashboardVolumetricsTopIncidentBatchApplications>(
+    "/dashboard/volumetrics/top-incident-batch-applications",
+    { ...input, top_n: topN } as DashboardVolumetricsRequest & { top_n: 10 | 20 }
   );
 }
 

@@ -39,6 +39,8 @@ from app.services.dashboard import (
     normalize_dashboard_datetime,
     overview_summary,
     priority_sort_key,
+    ranking_window_payload,
+    rolling_six_complete_month_window,
     volumetrics_base_conditions,
     volumetrics_cancelled_expression,
     volumetrics_data_range,
@@ -875,6 +877,75 @@ def build_sla_trends_payload(
     }
 
 
+def build_detailed_volume_payload(
+    db: Session,
+    project_id: UUID,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> dict[str, Any]:
+    request = monthly_request(project_id, start_datetime, end_datetime)
+    source = build_volumetrics_source(project_id)
+    dimensions = volumetrics_dimension_expressions(source)
+    period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
+    application_expression = volumetrics_display_expression(source.c.business_service_ci_name)
+    cancelled_condition = volumetrics_cancelled_expression(source)
+    incident_batch_condition = (
+        (source.c.ticket_type == "INCIDENT") & source.c.is_batch_related.is_(True)
+    )
+    statement = (
+        select(
+            *[expression.label(name) for name, expression in dimensions.items()],
+            application_expression.label("application_name"),
+            period_expression.label("period_start"),
+            func.count(source.c.id).label("created_count"),
+            func.count(source.c.id)
+            .filter(cancelled_condition)
+            .label("canceled_closed_incomplete_count"),
+            func.count(source.c.id)
+            .filter(incident_batch_condition)
+            .label("incident_batch_created_count"),
+            func.count(source.c.id)
+            .filter(incident_batch_condition & cancelled_condition)
+            .label("incident_batch_canceled_count"),
+        )
+        .select_from(source)
+        .where(*volumetrics_base_conditions(source, request))
+        .group_by(*dimensions.values(), application_expression, period_expression)
+    )
+    rows = []
+    for row in db.execute(statement).mappings().all():
+        period_start = row["period_start"]
+        if period_start is None:
+            continue
+        rows.append(
+            {
+                **dimension_dict(dimension_key(row)),
+                "application_name": str(row["application_name"]),
+                "period_key": month_key(period_start),
+                "period_label": f"{period_start:%b-%y}",
+                "created_count": int(row["created_count"] or 0),
+                "canceled_closed_incomplete_count": int(
+                    row["canceled_closed_incomplete_count"] or 0,
+                ),
+                "incident_batch_created_count": int(row["incident_batch_created_count"] or 0),
+                "incident_batch_canceled_count": int(row["incident_batch_canceled_count"] or 0),
+            },
+        )
+
+    window_start, window_end = rolling_six_complete_month_window()
+    return {
+        "ranking_window": ranking_window_payload(window_start, window_end),
+        "application_rows": rows,
+        "batch_rule": {
+            "field": "short_description",
+            "rule_description": (
+                "Incident is batch-related when short_description contains Automic, "
+                "case-insensitive."
+            ),
+        },
+    }
+
+
 def build_filter_values(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
     functional_values = sorted(
         {row["functional_track_ams_owner"] for row in monthly_rows},
@@ -929,8 +1000,12 @@ def build_volumetrics_payload(
                 "priority_distribution": {"priorities": [], "rows": []},
             },
             "overall_sla_trends": {"rows": [], "logic": {}},
+            "detailed_volume_trends": {
+                "ranking_window": {},
+                "application_rows": [],
+                "batch_rule": {},
+            },
             "placeholders": {
-                "detailed_volume_trends": "Detailed requirements for this section will be added in the next prompts.",
                 "kpi_trends": "Detailed requirements for this section will be added in the next prompts.",
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
             },
@@ -957,8 +1032,12 @@ def build_volumetrics_payload(
                 "priority_distribution": {"priorities": [], "rows": []},
             },
             "overall_sla_trends": {"rows": [], "logic": {}},
+            "detailed_volume_trends": {
+                "ranking_window": {},
+                "application_rows": [],
+                "batch_rule": {},
+            },
             "placeholders": {
-                "detailed_volume_trends": "Detailed requirements for this section will be added in the next prompts.",
                 "kpi_trends": "Detailed requirements for this section will be added in the next prompts.",
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
             },
@@ -1014,8 +1093,13 @@ def build_volumetrics_payload(
             start_datetime,
             end_datetime,
         ),
+        "detailed_volume_trends": build_detailed_volume_payload(
+            db,
+            project_id,
+            start_datetime,
+            end_datetime,
+        ),
         "placeholders": {
-            "detailed_volume_trends": "Detailed requirements for this section will be added in the next prompts.",
             "kpi_trends": "Detailed requirements for this section will be added in the next prompts.",
             "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
         },
@@ -1603,7 +1687,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       pattern: "day_of_month",
       volSubTab: "overall_volume_trends",
       hourlyDayType: "weekdays",
-      priorityView: "graph"
+      priorityView: "graph",
+      topVolumeN: "10",
+      topBatchN: "10"
     };
     function fmt(value, digits = 0) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "N/A";
@@ -1938,6 +2024,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll("[data-priority-view]").forEach((button) => {
         button.addEventListener("click", () => { state.priorityView = button.dataset.priorityView; renderVolumetrics(); });
       });
+      document.querySelectorAll("[data-top-volume]").forEach((button) => {
+        button.addEventListener("click", () => { state.topVolumeN = button.dataset.topVolume; renderVolumetrics(); });
+      });
+      document.querySelectorAll("[data-top-batch]").forEach((button) => {
+        button.addEventListener("click", () => { state.topBatchN = button.dataset.topBatch; renderVolumetrics(); });
+      });
     }
     function volSubTabs() {
       const labels = {
@@ -1951,10 +2043,135 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function renderVolumetricsSubTab(periods) {
       if (state.volSubTab === "overall_sla_trends") return renderSlaTrends();
-      if (state.volSubTab === "detailed_volume_trends") return placeholder("Detailed Volume Trends");
+      if (state.volSubTab === "detailed_volume_trends") return renderDetailedVolumeTrends();
       if (state.volSubTab === "kpi_trends") return placeholder("KPI Trends");
       if (state.volSubTab === "category_wise_trends") return placeholder("Category-wise Trends");
       return renderOverallVolume(periods);
+    }
+    function rankingWindowText() {
+      const window = DASHBOARD.volumetrics.detailed_volume_trends?.ranking_window || {};
+      if (!window.start_month || !window.end_month) return "Ranking uses the last 6 complete months, excluding the current month.";
+      return `Ranking uses average monthly created tickets for ${esc(window.start_month)} to ${esc(window.end_month)}, excluding the current month.`;
+    }
+    function topToggle(kind, selected) {
+      const attribute = kind === "batch" ? "data-top-batch" : "data-top-volume";
+      return ["10", "20"].map((value) => `<button type="button" ${attribute}="${value}" class="${selected === value ? "active" : ""}">Top ${value}</button>`).join("");
+    }
+    function detailedVolumeRows() {
+      return DASHBOARD.volumetrics.detailed_volume_trends?.application_rows || [];
+    }
+    function incidentBatchFilterMatch(row) {
+      return (
+        row.ticket_type === "incident" &&
+        (state.volScope === "all" || row.scope === state.volScope) &&
+        (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+      );
+    }
+    function inRankingWindow(row) {
+      const window = DASHBOARD.volumetrics.detailed_volume_trends?.ranking_window || {};
+      return !window.start_month || !window.end_month || (row.period_key >= window.start_month && row.period_key <= window.end_month);
+    }
+    function topApplicationPoints(options) {
+      const topN = Number(options.topN || 10);
+      const rows = detailedVolumeRows()
+        .filter(options.batch ? incidentBatchFilterMatch : offlineFilterMatch)
+        .filter(inRankingWindow);
+      const createdKey = options.batch ? "incident_batch_created_count" : "created_count";
+      const canceledKey = options.batch ? "incident_batch_canceled_count" : "canceled_closed_incomplete_count";
+      const byApp = new Map();
+      rows.forEach((row) => {
+        const appName = row.application_name || "(blank)";
+        const current = byApp.get(appName) || { label: appName, createdSum: 0, canceledSum: 0 };
+        current.createdSum += Number(row[createdKey] || 0);
+        current.canceledSum += Number(row[canceledKey] || 0);
+        byApp.set(appName, current);
+      });
+      const points = [...byApp.values()]
+        .map((row) => ({
+          label: row.label,
+          created: row.createdSum / 6,
+          canceled: row.canceledSum / 6
+        }))
+        .filter((row) => row.created > 0 || row.canceled > 0)
+        .sort((left, right) => right.created - left.created || left.label.localeCompare(right.label))
+        .slice(0, topN);
+      const totalCreated = points.reduce((total, row) => total + row.created, 0);
+      let runningCreated = 0;
+      return points.map((row) => {
+        runningCreated += row.created;
+        return {
+          ...row,
+          pareto: totalCreated > 0 ? (runningCreated / totalCreated) * 100 : null
+        };
+      });
+    }
+    function incidentBatchTrendPoints() {
+      const rows = detailedVolumeRows().filter(incidentBatchFilterMatch);
+      return DASHBOARD.volumetrics.periods.map((period) => ({
+        label: period.period_label,
+        batch_created: sum(rows.filter((row) => row.period_key === period.period_key), "incident_batch_created_count")
+      }));
+    }
+    function renderDetailedVolumeTrends() {
+      const topVolume = topApplicationPoints({ topN: state.topVolumeN, batch: false });
+      const topBatch = state.volTicketType === "sc_task"
+        ? []
+        : topApplicationPoints({ topN: state.topBatchN, batch: true });
+      const batchTrend = state.volTicketType === "sc_task" ? [] : incidentBatchTrendPoints();
+      const batchMessage = state.volTicketType === "sc_task"
+        ? "Batch-related ticket charts are applicable only for Incidents. SC Task catalog item charts will be added separately."
+        : "Batch-related charts are Incident-only and use Incident tickets within the selected filters.";
+      return `
+        <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top High-Volume Applications</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("volume", state.topVolumeN)}</div></div><div class="chart-frame chart-stage">${paretoBarLineChart(topVolume, "Average Created Count", "Average Canceled / Closed Incomplete Count")}</div></section>
+        <section class="chart-card panel full"><h3>Incident Batch-Related Tickets Created Trend</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
+        <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top Applications with Incident Batch-Related Tickets</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("batch", state.topBatchN)}</div></div><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : paretoBarLineChart(topBatch, "Average Batch Created Count", "Average Batch Canceled Count")}</div></section>
+      `;
+    }
+    function truncateLabel(value, maxLength = 28) {
+      const text = String(value || "");
+      return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+    }
+    function paretoBarLineChart(data, createdName, canceledName) {
+      if (!data.length) return `<p class="muted" style="padding:12px">No chart data available.</p>`;
+      const width = 1100;
+      const height = 430;
+      const margin = { top: 58, right: 72, bottom: 132, left: 44 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const maxValue = Math.max(1, ...data.flatMap((row) => [Number(row.created || 0), Number(row.canceled || 0)]));
+      const groupWidth = plotWidth / Math.max(1, data.length);
+      const barWidth = Math.max(8, Math.min(26, (groupWidth - 12) / 2));
+      const bars = [];
+      const linePoints = [];
+      data.forEach((row, index) => {
+        const groupCenter = margin.left + index * groupWidth + groupWidth / 2;
+        const createdHeight = (Number(row.created || 0) / maxValue) * plotHeight;
+        const canceledHeight = (Number(row.canceled || 0) / maxValue) * plotHeight;
+        const createdX = groupCenter - barWidth - 2;
+        const canceledX = groupCenter + 2;
+        const createdY = margin.top + plotHeight - createdHeight;
+        const canceledY = margin.top + plotHeight - canceledHeight;
+        bars.push(`<rect x="${createdX}" y="${createdY}" width="${barWidth}" height="${createdHeight}" fill="${COLORS.teal}" rx="3"></rect>`);
+        bars.push(`<rect x="${canceledX}" y="${canceledY}" width="${barWidth}" height="${canceledHeight}" fill="${COLORS.red}" rx="3"></rect>`);
+        if (row.created > 0) bars.push(`<text x="${createdX + barWidth / 2}" y="${Math.max(margin.top + 12, createdY - 7)}" text-anchor="middle" font-size="10" font-weight="800" fill="#334155">${rounded(row.created)}</text>`);
+        if (row.canceled > 0) bars.push(`<text x="${canceledX + barWidth / 2}" y="${Math.max(margin.top + 12, canceledY - 7)}" text-anchor="middle" font-size="10" font-weight="800" fill="#334155">${rounded(row.canceled)}</text>`);
+        const paretoY = row.pareto === null ? null : margin.top + plotHeight - (Number(row.pareto) / 100) * plotHeight;
+        if (paretoY !== null) linePoints.push({ x: groupCenter, y: paretoY, pct: row.pareto });
+      });
+      const linePath = linePoints.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
+      const labels = data.map((row, index) => {
+        const x = margin.left + index * groupWidth + groupWidth / 2;
+        return `<text x="${x}" y="${height - 50}" text-anchor="end" transform="rotate(-38 ${x} ${height - 50})" font-size="10" font-weight="800" fill="#334155"><title>${esc(row.label)}</title>${esc(truncateLabel(row.label))}</text>`;
+      });
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Top applications Pareto chart">
+        <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
+        <text x="${width - margin.right + 20}" y="${margin.top}" text-anchor="middle" font-size="10" font-weight="900" fill="${COLORS.purple}">100%</text>
+        ${bars.join("")}
+        <path d="${linePath}" fill="none" stroke="${COLORS.purple}" stroke-width="3"></path>
+        ${linePoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${COLORS.purple}" stroke-width="2"></circle><text x="${point.x}" y="${Math.max(margin.top + 12, point.y - 10)}" text-anchor="middle" font-size="11" font-weight="900" fill="${COLORS.purple}" stroke="#fff" stroke-width="3" paint-order="stroke">${point.pct.toFixed(0)}%</text>`).join("")}
+        ${labels.join("")}
+      </svg>${legend([{ name: createdName, color: COLORS.teal }, { name: canceledName, color: COLORS.red }, { name: "Pareto cumulative %", color: COLORS.purple }])}`;
     }
     function placeholder(title) {
       return `<section class="panel" style="padding:18px"><p class="label">${esc(title)}</p><h3>Detailed requirements for this section will be added in the next prompts.</h3></section>`;

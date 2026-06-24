@@ -16,6 +16,7 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
+from app.services.batch_classification import derive_is_batch_related
 from app.services.ingestion import build_validation_summary, recalculate_upload_batch_status
 from app.services.mapping import (
     apply_mapping_to_batch,
@@ -831,6 +832,116 @@ def test_apply_mapping_derives_sap_non_sap_for_in_scope_and_out_of_scope_rows() 
         assert in_scope_ticket.sap_non_sap == "SAP"
         assert out_of_scope_ticket is not None
         assert out_of_scope_ticket.sap_non_sap == "Non-SAP"
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_batch_classification_rule_is_incident_short_description_only() -> None:
+    assert derive_is_batch_related("INCIDENT", "Automic job failed") is True
+    assert derive_is_batch_related("INCIDENT", "automic job failed") is True
+    assert derive_is_batch_related("INCIDENT", "Manual ticket") is False
+    assert derive_is_batch_related("SERVICE_CATALOG_TASK", "Automic request") is False
+    assert derive_is_batch_related("INCIDENT", None) is False
+
+
+def test_apply_mapping_populates_incident_batch_classification() -> None:
+    rows = [
+        {
+            "number": "INC-BATCH",
+            "caller_id": "End User",
+            "short_description": "Automic batch failure",
+            "state": "Resolved",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
+            "sys_created_on": "2026-06-03 09:15:00",
+        },
+        {
+            "number": "INC-CALLER-ONLY",
+            "caller_id": "ITSM - Automic INC integration",
+            "short_description": "Manual incident without keyword",
+            "state": "Resolved",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
+            "sys_created_on": "2026-06-04 09:15:00",
+        },
+        {
+            "number": "INC-BATCH-OOS",
+            "caller_id": "End User",
+            "short_description": "AUTOMIC failed in unknown service",
+            "state": "Open",
+            "assignment_group": "Unmapped Group",
+            "business_service": "Unknown Service",
+            "sys_created_on": "2026-06-05 09:15:00",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(rows)
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+    }
+
+    try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
+        apply_mapping_to_batch(db, upload_batch_id, mapping)
+
+        tickets = {
+            ticket.ticket_number: ticket
+            for ticket in db.scalars(
+                select(Ticket).where(Ticket.upload_batch_id == upload_batch_id),
+            )
+        }
+        out_of_scope_ticket = db.scalar(
+            select(AssessmentOutOfScopeTicket).where(
+                AssessmentOutOfScopeTicket.ticket_number == "INC-BATCH-OOS",
+            ),
+        )
+
+        assert tickets["INC-BATCH"].is_batch_related is True
+        assert tickets["INC-CALLER-ONLY"].is_batch_related is False
+        assert out_of_scope_ticket is not None
+        assert out_of_scope_ticket.is_batch_related is True
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_apply_mapping_sets_sc_task_batch_classification_false() -> None:
+    rows = [
+        {
+            "number": "SCTASK-BATCH",
+            "short_description": "Automic request should not use Incident batch rule",
+            "state": "Closed",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
+            "sys_created_on": "2026-06-03 09:15:00",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
+        rows,
+        ticket_type="SERVICE_CATALOG_TASK",
+    )
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+    }
+
+    try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
+        apply_mapping_to_batch(db, upload_batch_id, mapping)
+        ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "SCTASK-BATCH"))
+
+        assert ticket is not None
+        assert ticket.ticket_type == "SERVICE_CATALOG_TASK"
+        assert ticket.is_batch_related is False
     finally:
         cleanup_client(db, client_id)
 

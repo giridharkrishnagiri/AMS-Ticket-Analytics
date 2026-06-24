@@ -22,6 +22,7 @@ from app.models import (
     UploadedFile,
 )
 from app.services import dashboard as dashboard_service
+from app.services.batch_classification import derive_is_batch_related
 from app.services.sap_classification import derive_sap_non_sap
 
 
@@ -117,10 +118,13 @@ def add_ticket(
     is_technical: bool | None = None,
     technical_functional_type: str | None = None,
     sap_non_sap: str | None = None,
+    short_description: str | None = None,
+    business_service_ci_name: str | None = None,
 ) -> Ticket:
     resolved_sap_non_sap = (
         sap_non_sap if sap_non_sap is not None else derive_sap_non_sap(assignment_group)
     )
+    resolved_short_description = short_description or f"{number} title"
     ticket = Ticket(
         project_id=project_id,
         upload_batch_id=upload_batch_id,
@@ -137,13 +141,15 @@ def add_ticket(
         created_at=created_at,
         resolved_at=resolved_at,
         closed_at=closed_at,
-        short_description=f"{number} title",
+        short_description=resolved_short_description,
         state=state,
         priority=priority,
         assignment_group=assignment_group,
         sap_non_sap=resolved_sap_non_sap,
         application=application,
+        business_service_ci_name=business_service_ci_name,
         sla_breached=sla_breached,
+        is_batch_related=derive_is_batch_related(ticket_type, resolved_short_description),
         reopen_count=reopen_count,
         reassignment_count=reassignment_count,
         business_duration_seconds=business_duration_seconds,
@@ -1156,6 +1162,146 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        window_start, window_end = dashboard_service.rolling_six_complete_month_window()
+        current_month = window_start
+        for month_index in range(6):
+            for ticket_index in range(3):
+                is_batch = ticket_index < 2
+                is_cancelled = ticket_index == 1
+                add_ticket(
+                    db,
+                    project_id,
+                    batch_id,
+                    file_id,
+                    f"INC-APP-A-{month_index}-{ticket_index}",
+                    "INCIDENT",
+                    current_month,
+                    state="Cancelled" if is_cancelled else "Resolved",
+                    resolved_at=None if is_cancelled else current_month,
+                    closed_at=current_month if is_cancelled else None,
+                    short_description=(
+                        "Automic batch failure" if is_batch else "User-reported issue"
+                    ),
+                    business_service_ci_name="Application A",
+                )
+            for ticket_index in range(2):
+                add_ticket(
+                    db,
+                    project_id,
+                    batch_id,
+                    file_id,
+                    f"INC-APP-B-{month_index}-{ticket_index}",
+                    "INCIDENT",
+                    current_month,
+                    state="Resolved",
+                    resolved_at=current_month,
+                    short_description=(
+                        "Automic downstream failure"
+                        if ticket_index == 0
+                        else "Manual incident"
+                    ),
+                    business_service_ci_name="Application B",
+                )
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"SCTASK-APP-C-{month_index}",
+                "SERVICE_CATALOG_TASK",
+                current_month,
+                state="Closed",
+                closed_at=current_month,
+                business_service_ci_name="Application C",
+            )
+            current_month = dashboard_service.add_month(current_month)
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "in_scope",
+            "ticket_type": "all",
+            "time_grain": "monthly",
+            "start_datetime": "2025-01-01T00:00:00+00:00",
+            "end_datetime": "2025-01-31T23:59:59+00:00",
+            "filters": {},
+        }
+        batch_trend_body = {
+            **request_body,
+            "start_datetime": window_start.isoformat(),
+            "end_datetime": window_end.isoformat(),
+        }
+
+        with TestClient(app) as client:
+            top_apps_response = client.post(
+                "/api/dashboard/volumetrics/top-applications",
+                json={**request_body, "top_n": 10},
+            )
+            batch_trend_response = client.post(
+                "/api/dashboard/volumetrics/incident-batch-trend",
+                json=batch_trend_body,
+            )
+            top_batch_response = client.post(
+                "/api/dashboard/volumetrics/top-incident-batch-applications",
+                json={**request_body, "top_n": 10},
+            )
+            sc_task_batch_response = client.post(
+                "/api/dashboard/volumetrics/incident-batch-trend",
+                json={**batch_trend_body, "ticket_type": "sc_task"},
+            )
+
+        assert top_apps_response.status_code == 200
+        top_apps = top_apps_response.json()
+        assert top_apps["ranking_window"] == {
+            "start_month": f"{window_start.year:04d}-{window_start.month:02d}",
+            "end_month": f"{window_end.year:04d}-{window_end.month:02d}",
+            "description": "Last 6 complete months excluding current month",
+        }
+        assert [point["application_name"] for point in top_apps["points"][:3]] == [
+            "Application A",
+            "Application B",
+            "Application C",
+        ]
+        assert top_apps["points"][0]["average_created"] == 3
+        assert top_apps["points"][0]["average_canceled_closed_incomplete"] == 1
+        assert round(top_apps["points"][0]["pareto_cumulative_pct"], 1) == 50.0
+
+        assert batch_trend_response.status_code == 200
+        batch_trend = batch_trend_response.json()
+        assert batch_trend["applicable"] is True
+        assert batch_trend["batch_rule"]["field"] == "short_description"
+        assert [point["batch_created_count"] for point in batch_trend["points"]] == [
+            3,
+            3,
+            3,
+            3,
+            3,
+            3,
+        ]
+
+        assert top_batch_response.status_code == 200
+        top_batch = top_batch_response.json()
+        assert top_batch["applicable"] is True
+        assert [point["application_name"] for point in top_batch["points"][:2]] == [
+            "Application A",
+            "Application B",
+        ]
+        assert top_batch["points"][0]["average_batch_created"] == 2
+        assert top_batch["points"][0]["average_batch_canceled"] == 1
+        assert round(top_batch["points"][0]["pareto_cumulative_pct"], 1) == 66.7
+
+        assert sc_task_batch_response.status_code == 200
+        sc_task_batch = sc_task_batch_response.json()
+        assert sc_task_batch["applicable"] is False
+        assert sc_task_batch["points"] == []
+        assert "SC Task catalog item charts" in sc_task_batch["message"]
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
@@ -1293,6 +1439,9 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Priority-wise ticket distribution" in document
         assert "Response SLA adherence trend" in document
         assert "Resolution SLA adherence trend" in document
+        assert "Top High-Volume Applications" in document
+        assert "Incident Batch-Related Tickets Created Trend" in document
+        assert "Top Applications with Incident Batch-Related Tickets" in document
         assert (
             '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
             in document
@@ -1430,6 +1579,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             "priority_distribution"
         ]["rows"]
         assert payload["volumetrics"]["overall_sla_trends"]["rows"]
+        assert payload["volumetrics"]["detailed_volume_trends"]["application_rows"]
+        detailed_row = payload["volumetrics"]["detailed_volume_trends"]["application_rows"][0]
+        assert "ticket_number" not in detailed_row
+        assert "short_description" not in detailed_row
+        assert "caller_id" not in detailed_row
+        assert "normalized_payload" not in detailed_row
         assert payload["volumetrics"]["placeholders"]["kpi_trends"].startswith(
             "Detailed requirements",
         )

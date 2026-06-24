@@ -21,9 +21,12 @@ import {
   getDashboardVolumetricsDataRange,
   getDashboardVolumetricsFilterValues,
   getDashboardVolumetricsHourlyCreatedResolved,
+  getDashboardVolumetricsIncidentBatchTrend,
   getDashboardVolumetricsPriorityDistribution,
   getDashboardVolumetricsSlaTrends,
   getDashboardVolumetricsSummary,
+  getDashboardVolumetricsTopApplications,
+  getDashboardVolumetricsTopIncidentBatchApplications,
 } from "./api/dashboard";
 import type {
   CreatedPatternType,
@@ -34,10 +37,13 @@ import type {
   DashboardVolumetricsFilterValues,
   DashboardVolumetricsFilters,
   DashboardVolumetricsHourlyCreatedResolved,
+  DashboardVolumetricsIncidentBatchTrend,
   DashboardVolumetricsPriorityDistribution,
   DashboardVolumetricsRequest,
   DashboardVolumetricsSlaTrends,
   DashboardVolumetricsSummary,
+  DashboardVolumetricsTopApplications,
+  DashboardVolumetricsTopIncidentBatchApplications,
   VolumetricsDayType,
   VolumetricsScope,
   VolumetricsTicketType,
@@ -67,6 +73,7 @@ type VolumetricsSubTab =
   | "kpi"
   | "category";
 type PriorityDistributionView = "graph" | "table";
+type TopNSelection = 10 | 20;
 
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -152,6 +159,39 @@ const emptySlaTrends: DashboardVolumetricsSlaTrends = {
       "resolution_sla_adhered_count / resolution_sla_captured_count * 100",
     captured_definition: "sla_breached IS NOT NULL",
   },
+};
+
+const emptyTopApplications: DashboardVolumetricsTopApplications = {
+  ranking_window: {
+    start_month: "",
+    end_month: "",
+    description: "Last 6 complete months excluding current month",
+  },
+  top_n: 10,
+  points: [],
+};
+
+const emptyIncidentBatchTrend: DashboardVolumetricsIncidentBatchTrend = {
+  applicable: true,
+  message: "Batch-related charts are Incident-only and use Incident tickets within the selected filters.",
+  batch_rule: {
+    field: "short_description",
+    rule_description:
+      "Incident is batch-related when short_description contains Automic, case-insensitive.",
+  },
+  points: [],
+};
+
+const emptyTopIncidentBatchApplications: DashboardVolumetricsTopIncidentBatchApplications = {
+  applicable: true,
+  message: "Batch-related charts are Incident-only and use Incident tickets within the selected filters.",
+  ranking_window: {
+    start_month: "",
+    end_month: "",
+    description: "Last 6 complete months excluding current month",
+  },
+  top_n: 10,
+  points: [],
 };
 
 const chartColors = {
@@ -497,6 +537,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     useState<CreatedPatternType>("day_of_month");
   const [hourlyDayType, setHourlyDayType] = useState<VolumetricsDayType>("weekdays");
   const [priorityView, setPriorityView] = useState<PriorityDistributionView>("graph");
+  const [topApplicationsN, setTopApplicationsN] = useState<TopNSelection>(10);
+  const [topBatchApplicationsN, setTopBatchApplicationsN] = useState<TopNSelection>(10);
   const [filters, setFilters] = useState<DashboardVolumetricsFilters>(emptyFilters);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardVolumetricsFilterValues>>(
     createLoadState(emptyFilterValues)
@@ -525,6 +567,15 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [slaTrends, setSlaTrends] = useState<LoadState<DashboardVolumetricsSlaTrends>>(
     createLoadState(emptySlaTrends)
   );
+  const [topApplications, setTopApplications] = useState<
+    LoadState<DashboardVolumetricsTopApplications>
+  >(createLoadState(emptyTopApplications));
+  const [incidentBatchTrend, setIncidentBatchTrend] = useState<
+    LoadState<DashboardVolumetricsIncidentBatchTrend>
+  >(createLoadState(emptyIncidentBatchTrend));
+  const [topIncidentBatchApplications, setTopIncidentBatchApplications] = useState<
+    LoadState<DashboardVolumetricsTopIncidentBatchApplications>
+  >(createLoadState(emptyTopIncidentBatchApplications));
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
 
@@ -630,6 +681,9 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     setHourlyCreatedResolved(createLoadState(emptyHourlyCreatedResolved, "loading"));
     setPriorityDistribution(createLoadState(emptyPriorityDistribution, "loading"));
     setSlaTrends(createLoadState(emptySlaTrends, "loading"));
+    setTopApplications(createLoadState(emptyTopApplications, "loading"));
+    setIncidentBatchTrend(createLoadState(emptyIncidentBatchTrend, "loading"));
+    setTopIncidentBatchApplications(createLoadState(emptyTopIncidentBatchApplications, "loading"));
 
     void getDashboardVolumetricsSummary(requestBody)
       .then((nextSummary) => {
@@ -723,6 +777,53 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
         });
       });
 
+    void getDashboardVolumetricsTopApplications(requestBody, topApplicationsN)
+      .then((nextTopApplications) => {
+        setTopApplications({ status: "success", data: nextTopApplications, error: null });
+      })
+      .catch((error) => {
+        setTopApplications({
+          status: "error",
+          data: emptyTopApplications,
+          error: errorMessage(error, "Unable to load top applications"),
+        });
+      });
+
+    void getDashboardVolumetricsIncidentBatchTrend(requestBody)
+      .then((nextIncidentBatchTrend) => {
+        setIncidentBatchTrend({
+          status: "success",
+          data: nextIncidentBatchTrend,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setIncidentBatchTrend({
+          status: "error",
+          data: emptyIncidentBatchTrend,
+          error: errorMessage(error, "Unable to load Incident batch trend"),
+        });
+      });
+
+    void getDashboardVolumetricsTopIncidentBatchApplications(
+      requestBody,
+      topBatchApplicationsN
+    )
+      .then((nextTopIncidentBatchApplications) => {
+        setTopIncidentBatchApplications({
+          status: "success",
+          data: nextTopIncidentBatchApplications,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setTopIncidentBatchApplications({
+          status: "error",
+          data: emptyTopIncidentBatchApplications,
+          error: errorMessage(error, "Unable to load top Incident batch applications"),
+        });
+      });
+
     void getDashboardVolumetricsFilterValues(requestBody)
       .then((nextFilterValues) => {
         setFilterValues({ status: "success", data: nextFilterValues, error: null });
@@ -734,7 +835,13 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
           error: errorMessage(error, "Unable to load Volumetrics filters"),
         });
       });
-  }, [createdPatternType, hourlyDayType, requestBody]);
+  }, [
+    createdPatternType,
+    hourlyDayType,
+    requestBody,
+    topApplicationsN,
+    topBatchApplicationsN,
+  ]);
 
   useEffect(() => {
     if (projectId !== loadedProjectId) {
@@ -745,6 +852,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       setActiveSubTab("overall_volume");
       setHourlyDayType("weekdays");
       setPriorityView("graph");
+      setTopApplicationsN(10);
+      setTopBatchApplicationsN(10);
       setFilterValues(createLoadState(emptyFilterValues));
       setSummary(createLoadState(emptySummary));
       setDataRange(createLoadState(emptyDataRange));
@@ -754,6 +863,9 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       setHourlyCreatedResolved(createLoadState(emptyHourlyCreatedResolved));
       setPriorityDistribution(createLoadState(emptyPriorityDistribution));
       setSlaTrends(createLoadState(emptySlaTrends));
+      setTopApplications(createLoadState(emptyTopApplications));
+      setIncidentBatchTrend(createLoadState(emptyIncidentBatchTrend));
+      setTopIncidentBatchApplications(createLoadState(emptyTopIncidentBatchApplications));
       setRangeInitializedProjectId("");
     }
   }, [loadedProjectId, projectId]);
@@ -1134,7 +1246,22 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
         ) : null}
 
         {activeSubTab === "detailed_volume" ? (
-          <VolumetricsPlaceholder title="Detailed Volume Trends" />
+          <DetailedVolumeTrends
+            incidentBatchTrend={incidentBatchTrend.data}
+            incidentBatchTrendError={incidentBatchTrend.error}
+            incidentBatchTrendStatus={incidentBatchTrend.status}
+            onTopApplicationsNChange={setTopApplicationsN}
+            onTopBatchApplicationsNChange={setTopBatchApplicationsN}
+            ticketType={ticketType}
+            topApplications={topApplications.data}
+            topApplicationsError={topApplications.error}
+            topApplicationsN={topApplicationsN}
+            topApplicationsStatus={topApplications.status}
+            topIncidentBatchApplications={topIncidentBatchApplications.data}
+            topIncidentBatchApplicationsError={topIncidentBatchApplications.error}
+            topIncidentBatchApplicationsStatus={topIncidentBatchApplications.status}
+            topBatchApplicationsN={topBatchApplicationsN}
+          />
         ) : null}
         {activeSubTab === "kpi" ? <VolumetricsPlaceholder title="KPI Trends" /> : null}
         {activeSubTab === "category" ? (
@@ -1223,6 +1350,357 @@ function VolumetricsPlaceholder({ title }: { title: string }) {
     <section className="panel volumetrics-placeholder-panel">
       <p className="label">{title}</p>
       <h3>Detailed requirements for this section will be added in the next prompts.</h3>
+    </section>
+  );
+}
+
+const topNOptions: TopNSelection[] = [10, 20];
+
+function topNSelector(
+  label: string,
+  selectedValue: TopNSelection,
+  onChange: (value: TopNSelection) => void
+) {
+  return (
+    <div className="segmented-control volumetrics-compact-toggle" aria-label={label}>
+      {topNOptions.map((value) => (
+        <button
+          className={selectedValue === value ? "active" : ""}
+          key={value}
+          type="button"
+          onClick={() => onChange(value)}
+        >
+          Top {value}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function rankingWindowText(
+  rankingWindow: DashboardVolumetricsTopApplications["ranking_window"]
+): string {
+  if (!rankingWindow.start_month || !rankingWindow.end_month) {
+    return "Ranking uses average monthly created tickets for the last 6 complete months, excluding the current month.";
+  }
+  return `Ranking uses average monthly created tickets for ${rankingWindow.start_month} to ${rankingWindow.end_month}, excluding the current month.`;
+}
+
+function DetailedVolumeTrends({
+  incidentBatchTrend,
+  incidentBatchTrendError,
+  incidentBatchTrendStatus,
+  onTopApplicationsNChange,
+  onTopBatchApplicationsNChange,
+  ticketType,
+  topApplications,
+  topApplicationsError,
+  topApplicationsN,
+  topApplicationsStatus,
+  topBatchApplicationsN,
+  topIncidentBatchApplications,
+  topIncidentBatchApplicationsError,
+  topIncidentBatchApplicationsStatus,
+}: {
+  incidentBatchTrend: DashboardVolumetricsIncidentBatchTrend;
+  incidentBatchTrendError: string | null;
+  incidentBatchTrendStatus: LoadStatus;
+  onTopApplicationsNChange: (value: TopNSelection) => void;
+  onTopBatchApplicationsNChange: (value: TopNSelection) => void;
+  ticketType: VolumetricsTicketType;
+  topApplications: DashboardVolumetricsTopApplications;
+  topApplicationsError: string | null;
+  topApplicationsN: TopNSelection;
+  topApplicationsStatus: LoadStatus;
+  topBatchApplicationsN: TopNSelection;
+  topIncidentBatchApplications: DashboardVolumetricsTopIncidentBatchApplications;
+  topIncidentBatchApplicationsError: string | null;
+  topIncidentBatchApplicationsStatus: LoadStatus;
+}) {
+  return (
+    <>
+      <TopApplicationsParetoChart
+        canceledLabel={
+          ticketType === "incident"
+            ? "Average Canceled Count"
+            : ticketType === "sc_task"
+              ? "Average Closed Incomplete Count"
+              : "Average Canceled / Closed Incomplete Count"
+        }
+        createdLabel="Average Created Count"
+        data={topApplications.points.map((point) => ({
+          application_name: point.application_name,
+          average_created: point.average_created,
+          average_canceled: point.average_canceled_closed_incomplete,
+          created_label: point.created_label,
+          canceled_label: point.canceled_label,
+          pareto_cumulative_pct: point.pareto_cumulative_pct,
+        }))}
+        description={rankingWindowText(topApplications.ranking_window)}
+        error={topApplicationsError}
+        onTopNChange={onTopApplicationsNChange}
+        status={topApplicationsStatus}
+        title="Top High-Volume Applications"
+        topN={topApplicationsN}
+      />
+
+      <IncidentBatchTrendChart
+        data={incidentBatchTrend}
+        error={incidentBatchTrendError}
+        status={incidentBatchTrendStatus}
+      />
+
+      <TopApplicationsParetoChart
+        canceledLabel="Average Batch Canceled Count"
+        createdLabel="Average Batch Created Count"
+        data={topIncidentBatchApplications.points.map((point) => ({
+          application_name: point.application_name,
+          average_created: point.average_batch_created,
+          average_canceled: point.average_batch_canceled,
+          created_label: point.batch_created_label,
+          canceled_label: point.batch_canceled_label,
+          pareto_cumulative_pct: point.pareto_cumulative_pct,
+        }))}
+        description={`${topIncidentBatchApplications.message} ${rankingWindowText(
+          topIncidentBatchApplications.ranking_window
+        )}`}
+        error={topIncidentBatchApplicationsError}
+        notApplicable={!topIncidentBatchApplications.applicable}
+        notApplicableMessage={topIncidentBatchApplications.message}
+        onTopNChange={onTopBatchApplicationsNChange}
+        status={topIncidentBatchApplicationsStatus}
+        title="Top Applications with Incident Batch-Related Tickets"
+        topN={topBatchApplicationsN}
+      />
+    </>
+  );
+}
+
+type ParetoChartPoint = {
+  application_name: string;
+  average_created: number;
+  average_canceled: number;
+  created_label: number;
+  canceled_label: number;
+  pareto_cumulative_pct: number | null;
+};
+
+function TopApplicationsParetoChart({
+  canceledLabel,
+  createdLabel,
+  data,
+  description,
+  error,
+  notApplicable = false,
+  notApplicableMessage,
+  onTopNChange,
+  status,
+  title,
+  topN,
+}: {
+  canceledLabel: string;
+  createdLabel: string;
+  data: ParetoChartPoint[];
+  description: string;
+  error: string | null;
+  notApplicable?: boolean;
+  notApplicableMessage?: string;
+  onTopNChange: (value: TopNSelection) => void;
+  status: LoadStatus;
+  title: string;
+  topN: TopNSelection;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.length > 0;
+  const chartWidth = Math.max(Math.max(860, plotWidth - 24), data.length * 68);
+  const canCopy = status !== "loading" && hasRows && !notApplicable;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">{description}</p>
+        </div>
+        <div className="volumetrics-chart-actions">
+          {topNSelector(`${title} top N`, topN, onTopNChange)}
+          <button
+            className="secondary-button chart-copy-button"
+            type="button"
+            disabled={!canCopy}
+            onClick={handleCopy}
+          >
+            Copy chart
+          </button>
+        </div>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">{notApplicableMessage}</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && !hasRows ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && !notApplicable && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <ComposedChart
+                data={data}
+                width={chartWidth}
+                height={430}
+                margin={{ top: 56, right: 68, bottom: 132, left: 44 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="application_name"
+                  angle={-35}
+                  height={128}
+                  interval={0}
+                  textAnchor="end"
+                  tickMargin={14}
+                />
+                <YAxis yAxisId="volume" hide />
+                <YAxis
+                  yAxisId="pareto"
+                  orientation="right"
+                  domain={[0, 100]}
+                  tickFormatter={(value) => `${value}%`}
+                />
+                <Tooltip
+                  formatter={(value, name) =>
+                    name === "Pareto cumulative %"
+                      ? formatPercent(Number(value))
+                      : formatNumber(Number(value), 1)
+                  }
+                />
+                <Legend />
+                <Bar
+                  dataKey="average_created"
+                  fill={chartColors.created}
+                  name={createdLabel}
+                  radius={[4, 4, 0, 0]}
+                  yAxisId="volume"
+                >
+                  <LabelList dataKey="created_label" position="top" fontSize={10} />
+                </Bar>
+                <Bar
+                  dataKey="average_canceled"
+                  fill={chartColors.canceled}
+                  name={canceledLabel}
+                  radius={[4, 4, 0, 0]}
+                  yAxisId="volume"
+                >
+                  <LabelList dataKey="canceled_label" position="top" fontSize={10} />
+                </Bar>
+                <Line
+                  connectNulls
+                  dataKey="pareto_cumulative_pct"
+                  dot={{ r: 4 }}
+                  name="Pareto cumulative %"
+                  stroke={chartColors.average}
+                  strokeWidth={2.5}
+                  type="monotone"
+                  yAxisId="pareto"
+                >
+                  <LabelList
+                    dataKey="pareto_cumulative_pct"
+                    fontSize={11}
+                    fontWeight={900}
+                    formatter={(value) => formatPercent(Number(value))}
+                    position="top"
+                  />
+                </Line>
+              </ComposedChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function IncidentBatchTrendChart({
+  data,
+  error,
+  status,
+}: {
+  data: DashboardVolumetricsIncidentBatchTrend;
+  error: string | null;
+  status: LoadStatus;
+}) {
+  const title = "Incident Batch-Related Tickets Created Trend";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.points.length > 0;
+  const chartWidth = Math.max(760, plotWidth - 24);
+  const canCopy = status !== "loading" && data.applicable && hasRows;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">{data.message}</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {!data.applicable ? <p className="muted-text chart-state-text">{data.message}</p> : null}
+      {status !== "loading" && status !== "error" && data.applicable && !hasRows ? (
+        <p className="muted-text chart-state-text">No Incident batch-related tickets found.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && data.applicable && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={data.points}
+                width={chartWidth}
+                height={340}
+                margin={{ top: 34, right: 42, bottom: 82, left: 34 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="period_label"
+                  angle={-35}
+                  height={86}
+                  interval={0}
+                  textAnchor="end"
+                  tickMargin={12}
+                />
+                <YAxis hide />
+                <Tooltip />
+                <Legend />
+                <Bar
+                  dataKey="batch_created_count"
+                  fill={chartColors.backlog}
+                  name="Batch Created"
+                  radius={[4, 4, 0, 0]}
+                >
+                  <LabelList dataKey="batch_created_count" position="top" fontSize={11} />
+                </Bar>
+              </BarChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
     </section>
   );
 }
