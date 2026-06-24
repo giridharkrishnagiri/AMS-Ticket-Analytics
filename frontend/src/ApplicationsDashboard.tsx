@@ -162,6 +162,12 @@ function createLoadState<T>(data: T, status: LoadStatus = "idle"): LoadState<T> 
   return { status, data, error: null };
 }
 
+function summaryTileToneClass(index: number, columns: number): string {
+  const row = Math.floor(index / columns);
+  const column = index % columns;
+  return (row + column) % 2 === 0 ? "summary-tile-dark" : "summary-tile-light";
+}
+
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "Not available";
@@ -483,6 +489,80 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
   }
 
   const lifecycleFilterApplied = filters.lifecycle_status_stage.length > 0;
+  const applicationSummaryTiles = [
+    {
+      key: "applications",
+      content: (
+        <>
+          <p className="label">Applications</p>
+          <strong>{formatNumber(summary.data.applications)}</strong>
+        </>
+      ),
+    },
+    ...(summary.data.show_functional_groups
+      ? [
+          {
+            key: "functional-groups",
+            content: (
+              <>
+                <p className="label">Functional Groups</p>
+                <strong>{formatNumber(summary.data.functional_groups)}</strong>
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...(summary.data.show_assignment_groups
+      ? [
+          {
+            key: "assignment-groups",
+            content: (
+              <>
+                <p className="label">Assignment Groups</p>
+                <strong>{formatNumber(summary.data.assignment_groups)}</strong>
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...(summary.data.show_parent_business_apps
+      ? [
+          {
+            key: "parent-business-apps",
+            content: (
+              <>
+                <p className="label">Parent Business Apps</p>
+                <strong>{formatNumber(summary.data.parent_business_apps)}</strong>
+              </>
+            ),
+          },
+        ]
+      : []),
+    {
+      key: "application-type",
+      content: (
+        <>
+          <p className="label">Application Type</p>
+          <div className="overview-ticket-details">
+            <span>Business: {formatNumber(summary.data.business_applications)}</span>
+            <span>Technical: {formatNumber(summary.data.technical_applications)}</span>
+          </div>
+        </>
+      ),
+    },
+    {
+      key: "criticality",
+      content: (
+        <>
+          <p className="label">Criticality</p>
+          <div className="overview-ticket-details">
+            <span>Very Critical: {formatNumber(summary.data.very_critical_applications)}</span>
+            <span>Critical: {formatNumber(summary.data.critical_applications)}</span>
+          </div>
+        </>
+      ),
+    },
+  ];
 
   return (
     <section className="applications-dashboard-layout" aria-labelledby="applications-tab-heading">
@@ -590,42 +670,11 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
           </div>
 
           <div className="summary-grid applications-summary-grid">
-            <div>
-              <p className="label">Applications</p>
-              <strong>{formatNumber(summary.data.applications)}</strong>
-            </div>
-            {summary.data.show_functional_groups ? (
-              <div>
-                <p className="label">Functional Groups</p>
-                <strong>{formatNumber(summary.data.functional_groups)}</strong>
+            {applicationSummaryTiles.map((tile, index) => (
+              <div key={tile.key} className={summaryTileToneClass(index, 6)}>
+                {tile.content}
               </div>
-            ) : null}
-            {summary.data.show_assignment_groups ? (
-              <div>
-                <p className="label">Assignment Groups</p>
-                <strong>{formatNumber(summary.data.assignment_groups)}</strong>
-              </div>
-            ) : null}
-            {summary.data.show_parent_business_apps ? (
-              <div>
-                <p className="label">Parent Business Apps</p>
-                <strong>{formatNumber(summary.data.parent_business_apps)}</strong>
-              </div>
-            ) : null}
-            <div>
-              <p className="label">Application Type</p>
-              <div className="overview-ticket-details">
-                <span>Business: {formatNumber(summary.data.business_applications)}</span>
-                <span>Technical: {formatNumber(summary.data.technical_applications)}</span>
-              </div>
-            </div>
-            <div>
-              <p className="label">Criticality</p>
-              <div className="overview-ticket-details">
-                <span>Very Critical: {formatNumber(summary.data.very_critical_applications)}</span>
-                <span>Critical: {formatNumber(summary.data.critical_applications)}</span>
-              </div>
-            </div>
+            ))}
           </div>
 
           {summary.status === "loading" ? <p className="muted-text">Loading summary...</p> : null}

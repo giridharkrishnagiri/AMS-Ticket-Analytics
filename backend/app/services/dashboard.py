@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import math
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
@@ -270,6 +271,66 @@ def to_utc_datetime(value: date | datetime) -> datetime:
     return datetime.combine(value, time.min, tzinfo=UTC)
 
 
+def first_day_of_month(value: datetime) -> datetime:
+    normalized = to_utc_datetime(value)
+    return datetime(normalized.year, normalized.month, 1, tzinfo=normalized.tzinfo)
+
+
+def first_day_of_next_month(value: datetime) -> datetime:
+    normalized = to_utc_datetime(value)
+    if normalized.month == 12:
+        return datetime(normalized.year + 1, 1, 1, tzinfo=normalized.tzinfo)
+    return datetime(normalized.year, normalized.month + 1, 1, tzinfo=normalized.tzinfo)
+
+
+def last_moment_of_month(value: datetime) -> datetime:
+    normalized = to_utc_datetime(value)
+    last_day = calendar.monthrange(normalized.year, normalized.month)[1]
+    return datetime(
+        normalized.year,
+        normalized.month,
+        last_day,
+        23,
+        59,
+        59,
+        999999,
+        tzinfo=normalized.tzinfo,
+    )
+
+
+def last_moment_of_previous_month(value: datetime) -> datetime:
+    return first_day_of_month(value) - timedelta(microseconds=1)
+
+
+def complete_month_bounds(
+    start_value: datetime | None,
+    end_value: datetime | None,
+    *,
+    reference_datetime: datetime | None = None,
+) -> tuple[datetime | None, datetime | None]:
+    if start_value is None or end_value is None:
+        return None, None
+
+    normalized_start = to_utc_datetime(start_value)
+    normalized_end = to_utc_datetime(end_value)
+    start_datetime = (
+        first_day_of_month(normalized_start)
+        if normalized_start.day == 1
+        else first_day_of_next_month(normalized_start)
+    )
+    end_month_last_day = calendar.monthrange(normalized_end.year, normalized_end.month)[1]
+    data_end_datetime = (
+        last_moment_of_month(normalized_end)
+        if normalized_end.day == end_month_last_day
+        else last_moment_of_previous_month(normalized_end)
+    )
+    latest_allowed_end = last_moment_of_previous_month(reference_datetime or datetime.now(UTC))
+    end_datetime = min(data_end_datetime, latest_allowed_end)
+    if start_datetime > end_datetime:
+        return None, None
+    return start_datetime, end_datetime
+
+
 def month_key_bounds(month_key: str) -> tuple[date, date]:
     year_text, month_text = month_key.split("-", maxsplit=1)
     year = int(year_text)
@@ -406,6 +467,48 @@ def distinct_nonblank_count(column: Any) -> Any:
     return func.count(func.distinct(func.nullif(func.trim(column), "")))
 
 
+def overview_ticket_volume_80pct_application_count(
+    db: Session,
+    project_id: UUID,
+    completion_start: datetime | None,
+    completion_end: datetime | None,
+) -> int:
+    if completion_start is None or completion_end is None:
+        return 0
+
+    completion_expression = effective_completion_expression()
+    application_expression = func.nullif(func.trim(Ticket.business_service_ci_name), "")
+    statement = (
+        select(
+            application_expression.label("application_name"),
+            func.count(Ticket.id).label("ticket_count"),
+        )
+        .where(
+            Ticket.project_id == project_id,
+            application_expression.is_not(None),
+            completion_expression.is_not(None),
+            completion_expression >= completion_start,
+            completion_expression <= completion_end,
+        )
+        .group_by(application_expression)
+        .order_by(func.count(Ticket.id).desc(), application_expression.asc())
+    )
+    rows = db.execute(statement).mappings().all()
+    total_tickets = sum(int(row["ticket_count"] or 0) for row in rows)
+    if total_tickets <= 0:
+        return 0
+
+    threshold = total_tickets * 0.8
+    cumulative = 0
+    application_count = 0
+    for row in rows:
+        cumulative += int(row["ticket_count"] or 0)
+        application_count += 1
+        if cumulative >= threshold:
+            break
+    return application_count
+
+
 def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
     project_statement = (
         select(Project, Client)
@@ -418,6 +521,15 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
 
     project, client = project_row
 
+    criticality_expression = func.lower(
+        func.trim(
+            func.coalesce(
+                cmdb_payload_text_expression(*CMDB_APPLICATION_FIELDS["biz_criticality"]),
+                "",
+            ),
+        ),
+    )
+    active_application_expression = ApplicationInventoryItem.business_service_ci_name
     inventory_statement = select(
         distinct_nonblank_count(ApplicationInventoryItem.business_service_ci_name).label(
             "total_applications",
@@ -435,6 +547,12 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         distinct_nonblank_count(ApplicationInventoryItem.application_owner).label(
             "application_owner_count",
         ),
+        distinct_nonblank_count(active_application_expression)
+        .filter(criticality_expression == "very critical")
+        .label("very_critical_application_count"),
+        distinct_nonblank_count(active_application_expression)
+        .filter(criticality_expression == "critical")
+        .label("critical_application_count"),
     ).where(
         ApplicationInventoryItem.project_id == project_id,
         ApplicationInventoryItem.active.is_(True),
@@ -442,6 +560,31 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
     inventory_row = db.execute(inventory_statement).mappings().one()
 
     completion_expression = effective_completion_expression()
+    range_statement = select(
+        func.min(completion_expression).label("completion_date_min"),
+        func.max(completion_expression).label("completion_date_max"),
+    ).where(
+        Ticket.project_id == project_id,
+        completion_expression.is_not(None),
+    )
+    range_row = db.execute(range_statement).mappings().one()
+    completion_start, completion_end = complete_month_bounds(
+        range_row["completion_date_min"],
+        range_row["completion_date_max"],
+    )
+
+    ticket_conditions = [Ticket.project_id == project_id]
+    if completion_start is None or completion_end is None:
+        ticket_conditions.append(literal(False))
+    else:
+        ticket_conditions.extend(
+            [
+                completion_expression.is_not(None),
+                completion_expression >= completion_start,
+                completion_expression <= completion_end,
+            ],
+        )
+
     ticket_statement = select(
         func.count(Ticket.id).label("total_in_scope_tickets"),
         func.sum(case((Ticket.ticket_type == "INCIDENT", 1), else_=0)).label("incident_count"),
@@ -450,8 +593,14 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         ),
         func.min(completion_expression).label("completion_date_min"),
         func.max(completion_expression).label("completion_date_max"),
-    ).where(Ticket.project_id == project_id)
+    ).where(*ticket_conditions)
     ticket_row = db.execute(ticket_statement).mappings().one()
+    applications_80pct_count = overview_ticket_volume_80pct_application_count(
+        db,
+        project_id,
+        completion_start,
+        completion_end,
+    )
 
     raw_ticket_statement = select(
         func.count(TicketRawRow.id).label("total_ticket_rows"),
@@ -483,6 +632,10 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
             "supported_vendor_count": int(inventory_row["supported_vendor_count"] or 0),
             "assignment_group_count": int(inventory_row["assignment_group_count"] or 0),
             "application_owner_count": int(inventory_row["application_owner_count"] or 0),
+            "very_critical_application_count": int(
+                inventory_row["very_critical_application_count"] or 0,
+            ),
+            "critical_application_count": int(inventory_row["critical_application_count"] or 0),
         },
         "ingested_volume": {
             "total_rows": raw_incident_rows + raw_sc_task_rows + raw_incident_sla_rows,
@@ -494,8 +647,9 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
             "total_in_scope_tickets": int(ticket_row["total_in_scope_tickets"] or 0),
             "incident_count": int(ticket_row["incident_count"] or 0),
             "sc_task_count": int(ticket_row["sc_task_count"] or 0),
-            "completion_date_min": ticket_row["completion_date_min"],
-            "completion_date_max": ticket_row["completion_date_max"],
+            "completion_date_min": completion_start,
+            "completion_date_max": completion_end,
+            "applications_80pct_monthly_volume_count": applications_80pct_count,
         },
     }
 
@@ -1477,9 +1631,13 @@ def volumetrics_data_range(db: Session, project_id: UUID) -> dict[str, Any]:
             func.max(source.c.completion_at).label("completion_date_max"),
         ).where(source.c.completion_at.is_not(None)),
     ).mappings().one()
+    completion_start, completion_end = complete_month_bounds(
+        row["completion_date_min"],
+        row["completion_date_max"],
+    )
     return {
-        "completion_date_min": row["completion_date_min"],
-        "completion_date_max": row["completion_date_max"],
+        "completion_date_min": completion_start,
+        "completion_date_max": completion_end,
     }
 
 

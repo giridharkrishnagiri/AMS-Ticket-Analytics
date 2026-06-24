@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import calendar
 import html
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
@@ -56,6 +58,7 @@ OFFLINE_CREATED_PATTERN_TYPES = (
 )
 OFFLINE_SCOPE_VALUES = ("in_scope", "out_of_scope")
 OFFLINE_TICKET_TYPE_VALUES = ("incident", "sc_task")
+MONDELEZ_LOGO_FILENAMES = ("MDLZlogo_smr.webp", "MDLZlogo.webp")
 
 
 def json_default(value: Any) -> str:
@@ -77,10 +80,24 @@ def safe_filename_part(value: str) -> str:
 
 def dashboard_filename(customer_name: str, project_name: str, exported_at: datetime) -> str:
     timestamp = exported_at.strftime("%Y%m%d_%H%M")
-    return (
-        f"{safe_filename_part(customer_name)}_"
-        f"{safe_filename_part(project_name)}_Dashboard_{timestamp}.html"
-    )
+    return f"AMS_Apps_Volumetrics_Dashboard_{timestamp}.html"
+
+
+def project_root_path() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def customer_logo_data_url(customer_name: str) -> str | None:
+    if "mondelez" not in customer_name.casefold():
+        return None
+
+    root = project_root_path()
+    for filename in MONDELEZ_LOGO_FILENAMES:
+        logo_path = root / filename
+        if logo_path.is_file():
+            encoded_logo = base64.b64encode(logo_path.read_bytes()).decode("ascii")
+            return f"data:image/webp;base64,{encoded_logo}"
+    return None
 
 
 def display_value(value: Any) -> str:
@@ -1018,6 +1035,7 @@ def build_offline_dashboard_payload(db: Session, project_id: UUID) -> dict[str, 
             "version": "1.0",
             "exported_at": exported_at,
             "customer_name": client.name,
+            "customer_logo_data_url": customer_logo_data_url(client.name),
             "project_name": project.name,
             "project_id": str(project.id),
             "data_available_from": data_range["completion_date_min"],
@@ -1066,7 +1084,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>__PAGE_TITLE__</title>
   <style>
     :root {
@@ -1083,27 +1101,40 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       --purple: #7c3aed;
       font-family: Inter, "Segoe UI", Arial, sans-serif;
     }
-    * { box-sizing: border-box; }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
     html,
     body {
       width: 100%;
-      height: 100%;
+      inline-size: 100%;
+      min-height: 100%;
+      height: auto;
       max-width: 100%;
+      max-inline-size: 100%;
       margin: 0;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
       background: var(--bg);
       color: var(--text);
     }
     .shell {
       display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
-      gap: 12px;
+      grid-template-rows: auto auto auto;
+      gap: 8px;
       width: 100%;
+      inline-size: 100%;
       max-width: 100vw;
-      height: 100vh;
+      max-inline-size: 100vw;
+      min-height: 100vh;
+      height: auto;
       min-width: 0;
-      overflow: hidden;
-      padding: 10px;
+      min-inline-size: 0;
+      overflow-x: hidden;
+      overflow-y: visible;
+      padding: 8px 10px;
     }
     .topbar, .panel {
       border: 1px solid var(--border);
@@ -1112,15 +1143,38 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
     }
     .topbar {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: flex-start;
+      display: grid;
+      grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) minmax(160px, 240px);
+      gap: 14px;
+      align-items: center;
       min-width: 0;
-      padding: 14px 16px;
+      min-height: 72px;
+      max-height: 92px;
+      overflow: hidden;
+      padding: 8px 14px;
+    }
+    .customer-logo {
+      display: flex;
+      align-items: center;
+      min-height: 0;
+      min-width: 0;
+    }
+    .customer-logo img {
+      display: block;
+      max-width: 165px;
+      max-height: 36px;
+      object-fit: contain;
+    }
+    .dashboard-title {
+      min-width: 0;
+      text-align: center;
+    }
+    #export-meta {
+      line-height: 1.25;
+      text-align: right;
     }
     h1, h2, h3 { margin: 0; }
-    h1 { font-size: 1.25rem; }
+    h1 { font-size: 1.16rem; }
     h2 { font-size: 1.08rem; }
     h3 { font-size: 1rem; }
     .label {
@@ -1132,39 +1186,73 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       text-transform: uppercase;
     }
     .muted { color: var(--muted); font-size: 0.88rem; }
-    .tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      min-height: 0;
+    }
     .tab {
-      min-height: 36px;
-      padding: 0 15px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 34px;
+      min-height: 34px;
+      max-height: 34px;
+      padding: 0 14px;
       border: 1px solid var(--border);
       border-radius: 8px;
       background: #fff;
       color: #334155;
       cursor: pointer;
       font-weight: 900;
+      line-height: 1;
     }
     .tab.active { border-color: var(--teal); color: #fff; background: var(--teal); }
     .view {
       display: none;
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
+      min-inline-size: 0;
       min-height: 0;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: visible;
     }
     .view.active {
       display: grid;
       gap: 12px;
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
+      height: auto;
       min-height: 0;
+      overflow-x: hidden;
+      overflow-y: visible;
     }
     #overview.view.active {
       overflow-x: hidden;
-      overflow-y: auto;
-      padding-right: 4px;
+      overflow-y: visible;
+      padding-right: 0;
     }
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
       gap: 10px;
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
+      min-inline-size: 0;
+    }
+    .overview-summary-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
     }
     .tile {
       min-height: 84px;
@@ -1173,25 +1261,74 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       border-radius: 8px;
       background: #f8fafc;
     }
+    .tile.tile-dark {
+      border-color: #0f766e;
+      background: #0f766e;
+      color: #f8fafc;
+    }
+    .tile.tile-dark .label,
+    .tile.tile-dark .muted {
+      color: #d9f99d;
+    }
+    .tile.tile-light {
+      border-color: #bdd6e6;
+      background: #f8fbff;
+      color: #111827;
+    }
+    .tile.tile-light .label {
+      color: #0f766e;
+    }
     .tile strong { display: block; margin-top: 6px; font-size: 1.08rem; }
     .tile .muted { margin: 7px 0 0; font-size: 0.78rem; }
+    .overview-summary-grid .tile {
+      min-height: 124px;
+      padding: 16px;
+    }
+    .overview-summary-grid .tile strong {
+      margin-top: 12px;
+      font-size: 1.35rem;
+      line-height: 1.2;
+    }
+    .overview-summary-grid .tile .muted {
+      margin-top: 10px;
+      font-size: 0.86rem;
+      white-space: pre-line;
+    }
+    .overview-date-note {
+      margin: 12px 0 0;
+      color: #64748b;
+      font-size: 0.86rem;
+      font-style: italic;
+      font-weight: 800;
+      text-align: right;
+    }
     .layout {
       display: grid;
-      grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+      grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
       gap: 12px;
-      height: 100%;
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
+      height: auto;
       min-height: 0;
       min-width: 0;
-      overflow: hidden;
+      min-inline-size: 0;
+      overflow-x: hidden;
+      overflow-y: visible;
+      align-items: start;
     }
     .filters {
       position: sticky;
-      top: 0;
+      top: 10px;
       display: grid;
       align-content: start;
       gap: 12px;
-      max-height: 100%;
+      max-height: 90vh;
+      max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
+      min-inline-size: 0;
       overflow-x: hidden;
       overflow-y: auto;
       padding: 12px;
@@ -1211,49 +1348,134 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       display: grid;
       gap: 12px;
       align-content: start;
-      height: 100%;
+      height: auto;
+      max-height: none;
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
+      min-inline-size: 0;
       min-height: 0;
       overflow-x: hidden;
-      overflow-y: auto;
-      padding-right: 4px;
+      overflow-y: visible;
+      padding-right: 0;
     }
     .chart-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
+      gap: 12px;
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
+      min-inline-size: 0;
+      overflow-x: hidden;
     }
     .chart-card {
+      width: 100%;
+      inline-size: 100%;
       min-width: 0;
-      overflow: hidden;
+      min-inline-size: 0;
+      max-width: 100%;
+      max-inline-size: 100%;
+      min-height: 420px;
+      overflow-x: hidden;
+      overflow-y: visible;
       padding: 10px;
     }
     .chart-card.full { grid-column: 1 / -1; }
     .chart-frame {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
       width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
-      min-height: 250px;
+      min-inline-size: 0;
+      min-height: 340px;
       margin-top: 8px;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: visible;
       border: 1px solid #cbd5e1;
       border-radius: 8px;
       background: #fff;
+      padding: 8px;
     }
-    svg {
+    .chart-stage {
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
+      min-width: 0;
+      min-inline-size: 0;
+      min-height: 340px;
+      overflow-x: hidden;
+      overflow-y: visible;
+    }
+    .chart-stage.scroll-x {
+      overflow-x: auto;
+    }
+    svg,
+    .chart-svg {
       display: block;
       width: 100%;
+      inline-size: 100%;
       max-width: 100%;
+      max-inline-size: 100%;
       height: auto;
     }
+    .pie-svg {
+      max-height: 320px;
+    }
+    .chart-frame .legend { margin-top: 8px; }
+    #applications .chart-card {
+      min-height: 430px;
+    }
+    #applications .chart-stage {
+      min-height: 360px;
+    }
+    #volumetrics .chart-card {
+      min-height: 440px;
+    }
+    #volumetrics .chart-stage {
+      min-height: 360px;
+    }
+    #volumetrics .summary-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
     .table-frame {
+      display: block;
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
+      min-height: 300px;
       max-height: 360px;
-      overflow: auto;
+      overflow-x: auto;
+      overflow-y: auto;
       border: 1px solid var(--border);
       border-radius: 8px;
       background: #fff;
+      -webkit-overflow-scrolling: touch;
     }
-    table { width: 100%; border-collapse: collapse; min-width: 900px; font-size: 0.78rem; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; font-size: 0.78rem; }
+    .table-card {
+      width: 100%;
+      inline-size: 100%;
+      max-width: 100%;
+      max-inline-size: 100%;
+      min-width: 0;
+      min-inline-size: 0;
+      min-height: 420px;
+      overflow: hidden;
+    }
+    .applications-table {
+      width: max-content;
+      min-width: 1800px;
+      border-collapse: collapse;
+    }
     th, td {
       padding: 8px 10px;
       border-bottom: 1px solid #e2e8f0;
@@ -1296,26 +1518,58 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       gap: 10px;
     }
     .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; font-size: 0.78rem; }
+    #applications .legend {
+      gap: 14px;
+      font-size: 0.82rem;
+    }
     .legend span { display: inline-flex; align-items: center; gap: 5px; font-weight: 800; }
     .swatch { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+    #applications .swatch { width: 12px; height: 12px; }
+    .offline-dashboard,
+    .dashboard-layout,
+    .filter-pane,
+    .main-content,
+    .cards-grid,
+    .chart-grid,
+    .chart-card,
+    .chart-stage,
+    .table-card,
+    .table-scroll {
+      min-width: 0;
+      min-inline-size: 0;
+      max-width: 100%;
+      max-inline-size: 100%;
+    }
+    @media (max-width: 1100px) {
+      .chart-grid { grid-template-columns: 1fr; }
+      #volumetrics .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     @media (max-width: 980px) {
       .topbar, .layout { grid-template-columns: 1fr; display: grid; }
-      .summary-grid, .chart-grid { grid-template-columns: 1fr; }
+      .topbar { max-height: none; min-height: 0; }
+      .dashboard-title, #export-meta { text-align: left; }
+      .summary-grid, .chart-grid, #volumetrics .summary-grid { grid-template-columns: 1fr; }
+      .overview-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .filters { position: static; max-height: none; }
       .main { overflow-y: visible; }
+      .shell {
+        height: auto;
+        min-height: 100vh;
+        overflow-y: visible;
+      }
       body { overflow-y: auto; }
+    }
+    @media (max-width: 640px) {
+      .overview-summary-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <script type="application/json" id="dashboard-data">__DASHBOARD_DATA_JSON__</script>
-  <main class="shell">
+  <main class="shell offline-dashboard">
     <section class="topbar">
-      <div>
-        <p class="label">Offline Dashboard</p>
-        <h1 id="page-title"></h1>
-        <p class="muted" id="page-subtitle"></p>
-      </div>
+      <div class="customer-logo" id="customer-logo"></div>
+      <h1 class="dashboard-title" id="page-title"></h1>
       <div class="muted" id="export-meta"></div>
     </section>
     <nav class="tabs" aria-label="Dashboard tabs">
@@ -1391,8 +1645,15 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#39;");
     }
-    function tile(label, value, helper = "") {
-      return `<div class="tile"><p class="label">${esc(label)}</p><strong>${esc(value)}</strong><p class="muted">${esc(helper)}</p></div>`;
+    function tile(label, value, helper = "", index = null, columns = null) {
+      let tone = "";
+      if (index !== null) {
+        const columnCount = columns || 2;
+        const row = Math.floor(index / columnCount);
+        const column = index % columnCount;
+        tone = (row + column) % 2 === 0 ? "tile-dark" : "tile-light";
+      }
+      return `<div class="tile ${tone}"><p class="label">${esc(label)}</p><strong>${esc(value)}</strong><p class="muted">${esc(helper)}</p></div>`;
     }
     function option(value, label, selected) {
       return `<option value="${esc(value)}" ${selected === value ? "selected" : ""}>${esc(label)}</option>`;
@@ -1407,40 +1668,61 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .sort((left, right) => String(left).localeCompare(String(right)));
     }
     function barChart(data, series, options = {}) {
-      const width = Math.max(options.width || 880, data.length * (series.length + 1) * 18);
-      const height = options.height || 310;
-      const margin = { top: 38, right: 30, bottom: 76, left: 34 };
+      const width = Math.max(640, Math.min(options.width || 960, 1120));
+      const isApplicationChart = Boolean(options.applicationChart);
+      const height = options.height || (isApplicationChart ? 380 : 360);
+      const margin = isApplicationChart
+        ? { top: 46, right: 28, bottom: 96, left: 42 }
+        : { top: 42, right: 28, bottom: 86, left: 36 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
       const maxValue = Math.max(1, ...data.flatMap((row) => series.map((item) => Number(row[item.key] || 0))));
-      const groupWidth = plotWidth / Math.max(1, data.length);
-      const barWidth = Math.max(5, Math.min(18, (groupWidth - 8) / series.length));
+      const categoryCount = Math.max(1, data.length);
+      const activePlotWidth = isApplicationChart && categoryCount <= 5
+        ? Math.min(plotWidth, categoryCount * 140)
+        : plotWidth;
+      const plotOffsetX = isApplicationChart ? (plotWidth - activePlotWidth) / 2 : 0;
+      const groupWidth = activePlotWidth / categoryCount;
+      let barWidth;
+      if (isApplicationChart && categoryCount <= 5) {
+        const totalBarWidth = Math.max(34, Math.min(64, groupWidth * 0.38));
+        barWidth = Math.max(22, totalBarWidth / Math.max(1, series.length));
+      } else if (isApplicationChart) {
+        const totalBarWidth = Math.max(24, Math.min(52, groupWidth * 0.36));
+        barWidth = Math.max(22, totalBarWidth / Math.max(1, series.length));
+      } else {
+        barWidth = Math.max(5, Math.min(18, (groupWidth - 8) / series.length));
+      }
+      const dataLabelFontSize = isApplicationChart ? 14 : 10;
+      const axisLabelFontSize = isApplicationChart ? 13 : 10;
+      const labelFontWeight = isApplicationChart ? 800 : 700;
       const bars = [];
       data.forEach((row, index) => {
         series.forEach((item, seriesIndex) => {
           const value = Number(row[item.key] || 0);
           const barHeight = (value / maxValue) * plotHeight;
-          const x = margin.left + index * groupWidth + (groupWidth - barWidth * series.length) / 2 + seriesIndex * barWidth;
+          const x = margin.left + plotOffsetX + index * groupWidth + (groupWidth - barWidth * series.length) / 2 + seriesIndex * barWidth;
           const y = margin.top + plotHeight - barHeight;
           bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${item.color}" rx="3"></rect>`);
           if (value > 0) {
-            bars.push(`<text x="${x + barWidth / 2}" y="${y - 5}" text-anchor="middle" font-size="10" fill="#475569">${options.roundLabels ? rounded(value) : fmt(value)}</text>`);
+            const labelY = Math.max(margin.top + dataLabelFontSize, y - 7);
+            bars.push(`<text x="${x + barWidth / 2}" y="${labelY}" text-anchor="middle" font-size="${dataLabelFontSize}" font-weight="${labelFontWeight}" fill="#334155">${options.roundLabels ? rounded(value) : fmt(value)}</text>`);
           }
         });
       });
       const labels = data.map((row, index) => {
-        const x = margin.left + index * groupWidth + groupWidth / 2;
-        return `<text x="${x}" y="${height - 42}" text-anchor="end" transform="rotate(-35 ${x} ${height - 42})" font-size="11" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
+        const x = margin.left + plotOffsetX + index * groupWidth + groupWidth / 2;
+        return `<text x="${x}" y="${height - 42}" text-anchor="end" transform="rotate(-38 ${x} ${height - 42})" font-size="${axisLabelFontSize}" font-weight="${labelFontWeight}" fill="#334155">${esc(row.label)}</text>`;
       });
-      return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${options.title || "Bar chart"}">
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${options.title || "Bar chart"}">
         <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
         ${bars.join("")}${labels.join("")}
       </svg>${legend(series)}`;
     }
     function lineChart(data, key, averageKey) {
-      const width = Math.max(880, data.length * 56);
-      const height = 310;
-      const margin = { top: 44, right: 36, bottom: 72, left: 36 };
+      const width = 1040;
+      const height = 360;
+      const margin = { top: 52, right: 36, bottom: 78, left: 36 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
       const values = data.map((row) => Number(row[key] || 0));
@@ -1454,7 +1736,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const points = data.map(point);
       const path = points.map(([x, y], index) => `${index ? "L" : "M"}${x},${y}`).join(" ");
       const avgY = margin.top + plotHeight - (average / maxValue) * plotHeight;
-      return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Backlog chart">
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Backlog chart">
         <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
         <line x1="${margin.left}" y1="${avgY}" x2="${width - margin.right}" y2="${avgY}" stroke="${COLORS.purple}" stroke-dasharray="6 5"></line>
         <text x="${width - margin.right - 8}" y="${avgY - 10}" text-anchor="end" fill="${COLORS.purple}" font-size="12" font-weight="900">Avg backlog: ${fmt(average)}</text>
@@ -1462,7 +1744,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ${points.map(([x, y], index) => `<circle cx="${x}" cy="${y}" r="4" fill="#fff" stroke="${COLORS.orange}" stroke-width="2"></circle><text x="${x}" y="${y - 9}" text-anchor="middle" font-size="10" fill="#475569">${fmt(data[index][key])}</text>`).join("")}
         ${data.map((row, index) => {
           const x = margin.left + (plotWidth * index) / Math.max(1, data.length - 1);
-          return `<text x="${x}" y="${height - 38}" text-anchor="end" transform="rotate(-35 ${x} ${height - 38})" font-size="11" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
+          return `<text x="${x}" y="${height - 38}" text-anchor="end" transform="rotate(-35 ${x} ${height - 38})" font-size="10" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
         }).join("")}
       </svg>${legend([{ name: "Backlog(Open)", color: COLORS.orange }, { name: "Average", color: COLORS.purple }])}`;
     }
@@ -1470,9 +1752,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const total = items.reduce((sum, item) => sum + item.count, 0);
       if (!total) return `<p class="muted">No chart data available.</p>`;
       let startAngle = -90;
-      const radius = 96;
-      const cx = 170;
-      const cy = 125;
+      const radius = 106;
+      const cx = 260;
+      const cy = 146;
       const colors = [COLORS.blue, COLORS.green, COLORS.orange, COLORS.red, COLORS.purple, COLORS.slate];
       const slices = items.map((item, index) => {
         const angle = (item.count / total) * 360;
@@ -1484,7 +1766,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         startAngle = endAngle;
         return `<path d="${path}" fill="${colors[index % colors.length]}"><title>${esc(item.label)}: ${fmt(item.count)}</title></path>`;
       });
-      return `<svg viewBox="0 0 360 260" role="img" aria-label="Pie chart">${slices.join("")}</svg>${legend(items.map((item, index) => ({ name: `${item.label} (${fmt(item.count)})`, color: colors[index % colors.length] })))}`;
+      return `<svg class="chart-svg pie-svg" viewBox="0 0 520 320" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Pie chart">${slices.join("")}</svg>${legend(items.map((item, index) => ({ name: `${item.label} (${fmt(item.count)})`, color: colors[index % colors.length] })))}`;
     }
     function polar(cx, cy, radius, angle) {
       const radians = (angle * Math.PI) / 180;
@@ -1523,18 +1805,18 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const overview = DASHBOARD.overview;
       document.getElementById("overview").innerHTML = `<section class="panel" style="padding:14px">
         <p class="label">Overview</p><h2>Executive Summary</h2>
-        <div class="summary-grid" style="margin-top:12px">
-          ${tile("Customer", DASHBOARD.metadata.customer_name)}
-          ${tile("Project", DASHBOARD.metadata.project_name)}
-          ${tile("Total Applications", fmt(overview.application_inventory.total_applications))}
-          ${tile("Functional Tracks", fmt(overview.application_inventory.functional_track_count))}
-          ${tile("AMS Owners", fmt(overview.application_inventory.ams_owner_count))}
-          ${tile("Supported Vendors", fmt(overview.application_inventory.supported_vendor_count))}
-          ${tile("Assignment Groups", fmt(overview.application_inventory.assignment_group_count))}
-          ${tile("Application Owners", fmt(overview.application_inventory.application_owner_count))}
-          ${tile("In-Scope Tickets", fmt(overview.tickets.total_in_scope_tickets), `Incidents: ${fmt(overview.tickets.incident_count)} | SC Tasks: ${fmt(overview.tickets.sc_task_count)}`)}
-          ${tile("Completion Range", `${dateText(overview.tickets.completion_date_min)} to ${dateText(overview.tickets.completion_date_max)}`)}
-        </div></section>`;
+        <div class="summary-grid cards-grid overview-summary-grid" style="margin-top:12px">
+          ${tile("Total Applications", fmt(overview.application_inventory.total_applications), `Very Critical: ${fmt(overview.application_inventory.very_critical_application_count)}\nCritical: ${fmt(overview.application_inventory.critical_application_count)}`, 0, 4)}
+          ${tile("Functional Tracks / AMS Owners", fmt(overview.application_inventory.functional_track_count), `AMS Owners: ${fmt(overview.application_inventory.ams_owner_count)}`, 1, 4)}
+          ${tile("Assignment Groups", fmt(overview.application_inventory.assignment_group_count), "", 2, 4)}
+          ${tile("Supported Vendors", fmt(overview.application_inventory.supported_vendor_count), "", 3, 4)}
+          ${tile("In-Scope Tickets", fmt(overview.tickets.total_in_scope_tickets), "", 4, 4)}
+          ${tile("Incidents", fmt(overview.tickets.incident_count), `${pct(overview.tickets.incident_count, overview.tickets.total_in_scope_tickets)} of in-scope tickets`, 5, 4)}
+          ${tile("SC Tasks", fmt(overview.tickets.sc_task_count), `${pct(overview.tickets.sc_task_count, overview.tickets.total_in_scope_tickets)} of in-scope tickets`, 6, 4)}
+          ${tile("Apps Driving 80% Volume", fmt(overview.tickets.applications_80pct_monthly_volume_count), "Based on avg monthly ticket volume", 7, 4)}
+        </div>
+        <p class="overview-date-note">Tickets data range: ${dateText(overview.tickets.completion_date_min)} to ${dateText(overview.tickets.completion_date_max)}</p>
+      </section>`;
     }
     function filteredApplications() {
       return DASHBOARD.applications.rows.filter((row) =>
@@ -1550,28 +1832,28 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const technicalCount = rows.filter((row) => ["technical", "technical application"].includes(String(row.app_type).toLowerCase())).length;
       const criticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "critical").length;
       const veryCriticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "very critical").length;
-      document.getElementById("applications").innerHTML = `<div class="layout">
-        <aside class="filters panel">
+      document.getElementById("applications").innerHTML = `<div class="layout dashboard-layout">
+        <aside class="filters filter-pane panel">
           <p class="label">Filters</p><h2>Applications</h2>
           ${renderSelect("app-functional", "Functional Track / AMS Owner", [{ value: "all", label: "All" }, ...functionalValues.map((value) => ({ value, label: value }))], state.appFunctional)}
           ${renderSelect("app-sap", "SAP / Non-SAP", [{ value: "all", label: "All" }, ...sapValues.map((value) => ({ value, label: value }))], state.appSap)}
         </aside>
-        <section class="main">
-          <div class="summary-grid">
-            ${tile("Applications", fmt(new Set(rows.map((row) => row.business_service_ci_name)).size))}
-            ${tile("Functional Groups", fmt(new Set(rows.map((row) => row.functional_track)).size))}
-            ${tile("Assignment Groups", fmt(new Set(rows.map((row) => row.assignment_group)).size))}
-            ${tile("Parent Business Apps", fmt(new Set(rows.map((row) => row.parent_application_name)).size))}
-            ${tile("Application Type", `Business: ${fmt(businessCount)}`, `Technical: ${fmt(technicalCount)}`)}
-            ${tile("Criticality", `Very Critical: ${fmt(veryCriticalCount)}`, `Critical: ${fmt(criticalCount)}`)}
+        <section class="main main-content">
+          <div class="summary-grid cards-grid">
+            ${tile("Applications", fmt(new Set(rows.map((row) => row.business_service_ci_name)).size), "", 0, 6)}
+            ${tile("Functional Groups", fmt(new Set(rows.map((row) => row.functional_track)).size), "", 1, 6)}
+            ${tile("Assignment Groups", fmt(new Set(rows.map((row) => row.assignment_group)).size), "", 2, 6)}
+            ${tile("Parent Business Apps", fmt(new Set(rows.map((row) => row.parent_application_name)).size), "", 3, 6)}
+            ${tile("Application Type", `Business: ${fmt(businessCount)}`, `Technical: ${fmt(technicalCount)}`, 4, 6)}
+            ${tile("Criticality", `Very Critical: ${fmt(veryCriticalCount)}`, `Critical: ${fmt(criticalCount)}`, 5, 6)}
           </div>
           <div class="chart-grid">
-            <section class="chart-card panel"><h3>Strategic</h3><div class="chart-frame">${pieChart(countBy(rows, "strategic"))}</div></section>
-            <section class="chart-card panel"><h3>Lifecycle Stage</h3><div class="chart-frame">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 760 })}</div></section>
-            <section class="chart-card panel"><h3>Operating System</h3><div class="chart-frame">${barChart(countBy(rows, "operating_system").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 760 })}</div></section>
-            <section class="chart-card panel"><h3>SOX Scope</h3><div class="chart-frame">${barChart(countBy(rows, "sox_scope").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 760 })}</div></section>
+            <section class="chart-card panel"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
+            <section class="chart-card panel"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel"><h3>Operating System</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "operating_system").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel"><h3>SOX Scope</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "sox_scope").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
           </div>
-          <section class="panel" style="padding:14px"><h3>Application List</h3><div class="table-frame">${applicationTable(rows)}</div></section>
+          <section class="panel table-card" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
         </section>
       </div>`;
       document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; renderApplications(); });
@@ -1579,7 +1861,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function applicationTable(rows) {
       const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "app_type", "architecture_type", "biz_criticality", "install_status", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
-      return `<table><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(row[column] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+      return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(row[column] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function filteredVolumetricsRows() {
       return DASHBOARD.volumetrics.monthly_rows.filter((row) =>
@@ -1624,15 +1906,15 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function renderVolumetrics() {
       const rows = filteredVolumetricsRows();
       const periods = aggregateByPeriod(rows);
-      document.getElementById("volumetrics").innerHTML = `<div class="layout">
-        <aside class="filters panel">
+      document.getElementById("volumetrics").innerHTML = `<div class="layout dashboard-layout">
+        <aside class="filters filter-pane panel">
           <p class="label">Filters</p><h2>Volumetrics &amp; SLA</h2>
           ${renderSelect("vol-scope", "Scope", DASHBOARD.volumetrics.filter_values.scope, state.volScope)}
           ${renderSelect("vol-ticket", "Ticket Type", DASHBOARD.volumetrics.filter_values.ticket_type, state.volTicketType)}
           ${renderSelect("vol-functional", "Functional Track / AMS Owner", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.functional_track_ams_owner.map((value) => ({ value, label: value }))], state.volFunctional)}
           ${renderSelect("vol-sap", "SAP / Non-SAP", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.sap_non_sap.map((value) => ({ value, label: value }))], state.volSap)}
         </aside>
-        <section class="main">
+        <section class="main main-content">
           <section class="panel" style="padding:14px"><p class="muted"><strong>Monthly dashboard based on complete uploaded months.</strong> Charts use ${dateText(DASHBOARD.metadata.complete_month_from)} to ${dateText(DASHBOARD.metadata.complete_month_to)}. Data available from ${dateText(DASHBOARD.metadata.data_available_from)} to ${dateText(DASHBOARD.metadata.data_available_to)}.</p><div class="subtabs">${volSubTabs()}</div></section>
           ${renderVolumetricsSubTab(periods)}
         </section>
@@ -1686,18 +1968,18 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const responseAverage = state.volTicketType === "sc_task" ? null : average(responsePercentages);
       const resolutionAverage = state.volTicketType === "sc_task" ? null : average(resolutionPercentages);
       return `
-        <div class="summary-grid">
-          ${tile("Created", `Total: ${fmt(totalCreated)}`, `Avg monthly: ${fmt(totalCreated / Math.max(1, periods.length))}`)}
-          ${tile("Resolved / Closed", `Total: ${fmt(totalResolved)}`, `Avg monthly: ${fmt(totalResolved / Math.max(1, periods.length))}`)}
-          ${tile("Canceled / Closed Incomplete", `Total: ${fmt(totalCanceled)}`, `% of Resolved+Canceled: ${pct(totalCanceled, totalResolved + totalCanceled)}`)}
-          ${tile("Response SLA", responseAverage === null ? "N/A" : `${responseAverage.toFixed(1)}%`, "Avg monthly adherence")}
-          ${tile("Resolution SLA", resolutionAverage === null ? "N/A" : `${resolutionAverage.toFixed(1)}%`, "Avg monthly adherence")}
+        <div class="summary-grid cards-grid">
+          ${tile("Created", `Total: ${fmt(totalCreated)}`, `Avg monthly: ${fmt(totalCreated / Math.max(1, periods.length))}`, 0, 5)}
+          ${tile("Resolved / Closed", `Total: ${fmt(totalResolved)}`, `Avg monthly: ${fmt(totalResolved / Math.max(1, periods.length))}`, 1, 5)}
+          ${tile("Canceled / Closed Incomplete", `Total: ${fmt(totalCanceled)}`, `% of Resolved+Canceled: ${pct(totalCanceled, totalResolved + totalCanceled)}`, 2, 5)}
+          ${tile("Response SLA", responseAverage === null ? "N/A" : `${responseAverage.toFixed(1)}%`, "Avg monthly adherence", 3, 5)}
+          ${tile("Resolution SLA", resolutionAverage === null ? "N/A" : `${resolutionAverage.toFixed(1)}%`, "Avg monthly adherence", 4, 5)}
         </div>
-        <section class="chart-card panel full"><h3>Created vs Resolved/Closed vs Canceled / Closed Incomplete</h3><div class="chart-frame">${barChart(periods, [{ key: "created", name: "Created", color: COLORS.teal }, { key: "resolved", name: "Resolved/Closed", color: COLORS.blue }, { key: "canceled", name: "Canceled", color: COLORS.red }], { width: 980 })}</div></section>
-        <section class="chart-card panel full"><h3>Backlog(Open)</h3><div class="chart-frame">${lineChart(periods, "backlog", "average")}</div></section>
-        <section class="chart-card panel full"><h3>Created Pattern</h3><p class="muted">Average created/opened tickets across the available monthly range.</p><div class="pattern-buttons">${patternButtons()}</div><div class="chart-frame">${createdPatternChart()}</div></section>
-        <section class="chart-card panel full"><h3>Created vs Resolved by hour of the day</h3><div class="pattern-buttons">${hourlyButtons()}</div><div class="chart-frame">${hourlyCreatedResolvedChart()}</div></section>
-        <section class="chart-card panel full"><div class="chart-title-row"><h3>Priority-wise ticket distribution</h3><div class="pattern-buttons">${priorityToggle()}</div></div><div class="chart-frame">${priorityDistributionContent()}</div></section>
+        <section class="chart-card panel full"><h3>Created vs Resolved/Closed vs Canceled / Closed Incomplete</h3><div class="chart-frame chart-stage">${barChart(periods, [{ key: "created", name: "Created", color: COLORS.teal }, { key: "resolved", name: "Resolved/Closed", color: COLORS.blue }, { key: "canceled", name: "Canceled", color: COLORS.red }], { width: 1040 })}</div></section>
+        <section class="chart-card panel full"><h3>Backlog(Open)</h3><div class="chart-frame chart-stage">${lineChart(periods, "backlog", "average")}</div></section>
+        <section class="chart-card panel full"><h3>Created Pattern</h3><p class="muted">Average created/opened tickets across the available monthly range.</p><div class="pattern-buttons">${patternButtons()}</div><div class="chart-frame chart-stage">${createdPatternChart()}</div></section>
+        <section class="chart-card panel full"><h3>Created vs Resolved by hour of the day</h3><div class="pattern-buttons">${hourlyButtons()}</div><div class="chart-frame chart-stage">${hourlyCreatedResolvedChart()}</div></section>
+        <section class="chart-card panel full"><div class="chart-title-row"><h3>Priority-wise ticket distribution</h3><div class="pattern-buttons">${priorityToggle()}</div></div><div class="chart-frame chart-stage">${priorityDistributionContent()}</div></section>
       `;
     }
     function average(values) {
@@ -1773,12 +2055,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return stackedBarChart(periodRows, series);
     }
     function priorityDistributionTable(points, priorities) {
-      return `<div class="table-frame"><table><thead><tr><th>Period</th>${priorities.map((priority) => `<th>${esc(priority)}</th>`).join("")}<th>Total</th></tr></thead><tbody>${points.map((point) => `<tr><td>${esc(point.label)}</td>${priorities.map((priority) => `<td>${fmt(point.values[priority] || 0)}</td>`).join("")}<td>${fmt(point.total)}</td></tr>`).join("")}</tbody></table></div>`;
+      return `<div class="table-frame table-scroll"><table><thead><tr><th>Period</th>${priorities.map((priority) => `<th>${esc(priority)}</th>`).join("")}<th>Total</th></tr></thead><tbody>${points.map((point) => `<tr><td>${esc(point.label)}</td>${priorities.map((priority) => `<td>${fmt(point.values[priority] || 0)}</td>`).join("")}<td>${fmt(point.total)}</td></tr>`).join("")}</tbody></table></div>`;
     }
     function stackedBarChart(data, series) {
-      const width = Math.max(880, data.length * 54);
-      const height = 330;
-      const margin = { top: 34, right: 30, bottom: 76, left: 34 };
+      const width = 1040;
+      const height = 360;
+      const margin = { top: 42, right: 30, bottom: 86, left: 36 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
       const maxValue = Math.max(1, ...data.map((row) => Number(row.total || 0)));
@@ -1800,9 +2082,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
       const labels = data.map((row, index) => {
         const x = margin.left + index * groupWidth + groupWidth / 2;
-        return `<text x="${x}" y="${height - 42}" text-anchor="end" transform="rotate(-35 ${x} ${height - 42})" font-size="11" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
+        return `<text x="${x}" y="${height - 38}" text-anchor="end" transform="rotate(-35 ${x} ${height - 38})" font-size="10" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
       });
-      return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Priority distribution">
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Priority distribution">
         <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
         ${bars.join("")}${labels.join("")}
       </svg>${legend(series)}`;
@@ -1815,8 +2097,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const response = slaTrendPoints(rows, "response");
       const resolution = slaTrendPoints(rows, "resolution");
       return `
-        <section class="chart-card panel full"><h3>Response SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame">${slaLineChart(response, COLORS.teal, "Response SLA adherence %")}</div>${slaTrendTable(response, "Response SLA")}</section>
-        <section class="chart-card panel full"><h3>Resolution SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame">${slaLineChart(resolution, COLORS.blue, "Resolution SLA adherence %")}</div>${slaTrendTable(resolution, "Resolution SLA")}</section>
+        <section class="chart-card panel full"><h3>Response SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame chart-stage">${slaLineChart(response, COLORS.teal, "Response SLA adherence %")}</div>${slaTrendTable(response, "Response SLA")}</section>
+        <section class="chart-card panel full"><h3>Resolution SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame chart-stage">${slaLineChart(resolution, COLORS.blue, "Resolution SLA adherence %")}</div>${slaTrendTable(resolution, "Resolution SLA")}</section>
       `;
     }
     function slaTrendPoints(rows, kind) {
@@ -1835,9 +2117,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
     }
     function slaLineChart(data, color, label) {
-      const width = Math.max(880, data.length * 56);
-      const height = 310;
-      const margin = { top: 42, right: 34, bottom: 76, left: 44 };
+      const width = 1040;
+      const height = 360;
+      const margin = { top: 52, right: 34, bottom: 78, left: 44 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
       const values = data.map((row) => row.pct).filter((value) => value !== null);
@@ -1848,18 +2130,24 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         return { x, y, row };
       });
       const path = points.filter((point) => point.y !== null).map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
-      return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(label)}">
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(label)}">
         <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
         <path d="${path}" fill="none" stroke="${color}" stroke-width="3"></path>
         ${points.map((point) => point.y === null ? "" : `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${color}" stroke-width="2"></circle><text x="${point.x}" y="${point.y - 9}" text-anchor="middle" font-size="10" fill="#475569">${point.row.pct.toFixed(1)}%</text>`).join("")}
         ${data.map((row, index) => {
           const x = margin.left + (plotWidth * index) / Math.max(1, data.length - 1);
-          return `<text x="${x}" y="${height - 40}" text-anchor="end" transform="rotate(-35 ${x} ${height - 40})" font-size="11" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
+          return `<text x="${x}" y="${height - 38}" text-anchor="end" transform="rotate(-35 ${x} ${height - 38})" font-size="10" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
         }).join("")}
       </svg>${legend([{ name: label, color }])}`;
     }
     function slaTrendTable(rows, label) {
-      return `<div class="table-frame" style="margin-top:10px"><table><thead><tr><th>Duration</th><th>Total closed tickets</th><th>${esc(label)} captured</th><th>${esc(label)} adhered</th><th>${esc(label)} adherence %</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.totalClosed)}</td><td>${fmt(row.captured)}</td><td>${fmt(row.adhered)}</td><td>${row.pct === null ? "N/A" : `${row.pct.toFixed(1)}%`}</td></tr>`).join("")}</tbody></table></div>`;
+      return `<div class="table-frame table-scroll" style="margin-top:10px"><table><thead><tr><th>Duration</th><th>Total closed tickets</th><th>${esc(label)} captured</th><th>${esc(label)} adhered</th><th>${esc(label)} adherence %</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.totalClosed)}</td><td>${fmt(row.captured)}</td><td>${fmt(row.adhered)}</td><td>${row.pct === null ? "N/A" : `${row.pct.toFixed(1)}%`}</td></tr>`).join("")}</tbody></table></div>`;
+    }
+    function renderCustomerLogo() {
+      const logoUrl = DASHBOARD.metadata.customer_logo_data_url;
+      document.getElementById("customer-logo").innerHTML = logoUrl
+        ? `<img src="${esc(logoUrl)}" alt="${esc(DASHBOARD.metadata.customer_name)} logo">`
+        : "";
     }
     function activateTab(tab) {
       state.tab = tab;
@@ -1867,9 +2155,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === tab));
     }
     function initialize() {
-      document.getElementById("page-title").textContent = "AMS Ticket Intelligence";
-      document.getElementById("page-subtitle").textContent = `${DASHBOARD.metadata.customer_name} / ${DASHBOARD.metadata.project_name}`;
+      document.getElementById("page-title").textContent = "AMS Applications & Volumetric Analysis";
       document.getElementById("export-meta").innerHTML = `Exported: ${dateTimeText(DASHBOARD.metadata.exported_at)}<br>Monthly offline dashboard`;
+      renderCustomerLogo();
       document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
       renderOverview();
       renderApplications();

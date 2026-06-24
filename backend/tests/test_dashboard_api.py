@@ -225,6 +225,7 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             assignment_group="Assignment A",
             application_owner="App Owner A",
             parent_application_name="Parent One",
+            cmdb_payload={"Business criticality": "Very Critical"},
         )
         add_inventory_item(
             db,
@@ -236,6 +237,7 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             assignment_group="Assignment B",
             application_owner="App Owner B",
             parent_application_name="Parent One",
+            cmdb_payload={"Business criticality": "Critical"},
         )
         add_inventory_item(
             db,
@@ -247,6 +249,7 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             assignment_group="Assignment C",
             application_owner="App Owner B",
             parent_application_name="Parent Two",
+            cmdb_payload={"Business criticality": "Low"},
         )
         add_inventory_item(
             db,
@@ -270,7 +273,7 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             "INCIDENT",
             dt("2026-01-01T00:00:00"),
             state="Resolved",
-            resolved_at=dt("2026-01-03T00:00:00"),
+            resolved_at=dt("2026-01-01T00:00:00"),
         )
         incident.business_service_ci_name = "Ticket Service Only"
         incident.supported_by_vendor = "Ticket Supported Vendor"
@@ -286,7 +289,7 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             "SERVICE_CATALOG_TASK",
             dt("2026-01-02T00:00:00"),
             state="Closed",
-            closed_at=dt("2026-01-05T00:00:00"),
+            closed_at=dt("2026-01-31T00:00:00"),
         )
         sc_task.business_service_ci_name = "Another Ticket Service"
         sc_task.supported_by_vendor = "Another Ticket Vendor"
@@ -344,6 +347,8 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             "supported_vendor_count": 3,
             "assignment_group_count": 3,
             "application_owner_count": 2,
+            "very_critical_application_count": 1,
+            "critical_application_count": 1,
         }
         assert payload["ingested_volume"] == {
             "total_rows": 5,
@@ -354,8 +359,9 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
         assert payload["tickets"]["total_in_scope_tickets"] == 2
         assert payload["tickets"]["incident_count"] == 1
         assert payload["tickets"]["sc_task_count"] == 1
-        assert payload["tickets"]["completion_date_min"].startswith("2026-01-03")
-        assert payload["tickets"]["completion_date_max"].startswith("2026-01-05")
+        assert payload["tickets"]["completion_date_min"].startswith("2026-01-01")
+        assert payload["tickets"]["completion_date_max"].startswith("2026-01-31")
+        assert payload["tickets"]["applications_80pct_monthly_volume_count"] == 2
         assert "response_sla_adherence_pct" not in str(payload)
         assert "resolution_sla_adherence_pct" not in str(payload)
     finally:
@@ -994,8 +1000,8 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
 
         assert data_range_response.status_code == 200
         data_range = data_range_response.json()
-        assert data_range["completion_date_min"].startswith("2026-01-25")
-        assert data_range["completion_date_max"].startswith("2026-03-05")
+        assert data_range["completion_date_min"].startswith("2026-02-01")
+        assert data_range["completion_date_max"].startswith("2026-02-28")
 
         assert chart_response.status_code == 200
         chart_payload = chart_response.json()
@@ -1192,6 +1198,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         incident.functional_track = "Data"
         incident.ams_owner = "Owner A"
         incident.support_lead = "Lead A"
+        incident.business_service_ci_name = "Payroll Portal"
         incident.parent_application_name = "Parent Payroll"
         incident.application_owner = "Application Owner A"
         incident.supported_by_vendor = "Vendor A"
@@ -1214,6 +1221,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         sc_task.functional_track = "Run"
         sc_task.ams_owner = "Owner B"
         sc_task.support_lead = "Lead B"
+        sc_task.business_service_ci_name = "Payroll Portal"
         sc_task.parent_application_name = "Parent Payroll"
         sc_task.application_owner = "Application Owner B"
         sc_task.supported_by_vendor = "Vendor B"
@@ -1269,7 +1277,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
 
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/html")
-        assert "Dashboard_" in response.headers["content-disposition"]
+        assert "AMS_Apps_Volumetrics_Dashboard_" in response.headers["content-disposition"]
         assert response.headers["content-disposition"].endswith('.html"')
 
         document = response.text
@@ -1285,12 +1293,89 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Priority-wise ticket distribution" in document
         assert "Response SLA adherence trend" in document
         assert "Resolution SLA adherence trend" in document
+        assert (
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
+            in document
+        )
+        assert "AMS Applications & Volumetric Analysis" in document
+        assert "AMS Ticket Intelligence" not in document
+        assert "Offline Dashboard</p>" not in document
+        assert "page-subtitle" not in document
+        assert "overview-summary-grid" in document
+        assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in document
+        assert "tile-dark" in document
+        assert "tile-light" in document
+        assert "const row = Math.floor(index / columnCount);" in document
+        assert 'tile("Project", DASHBOARD.metadata.project_name, "", 0, 4)' not in document
+        assert "Functional Tracks / AMS Owners" in document
+        assert "Apps Driving 80% Volume" in document
+        assert "Tickets data range:" in document
+        assert (
+            'tile("Applications", fmt(new Set(rows.map((row) => '
+            'row.business_service_ci_name)).size), "", 0, 6)'
+            in document
+        )
+        assert (
+            'tile("Created", `Total: ${fmt(totalCreated)}`, '
+            "`Avg monthly: ${fmt(totalCreated / Math.max(1, periods.length))}`, 0, 5)"
+            in document
+        )
+        assert "Tickets Data Range" not in document
+        assert "Completion Range" not in document
+        assert 'tile("Customer"' not in document
+        assert 'tile("Application Owners"' not in document
+        assert "function renderCustomerLogo" in document
         assert "function dateTimeText" in document
         assert "Exported: ${dateTimeText(DASHBOARD.metadata.exported_at)}" in document
         assert "max-width: 100vw" in document
+        assert "*::before" in document
+        assert "*::after" in document
+        assert "offline-dashboard" in document
+        assert "dashboard-layout" in document
+        assert "filter-pane" in document
+        assert "main-content" in document
+        assert "cards-grid" in document
+        assert "max-height: 92px" in document
+        assert "max-height: 34px" in document
+        assert "max-height: none; min-height: 0;" in document
+        assert "#applications .legend" in document
+        assert "font-size: 0.82rem" in document
+        assert "const dataLabelFontSize = isApplicationChart ? 14 : 10;" in document
+        assert "const axisLabelFontSize = isApplicationChart ? 13 : 10;" in document
+        assert "barWidth = Math.max(22" in document
+        assert "applicationChart: true" in document
+        assert "chart-stage" in document
+        assert "table-card" in document
+        assert "table-scroll" in document
+        assert "applications-table" in document
+        assert "@media (max-width: 1100px)" in document
+        assert "grid-template-columns: minmax(220px, 260px) minmax(0, 1fr)" in document
+        assert "width: 100%" in document
+        assert (
+            "#volumetrics .summary-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }"
+            in document
+        )
         assert "overflow-x: hidden" in document
+        assert "overflow-x: auto" in document
         assert "position: sticky" in document
         assert "overflow-y: auto" in document
+        assert "overflow-y: visible" in document
+        assert "grid-template-rows: auto auto auto" in document
+        assert "min-height: 420px" in document
+        assert "min-height: 430px" in document
+        assert "min-height: 440px" in document
+        assert "min-height: 360px" in document
+        assert "min-height: 300px" in document
+        assert "max-height: 360px" in document
+        assert "min-width: 1800px" in document
+        assert "class=\"chart-svg pie-svg\"" in document
+        assert "viewBox=\"0 0 520 320\"" in document
+        assert "preserveAspectRatio=\"xMidYMid meet\"" in document
+        assert "100dvh" not in document
+        assert "overflow-y: hidden" not in document
+        assert "max-height: calc(100vh" not in document
+        assert "Math.max(options.width || 1180" not in document
+        assert "data.length * 60" not in document
         assert "INC-OFFLINE-RAW-SECRET" not in document
         assert "INC-OFFLINE-INCOMPLETE-MONTH" not in document
         assert "SCTASK-OFFLINE-RAW-SECRET" not in document
@@ -1308,16 +1393,21 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert match is not None
         payload = json.loads(match.group(1))
         assert payload["metadata"]["time_grain"] == "monthly"
+        assert payload["metadata"]["customer_logo_data_url"] is None
         assert payload["metadata"]["offline_filters"] == [
             "scope",
             "ticket_type",
             "functional_track_ams_owner",
             "sap_non_sap",
         ]
-        assert payload["metadata"]["data_available_to"].startswith("2026-02-20")
+        assert payload["metadata"]["data_available_to"].startswith("2026-01-31")
         assert payload["metadata"]["complete_month_from"].startswith("2026-01-01")
         assert payload["metadata"]["complete_month_to"].startswith("2026-01-31")
         assert payload["overview"]["application_inventory"]["total_applications"] == 1
+        assert payload["overview"]["application_inventory"]["critical_application_count"] == 1
+        assert payload["overview"]["application_inventory"]["very_critical_application_count"] == 0
+        assert payload["overview"]["tickets"]["completion_date_max"].startswith("2026-01-31")
+        assert payload["overview"]["tickets"]["applications_80pct_monthly_volume_count"] == 1
         assert payload["applications"]["rows"][0]["business_service_ci_name"] == "Payroll Portal"
         assert "cmdb_payload" not in payload["applications"]["rows"][0]
         assert payload["volumetrics"]["monthly_rows"]

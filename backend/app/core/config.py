@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
     )
 
-    app_name: str = "AMS Ticket Intelligence"
+    app_name: str = "AMS Applications & Volumetrics Analytics"
     app_version: str = "0.1.0"
     environment: str = "local"
     database_url: str = "postgresql+psycopg://localhost:5432/ams_ticket_intelligence"

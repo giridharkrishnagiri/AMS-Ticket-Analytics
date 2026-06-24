@@ -76,9 +76,7 @@ function CustomerSelector({
         ))}
       </select>
       {selectedProject ? (
-        <span className="helper-text">
-          Project: {selectedProject.name} ({selectedProject.code})
-        </span>
+        <span className="helper-text">Project: {selectedProject.name}</span>
       ) : null}
       {error ? <span className="helper-text error-inline">{error}</span> : null}
     </label>

@@ -274,6 +274,12 @@ function KpiCard({
   );
 }
 
+function summaryTileToneClass(index: number, columns: number): string {
+  const row = Math.floor(index / columns);
+  const column = index % columns;
+  return (row + column) % 2 === 0 ? "summary-tile-dark" : "summary-tile-light";
+}
+
 function ChartCard({
   title,
   subtitle,
@@ -725,19 +731,30 @@ function Dashboard() {
   }, [loadDashboardData, overview.data, overview.status, overviewShapeRefreshAttempted]);
 
   const overviewInventory = overview.data?.application_inventory;
-  const overviewIngestedVolume = overview.data?.ingested_volume;
   const overviewTickets = overview.data?.tickets;
   const overviewCompletionDateRange = formatDisplayDateRange(
     overviewTickets?.completion_date_min,
     overviewTickets?.completion_date_max
   );
+  const overviewTotalTickets = overviewTickets?.total_in_scope_tickets ?? 0;
+  const incidentTicketShare =
+    overviewTotalTickets > 0
+      ? `${(((overviewTickets?.incident_count ?? 0) / overviewTotalTickets) * 100).toFixed(
+          1
+        )}% of in-scope tickets`
+      : "No in-scope tickets";
+  const scTaskTicketShare =
+    overviewTotalTickets > 0
+      ? `${(((overviewTickets?.sc_task_count ?? 0) / overviewTotalTickets) * 100).toFixed(
+          1
+        )}% of in-scope tickets`
+      : "No in-scope tickets";
 
   return (
     <div className="dashboard-layout">
-      <section className="dashboard-header panel" aria-labelledby="dashboard-heading">
+      <section className="dashboard-header panel" aria-label="Dashboard controls">
         <div>
           <p className="label">Dashboard</p>
-          <h2 id="dashboard-heading">AMS Ticket Analytics Dashboard</h2>
           <p>Uses normalized ticket data and backend SQL aggregate APIs.</p>
         </div>
         <div className="dashboard-header-actions">
@@ -815,49 +832,60 @@ function Dashboard() {
             </div>
           </div>
           <div className="summary-grid">
-            <div>
+            <div className={summaryTileToneClass(0, 4)}>
               <p className="label">Total Applications</p>
               <strong>{formatNumber(overviewInventory?.total_applications)}</strong>
-              <span className="helper-text">Unique Business Service CI names in active Application Inventory.</span>
+              <div className="overview-ticket-details">
+                <span>
+                  Very Critical: {formatNumber(overviewInventory?.very_critical_application_count)}
+                </span>
+                <span>Critical: {formatNumber(overviewInventory?.critical_application_count)}</span>
+              </div>
             </div>
-            <div>
-              <p className="label">Functional Tracks</p>
+            <div className={summaryTileToneClass(1, 4)}>
+              <p className="label">Functional Tracks / AMS Owners</p>
               <strong>{formatNumber(overviewInventory?.functional_track_count)}</strong>
+              <div className="overview-ticket-details">
+                <span>AMS Owners: {formatNumber(overviewInventory?.ams_owner_count)}</span>
+              </div>
             </div>
-            <div>
-              <p className="label">AMS Owners</p>
-              <strong>{formatNumber(overviewInventory?.ams_owner_count)}</strong>
-            </div>
-            <div>
-              <p className="label">Supported Vendors</p>
-              <strong>{formatNumber(overviewInventory?.supported_vendor_count)}</strong>
-            </div>
-            <div>
+            <div className={summaryTileToneClass(2, 4)}>
               <p className="label">Assignment Groups</p>
               <strong>{formatNumber(overviewInventory?.assignment_group_count)}</strong>
             </div>
-            <div>
-              <p className="label">Application Owners</p>
-              <strong>{formatNumber(overviewInventory?.application_owner_count)}</strong>
+            <div className={summaryTileToneClass(3, 4)}>
+              <p className="label">Supported Vendors</p>
+              <strong>{formatNumber(overviewInventory?.supported_vendor_count)}</strong>
             </div>
-            <div className="overview-slab-card">
-              <p className="label">Total Tickets Data Ingested</p>
-              <div className="overview-ticket-details">
-                <span>Incidents: {formatNumber(overviewIngestedVolume?.incident_rows)}</span>
-                <span>SC Tasks: {formatNumber(overviewIngestedVolume?.sc_task_rows)}</span>
-                <span>Incident SLA: {formatNumber(overviewIngestedVolume?.incident_sla_rows)}</span>
-              </div>
-            </div>
-            <div className="overview-slab-card">
+            <div className={`overview-slab-card ${summaryTileToneClass(4, 4)}`}>
               <p className="label">In-Scope Tickets</p>
               <strong>{formatNumber(overviewTickets?.total_in_scope_tickets)}</strong>
+            </div>
+            <div className={`overview-slab-card ${summaryTileToneClass(5, 4)}`}>
+              <p className="label">Incidents</p>
+              <strong>{formatNumber(overviewTickets?.incident_count)}</strong>
               <div className="overview-ticket-details">
-                <span>Incidents: {formatNumber(overviewTickets?.incident_count)}</span>
-                <span>SC Tasks: {formatNumber(overviewTickets?.sc_task_count)}</span>
+                <span>{incidentTicketShare}</span>
+              </div>
+            </div>
+            <div className={`overview-slab-card ${summaryTileToneClass(6, 4)}`}>
+              <p className="label">SC Tasks</p>
+              <strong>{formatNumber(overviewTickets?.sc_task_count)}</strong>
+              <div className="overview-ticket-details">
+                <span>{scTaskTicketShare}</span>
+              </div>
+            </div>
+            <div className={summaryTileToneClass(7, 4)}>
+              <p className="label">Apps Driving 80% Volume</p>
+              <strong>
+                {formatNumber(overviewTickets?.applications_80pct_monthly_volume_count)}
+              </strong>
+              <div className="overview-ticket-details">
+                <span>Based on avg monthly ticket volume</span>
               </div>
             </div>
           </div>
-          <p className="overview-date-note">Resolved/Closed Date Range: {overviewCompletionDateRange}</p>
+          <p className="overview-date-note">Tickets data range: {overviewCompletionDateRange}</p>
           {overview.status === "loading" ? (
             <p className="muted-text">Loading dashboard overview...</p>
           ) : null}

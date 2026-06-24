@@ -551,6 +551,14 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       selectedLabel: `${formatDateShort(startDate)} to ${formatDateShort(endDate)}`,
     };
   }, [endMonth, endWeek, startMonth, startWeek, timeGrain]);
+  const availableStartDate = parseApiDateValue(dataRange.data.completion_date_min);
+  const availableEndDate = parseApiDateValue(dataRange.data.completion_date_max);
+  const availableStartMonth = availableStartDate ? monthInputValue(availableStartDate) : undefined;
+  const availableEndMonth = availableEndDate ? monthInputValue(availableEndDate) : undefined;
+  const availableStartWeek = availableStartDate
+    ? dateInputValue(weekStartDate(dateInputValue(availableStartDate)))
+    : undefined;
+  const availableEndWeek = availableEndDate ? dateInputValue(availableEndDate) : undefined;
 
   const filterOptions = useMemo(
     () => ({
@@ -962,6 +970,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   <input
                     type="month"
                     value={startMonth}
+                    min={availableStartMonth}
+                    max={availableEndMonth}
                     onChange={(event) => setStartMonth(event.target.value)}
                   />
                 </label>
@@ -970,6 +980,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   <input
                     type="month"
                     value={endMonth}
+                    min={availableStartMonth}
+                    max={availableEndMonth}
                     onChange={(event) => setEndMonth(event.target.value)}
                   />
                 </label>
@@ -981,6 +993,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   <input
                     type="date"
                     value={startWeek}
+                    min={availableStartWeek}
+                    max={availableEndWeek}
                     onChange={(event) => handleStartWeekChange(event.target.value)}
                   />
                 </label>
@@ -989,6 +1003,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   <input
                     type="date"
                     value={endWeek}
+                    min={availableStartWeek}
+                    max={availableEndWeek}
                     onChange={(event) => handleEndWeekChange(event.target.value)}
                   />
                 </label>
@@ -1011,6 +1027,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                     summary.data.created.average_per_period,
                     1
                   )}`}
+                  index={0}
                 />
                 <MetricCard
                   label="Resolved / Closed"
@@ -1019,6 +1036,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                     summary.data.resolved_closed.average_per_period,
                     1
                   )}`}
+                  index={1}
                 />
                 <MetricCard
                   label={canceledMetricLabel}
@@ -1030,6 +1048,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   tertiary={`% of Resolved+${canceledMetricLabel}: ${formatPercent(
                     summary.data.cancelled.cancelled_pct_of_resolved_cancelled
                   )}`}
+                  index={2}
                 />
                 <MetricCard
                   label="Response SLA"
@@ -1039,6 +1058,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   secondary={`${formatNumber(
                     summary.data.response_sla.met_count
                   )} met / ${formatNumber(summary.data.response_sla.applicable_count)} applicable`}
+                  index={3}
                 />
                 <MetricCard
                   label="Resolution SLA"
@@ -1050,6 +1070,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   )} met / ${formatNumber(
                     summary.data.resolution_sla.applicable_count
                   )} applicable`}
+                  index={4}
                 />
               </div>
 
@@ -1134,19 +1155,27 @@ function cancellationMetricLabel(ticketType: VolumetricsTicketType): string {
   return "Canceled / Closed Incomplete";
 }
 
+function summaryTileToneClass(index: number, columns: number): string {
+  const row = Math.floor(index / columns);
+  const column = index % columns;
+  return (row + column) % 2 === 0 ? "summary-tile-dark" : "summary-tile-light";
+}
+
 function MetricCard({
   label,
   primary,
   secondary,
   tertiary,
+  index,
 }: {
   label: string;
   primary: string;
   secondary: string;
   tertiary?: string;
+  index: number;
 }) {
   return (
-    <div>
+    <div className={summaryTileToneClass(index, 5)}>
       <p className="label">{label}</p>
       <strong>{primary}</strong>
       <div className="overview-ticket-details">

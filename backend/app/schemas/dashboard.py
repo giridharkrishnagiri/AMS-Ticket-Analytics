@@ -119,6 +119,8 @@ class DashboardOverviewInventorySummary(BaseModel):
     supported_vendor_count: int
     assignment_group_count: int
     application_owner_count: int
+    very_critical_application_count: int
+    critical_application_count: int
 
 
 class DashboardOverviewTicketSummary(BaseModel):
@@ -127,6 +129,7 @@ class DashboardOverviewTicketSummary(BaseModel):
     sc_task_count: int
     completion_date_min: datetime | None
     completion_date_max: datetime | None
+    applications_80pct_monthly_volume_count: int
 
 
 class DashboardOverviewIngestedVolumeSummary(BaseModel):

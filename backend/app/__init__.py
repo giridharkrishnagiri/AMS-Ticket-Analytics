@@ -1,1 +1,1 @@
-"""AMS Ticket Intelligence backend application."""
+"""AMS Applications & Volumetrics Analytics backend application."""

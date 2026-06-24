@@ -494,6 +494,36 @@ h2 {
   background: #f8fafc;
 }
 
+.summary-grid > .summary-tile-dark {
+  border-color: #0f766e;
+  color: #f8fafc;
+  background: #0f766e;
+}
+
+.summary-grid > .summary-tile-dark .label,
+.summary-grid > .summary-tile-dark .helper-text,
+.summary-grid > .summary-tile-dark .overview-ticket-details {
+  color: #d9f99d;
+}
+
+.summary-grid > .summary-tile-dark strong {
+  color: #ffffff;
+}
+
+.summary-grid > .summary-tile-light {
+  border-color: #bdd6e6;
+  color: #111827;
+  background: #f8fbff;
+}
+
+.summary-grid > .summary-tile-light .label {
+  color: #0f766e;
+}
+
+.summary-grid > .summary-tile-light strong {
+  color: #111827;
+}
+
 .summary-grid strong {
   display: block;
   margin-top: 8px;

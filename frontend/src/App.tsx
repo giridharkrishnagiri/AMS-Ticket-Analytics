@@ -89,7 +89,7 @@ function HealthDetails({
         </div>
         <div>
           <p className="label">Service</p>
-          <strong>{health?.service ?? "AMS Ticket Intelligence"}</strong>
+          <strong>{health?.service ?? "AMS Applications & Volumetrics Analytics"}</strong>
           <span className="helper-text">Version: {health?.version ?? "Not available"}</span>
         </div>
         <div>
@@ -151,8 +151,7 @@ function App() {
       <section className={`workspace-panel workspace-${activeView}`} aria-labelledby="page-title">
         <div className="page-heading">
           <div>
-            <p className="eyebrow">AMS Consulting</p>
-            <h1 id="page-title">AMS Ticket Intelligence</h1>
+            <h1 id="page-title">AMS Applications &amp; Volumetrics Analytics</h1>
             <p className="page-subtitle">Application Support &amp; Maintenance Analytics Cockpit</p>
           </div>
           <div className="shell-actions">

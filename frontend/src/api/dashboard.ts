@@ -171,6 +171,8 @@ export type DashboardOverview = {
     supported_vendor_count: number;
     assignment_group_count: number;
     application_owner_count: number;
+    very_critical_application_count: number;
+    critical_application_count: number;
   };
   ingested_volume: {
     total_rows: number;
@@ -184,6 +186,7 @@ export type DashboardOverview = {
     sc_task_count: number;
     completion_date_min: string | null;
     completion_date_max: string | null;
+    applications_80pct_monthly_volume_count: number;
   };
 };
 
@@ -568,7 +571,7 @@ export async function downloadOfflineDashboard(
 
   const filename =
     getDownloadFilename(response.headers.get("Content-Disposition")) ??
-    `AMS_Ticket_Intelligence_Dashboard_${new Date()
+    `AMS_Apps_Volumetrics_Dashboard_${new Date()
       .toISOString()
       .slice(0, 16)
       .replace(/[-:T]/g, "")}.html`;
