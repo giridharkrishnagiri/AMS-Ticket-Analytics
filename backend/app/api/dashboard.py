@@ -4,7 +4,7 @@ from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -24,6 +24,7 @@ from app.schemas.dashboard import (
     IncidentSlaSummaryResponse,
     IncidentSlaTrendRow,
     MttrTrendRow,
+    OfflineDashboardExportRequest,
     ReassignmentTrendRow,
     ReopenTrendRow,
     SlaTrendRow,
@@ -35,7 +36,11 @@ from app.schemas.dashboard import (
     VolumetricsCreatedResolvedCanceledResponse,
     VolumetricsDataRangeResponse,
     VolumetricsFilterValuesResponse,
+    VolumetricsHourlyCreatedResolvedRequest,
+    VolumetricsHourlyCreatedResolvedResponse,
+    VolumetricsPriorityDistributionResponse,
     VolumetricsRequest,
+    VolumetricsSlaTrendsResponse,
     VolumetricsSummaryResponse,
 )
 from app.services.dashboard import (
@@ -65,8 +70,12 @@ from app.services.dashboard import (
     volumetrics_created_resolved_cancelled,
     volumetrics_data_range,
     volumetrics_filter_value_counts,
+    volumetrics_hourly_created_resolved,
+    volumetrics_priority_distribution,
+    volumetrics_sla_trends,
     volumetrics_summary,
 )
+from app.services.offline_dashboard_export import build_offline_dashboard_export
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -288,6 +297,64 @@ def get_dashboard_volumetrics_created_pattern(
         return volumetrics_created_pattern(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/hourly-created-resolved",
+    response_model=VolumetricsHourlyCreatedResolvedResponse,
+)
+def get_dashboard_volumetrics_hourly_created_resolved(
+    request: VolumetricsHourlyCreatedResolvedRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_hourly_created_resolved(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/priority-distribution",
+    response_model=VolumetricsPriorityDistributionResponse,
+)
+def get_dashboard_volumetrics_priority_distribution(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_priority_distribution(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/sla-trends",
+    response_model=VolumetricsSlaTrendsResponse,
+)
+def get_dashboard_volumetrics_sla_trends(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_sla_trends(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/offline-export")
+def download_offline_dashboard(
+    request: OfflineDashboardExportRequest,
+    db: DbSession,
+) -> Response:
+    try:
+        document, filename = build_offline_dashboard_export(db, request.project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=document,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get(

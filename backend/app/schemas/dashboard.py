@@ -411,6 +411,11 @@ class VolumetricsCreatedPatternRequest(VolumetricsRequest):
     pattern_type: str = "day_of_month"
 
 
+class OfflineDashboardExportRequest(BaseModel):
+    project_id: UUID
+    format: str = Field(default="html", pattern="^html$")
+
+
 class VolumetricsCreatedPatternPoint(BaseModel):
     label: str
     average_created: float
@@ -421,3 +426,57 @@ class VolumetricsCreatedPatternPoint(BaseModel):
 class VolumetricsCreatedPatternResponse(BaseModel):
     pattern_type: str
     points: list[VolumetricsCreatedPatternPoint]
+
+
+class VolumetricsHourlyCreatedResolvedRequest(VolumetricsRequest):
+    day_type: str = "weekdays"
+
+
+class VolumetricsHourlyCreatedResolvedPoint(BaseModel):
+    hour: str
+    average_created: float
+    average_resolved_closed: float
+    created_label: int
+    resolved_closed_label: int
+
+
+class VolumetricsHourlyCreatedResolvedResponse(BaseModel):
+    day_type: str
+    denominator_days: int
+    points: list[VolumetricsHourlyCreatedResolvedPoint]
+
+
+class VolumetricsPriorityDistributionPoint(BaseModel):
+    period_key: str
+    period_label: str
+    values: dict[str, int]
+    total: int
+
+
+class VolumetricsPriorityDistributionResponse(BaseModel):
+    time_grain: str
+    priorities: list[str]
+    points: list[VolumetricsPriorityDistributionPoint]
+
+
+class VolumetricsSlaTrendRow(BaseModel):
+    period_key: str
+    period_label: str
+    total_closed_ticket_count: int
+    sla_captured_count: int
+    sla_adhered_count: int
+    sla_adherence_pct: float | None
+
+
+class VolumetricsSlaTrendLogic(BaseModel):
+    response_adherence_formula: str
+    resolution_adherence_formula: str
+    captured_definition: str
+
+
+class VolumetricsSlaTrendsResponse(BaseModel):
+    time_grain: str
+    not_applicable: bool
+    response: list[VolumetricsSlaTrendRow]
+    resolution: list[VolumetricsSlaTrendRow]
+    logic: VolumetricsSlaTrendLogic

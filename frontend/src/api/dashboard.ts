@@ -1,4 +1,4 @@
-import { requestJson } from "./client";
+import { apiBaseUrl, requestJson } from "./client";
 
 export type TimeGrain = "DAILY" | "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY";
 export type TicketTypeFilter = "INCIDENT" | "SERVICE_CATALOG_TASK";
@@ -415,6 +415,8 @@ export type CreatedPatternType =
   | "hour_weekdays"
   | "hour_weekends";
 
+export type VolumetricsDayType = "weekdays" | "weekends";
+
 export type DashboardVolumetricsCreatedPatternPoint = {
   label: string;
   average_created: number;
@@ -425,6 +427,54 @@ export type DashboardVolumetricsCreatedPatternPoint = {
 export type DashboardVolumetricsCreatedPattern = {
   pattern_type: CreatedPatternType;
   points: DashboardVolumetricsCreatedPatternPoint[];
+};
+
+export type DashboardVolumetricsHourlyCreatedResolvedPoint = {
+  hour: string;
+  average_created: number;
+  average_resolved_closed: number;
+  created_label: number;
+  resolved_closed_label: number;
+};
+
+export type DashboardVolumetricsHourlyCreatedResolved = {
+  day_type: VolumetricsDayType;
+  denominator_days: number;
+  points: DashboardVolumetricsHourlyCreatedResolvedPoint[];
+};
+
+export type DashboardVolumetricsPriorityDistributionPoint = {
+  period_key: string;
+  period_label: string;
+  values: Record<string, number>;
+  total: number;
+};
+
+export type DashboardVolumetricsPriorityDistribution = {
+  time_grain: VolumetricsTimeGrain;
+  priorities: string[];
+  points: DashboardVolumetricsPriorityDistributionPoint[];
+};
+
+export type DashboardVolumetricsSlaTrendRow = {
+  period_key: string;
+  period_label: string;
+  total_closed_ticket_count: number;
+  sla_captured_count: number;
+  sla_adhered_count: number;
+  sla_adherence_pct: number | null;
+};
+
+export type DashboardVolumetricsSlaTrends = {
+  time_grain: VolumetricsTimeGrain;
+  not_applicable: boolean;
+  response: DashboardVolumetricsSlaTrendRow[];
+  resolution: DashboardVolumetricsSlaTrendRow[];
+  logic: {
+    response_adherence_formula: string;
+    resolution_adherence_formula: string;
+    captured_definition: string;
+  };
 };
 
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
@@ -480,6 +530,50 @@ export function getDashboardFilterValues(input: DashboardQuery): Promise<Dashboa
 export function getDashboardOverview(projectId: string): Promise<DashboardOverview> {
   const query = new URLSearchParams({ project_id: projectId.trim() });
   return requestJson<DashboardOverview>(`/dashboard/overview?${query.toString()}`);
+}
+
+function getDownloadFilename(contentDisposition: string | null): string | null {
+  if (!contentDisposition) {
+    return null;
+  }
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].trim());
+  }
+  const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return filenameMatch?.[1]?.trim() ?? null;
+}
+
+export async function downloadOfflineDashboard(
+  projectId: string
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${apiBaseUrl}/dashboard/offline-export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId.trim(), format: "html" }),
+  });
+
+  if (!response.ok) {
+    let message = `Request failed with HTTP ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") {
+        message = payload.detail;
+      }
+    } catch {
+      // Keep the HTTP status fallback when the response is not JSON.
+    }
+    throw new Error(message);
+  }
+
+  const filename =
+    getDownloadFilename(response.headers.get("Content-Disposition")) ??
+    `AMS_Ticket_Intelligence_Dashboard_${new Date()
+      .toISOString()
+      .slice(0, 16)
+      .replace(/[-:T]/g, "")}.html`;
+
+  return { blob: await response.blob(), filename };
 }
 
 export function getDashboardApplicationsFilterValues(
@@ -604,6 +698,36 @@ export function getDashboardVolumetricsCreatedPattern(
     { ...input, pattern_type: patternType } as DashboardVolumetricsRequest & {
       pattern_type: CreatedPatternType;
     }
+  );
+}
+
+export function getDashboardVolumetricsHourlyCreatedResolved(
+  input: DashboardVolumetricsRequest,
+  dayType: VolumetricsDayType
+): Promise<DashboardVolumetricsHourlyCreatedResolved> {
+  return postVolumetricsRequest<DashboardVolumetricsHourlyCreatedResolved>(
+    "/dashboard/volumetrics/hourly-created-resolved",
+    { ...input, day_type: dayType } as DashboardVolumetricsRequest & {
+      day_type: VolumetricsDayType;
+    }
+  );
+}
+
+export function getDashboardVolumetricsPriorityDistribution(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsPriorityDistribution> {
+  return postVolumetricsRequest<DashboardVolumetricsPriorityDistribution>(
+    "/dashboard/volumetrics/priority-distribution",
+    input
+  );
+}
+
+export function getDashboardVolumetricsSlaTrends(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsSlaTrends> {
+  return postVolumetricsRequest<DashboardVolumetricsSlaTrends>(
+    "/dashboard/volumetrics/sla-trends",
+    input
   );
 }
 

@@ -17,6 +17,7 @@ import {
 } from "recharts";
 
 import {
+  downloadOfflineDashboard,
   getCreatedResolvedOpenTrend,
   getCreationSourceTrend,
   getDashboardFilterValues,
@@ -423,6 +424,7 @@ function Dashboard() {
   >(createLoadState(emptyTechnicalFunctional));
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [pageMessage, setPageMessage] = useState<string | null>(null);
+  const [downloadStatus, setDownloadStatus] = useState<LoadStatus>("idle");
   const [overviewShapeRefreshAttempted, setOverviewShapeRefreshAttempted] = useState(false);
 
   function clearDashboardData() {
@@ -451,6 +453,33 @@ function Dashboard() {
     },
     [projectId]
   );
+
+  const handleDownloadDashboard = useCallback(async () => {
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedProjectId) {
+      setPageMessage("Select a customer and project to download dashboard.");
+      return;
+    }
+
+    setDownloadStatus("loading");
+    setPageMessage(null);
+    try {
+      const { blob, filename } = await downloadOfflineDashboard(cleanedProjectId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setPageMessage("Offline dashboard download is ready.");
+      setDownloadStatus("success");
+    } catch (error) {
+      setPageMessage(errorMessage(error, "Unable to download offline dashboard"));
+      setDownloadStatus("error");
+    }
+  }, [projectId]);
 
   const chartQuery = useMemo<DashboardQuery | null>(() => {
     const cleanedProjectId = projectId.trim();
@@ -712,7 +741,7 @@ function Dashboard() {
           <p>Uses normalized ticket data and backend SQL aggregate APIs.</p>
         </div>
         <div className="dashboard-header-actions">
-          <div>
+          <div className="dashboard-selector-panel">
             <CustomerSelector
               label="Customer / Project"
               projectId={projectId}
@@ -720,21 +749,36 @@ function Dashboard() {
               onProjectChange={setSelectedProject}
             />
           </div>
-          <button
-            className="primary-button"
-            disabled={!projectId.trim()}
-            type="button"
-            onClick={() => void loadDashboardData()}
-          >
-            Refresh Dashboard
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={clearDashboardData}
-          >
-            Clear Dashboard Data
-          </button>
+          <div className="dashboard-button-row">
+            <button
+              className="primary-button"
+              disabled={!projectId.trim()}
+              type="button"
+              onClick={() => void loadDashboardData()}
+            >
+              Refresh Dashboard
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={clearDashboardData}
+            >
+              Clear Dashboard Data
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!projectId.trim() || downloadStatus === "loading"}
+              title={
+                projectId.trim()
+                  ? "Download an offline interactive dashboard"
+                  : "Select a customer and project to download dashboard."
+              }
+              type="button"
+              onClick={() => void handleDownloadDashboard()}
+            >
+              {downloadStatus === "loading" ? "Preparing Download..." : "Download Dashboard"}
+            </button>
+          </div>
         </div>
       </section>
 

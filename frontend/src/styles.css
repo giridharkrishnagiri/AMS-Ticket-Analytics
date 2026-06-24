@@ -576,17 +576,25 @@ h2 {
 
 .dashboard-header-actions {
   display: grid;
-  min-width: min(340px, 100%);
+  min-width: min(620px, 100%);
   gap: 12px;
   justify-items: end;
 }
 
-.dashboard-header-actions > div {
+.dashboard-selector-panel {
   width: 100%;
   padding: 12px;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #f8fafc;
+}
+
+.dashboard-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  width: 100%;
 }
 
 .dashboard-header-actions strong {
@@ -1666,6 +1674,36 @@ h2 {
   text-align: right;
 }
 
+.dashboard-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dashboard-subtabs button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #334155;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.dashboard-subtabs button.active {
+  border-color: #0f766e;
+  color: #ffffff;
+  background: #0f766e;
+  box-shadow: 0 2px 7px rgb(15 118 110 / 20%);
+}
+
+.volumetrics-subtabs {
+  justify-content: flex-start;
+}
+
 .volumetrics-controls {
   display: grid;
   grid-template-columns: auto minmax(150px, 220px) minmax(150px, 220px);
@@ -1769,6 +1807,48 @@ h2 {
 
 .volumetrics-chart-plot {
   min-height: 406px;
+}
+
+.volumetrics-chart-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.volumetrics-compact-toggle {
+  min-height: 32px;
+}
+
+.volumetrics-compact-toggle button {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 0.76rem;
+}
+
+.volumetrics-data-table-frame {
+  max-height: 340px;
+}
+
+.volumetrics-data-table {
+  min-width: 760px;
+}
+
+.volumetrics-data-table th,
+.volumetrics-data-table td {
+  text-align: right;
+}
+
+.volumetrics-data-table th:first-child,
+.volumetrics-data-table td:first-child {
+  text-align: left;
+}
+
+.volumetrics-placeholder-panel {
+  display: grid;
+  gap: 6px;
+  padding: 18px;
 }
 
 .maintenance-panel {
@@ -1878,6 +1958,10 @@ h2 {
   .dashboard-header-actions {
     width: 100%;
     justify-items: stretch;
+  }
+
+  .dashboard-button-row {
+    flex-direction: column;
   }
 
   .breakdown-row {

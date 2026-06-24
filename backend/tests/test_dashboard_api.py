@@ -1,4 +1,6 @@
 import inspect
+import json
+import re
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -956,6 +958,26 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                     "filters": {"sap_non_sap": ["SAP"]},
                 },
             )
+            hourly_weekday_response = client.post(
+                "/api/dashboard/volumetrics/hourly-created-resolved",
+                json={**request_body, "day_type": "weekdays"},
+            )
+            hourly_weekend_response = client.post(
+                "/api/dashboard/volumetrics/hourly-created-resolved",
+                json={**request_body, "day_type": "weekends"},
+            )
+            priority_response = client.post(
+                "/api/dashboard/volumetrics/priority-distribution",
+                json=request_body,
+            )
+            sla_trends_response = client.post(
+                "/api/dashboard/volumetrics/sla-trends",
+                json=request_body,
+            )
+            sc_task_sla_trends_response = client.post(
+                "/api/dashboard/volumetrics/sla-trends",
+                json={**request_body, "ticket_type": "sc_task"},
+            )
 
         assert summary_response.status_code == 200
         summary = summary_response.json()
@@ -1084,6 +1106,245 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         assert sap_points[0]["created_count"] == 2
         assert sap_points[0]["resolved_closed_count"] == 1
         assert sap_points[0]["canceled_closed_incomplete_count"] == 0
+
+        assert hourly_weekday_response.status_code == 200
+        weekday_hourly = hourly_weekday_response.json()
+        assert weekday_hourly["day_type"] == "weekdays"
+        assert [point["hour"] for point in weekday_hourly["points"]] == [
+            f"{hour:02d}" for hour in range(24)
+        ]
+        assert sum(point["average_created"] for point in weekday_hourly["points"]) > 0
+        assert sum(point["average_resolved_closed"] for point in weekday_hourly["points"]) > 0
+
+        assert hourly_weekend_response.status_code == 200
+        weekend_hourly = hourly_weekend_response.json()
+        assert weekend_hourly["day_type"] == "weekends"
+        assert len(weekend_hourly["points"]) == 24
+        assert sum(point["average_created"] for point in weekend_hourly["points"]) > 0
+
+        assert priority_response.status_code == 200
+        priority_payload = priority_response.json()
+        assert priority_payload["time_grain"] == "monthly"
+        assert "P1" in priority_payload["priorities"]
+        assert priority_payload["points"][0]["values"]["P1"] == 3
+        assert priority_payload["points"][0]["total"] == 3
+
+        assert sla_trends_response.status_code == 200
+        sla_trends = sla_trends_response.json()
+        assert sla_trends["not_applicable"] is False
+        assert sla_trends["logic"]["captured_definition"] == "sla_breached IS NOT NULL"
+        assert sla_trends["response"][1]["total_closed_ticket_count"] == 1
+        assert sla_trends["response"][1]["sla_captured_count"] == 1
+        assert sla_trends["response"][1]["sla_adhered_count"] == 1
+        assert sla_trends["response"][1]["sla_adherence_pct"] == 100
+        assert sla_trends["resolution"][1]["sla_captured_count"] == 1
+        assert sla_trends["resolution"][1]["sla_adhered_count"] == 0
+        assert sla_trends["resolution"][1]["sla_adherence_pct"] == 0
+
+        assert sc_task_sla_trends_response.status_code == 200
+        sc_task_sla_trends = sc_task_sla_trends_response.json()
+        assert sc_task_sla_trends["not_applicable"] is True
+        assert sc_task_sla_trends["response"] == []
+        assert sc_task_sla_trends["resolution"] == []
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "Payroll Portal",
+            supported_by_vendor="Vendor A",
+            functional_track="Data",
+            ams_owner="Owner A",
+            assignment_group="IT-SAP-PAYROLL",
+            application_owner="Application Owner A",
+            parent_application_name="Parent Payroll",
+            cmdb_payload={
+                "Application type": "Business",
+                "Architecture type": "Cloud",
+                "Business criticality": "Critical",
+                "Install Status": "In production",
+                "Install type": "Production",
+                "Life Cycle Stage": "Operational",
+                "Life Cycle Stage Status": "In Use",
+                "Operating System": "Windows",
+                "SOX Scope": "In-Scope",
+                "Strategic": "Yes",
+            },
+        )
+        incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-OFFLINE-RAW-SECRET",
+            "INCIDENT",
+            dt("2026-01-01T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-01T00:00:00"),
+            assignment_group="IT-SAP-PAYROLL",
+            raw_payload={"secret": "raw ticket payload should not be exported"},
+        )
+        incident.functional_track = "Data"
+        incident.ams_owner = "Owner A"
+        incident.support_lead = "Lead A"
+        incident.parent_application_name = "Parent Payroll"
+        incident.application_owner = "Application Owner A"
+        incident.supported_by_vendor = "Vendor A"
+        incident.response_sla_breached = False
+        incident.resolution_sla_breached = False
+
+        sc_task = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-OFFLINE-RAW-SECRET",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-12T00:00:00"),
+            state="Closed",
+            closed_at=dt("2026-01-18T00:00:00"),
+            assignment_group="IT-NSA-PAYROLL",
+            raw_payload={"secret": "raw sc task payload should not be exported"},
+        )
+        sc_task.functional_track = "Run"
+        sc_task.ams_owner = "Owner B"
+        sc_task.support_lead = "Lead B"
+        sc_task.parent_application_name = "Parent Payroll"
+        sc_task.application_owner = "Application Owner B"
+        sc_task.supported_by_vendor = "Vendor B"
+
+        incomplete_month_incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-OFFLINE-INCOMPLETE-MONTH",
+            "INCIDENT",
+            dt("2026-02-10T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-02-20T00:00:00"),
+            assignment_group="IT-SAP-PAYROLL",
+        )
+        incomplete_month_incident.functional_track = "Data"
+        incomplete_month_incident.ams_owner = "Owner A"
+        incomplete_month_incident.support_lead = "Lead A"
+        incomplete_month_incident.parent_application_name = "Parent Payroll"
+        incomplete_month_incident.application_owner = "Application Owner A"
+        incomplete_month_incident.supported_by_vendor = "Vendor A"
+
+        db.add(
+            AssessmentOutOfScopeTicket(
+                project_id=project_id,
+                upload_batch_id=batch_id,
+                ticket_number="INC-OFFLINE-OOS-SECRET",
+                ticket_type="INCIDENT",
+                created_at=dt("2026-01-14T00:00:00"),
+                resolved_at=dt("2026-01-20T00:00:00"),
+                state="Resolved",
+                assignment_group="IT-SAP-OOS",
+                sap_non_sap="SAP",
+                functional_track="Data",
+                ams_owner="Owner A",
+                support_lead="Lead A",
+                parent_application_name="Parent Payroll",
+                application_owner="Application Owner A",
+                supported_by_vendor="Vendor A",
+                response_sla_breached=False,
+                resolution_sla_breached=False,
+                out_of_scope_reason="assignment_group_not_in_application_inventory",
+            ),
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/offline-export",
+                json={"project_id": str(project_id), "format": "html"},
+            )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "Dashboard_" in response.headers["content-disposition"]
+        assert response.headers["content-disposition"].endswith('.html"')
+
+        document = response.text
+        assert "Overview" in document
+        assert "Applications" in document
+        assert "Volumetrics &amp; SLA" in document
+        assert "Overall Volume Trends" in document
+        assert "Overall SLA Trends" in document
+        assert "Detailed Volume Trends" in document
+        assert "KPI Trends" in document
+        assert "Category-wise Trends" in document
+        assert "Created vs Resolved by hour of the day" in document
+        assert "Priority-wise ticket distribution" in document
+        assert "Response SLA adherence trend" in document
+        assert "Resolution SLA adherence trend" in document
+        assert "function dateTimeText" in document
+        assert "Exported: ${dateTimeText(DASHBOARD.metadata.exported_at)}" in document
+        assert "max-width: 100vw" in document
+        assert "overflow-x: hidden" in document
+        assert "position: sticky" in document
+        assert "overflow-y: auto" in document
+        assert "INC-OFFLINE-RAW-SECRET" not in document
+        assert "INC-OFFLINE-INCOMPLETE-MONTH" not in document
+        assert "SCTASK-OFFLINE-RAW-SECRET" not in document
+        assert "INC-OFFLINE-OOS-SECRET" not in document
+        assert "raw ticket payload should not be exported" not in document
+        assert "raw sc task payload should not be exported" not in document
+        assert "normalized_payload" not in document
+        assert "cmdb_payload" not in document
+
+        match = re.search(
+            r'<script type="application/json" id="dashboard-data">(.*?)</script>',
+            document,
+            re.S,
+        )
+        assert match is not None
+        payload = json.loads(match.group(1))
+        assert payload["metadata"]["time_grain"] == "monthly"
+        assert payload["metadata"]["offline_filters"] == [
+            "scope",
+            "ticket_type",
+            "functional_track_ams_owner",
+            "sap_non_sap",
+        ]
+        assert payload["metadata"]["data_available_to"].startswith("2026-02-20")
+        assert payload["metadata"]["complete_month_from"].startswith("2026-01-01")
+        assert payload["metadata"]["complete_month_to"].startswith("2026-01-31")
+        assert payload["overview"]["application_inventory"]["total_applications"] == 1
+        assert payload["applications"]["rows"][0]["business_service_ci_name"] == "Payroll Portal"
+        assert "cmdb_payload" not in payload["applications"]["rows"][0]
+        assert payload["volumetrics"]["monthly_rows"]
+        assert [row["period_key"] for row in payload["volumetrics"]["periods"]] == ["2026-01"]
+        assert {
+            row["period_key"] for row in payload["volumetrics"]["monthly_rows"]
+        } == {"2026-01"}
+        assert payload["volumetrics"]["sub_tabs"] == [
+            "overall_volume_trends",
+            "overall_sla_trends",
+            "detailed_volume_trends",
+            "kpi_trends",
+            "category_wise_trends",
+        ]
+        assert payload["volumetrics"]["created_patterns"]["rows"]
+        assert payload["volumetrics"]["overall_volume_trends"][
+            "created_resolved_by_hour"
+        ]["rows"]
+        assert payload["volumetrics"]["overall_volume_trends"][
+            "priority_distribution"
+        ]["rows"]
+        assert payload["volumetrics"]["overall_sla_trends"]["rows"]
+        assert payload["volumetrics"]["placeholders"]["kpi_trends"].startswith(
+            "Detailed requirements",
+        )
+        assert "ticket_number" not in payload["volumetrics"]["monthly_rows"][0]
+        assert "normalized_payload" not in payload["volumetrics"]["monthly_rows"][0]
     finally:
         cleanup_client(db, client_id)
 

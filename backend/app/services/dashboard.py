@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
@@ -151,6 +152,7 @@ VOLUMETRICS_CREATED_PATTERN_TYPES = {
     "hour_weekdays",
     "hour_weekends",
 }
+VOLUMETRICS_DAY_TYPES = {"weekdays", "weekends"}
 VOLUMETRICS_SCOPE_LABELS = {
     "all": "All",
     "in_scope": "In-scope",
@@ -1114,9 +1116,12 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         model.id.label("id"),
         model.ticket_type.label("ticket_type"),
         model.created_at.label("created_at"),
+        model.resolved_at.label("resolved_at"),
+        model.closed_at.label("closed_at"),
         volumetrics_completion_expression(model).label("completion_at"),
         volumetrics_exit_expression(model).label("exit_at"),
         model.state.label("state"),
+        model.priority.label("priority"),
         model.assignment_group.label("assignment_group"),
         model.support_lead.label("support_lead"),
         model.functional_track.label("functional_track"),
@@ -2046,6 +2051,297 @@ def volumetrics_created_pattern(db: Session, request: Any) -> dict[str, Any]:
             for hour in range(24)
         ],
     }
+
+
+def normalize_volumetrics_day_type(value: str | None) -> str:
+    normalized = (value or "weekdays").strip().lower()
+    if normalized not in VOLUMETRICS_DAY_TYPES:
+        raise ValueError("Day type must be weekdays or weekends")
+    return normalized
+
+
+def volumetrics_day_type_condition(date_expression: Any, day_type: str) -> Any:
+    dow_expression = cast(func.extract("dow", date_expression), Float)
+    if normalize_volumetrics_day_type(day_type) == "weekdays":
+        return dow_expression.between(1, 5)
+    return dow_expression.in_((0, 6))
+
+
+def volumetrics_counts_by_hour(
+    db: Session,
+    request: Any,
+    source: Any,
+    date_expression: Any,
+    day_type: str,
+    value_label: str,
+    extra_conditions: list[Any] | None = None,
+) -> dict[int, int]:
+    hour_expression = cast(func.extract("hour", date_expression), Float)
+    conditions = [
+        *volumetrics_base_conditions(source, request, include_date_bounds=False),
+        date_expression.is_not(None),
+        date_expression >= normalize_dashboard_datetime(request.start_datetime),
+        date_expression <= normalize_dashboard_datetime(request.end_datetime),
+        volumetrics_day_type_condition(date_expression, day_type),
+    ]
+    if extra_conditions:
+        conditions.extend(extra_conditions)
+
+    statement = (
+        select(
+            hour_expression.label("hour"),
+            func.count(source.c.id).label(value_label),
+        )
+        .select_from(source)
+        .where(*conditions)
+        .group_by(hour_expression)
+        .order_by(hour_expression)
+    )
+    return {
+        int(row["hour"]): int(row[value_label] or 0)
+        for row in db.execute(statement).mappings().all()
+        if row["hour"] is not None
+    }
+
+
+def volumetrics_hourly_created_resolved(db: Session, request: Any) -> dict[str, Any]:
+    day_type = normalize_volumetrics_day_type(request.day_type)
+    start_date = normalize_dashboard_datetime(request.start_datetime).date()
+    end_date = normalize_dashboard_datetime(request.end_datetime).date()
+    denominator = day_count_for_week_part(
+        start_date,
+        end_date,
+        weekdays=day_type == "weekdays",
+    )
+    source = volumetrics_source_subquery(request)
+    cancelled_condition = volumetrics_cancelled_expression(source)
+
+    created_counts = volumetrics_counts_by_hour(
+        db,
+        request,
+        source,
+        source.c.created_at,
+        day_type,
+        "created_count",
+    )
+    resolved_counts = volumetrics_counts_by_hour(
+        db,
+        request,
+        source,
+        source.c.completion_at,
+        day_type,
+        "resolved_closed_count",
+        [~cancelled_condition],
+    )
+
+    points = []
+    for hour in range(24):
+        created_total = created_counts.get(hour, 0)
+        resolved_total = resolved_counts.get(hour, 0)
+        average_created = created_total / denominator if denominator else 0
+        average_resolved = resolved_total / denominator if denominator else 0
+        points.append(
+            {
+                "hour": f"{hour:02d}",
+                "average_created": average_created,
+                "average_resolved_closed": average_resolved,
+                "created_label": math.ceil(average_created),
+                "resolved_closed_label": math.ceil(average_resolved),
+            },
+        )
+
+    return {
+        "day_type": day_type,
+        "denominator_days": denominator,
+        "points": points,
+    }
+
+
+def priority_display_expression(expression: Any) -> Any:
+    return volumetrics_display_expression(expression)
+
+
+def priority_sort_key(label: str) -> tuple[int, str]:
+    normalized = label.casefold()
+    if label == BLANK_LABEL:
+        return (99, normalized)
+    first_digit = next((int(character) for character in label if character.isdigit()), None)
+    if first_digit is not None:
+        return (first_digit, normalized)
+    priority_words = (
+        ("critical", 1),
+        ("high", 2),
+        ("moderate", 3),
+        ("medium", 3),
+        ("low", 4),
+        ("planning", 5),
+    )
+    for word, sort_value in priority_words:
+        if word in normalized:
+            return (sort_value, normalized)
+    return (50, normalized)
+
+
+def volumetrics_priority_distribution(db: Session, request: Any) -> dict[str, Any]:
+    grain = normalize_volumetrics_time_grain(request.time_grain)
+    periods = build_volumetrics_periods(request)
+    source = volumetrics_source_subquery(request)
+    period_expression = volumetrics_period_start_expression(source.c.created_at, grain)
+    priority_expression = priority_display_expression(source.c.priority)
+    statement = (
+        select(
+            period_expression.label("period_start"),
+            priority_expression.label("priority"),
+            func.count(source.c.id).label("ticket_count"),
+        )
+        .select_from(source)
+        .where(*volumetrics_base_conditions(source, request))
+        .group_by(period_expression, priority_expression)
+        .order_by(period_expression, priority_expression)
+    )
+
+    rows_by_period: dict[str, dict[str, int]] = {}
+    priorities: set[str] = set()
+    for row in db.execute(statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], grain)
+        if period_start is None:
+            continue
+        period_key = volumetrics_period_lookup_key(period_start, grain)
+        priority = str(row["priority"])
+        priorities.add(priority)
+        rows_by_period.setdefault(period_key, {})[priority] = int(row["ticket_count"] or 0)
+
+    ordered_priorities = sorted(priorities, key=priority_sort_key)
+    points = []
+    for period in periods:
+        period_key = volumetrics_period_lookup_key(period.start, grain)
+        values = rows_by_period.get(period_key, {})
+        points.append(
+            {
+                "period_key": period_key,
+                "period_label": period.label,
+                "values": {priority: values.get(priority, 0) for priority in ordered_priorities},
+                "total": sum(values.get(priority, 0) for priority in ordered_priorities),
+            },
+        )
+
+    return {
+        "time_grain": grain,
+        "priorities": ordered_priorities,
+        "points": points,
+    }
+
+
+def empty_sla_trend_response(request: Any, *, not_applicable: bool) -> dict[str, Any]:
+    return {
+        "time_grain": normalize_volumetrics_time_grain(request.time_grain),
+        "not_applicable": not_applicable,
+        "response": [],
+        "resolution": [],
+        "logic": {
+            "response_adherence_formula": (
+                "response_sla_adhered_count / response_sla_captured_count * 100"
+            ),
+            "resolution_adherence_formula": (
+                "resolution_sla_adhered_count / resolution_sla_captured_count * 100"
+            ),
+            "captured_definition": "sla_breached IS NOT NULL",
+        },
+    }
+
+
+def volumetrics_sla_trend_rows(
+    db: Session,
+    request: Any,
+    source: Any,
+) -> dict[str, dict[str, Any]]:
+    grain = normalize_volumetrics_time_grain(request.time_grain)
+    period_expression = volumetrics_period_start_expression(source.c.resolved_at, grain)
+    incident_request = replace_request_value(request, "ticket_type", "incident")
+    statement = (
+        select(
+            period_expression.label("period_start"),
+            func.count(source.c.id).label("total_closed_ticket_count"),
+            func.count(source.c.id)
+            .filter(source.c.response_sla_breached.is_not(None))
+            .label("response_sla_captured_count"),
+            func.count(source.c.id)
+            .filter(source.c.response_sla_breached.is_(False))
+            .label("response_sla_adhered_count"),
+            func.count(source.c.id)
+            .filter(source.c.resolution_sla_breached.is_not(None))
+            .label("resolution_sla_captured_count"),
+            func.count(source.c.id)
+            .filter(source.c.resolution_sla_breached.is_(False))
+            .label("resolution_sla_adhered_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                incident_request,
+                include_date_bounds=False,
+            ),
+            source.c.resolved_at.is_not(None),
+            source.c.resolved_at >= normalize_dashboard_datetime(request.start_datetime),
+            source.c.resolved_at <= normalize_dashboard_datetime(request.end_datetime),
+        )
+        .group_by(period_expression)
+        .order_by(period_expression)
+    )
+    rows: dict[str, dict[str, Any]] = {}
+    for row in db.execute(statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], grain)
+        if period_start is None:
+            continue
+        rows[volumetrics_period_lookup_key(period_start, grain)] = dict(row)
+    return rows
+
+
+def volumetrics_sla_trends(db: Session, request: Any) -> dict[str, Any]:
+    if normalize_volumetrics_ticket_type(request.ticket_type) == "sc_task":
+        return empty_sla_trend_response(request, not_applicable=True)
+
+    periods = build_volumetrics_periods(request)
+    source = volumetrics_source_subquery(request)
+    rows_by_period = volumetrics_sla_trend_rows(db, request, source)
+    response_rows = []
+    resolution_rows = []
+    grain = normalize_volumetrics_time_grain(request.time_grain)
+
+    for period in periods:
+        period_key = volumetrics_period_lookup_key(period.start, grain)
+        values = rows_by_period.get(period_key, {})
+        total_closed = int_count(values.get("total_closed_ticket_count"))
+        response_captured = int_count(values.get("response_sla_captured_count"))
+        response_adhered = int_count(values.get("response_sla_adhered_count"))
+        resolution_captured = int_count(values.get("resolution_sla_captured_count"))
+        resolution_adhered = int_count(values.get("resolution_sla_adhered_count"))
+        response_rows.append(
+            {
+                "period_key": period_key,
+                "period_label": period.label,
+                "total_closed_ticket_count": total_closed,
+                "sla_captured_count": response_captured,
+                "sla_adhered_count": response_adhered,
+                "sla_adherence_pct": percentage(response_adhered, response_captured),
+            },
+        )
+        resolution_rows.append(
+            {
+                "period_key": period_key,
+                "period_label": period.label,
+                "total_closed_ticket_count": total_closed,
+                "sla_captured_count": resolution_captured,
+                "sla_adhered_count": resolution_adhered,
+                "sla_adherence_pct": percentage(resolution_adhered, resolution_captured),
+            },
+        )
+
+    response = empty_sla_trend_response(request, not_applicable=False)
+    response["response"] = response_rows
+    response["resolution"] = resolution_rows
+    return response
 
 
 def date_filter_basis_expression(filters: DashboardFilters) -> Any:

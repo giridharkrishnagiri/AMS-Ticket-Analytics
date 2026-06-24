@@ -20,6 +20,9 @@ import {
   getDashboardVolumetricsCreatedResolvedCanceled,
   getDashboardVolumetricsDataRange,
   getDashboardVolumetricsFilterValues,
+  getDashboardVolumetricsHourlyCreatedResolved,
+  getDashboardVolumetricsPriorityDistribution,
+  getDashboardVolumetricsSlaTrends,
   getDashboardVolumetricsSummary,
 } from "./api/dashboard";
 import type {
@@ -30,8 +33,12 @@ import type {
   DashboardVolumetricsDataRange,
   DashboardVolumetricsFilterValues,
   DashboardVolumetricsFilters,
+  DashboardVolumetricsHourlyCreatedResolved,
+  DashboardVolumetricsPriorityDistribution,
   DashboardVolumetricsRequest,
+  DashboardVolumetricsSlaTrends,
   DashboardVolumetricsSummary,
+  VolumetricsDayType,
   VolumetricsScope,
   VolumetricsTicketType,
   VolumetricsTimeGrain,
@@ -53,6 +60,13 @@ type VolumetricsDashboardProps = {
 };
 
 type FilterKey = keyof DashboardVolumetricsFilters;
+type VolumetricsSubTab =
+  | "overall_volume"
+  | "overall_sla"
+  | "detailed_volume"
+  | "kpi"
+  | "category";
+type PriorityDistributionView = "graph" | "table";
 
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -114,6 +128,32 @@ const emptyCreatedPattern: DashboardVolumetricsCreatedPattern = {
   points: [],
 };
 
+const emptyHourlyCreatedResolved: DashboardVolumetricsHourlyCreatedResolved = {
+  day_type: "weekdays",
+  denominator_days: 0,
+  points: [],
+};
+
+const emptyPriorityDistribution: DashboardVolumetricsPriorityDistribution = {
+  time_grain: "monthly",
+  priorities: [],
+  points: [],
+};
+
+const emptySlaTrends: DashboardVolumetricsSlaTrends = {
+  time_grain: "monthly",
+  not_applicable: false,
+  response: [],
+  resolution: [],
+  logic: {
+    response_adherence_formula:
+      "response_sla_adhered_count / response_sla_captured_count * 100",
+    resolution_adherence_formula:
+      "resolution_sla_adhered_count / resolution_sla_captured_count * 100",
+    captured_definition: "sla_breached IS NOT NULL",
+  },
+};
+
 const chartColors = {
   created: "#0f766e",
   resolved: "#2563eb",
@@ -122,6 +162,7 @@ const chartColors = {
   average: "#7c3aed",
   pattern: "#0891b2",
   patternAlt: "#7c3aed",
+  priority: ["#0f766e", "#2563eb", "#d97706", "#7c3aed", "#dc2626", "#64748b"],
 };
 
 const chartImagePadding = 18;
@@ -451,8 +492,11 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [endMonth, setEndMonth] = useState(defaultEndMonth);
   const [startWeek, setStartWeek] = useState(() => defaultWeeklyRange().start);
   const [endWeek, setEndWeek] = useState(() => defaultWeeklyRange().end);
+  const [activeSubTab, setActiveSubTab] = useState<VolumetricsSubTab>("overall_volume");
   const [createdPatternType, setCreatedPatternType] =
     useState<CreatedPatternType>("day_of_month");
+  const [hourlyDayType, setHourlyDayType] = useState<VolumetricsDayType>("weekdays");
+  const [priorityView, setPriorityView] = useState<PriorityDistributionView>("graph");
   const [filters, setFilters] = useState<DashboardVolumetricsFilters>(emptyFilters);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardVolumetricsFilterValues>>(
     createLoadState(emptyFilterValues)
@@ -472,6 +516,15 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [createdPattern, setCreatedPattern] = useState<
     LoadState<DashboardVolumetricsCreatedPattern>
   >(createLoadState(emptyCreatedPattern));
+  const [hourlyCreatedResolved, setHourlyCreatedResolved] = useState<
+    LoadState<DashboardVolumetricsHourlyCreatedResolved>
+  >(createLoadState(emptyHourlyCreatedResolved));
+  const [priorityDistribution, setPriorityDistribution] = useState<
+    LoadState<DashboardVolumetricsPriorityDistribution>
+  >(createLoadState(emptyPriorityDistribution));
+  const [slaTrends, setSlaTrends] = useState<LoadState<DashboardVolumetricsSlaTrends>>(
+    createLoadState(emptySlaTrends)
+  );
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
 
@@ -566,6 +619,9 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     setVolumeTrend(createLoadState(emptyVolumeTrend, "loading"));
     setBacklog(createLoadState(emptyBacklog, "loading"));
     setCreatedPattern(createLoadState(emptyCreatedPattern, "loading"));
+    setHourlyCreatedResolved(createLoadState(emptyHourlyCreatedResolved, "loading"));
+    setPriorityDistribution(createLoadState(emptyPriorityDistribution, "loading"));
+    setSlaTrends(createLoadState(emptySlaTrends, "loading"));
 
     void getDashboardVolumetricsSummary(requestBody)
       .then((nextSummary) => {
@@ -615,6 +671,50 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
         });
       });
 
+    void getDashboardVolumetricsHourlyCreatedResolved(requestBody, hourlyDayType)
+      .then((nextHourlyCreatedResolved) => {
+        setHourlyCreatedResolved({
+          status: "success",
+          data: nextHourlyCreatedResolved,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setHourlyCreatedResolved({
+          status: "error",
+          data: emptyHourlyCreatedResolved,
+          error: errorMessage(error, "Unable to load hourly created/resolved chart"),
+        });
+      });
+
+    void getDashboardVolumetricsPriorityDistribution(requestBody)
+      .then((nextPriorityDistribution) => {
+        setPriorityDistribution({
+          status: "success",
+          data: nextPriorityDistribution,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setPriorityDistribution({
+          status: "error",
+          data: emptyPriorityDistribution,
+          error: errorMessage(error, "Unable to load priority distribution"),
+        });
+      });
+
+    void getDashboardVolumetricsSlaTrends(requestBody)
+      .then((nextSlaTrends) => {
+        setSlaTrends({ status: "success", data: nextSlaTrends, error: null });
+      })
+      .catch((error) => {
+        setSlaTrends({
+          status: "error",
+          data: emptySlaTrends,
+          error: errorMessage(error, "Unable to load SLA trends"),
+        });
+      });
+
     void getDashboardVolumetricsFilterValues(requestBody)
       .then((nextFilterValues) => {
         setFilterValues({ status: "success", data: nextFilterValues, error: null });
@@ -626,7 +726,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
           error: errorMessage(error, "Unable to load Volumetrics filters"),
         });
       });
-  }, [createdPatternType, requestBody]);
+  }, [createdPatternType, hourlyDayType, requestBody]);
 
   useEffect(() => {
     if (projectId !== loadedProjectId) {
@@ -634,12 +734,18 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       setScope("in_scope");
       setTicketType("all");
       setFilters(emptyFilters);
+      setActiveSubTab("overall_volume");
+      setHourlyDayType("weekdays");
+      setPriorityView("graph");
       setFilterValues(createLoadState(emptyFilterValues));
       setSummary(createLoadState(emptySummary));
       setDataRange(createLoadState(emptyDataRange));
       setVolumeTrend(createLoadState(emptyVolumeTrend));
       setBacklog(createLoadState(emptyBacklog));
       setCreatedPattern(createLoadState(emptyCreatedPattern));
+      setHourlyCreatedResolved(createLoadState(emptyHourlyCreatedResolved));
+      setPriorityDistribution(createLoadState(emptyPriorityDistribution));
+      setSlaTrends(createLoadState(emptySlaTrends));
       setRangeInitializedProjectId("");
     }
   }, [loadedProjectId, projectId]);
@@ -820,11 +926,13 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
           <p className="error-text volumetrics-date-note">{dataRange.error}</p>
         ) : null}
 
+        <VolumetricsSubTabs activeSubTab={activeSubTab} onChange={setActiveSubTab} />
+
         <section className="panel" aria-labelledby="volumetrics-tab-heading">
           <div className="panel-heading">
             <div>
               <p className="label">Volumetrics &amp; SLA</p>
-              <h2 id="volumetrics-tab-heading">Ticket Volume and SLA Summary</h2>
+              <h2 id="volumetrics-tab-heading">Ticket Volume and SLA Controls</h2>
             </div>
             <span className="volumetrics-selected-range">{effectiveRange.selectedLabel}</span>
           </div>
@@ -890,75 +998,127 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
               </>
             )}
           </div>
-
-          <div className="summary-grid volumetrics-summary-grid">
-            <MetricCard
-              label="Created"
-              primary={`Total: ${formatNumber(summary.data.created.total)}`}
-              secondary={`${averageLabel}: ${formatNumber(summary.data.created.average_per_period, 1)}`}
-            />
-            <MetricCard
-              label="Resolved / Closed"
-              primary={`Total: ${formatNumber(summary.data.resolved_closed.total)}`}
-              secondary={`${averageLabel}: ${formatNumber(
-                summary.data.resolved_closed.average_per_period,
-                1
-              )}`}
-            />
-            <MetricCard
-              label={canceledMetricLabel}
-              primary={`Total: ${formatNumber(summary.data.cancelled.total)}`}
-              secondary={`${averageLabel}: ${formatNumber(summary.data.cancelled.average_per_period, 1)}`}
-              tertiary={`% of Resolved+${canceledMetricLabel}: ${formatPercent(
-                summary.data.cancelled.cancelled_pct_of_resolved_cancelled
-              )}`}
-            />
-            <MetricCard
-              label="Response SLA"
-              primary={`${averageLabel} adherence: ${formatPercent(
-                summary.data.response_sla.average_adherence_pct
-              )}`}
-              secondary={`${formatNumber(summary.data.response_sla.met_count)} met / ${formatNumber(
-                summary.data.response_sla.applicable_count
-              )} applicable`}
-            />
-            <MetricCard
-              label="Resolution SLA"
-              primary={`${averageLabel} adherence: ${formatPercent(
-                summary.data.resolution_sla.average_adherence_pct
-              )}`}
-              secondary={`${formatNumber(
-                summary.data.resolution_sla.met_count
-              )} met / ${formatNumber(summary.data.resolution_sla.applicable_count)} applicable`}
-            />
-          </div>
-
-          {summary.status === "loading" ? <p className="muted-text">Loading summary...</p> : null}
-          {summary.status === "error" ? <p className="error-text">{summary.error}</p> : null}
         </section>
 
-        <CreatedResolvedCanceledChart
-          data={volumeTrend.data}
-          status={volumeTrend.status}
-          error={volumeTrend.error}
-          ticketType={ticketType}
-          timeGrain={timeGrain}
-        />
+        {activeSubTab === "overall_volume" ? (
+          <>
+            <section className="panel">
+              <div className="summary-grid volumetrics-summary-grid">
+                <MetricCard
+                  label="Created"
+                  primary={`Total: ${formatNumber(summary.data.created.total)}`}
+                  secondary={`${averageLabel}: ${formatNumber(
+                    summary.data.created.average_per_period,
+                    1
+                  )}`}
+                />
+                <MetricCard
+                  label="Resolved / Closed"
+                  primary={`Total: ${formatNumber(summary.data.resolved_closed.total)}`}
+                  secondary={`${averageLabel}: ${formatNumber(
+                    summary.data.resolved_closed.average_per_period,
+                    1
+                  )}`}
+                />
+                <MetricCard
+                  label={canceledMetricLabel}
+                  primary={`Total: ${formatNumber(summary.data.cancelled.total)}`}
+                  secondary={`${averageLabel}: ${formatNumber(
+                    summary.data.cancelled.average_per_period,
+                    1
+                  )}`}
+                  tertiary={`% of Resolved+${canceledMetricLabel}: ${formatPercent(
+                    summary.data.cancelled.cancelled_pct_of_resolved_cancelled
+                  )}`}
+                />
+                <MetricCard
+                  label="Response SLA"
+                  primary={`${averageLabel} adherence: ${formatPercent(
+                    summary.data.response_sla.average_adherence_pct
+                  )}`}
+                  secondary={`${formatNumber(
+                    summary.data.response_sla.met_count
+                  )} met / ${formatNumber(summary.data.response_sla.applicable_count)} applicable`}
+                />
+                <MetricCard
+                  label="Resolution SLA"
+                  primary={`${averageLabel} adherence: ${formatPercent(
+                    summary.data.resolution_sla.average_adherence_pct
+                  )}`}
+                  secondary={`${formatNumber(
+                    summary.data.resolution_sla.met_count
+                  )} met / ${formatNumber(
+                    summary.data.resolution_sla.applicable_count
+                  )} applicable`}
+                />
+              </div>
 
-        <BacklogChart
-          data={backlog.data}
-          status={backlog.status}
-          error={backlog.error}
-          timeGrain={timeGrain}
-        />
+              {summary.status === "loading" ? (
+                <p className="muted-text">Loading summary...</p>
+              ) : null}
+              {summary.status === "error" ? <p className="error-text">{summary.error}</p> : null}
+            </section>
 
-        <CreatedPatternChart
-          data={createdPattern.data}
-          status={createdPattern.status}
-          error={createdPattern.error}
-          patternType={createdPatternType}
-          onPatternTypeChange={setCreatedPatternType}
-        />
+            <CreatedResolvedCanceledChart
+              data={volumeTrend.data}
+              status={volumeTrend.status}
+              error={volumeTrend.error}
+              ticketType={ticketType}
+              timeGrain={timeGrain}
+            />
+
+            <BacklogChart
+              data={backlog.data}
+              status={backlog.status}
+              error={backlog.error}
+              timeGrain={timeGrain}
+            />
+
+            <CreatedPatternChart
+              data={createdPattern.data}
+              status={createdPattern.status}
+              error={createdPattern.error}
+              patternType={createdPatternType}
+              onPatternTypeChange={setCreatedPatternType}
+            />
+
+            <HourlyCreatedResolvedChart
+              data={hourlyCreatedResolved.data}
+              status={hourlyCreatedResolved.status}
+              error={hourlyCreatedResolved.error}
+              dayType={hourlyDayType}
+              onDayTypeChange={setHourlyDayType}
+              ticketType={ticketType}
+            />
+
+            <PriorityDistributionChart
+              data={priorityDistribution.data}
+              status={priorityDistribution.status}
+              error={priorityDistribution.error}
+              view={priorityView}
+              onViewChange={setPriorityView}
+              timeGrain={timeGrain}
+            />
+          </>
+        ) : null}
+
+        {activeSubTab === "overall_sla" ? (
+          <OverallSlaTrends
+            data={slaTrends.data}
+            status={slaTrends.status}
+            error={slaTrends.error}
+            ticketType={ticketType}
+            timeGrain={timeGrain}
+          />
+        ) : null}
+
+        {activeSubTab === "detailed_volume" ? (
+          <VolumetricsPlaceholder title="Detailed Volume Trends" />
+        ) : null}
+        {activeSubTab === "kpi" ? <VolumetricsPlaceholder title="KPI Trends" /> : null}
+        {activeSubTab === "category" ? (
+          <VolumetricsPlaceholder title="Category-wise Trends" />
+        ) : null}
       </div>
     </section>
   );
@@ -994,6 +1154,47 @@ function MetricCard({
         {tertiary ? <span>{tertiary}</span> : null}
       </div>
     </div>
+  );
+}
+
+const volumetricsSubTabs: Array<{ value: VolumetricsSubTab; label: string }> = [
+  { value: "overall_volume", label: "Overall Volume Trends" },
+  { value: "overall_sla", label: "Overall SLA Trends" },
+  { value: "detailed_volume", label: "Detailed Volume Trends" },
+  { value: "kpi", label: "KPI Trends" },
+  { value: "category", label: "Category-wise Trends" },
+];
+
+function VolumetricsSubTabs({
+  activeSubTab,
+  onChange,
+}: {
+  activeSubTab: VolumetricsSubTab;
+  onChange: (value: VolumetricsSubTab) => void;
+}) {
+  return (
+    <div className="dashboard-subtabs volumetrics-subtabs" role="tablist">
+      {volumetricsSubTabs.map((tab) => (
+        <button
+          aria-selected={activeSubTab === tab.value}
+          className={activeSubTab === tab.value ? "active" : ""}
+          key={tab.value}
+          type="button"
+          onClick={() => onChange(tab.value)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function VolumetricsPlaceholder({ title }: { title: string }) {
+  return (
+    <section className="panel volumetrics-placeholder-panel">
+      <p className="label">{title}</p>
+      <h3>Detailed requirements for this section will be added in the next prompts.</h3>
+    </section>
   );
 }
 
@@ -1362,6 +1563,455 @@ function CreatedPatternChart({
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
     </section>
+  );
+}
+
+const hourlyDayTypeOptions: Array<{ value: VolumetricsDayType; label: string }> = [
+  { value: "weekdays", label: "Weekdays" },
+  { value: "weekends", label: "Weekends" },
+];
+
+function HourlyCreatedResolvedChart({
+  data,
+  dayType,
+  error,
+  onDayTypeChange,
+  status,
+  ticketType,
+}: {
+  data: DashboardVolumetricsHourlyCreatedResolved;
+  dayType: VolumetricsDayType;
+  error: string | null;
+  onDayTypeChange: (value: VolumetricsDayType) => void;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+}) {
+  const title = "Created vs Resolved by hour of the day";
+  const resolvedLabel = resolvedClosedMetricLabel(ticketType);
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.points.length > 0;
+  const chartWidth = Math.max(820, plotWidth - 24);
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Average created/opened and {resolvedLabel.toLowerCase()} tickets by hour.
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      <div className="segmented-control volumetrics-pattern-control" aria-label="Day type">
+        {hourlyDayTypeOptions.map((option) => (
+          <button
+            className={dayType === option.value ? "active" : ""}
+            key={option.value}
+            type="button"
+            onClick={() => onDayTypeChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={data.points}
+                width={chartWidth}
+                height={340}
+                margin={{ top: 34, right: 42, bottom: 64, left: 34 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="hour" height={56} interval={0} tickMargin={12} />
+                <YAxis hide />
+                <Tooltip formatter={(value) => formatNumber(Number(value), 1)} />
+                <Legend />
+                <Bar
+                  dataKey="average_created"
+                  fill={chartColors.created}
+                  name="Created"
+                  radius={[4, 4, 0, 0]}
+                >
+                  <LabelList
+                    dataKey="created_label"
+                    position="top"
+                    fontSize={10}
+                    formatter={(value) => formatNumber(Number(value))}
+                  />
+                </Bar>
+                <Bar
+                  dataKey="average_resolved_closed"
+                  fill={chartColors.resolved}
+                  name={resolvedLabel}
+                  radius={[4, 4, 0, 0]}
+                >
+                  <LabelList
+                    dataKey="resolved_closed_label"
+                    position="top"
+                    fontSize={10}
+                    formatter={(value) => formatNumber(Number(value))}
+                  />
+                </Bar>
+              </BarChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function priorityDataForChart(data: DashboardVolumetricsPriorityDistribution) {
+  const series = data.priorities.map((priority, index) => ({
+    key: `priority_${index}`,
+    label: priority,
+    color: chartColors.priority[index % chartColors.priority.length],
+  }));
+  const points = data.points.map((point) => {
+    const row: Record<string, string | number> = {
+      period_label: point.period_label,
+      total: point.total,
+    };
+    series.forEach((item) => {
+      row[item.key] = point.values[item.label] ?? 0;
+    });
+    return row;
+  });
+  return { points, series };
+}
+
+function PriorityDistributionChart({
+  data,
+  error,
+  onViewChange,
+  status,
+  timeGrain,
+  view,
+}: {
+  data: DashboardVolumetricsPriorityDistribution;
+  error: string | null;
+  onViewChange: (value: PriorityDistributionView) => void;
+  status: LoadStatus;
+  timeGrain: VolumetricsTimeGrain;
+  view: PriorityDistributionView;
+}) {
+  const title = "Priority-wise ticket distribution";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.points.length > 0;
+  const chartWidth = trendChartWidth(data.points.length, timeGrain, plotWidth);
+  const canCopy = status !== "loading" && hasRows && view === "graph";
+  const { points, series } = priorityDataForChart(data);
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">Ticket priority mix by selected duration.</p>
+        </div>
+        <div className="volumetrics-chart-actions">
+          <div className="segmented-control volumetrics-compact-toggle" aria-label="Priority view">
+            <button
+              className={view === "graph" ? "active" : ""}
+              type="button"
+              onClick={() => onViewChange("graph")}
+            >
+              Graph
+            </button>
+            <button
+              className={view === "table" ? "active" : ""}
+              type="button"
+              onClick={() => onViewChange("table")}
+            >
+              Data table
+            </button>
+          </div>
+          <button
+            className="secondary-button chart-copy-button"
+            type="button"
+            disabled={!canCopy}
+            onClick={handleCopy}
+          >
+            Copy chart
+          </button>
+        </div>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No priority data available.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && hasRows && view === "graph" ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={points}
+                width={chartWidth}
+                height={360}
+                margin={{ top: 36, right: 42, bottom: 82, left: 34 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="period_label"
+                  angle={-35}
+                  height={86}
+                  interval={0}
+                  textAnchor="end"
+                  tickMargin={12}
+                />
+                <YAxis hide />
+                <Tooltip />
+                <Legend />
+                {series.map((item) => (
+                  <Bar
+                    dataKey={item.key}
+                    fill={item.color}
+                    key={item.key}
+                    name={item.label}
+                    stackId="priority"
+                  />
+                ))}
+              </BarChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && hasRows && view === "table" ? (
+        <PriorityDistributionTable data={data} />
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function PriorityDistributionTable({ data }: { data: DashboardVolumetricsPriorityDistribution }) {
+  return (
+    <div className="applications-table-frame volumetrics-data-table-frame">
+      <table className="applications-table volumetrics-data-table">
+        <thead>
+          <tr>
+            <th>Period</th>
+            {data.priorities.map((priority) => (
+              <th key={priority}>{priority}</th>
+            ))}
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.points.map((point) => (
+            <tr key={point.period_key}>
+              <td>{point.period_label}</td>
+              {data.priorities.map((priority) => (
+                <td key={priority}>{formatNumber(point.values[priority] ?? 0)}</td>
+              ))}
+              <td>{formatNumber(point.total)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OverallSlaTrends({
+  data,
+  error,
+  status,
+  ticketType,
+  timeGrain,
+}: {
+  data: DashboardVolumetricsSlaTrends;
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  timeGrain: VolumetricsTimeGrain;
+}) {
+  if (ticketType === "sc_task" || data.not_applicable) {
+    return (
+      <section className="panel volumetrics-placeholder-panel">
+        <p className="label">Overall SLA Trends</p>
+        <h3>SLA trends are not applicable for SC Tasks.</h3>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      <SlaTrendSection
+        title="Response SLA adherence trend"
+        tableMetricLabel="Response SLA"
+        data={data.response}
+        status={status}
+        timeGrain={timeGrain}
+        color={chartColors.created}
+      />
+      <SlaTrendSection
+        title="Resolution SLA adherence trend"
+        tableMetricLabel="Resolution SLA"
+        data={data.resolution}
+        status={status}
+        timeGrain={timeGrain}
+        color={chartColors.resolved}
+      />
+    </>
+  );
+}
+
+function SlaTrendSection({
+  color,
+  data,
+  status,
+  tableMetricLabel,
+  timeGrain,
+  title,
+}: {
+  color: string;
+  data: DashboardVolumetricsSlaTrends["response"];
+  status: LoadStatus;
+  tableMetricLabel: string;
+  timeGrain: VolumetricsTimeGrain;
+  title: string;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.length > 0;
+  const chartWidth = trendChartWidth(data.length, timeGrain, plotWidth);
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Adherence is calculated as SLA adhered count divided by SLA captured count.
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status !== "loading" && !hasRows ? (
+        <p className="muted-text chart-state-text">No SLA trend data available.</p>
+      ) : null}
+
+      {status !== "loading" && hasRows ? (
+        <>
+          <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+            <div className="applications-chart-scroll">
+              <div className="applications-chart-stage">
+                <ComposedChart
+                  data={data}
+                  width={chartWidth}
+                  height={330}
+                  margin={{ top: 34, right: 42, bottom: 82, left: 46 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="period_label"
+                    angle={-35}
+                    height={86}
+                    interval={0}
+                    textAnchor="end"
+                    tickMargin={12}
+                  />
+                  <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                  <Tooltip formatter={(value) => `${Number(value).toFixed(1)}%`} />
+                  <Line
+                    connectNulls
+                    dataKey="sla_adherence_pct"
+                    dot={{ r: 3 }}
+                    name={`${tableMetricLabel} adherence %`}
+                    stroke={color}
+                    strokeWidth={2.5}
+                    type="monotone"
+                  >
+                    <LabelList
+                      dataKey="sla_adherence_pct"
+                      position="top"
+                      fontSize={11}
+                      formatter={(value) => formatPercent(Number(value))}
+                    />
+                  </Line>
+                </ComposedChart>
+              </div>
+            </div>
+          </div>
+          <SlaTrendTable data={data} metricLabel={tableMetricLabel} />
+        </>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function SlaTrendTable({
+  data,
+  metricLabel,
+}: {
+  data: DashboardVolumetricsSlaTrends["response"];
+  metricLabel: string;
+}) {
+  return (
+    <div className="applications-table-frame volumetrics-data-table-frame">
+      <table className="applications-table volumetrics-data-table">
+        <thead>
+          <tr>
+            <th>Duration</th>
+            <th>Total closed tickets</th>
+            <th>{metricLabel} captured</th>
+            <th>{metricLabel} adhered</th>
+            <th>{metricLabel} adherence %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.period_key}>
+              <td>{row.period_label}</td>
+              <td>{formatNumber(row.total_closed_ticket_count)}</td>
+              <td>{formatNumber(row.sla_captured_count)}</td>
+              <td>{formatNumber(row.sla_adhered_count)}</td>
+              <td>{formatPercent(row.sla_adherence_pct)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
