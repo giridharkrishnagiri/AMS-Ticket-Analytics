@@ -16,6 +16,8 @@ from app.schemas.dashboard import (
     ApplicationsFilterValuesResponse,
     ApplicationsListResponse,
     ApplicationsSummaryResponse,
+    ApplicationsTopActiveUsersRequest,
+    ApplicationsTopActiveUsersResponse,
     CreatedResolvedOpenRow,
     CreationSourceTrendRow,
     DashboardOverviewResponse,
@@ -35,14 +37,19 @@ from app.schemas.dashboard import (
     VolumetricsCreatedResolvedBacklogResponse,
     VolumetricsCreatedResolvedCanceledResponse,
     VolumetricsDataRangeResponse,
+    VolumetricsDetailedArchitectureInstallSplitsResponse,
+    VolumetricsDistributionSplitsResponse,
     VolumetricsFilterValuesResponse,
     VolumetricsHourlyCreatedResolvedRequest,
     VolumetricsHourlyCreatedResolvedResponse,
     VolumetricsIncidentBatchTrendResponse,
+    VolumetricsKpiDurationBucketsResponse,
+    VolumetricsKpiMttrTrendsResponse,
     VolumetricsPriorityDistributionResponse,
     VolumetricsRequest,
     VolumetricsSlaTrendsResponse,
     VolumetricsSummaryResponse,
+    VolumetricsTicketsPerUserResponse,
     VolumetricsTopApplicationsRequest,
     VolumetricsTopApplicationsResponse,
     VolumetricsTopIncidentBatchApplicationsResponse,
@@ -56,6 +63,7 @@ from app.services.dashboard import (
     applications_filter_values,
     applications_list,
     applications_summary,
+    applications_top_active_users,
     created_resolved_open_trend,
     creation_source_trend,
     filter_values,
@@ -73,12 +81,17 @@ from app.services.dashboard import (
     volumetrics_created_resolved_backlog,
     volumetrics_created_resolved_cancelled,
     volumetrics_data_range,
+    volumetrics_detailed_architecture_install_splits,
+    volumetrics_distribution_splits,
     volumetrics_filter_value_counts,
     volumetrics_hourly_created_resolved,
     volumetrics_incident_batch_trend,
+    volumetrics_kpi_duration_buckets,
+    volumetrics_kpi_mttr_trends,
     volumetrics_priority_distribution,
     volumetrics_sla_trends,
     volumetrics_summary,
+    volumetrics_tickets_per_user,
     volumetrics_top_applications,
     volumetrics_top_incident_batch_applications,
 )
@@ -215,6 +228,17 @@ def get_dashboard_applications_charts(
     db: DbSession,
 ) -> dict[str, object]:
     return applications_charts(db, request)
+
+
+@router.post("/applications/top-active-users", response_model=ApplicationsTopActiveUsersResponse)
+def get_dashboard_applications_top_active_users(
+    request: ApplicationsTopActiveUsersRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return applications_top_active_users(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post(
@@ -386,6 +410,76 @@ def get_dashboard_volumetrics_top_incident_batch_applications(
 ) -> dict[str, object]:
     try:
         return volumetrics_top_incident_batch_applications(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/detailed-architecture-install-splits",
+    response_model=VolumetricsDetailedArchitectureInstallSplitsResponse,
+)
+def get_dashboard_volumetrics_detailed_architecture_install_splits(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_detailed_architecture_install_splits(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/tickets-per-user",
+    response_model=VolumetricsTicketsPerUserResponse,
+)
+def get_dashboard_volumetrics_tickets_per_user(
+    request: VolumetricsTopApplicationsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_tickets_per_user(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/distribution-splits",
+    response_model=VolumetricsDistributionSplitsResponse,
+)
+def get_dashboard_volumetrics_distribution_splits(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_distribution_splits(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/kpi-mttr-trends",
+    response_model=VolumetricsKpiMttrTrendsResponse,
+)
+def get_dashboard_volumetrics_kpi_mttr_trends(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_kpi_mttr_trends(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/kpi-duration-buckets",
+    response_model=VolumetricsKpiDurationBucketsResponse,
+)
+def get_dashboard_volumetrics_kpi_duration_buckets(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_kpi_duration_buckets(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

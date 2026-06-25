@@ -1,7 +1,7 @@
 import inspect
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -120,6 +120,8 @@ def add_ticket(
     sap_non_sap: str | None = None,
     short_description: str | None = None,
     business_service_ci_name: str | None = None,
+    architecture_type: str | None = None,
+    install_type: str | None = None,
 ) -> Ticket:
     resolved_sap_non_sap = (
         sap_non_sap if sap_non_sap is not None else derive_sap_non_sap(assignment_group)
@@ -146,6 +148,8 @@ def add_ticket(
         priority=priority,
         assignment_group=assignment_group,
         sap_non_sap=resolved_sap_non_sap,
+        architecture_type=architecture_type,
+        install_type=install_type,
         application=application,
         business_service_ci_name=business_service_ci_name,
         sla_breached=sla_breached,
@@ -176,6 +180,7 @@ def add_inventory_item(
     application_owner: str,
     parent_application_name: str,
     active: bool | None = True,
+    active_users: int | None = None,
     cmdb_payload: dict[str, object] | None = None,
 ) -> ApplicationInventoryItem:
     item = ApplicationInventoryItem(
@@ -189,6 +194,7 @@ def add_inventory_item(
         application_owner=application_owner,
         parent_application_name=parent_application_name,
         active=active,
+        active_users=active_users,
         cmdb_payload=cmdb_payload,
         source_filename="overview-inventory.csv",
     )
@@ -387,6 +393,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             assignment_group="IT-SAP-Group A",
             application_owner="App Owner A",
             parent_application_name="Parent A",
+            active_users=1200,
             cmdb_payload={
                 "Application family": "Family A",
                 "Business process": "Process A",
@@ -422,6 +429,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             assignment_group="IT-NSA-Group B",
             application_owner="App Owner B",
             parent_application_name="Parent A",
+            active_users=0,
             cmdb_payload={
                 "Application type": "Technical",
                 "Architecture type": "On Premise",
@@ -445,6 +453,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             assignment_group="Group C",
             application_owner="App Owner C",
             parent_application_name="Parent B",
+            active_users=600,
             cmdb_payload={
                 "Application type": "Business",
                 "Architecture type": "Cloud",
@@ -523,6 +532,14 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
                 },
             )
             chart_response = client.post("/api/dashboard/applications/charts", json=request_body)
+            top_active_users_response = client.post(
+                "/api/dashboard/applications/top-active-users",
+                json={**request_body, "top_n": 10},
+            )
+            filtered_top_active_users_response = client.post(
+                "/api/dashboard/applications/top-active-users",
+                json={**request_body, "filters": {"sap_non_sap": ["SAP"]}, "top_n": 10},
+            )
             lifecycle_filtered_chart_response = client.post(
                 "/api/dashboard/applications/charts",
                 json={
@@ -635,6 +652,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         assert list_payload["rows"][0]["sap_non_sap"] == "(blank)"
         assert "cmdb_payload" not in list_payload["rows"][0]
         assert list_payload["rows"][0]["app_type"] == "Business"
+        assert "active_users" in list_payload["rows"][0]
 
         assert blank_vendor_response.status_code == 200
         blank_vendor_rows = blank_vendor_response.json()["rows"]
@@ -643,20 +661,34 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         assert sap_filtered_response.status_code == 200
         sap_rows = sap_filtered_response.json()["rows"]
         assert [row["business_service_ci_name"] for row in sap_rows] == ["Service A"]
+        assert sap_rows[0]["active_users"] == 1200
 
         assert chart_response.status_code == 200
         chart_payload = chart_response.json()
-        assert chart_payload["operating_system"] == [
-            {"label": "Linux", "count": 2},
-            {"label": "Windows", "count": 1},
+        assert "operating_system" not in chart_payload
+        assert "sox_scope" not in chart_payload
+        assert chart_payload["architecture_type"] == [
+            {"label": "Cloud", "count": 2},
+            {"label": "On Premise", "count": 1},
         ]
-        assert chart_payload["sox_scope"] == [
-            {"label": "In Scope", "count": 2},
-            {"label": "Out of Scope", "count": 1},
+        assert chart_payload["install_type"] == [
+            {"label": "Production", "count": 2},
+            {"label": "Non Production", "count": 1},
         ]
         assert chart_payload["strategic"] == [
             {"label": "Yes", "count": 2},
             {"label": "No", "count": 1},
+        ]
+        assert top_active_users_response.status_code == 200
+        top_active_payload = top_active_users_response.json()
+        assert top_active_payload["top_n"] == 10
+        assert top_active_payload["points"] == [
+            {"application_name": "Service A", "active_users": 1200},
+            {"application_name": "Service C", "active_users": 600},
+        ]
+        assert filtered_top_active_users_response.status_code == 200
+        assert filtered_top_active_users_response.json()["points"] == [
+            {"application_name": "Service A", "active_users": 1200},
         ]
         assert lifecycle_filtered_chart_response.status_code == 200
         assert lifecycle_filtered_chart_response.json()["lifecycle_stage"] == []
@@ -1165,13 +1197,51 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
 def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
+        app_a = add_inventory_item(
+            db,
+            project_id,
+            "Application A",
+            supported_by_vendor="Vendor A",
+            functional_track="Data",
+            ams_owner="Owner A",
+            assignment_group="IT-SAP-A",
+            application_owner="App Owner A",
+            parent_application_name="Parent A",
+            active_users=60,
+        )
+        app_b = add_inventory_item(
+            db,
+            project_id,
+            "Application B",
+            supported_by_vendor="Vendor B",
+            functional_track="Data",
+            ams_owner="Owner A",
+            assignment_group="IT-NSA-B",
+            application_owner="App Owner B",
+            parent_application_name="Parent B",
+            active_users=30,
+        )
+        app_c = add_inventory_item(
+            db,
+            project_id,
+            "Application C",
+            supported_by_vendor="Vendor C",
+            functional_track="Run",
+            ams_owner="Owner C",
+            assignment_group="IT-SAP-C",
+            application_owner="App Owner C",
+            parent_application_name="Parent C",
+            active_users=10,
+        )
+        db.flush()
         window_start, window_end = dashboard_service.rolling_six_complete_month_window()
         current_month = window_start
         for month_index in range(6):
+            completion_month = dashboard_service.last_moment_of_month(current_month)
             for ticket_index in range(3):
                 is_batch = ticket_index < 2
                 is_cancelled = ticket_index == 1
-                add_ticket(
+                ticket = add_ticket(
                     db,
                     project_id,
                     batch_id,
@@ -1180,15 +1250,19 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
                     "INCIDENT",
                     current_month,
                     state="Cancelled" if is_cancelled else "Resolved",
-                    resolved_at=None if is_cancelled else current_month,
-                    closed_at=current_month if is_cancelled else None,
+                    resolved_at=None if is_cancelled else completion_month,
+                    closed_at=completion_month if is_cancelled else None,
                     short_description=(
                         "Automic batch failure" if is_batch else "User-reported issue"
                     ),
                     business_service_ci_name="Application A",
+                    sap_non_sap="SAP",
+                    architecture_type="Cloud",
+                    install_type="Production",
                 )
+                ticket.application_inventory_id = app_a.id
             for ticket_index in range(2):
-                add_ticket(
+                ticket = add_ticket(
                     db,
                     project_id,
                     batch_id,
@@ -1197,15 +1271,19 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
                     "INCIDENT",
                     current_month,
                     state="Resolved",
-                    resolved_at=current_month,
+                    resolved_at=completion_month,
                     short_description=(
                         "Automic downstream failure"
                         if ticket_index == 0
                         else "Manual incident"
                     ),
                     business_service_ci_name="Application B",
+                    sap_non_sap="Non-SAP",
+                    architecture_type="On Premise",
+                    install_type="SaaS",
                 )
-            add_ticket(
+                ticket.application_inventory_id = app_b.id
+            ticket = add_ticket(
                 db,
                 project_id,
                 batch_id,
@@ -1214,9 +1292,13 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
                 "SERVICE_CATALOG_TASK",
                 current_month,
                 state="Closed",
-                closed_at=current_month,
+                closed_at=completion_month,
                 business_service_ci_name="Application C",
+                sap_non_sap="SAP",
+                architecture_type="Vendor Managed",
+                install_type="Cloud",
             )
+            ticket.application_inventory_id = app_c.id
             current_month = dashboard_service.add_month(current_month)
         db.commit()
 
@@ -1248,6 +1330,18 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
                 "/api/dashboard/volumetrics/top-incident-batch-applications",
                 json={**request_body, "top_n": 10},
             )
+            tickets_per_user_response = client.post(
+                "/api/dashboard/volumetrics/tickets-per-user",
+                json={**request_body, "top_n": 10},
+            )
+            distribution_response = client.post(
+                "/api/dashboard/volumetrics/distribution-splits",
+                json=request_body,
+            )
+            recompute_response = client.post(
+                "/api/application-inventory/recompute-ticket-user-metrics",
+                json={"project_id": str(project_id)},
+            )
             sc_task_batch_response = client.post(
                 "/api/dashboard/volumetrics/incident-batch-trend",
                 json={**batch_trend_body, "ticket_type": "sc_task"},
@@ -1267,7 +1361,10 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
         ]
         assert top_apps["points"][0]["average_created"] == 3
         assert top_apps["points"][0]["average_canceled_closed_incomplete"] == 1
-        assert round(top_apps["points"][0]["pareto_cumulative_pct"], 1) == 50.0
+        assert top_apps["overall_average_monthly_volume"] == 6
+        assert round(top_apps["points"][0]["volume_pct"], 1) == 50.0
+        assert top_apps["points"][0]["display_label"] == "3 (50.0%)"
+        assert "pareto_cumulative_pct" not in top_apps["points"][0]
 
         assert batch_trend_response.status_code == 200
         batch_trend = batch_trend_response.json()
@@ -1293,11 +1390,299 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
         assert top_batch["points"][0]["average_batch_canceled"] == 1
         assert round(top_batch["points"][0]["pareto_cumulative_pct"], 1) == 66.7
 
+        assert tickets_per_user_response.status_code == 200
+        tickets_per_user = tickets_per_user_response.json()
+        assert [point["application_name"] for point in tickets_per_user["points"]] == [
+            "Application C",
+            "Application B",
+            "Application A",
+        ]
+        assert tickets_per_user["points"][0]["average_monthly_ticket_volume"] == 1
+        assert tickets_per_user["points"][0]["active_users"] == 10
+        assert tickets_per_user["points"][0]["tickets_per_user_per_month"] == 0.1
+        assert tickets_per_user["points"][0]["display_label"] == "0.10"
+
+        assert distribution_response.status_code == 200
+        distribution = distribution_response.json()
+        sap_all = {
+            point["label"]: point["average_monthly_count"]
+            for point in distribution["sap_non_sap"]["all"]
+        }
+        assert sap_all == {"SAP": 4, "Non-SAP": 2}
+        architecture_all = {
+            point["label"]: point["average_monthly_count"]
+            for point in distribution["architecture_type"]["all"]
+        }
+        assert architecture_all == {"Cloud": 3, "On Premise": 2, "Vendor Managed": 1}
+        install_all = {
+            point["label"]: point["average_monthly_count"]
+            for point in distribution["install_type"]["all"]
+        }
+        assert install_all == {"Production": 3, "SaaS": 2, "Cloud": 1}
+        assert distribution["sap_non_sap"]["incidents"][0]["average_monthly_count"] == 3
+        assert distribution["sap_non_sap"]["sc_tasks"][0]["average_monthly_count"] == 1
+
+        assert recompute_response.status_code == 200
+        recompute_payload = recompute_response.json()
+        assert recompute_payload["inventory_count"] == 3
+        assert recompute_payload["active_users_count"] == 3
+        assert recompute_payload["metrics_updated_count"] == 3
+        db.expire_all()
+        refreshed_app_a = db.get(ApplicationInventoryItem, app_a.id)
+        refreshed_app_c = db.get(ApplicationInventoryItem, app_c.id)
+        assert refreshed_app_a is not None
+        assert refreshed_app_c is not None
+        assert refreshed_app_a.avg_monthly_ticket_volume_6m == 3
+        assert round(refreshed_app_a.tickets_per_user_per_month or 0, 2) == 0.05
+        assert refreshed_app_c.avg_monthly_ticket_volume_6m == 1
+        assert round(refreshed_app_c.tickets_per_user_per_month or 0, 2) == 0.10
+
         assert sc_task_batch_response.status_code == 200
         sc_task_batch = sc_task_batch_response.json()
         assert sc_task_batch["applicable"] is False
         assert sc_task_batch["points"] == []
         assert "SC Task catalog item charts" in sc_task_batch["message"]
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_volumetrics_prompt17_detailed_splits_mttr_and_duration_buckets() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        window_start, window_end = dashboard_service.rolling_six_complete_month_window()
+        current_month = window_start
+        for month_index in range(6):
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"INC-P17-VM-1-{month_index}",
+                "INCIDENT",
+                current_month,
+                state="Resolved",
+                resolved_at=current_month + timedelta(days=1),
+                priority="1 - Critical",
+                business_duration_seconds=86400,
+                business_service_ci_name="Architecture App A",
+                architecture_type="Vendor Managed",
+                install_type="Cloud",
+            )
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"INC-P17-VM-2-{month_index}",
+                "INCIDENT",
+                current_month,
+                state="Resolved",
+                resolved_at=current_month + timedelta(days=1),
+                priority="1 - Critical",
+                business_duration_seconds=86400,
+                business_service_ci_name="Architecture App A",
+                architecture_type="Vendor Managed",
+                install_type="Cloud",
+            )
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"INC-P17-COTS-{month_index}",
+                "INCIDENT",
+                current_month,
+                state="Resolved",
+                resolved_at=current_month + timedelta(days=2),
+                priority="2 - High",
+                business_duration_seconds=172800,
+                business_service_ci_name="Architecture App B",
+                architecture_type="COTS",
+                install_type="On Premise",
+            )
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"SCTASK-P17-COTS-{month_index}",
+                "SERVICE_CATALOG_TASK",
+                current_month,
+                state="Closed",
+                closed_at=current_month + timedelta(days=3),
+                priority="3 - Moderate",
+                business_duration_seconds=259200,
+                business_service_ci_name="Task Architecture App",
+                architecture_type="COTS",
+                install_type="SaaS",
+            )
+            current_month = dashboard_service.add_month(current_month)
+
+        may_start = dashboard_service.first_day_of_month(window_end)
+        incident_bucket_specs = [
+            ("INC-P17-BUCKET-1D", 1),
+            ("INC-P17-BUCKET-3D", 3),
+            ("INC-P17-BUCKET-10D", 10),
+            ("INC-P17-BUCKET-11D", 11),
+        ]
+        for ticket_number, duration_days in incident_bucket_specs:
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                ticket_number,
+                "INCIDENT",
+                may_start,
+                state="Resolved",
+                resolved_at=may_start + timedelta(days=duration_days),
+                priority="4 - Low",
+                business_duration_seconds=duration_days * 86400,
+                business_service_ci_name="Duration Bucket App",
+                architecture_type="Bucket Architecture",
+                install_type="Bucket Install",
+            )
+        sc_task_bucket_specs = [
+            ("SCTASK-P17-BUCKET-1D", 1),
+            ("SCTASK-P17-BUCKET-3D", 3),
+            ("SCTASK-P17-BUCKET-10D", 10),
+            ("SCTASK-P17-BUCKET-11D", 11),
+        ]
+        for ticket_number, duration_days in sc_task_bucket_specs:
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                ticket_number,
+                "SERVICE_CATALOG_TASK",
+                may_start,
+                state="Closed",
+                closed_at=may_start + timedelta(days=duration_days),
+                priority="4 - Low",
+                business_duration_seconds=duration_days * 86400,
+                business_service_ci_name="Task Duration Bucket App",
+                architecture_type="Bucket Architecture",
+                install_type="Bucket Install",
+            )
+
+        partial_month_ticket = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-P17-CURRENT-MONTH-EXCLUDED",
+            "INCIDENT",
+            dashboard_service.add_month(may_start),
+            state="Resolved",
+            resolved_at=dashboard_service.add_month(may_start) + timedelta(days=2),
+            priority="1 - Critical",
+            business_duration_seconds=86400,
+            business_service_ci_name="Current Month App",
+            architecture_type="Current Month Architecture",
+            install_type="Current Month Install",
+        )
+        partial_month_ticket.functional_track = "Current Month"
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "in_scope",
+            "ticket_type": "all",
+            "time_grain": "monthly",
+            "start_datetime": window_start.isoformat(),
+            "end_datetime": (
+                dashboard_service.add_month(may_start) + timedelta(days=20)
+            ).isoformat(),
+            "filters": {},
+        }
+
+        with TestClient(app) as client:
+            split_response = client.post(
+                "/api/dashboard/volumetrics/detailed-architecture-install-splits",
+                json=request_body,
+            )
+            mttr_response = client.post(
+                "/api/dashboard/volumetrics/kpi-mttr-trends",
+                json=request_body,
+            )
+            bucket_response = client.post(
+                "/api/dashboard/volumetrics/kpi-duration-buckets",
+                json=request_body,
+            )
+
+        assert split_response.status_code == 200
+        split_payload = split_response.json()
+        assert split_payload["rolling_window"] == {
+            "start_month": f"{window_start.year:04d}-{window_start.month:02d}",
+            "end_month": f"{window_end.year:04d}-{window_end.month:02d}",
+            "description": "Latest complete 6 months",
+        }
+        incident_architecture = {
+            row["label"]: row for row in split_payload["architecture_type"]["incidents"]
+        }
+        sc_task_install = {
+            row["label"]: row for row in split_payload["install_type"]["sc_tasks"]
+        }
+        assert incident_architecture["Vendor Managed"]["average_monthly_count"] == 2
+        assert incident_architecture["COTS"]["average_monthly_count"] == 1
+        assert "Current Month Architecture" not in incident_architecture
+        assert sc_task_install["SaaS"]["average_monthly_count"] == 1
+
+        assert mttr_response.status_code == 200
+        mttr_payload = mttr_response.json()
+        assert mttr_payload["incident"]["P1"][-1]["period_key"] == "2026-05"
+        assert all(
+            point["period_key"] != "2026-06"
+            for points in mttr_payload["incident"].values()
+            for point in points
+        )
+        p1_december = mttr_payload["incident"]["P1"][0]
+        p2_december = mttr_payload["incident"]["P2"][0]
+        sc_task_p3_december = mttr_payload["sc_task"]["P3"][0]
+        assert p1_december["average_mttr_days"] == 1
+        assert p1_december["ticket_count"] == 2
+        assert p1_december["show_label"] is True
+        assert p1_december["label_text"] == "1.0d\nn=2"
+        assert p2_december["average_mttr_days"] == 2
+        assert p2_december["ticket_count"] == 1
+        assert p2_december["show_label"] is False
+        assert sc_task_p3_december["average_mttr_days"] == 3
+        assert sc_task_p3_december["ticket_count"] == 1
+        assert any(
+            point["period_key"] == "2026-03" and point["show_label"]
+            for point in mttr_payload["incident"]["P1"]
+        )
+        assert any(
+            point["period_key"] == "2026-01" and point["show_label"]
+            for point in mttr_payload["incident"]["P2"]
+        )
+        assert any(
+            point["period_key"] == "2026-02" and point["show_label"]
+            for point in mttr_payload["sc_task"]["P3"]
+        )
+
+        assert bucket_response.status_code == 200
+        bucket_payload = bucket_response.json()
+        assert bucket_payload["months"] == ["2026-03", "2026-04", "2026-05"]
+        may_incident = next(
+            row for row in bucket_payload["incident"] if row["period_key"] == "2026-05"
+        )
+        may_sc_task = next(
+            row for row in bucket_payload["sc_task"] if row["period_key"] == "2026-05"
+        )
+        assert may_incident["buckets"] == {
+            "0-1 day": 3,
+            "1-3 days": 2,
+            "3-10 days": 1,
+            ">10 days": 1,
+        }
+        assert may_sc_task["buckets"] == {
+            "0-1 day": 1,
+            "1-3 days": 2,
+            "3-10 days": 1,
+            ">10 days": 1,
+        }
     finally:
         cleanup_client(db, client_id)
 
@@ -1315,6 +1700,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             assignment_group="IT-SAP-PAYROLL",
             application_owner="Application Owner A",
             parent_application_name="Parent Payroll",
+            active_users=500,
             cmdb_payload={
                 "Application type": "Business",
                 "Architecture type": "Cloud",
@@ -1339,6 +1725,9 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             state="Resolved",
             resolved_at=dt("2026-01-01T00:00:00"),
             assignment_group="IT-SAP-PAYROLL",
+            business_duration_seconds=86400,
+            architecture_type="Cloud",
+            install_type="Production",
             raw_payload={"secret": "raw ticket payload should not be exported"},
         )
         incident.functional_track = "Data"
@@ -1362,6 +1751,9 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             state="Closed",
             closed_at=dt("2026-01-18T00:00:00"),
             assignment_group="IT-NSA-PAYROLL",
+            business_duration_seconds=172800,
+            architecture_type="On Premise",
+            install_type="Production",
             raw_payload={"secret": "raw sc task payload should not be exported"},
         )
         sc_task.functional_track = "Run"
@@ -1408,6 +1800,9 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
                 parent_application_name="Parent Payroll",
                 application_owner="Application Owner A",
                 supported_by_vendor="Vendor A",
+                business_duration_seconds=86400,
+                architecture_type="Cloud",
+                install_type="Production",
                 response_sla_breached=False,
                 resolution_sla_breached=False,
                 out_of_scope_reason="assignment_group_not_in_application_inventory",
@@ -1442,6 +1837,35 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Top High-Volume Applications" in document
         assert "Incident Batch-Related Tickets Created Trend" in document
         assert "Top Applications with Incident Batch-Related Tickets" in document
+        assert "Average Monthly Incidents by Architecture Type" in document
+        assert "Average Monthly SC Tasks by Architecture Type" in document
+        assert "Average Monthly Incidents by Install Type" in document
+        assert "Average Monthly SC Tasks by Install Type" in document
+        assert "Incident MTTR by Priority" in document
+        assert "SC Task MTTR by Priority" in document
+        assert "P1 / P2 MTTR" in document
+        assert "P3 / P4 MTTR" in document
+        assert "Incident P1 MTTR</h3>" not in document
+        assert "Incident P2 MTTR</h3>" not in document
+        assert "Incident P3 MTTR</h3>" not in document
+        assert "Incident P4 MTTR</h3>" not in document
+        assert "SC Task P1 MTTR</h3>" not in document
+        assert "SC Task P2 MTTR</h3>" not in document
+        assert "SC Task P3 MTTR</h3>" not in document
+        assert "SC Task P4 MTTR</h3>" not in document
+        assert document.count("Average Monthly Incidents by Architecture Type") == 1
+        assert document.count("Average Monthly SC Tasks by Architecture Type") == 1
+        assert document.count("Average Monthly Incidents by Install Type") == 1
+        assert document.count("Average Monthly SC Tasks by Install Type") == 1
+        assert "Incident Resolved Volume by Resolution Duration" in document
+        assert "SC Task Closed Volume by Closed Duration" in document
+        assert "Top Applications by Active Users" in document
+        assert "Tickets per User per Month by Application" in document
+        assert "Average Monthly Tickets by SAP / Non-SAP" in document
+        assert "Average Monthly Incidents by SAP / Non-SAP" in document
+        assert "Average Monthly SC Tasks by SAP / Non-SAP" in document
+        assert "Average Monthly Tickets by Architecture Type" in document
+        assert "Average Monthly Tickets by Install Type" in document
         assert (
             '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
             in document
@@ -1494,6 +1918,21 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "barWidth = Math.max(22" in document
         assert "applicationChart: true" in document
         assert "chart-stage" in document
+        assert "chart-copy-toolbar" in document
+        assert "copy-chart-button" in document
+        assert "Copy Chart" in document
+        assert "function copyOfflineChart" in document
+        assert "function installChartCopyButtons" in document
+        assert (
+            "Future offline charts only need the standard .chart-card + .chart-frame SVG pattern."
+            in document
+        )
+        assert "ClipboardItem" in document
+        assert '"image/png"' in document
+        assert "XMLSerializer" in document
+        assert "navigator.clipboard?.writeText" in document
+        assert 'installChartCopyButtons(document.getElementById("applications"))' in document
+        assert 'installChartCopyButtons(document.getElementById("volumetrics"))' in document
         assert "table-card" in document
         assert "table-scroll" in document
         assert "applications-table" in document
@@ -1558,7 +1997,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["overview"]["tickets"]["completion_date_max"].startswith("2026-01-31")
         assert payload["overview"]["tickets"]["applications_80pct_monthly_volume_count"] == 1
         assert payload["applications"]["rows"][0]["business_service_ci_name"] == "Payroll Portal"
+        assert payload["applications"]["rows"][0]["active_users"] == 500
         assert "cmdb_payload" not in payload["applications"]["rows"][0]
+        assert "architecture_type" in payload["applications"]["charts"]
+        assert "install_type" in payload["applications"]["charts"]
+        assert "operating_system" not in payload["applications"]["charts"]
+        assert "sox_scope" not in payload["applications"]["charts"]
         assert payload["volumetrics"]["monthly_rows"]
         assert [row["period_key"] for row in payload["volumetrics"]["periods"]] == ["2026-01"]
         assert {
@@ -1580,14 +2024,25 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         ]["rows"]
         assert payload["volumetrics"]["overall_sla_trends"]["rows"]
         assert payload["volumetrics"]["detailed_volume_trends"]["application_rows"]
+        assert payload["volumetrics"]["detailed_volume_trends"]["split_rows"]
+        assert payload["volumetrics"]["detailed_volume_trends"]["split_window"][
+            "description"
+        ] == "Latest complete 6 months"
+        assert payload["volumetrics"]["kpi_trends"]["mttr"]["rows"]
+        assert payload["volumetrics"]["kpi_trends"]["duration_buckets"]["rows"]
         detailed_row = payload["volumetrics"]["detailed_volume_trends"]["application_rows"][0]
         assert "ticket_number" not in detailed_row
         assert "short_description" not in detailed_row
         assert "caller_id" not in detailed_row
         assert "normalized_payload" not in detailed_row
-        assert payload["volumetrics"]["placeholders"]["kpi_trends"].startswith(
-            "Detailed requirements",
-        )
+        assert "architecture_type" in detailed_row
+        assert "install_type" in detailed_row
+        kpi_row = payload["volumetrics"]["kpi_trends"]["mttr"]["rows"][0]
+        assert "ticket_count" in kpi_row
+        assert "ticket_number" not in kpi_row
+        assert "short_description" not in kpi_row
+        assert "caller_id" not in kpi_row
+        assert "normalized_payload" not in kpi_row
         assert "ticket_number" not in payload["volumetrics"]["monthly_rows"][0]
         assert "normalized_payload" not in payload["volumetrics"]["monthly_rows"][0]
     finally:

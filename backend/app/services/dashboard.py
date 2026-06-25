@@ -45,6 +45,9 @@ DIRECT_APPLICATION_FIELDS = {
     "ams_owner": ApplicationInventoryItem.ams_owner,
     "supported_by_vendor": ApplicationInventoryItem.supported_by_vendor,
     "sap_non_sap": ApplicationInventoryItem.sap_non_sap,
+    "active_users": ApplicationInventoryItem.active_users,
+    "avg_monthly_ticket_volume_6m": ApplicationInventoryItem.avg_monthly_ticket_volume_6m,
+    "tickets_per_user_per_month": ApplicationInventoryItem.tickets_per_user_per_month,
 }
 
 CMDB_APPLICATION_FIELDS = {
@@ -90,6 +93,9 @@ APPLICATION_LIST_FIELDS = (
     "functional_track",
     "ams_owner",
     "supported_by_vendor",
+    "active_users",
+    "avg_monthly_ticket_volume_6m",
+    "tickets_per_user_per_month",
     "app_family",
     "biz_process",
     "app_category",
@@ -668,7 +674,16 @@ def cmdb_payload_text_expression(*keys: str) -> Any:
     return func.coalesce(*expressions)
 
 
+APPLICATION_NUMERIC_FIELDS = {
+    "active_users",
+    "avg_monthly_ticket_volume_6m",
+    "tickets_per_user_per_month",
+}
+
+
 def application_field_expression(field_name: str) -> Any:
+    if field_name in APPLICATION_NUMERIC_FIELDS:
+        return DIRECT_APPLICATION_FIELDS[field_name]
     if field_name in DIRECT_APPLICATION_FIELDS:
         return nonblank_text_expression(DIRECT_APPLICATION_FIELDS[field_name])
     if field_name in CMDB_APPLICATION_FIELDS:
@@ -677,6 +692,8 @@ def application_field_expression(field_name: str) -> Any:
 
 
 def application_display_expression(field_name: str) -> Any:
+    if field_name in APPLICATION_NUMERIC_FIELDS:
+        return DIRECT_APPLICATION_FIELDS[field_name]
     return func.coalesce(application_field_expression(field_name), literal(BLANK_LABEL))
 
 
@@ -1189,10 +1206,36 @@ def applications_charts(db: Session, request: Any) -> dict[str, list[dict[str, A
         "lifecycle_stage": []
         if lifecycle_selected
         else applications_chart_counts(db, request, "lifecycle_stage_status"),
-        "operating_system": applications_chart_counts(db, request, "operating_system"),
-        "sox_scope": applications_chart_counts(db, request, "sox_scope"),
+        "architecture_type": applications_chart_counts(db, request, "architecture_type"),
+        "install_type": applications_chart_counts(db, request, "install_type"),
         "strategic": applications_chart_counts(db, request, "strategic"),
     }
+
+
+def applications_top_active_users(db: Session, request: Any) -> dict[str, Any]:
+    top_n = normalized_top_n(getattr(request, "top_n", 10))
+    name_expression = application_display_expression("business_service_ci_name")
+    statement = (
+        select(
+            name_expression.label("application_name"),
+            ApplicationInventoryItem.active_users.label("active_users"),
+        )
+        .where(
+            *applications_filter_conditions(request.project_id, request.filters),
+            ApplicationInventoryItem.active_users.is_not(None),
+            ApplicationInventoryItem.active_users > 0,
+        )
+        .order_by(ApplicationInventoryItem.active_users.desc(), name_expression.asc())
+        .limit(top_n)
+    )
+    points = [
+        {
+            "application_name": str(row["application_name"]),
+            "active_users": int(row["active_users"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return {"top_n": top_n, "points": points}
 
 
 def normalize_volumetrics_scope(value: str | None) -> str:
@@ -1285,7 +1328,10 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         model.application_owner.label("application_owner"),
         volumetrics_supported_vendor_expression(model).label("supported_by_vendor"),
         model.sap_non_sap.label("sap_non_sap"),
+        model.architecture_type.label("architecture_type"),
+        model.install_type.label("install_type"),
         model.is_batch_related.label("is_batch_related"),
+        model.business_duration_seconds.label("business_duration_seconds"),
         model.response_sla_breached.label("response_sla_breached"),
         model.resolution_sla_breached.label("resolution_sla_breached"),
     ).where(model.project_id == project_id)
@@ -2505,6 +2551,7 @@ def volumetrics_sla_trends(db: Session, request: Any) -> dict[str, Any]:
 
 
 TOP_APPLICATIONS_WINDOW_DESCRIPTION = "Last 6 complete months excluding current month"
+LATEST_COMPLETE_6_MONTHS_DESCRIPTION = "Latest complete 6 months"
 BATCH_RULE_DESCRIPTION = (
     "Incident is batch-related when short_description contains Automic, case-insensitive."
 )
@@ -2515,6 +2562,9 @@ BATCH_NOT_APPLICABLE_MESSAGE = (
     "Batch-related ticket charts are applicable only for Incidents. "
     "SC Task catalog item charts will be added separately."
 )
+MTTR_PRIORITIES = ("P1", "P2", "P3", "P4")
+MTTR_LABEL_START_INDEX = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
+DURATION_BUCKETS = ("0-1 day", "1-3 days", "3-10 days", ">10 days")
 
 
 def subtract_months(value: datetime, month_count: int) -> datetime:
@@ -2537,11 +2587,39 @@ def rolling_six_complete_month_window(
     return subtract_months(previous_month_start, 5), previous_month_end
 
 
+def latest_complete_month_window(
+    db: Session,
+    project_id: UUID,
+    month_count: int,
+) -> tuple[datetime, datetime]:
+    data_range = volumetrics_data_range(db, project_id)
+    data_end = data_range["completion_date_max"]
+    if data_end is None:
+        fallback_start, fallback_end = rolling_six_complete_month_window()
+        fallback_end_month = first_day_of_month(fallback_end)
+        return subtract_months(fallback_end_month, month_count - 1), fallback_end
+
+    end_month = first_day_of_month(normalize_dashboard_datetime(data_end))
+    end_datetime = last_moment_of_month(end_month)
+    return subtract_months(end_month, month_count - 1), end_datetime
+
+
 def ranking_window_payload(start_datetime: datetime, end_datetime: datetime) -> dict[str, str]:
     return {
         "start_month": f"{start_datetime.year:04d}-{start_datetime.month:02d}",
         "end_month": f"{end_datetime.year:04d}-{end_datetime.month:02d}",
         "description": TOP_APPLICATIONS_WINDOW_DESCRIPTION,
+    }
+
+
+def latest_complete_window_payload(
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> dict[str, str]:
+    return {
+        "start_month": f"{start_datetime.year:04d}-{start_datetime.month:02d}",
+        "end_month": f"{end_datetime.year:04d}-{end_datetime.month:02d}",
+        "description": LATEST_COMPLETE_6_MONTHS_DESCRIPTION,
     }
 
 
@@ -2607,7 +2685,7 @@ def volumetrics_top_application_rows(
     top_n: int,
     incident_batch_only: bool = False,
 ) -> list[dict[str, Any]]:
-    window_start, window_end = rolling_six_complete_month_window()
+    window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
     effective_request = (
         replace_request_value(request, "ticket_type", "incident")
         if incident_batch_only
@@ -2648,22 +2726,82 @@ def volumetrics_top_application_rows(
     return [dict(row) for row in db.execute(statement).mappings().all()]
 
 
+def volumetrics_overall_average_created_volume(
+    db: Session,
+    request: Any,
+    *,
+    incident_batch_only: bool = False,
+) -> float:
+    window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
+    effective_request = (
+        replace_request_value(request, "ticket_type", "incident")
+        if incident_batch_only
+        else request
+    )
+    source = volumetrics_source_subquery(request)
+    conditions = [
+        *volumetrics_base_conditions(
+            source,
+            effective_request,
+            include_date_bounds=False,
+        ),
+        source.c.created_at.is_not(None),
+        source.c.created_at >= window_start,
+        source.c.created_at <= window_end,
+    ]
+    if incident_batch_only:
+        conditions.append(source.c.is_batch_related.is_(True))
+    value = db.scalar(
+        select((func.count(source.c.id) / 6.0).label("overall_average"))
+        .select_from(source)
+        .where(*conditions),
+    )
+    return float(value or 0)
+
+
+def top_application_volume_points(
+    rows: list[dict[str, Any]],
+    *,
+    overall_average_monthly_volume: float,
+) -> list[dict[str, Any]]:
+    points: list[dict[str, Any]] = []
+    for row in rows:
+        created_value = float(row["average_created"] or 0)
+        canceled_value = float(row["average_canceled"] or 0)
+        volume_pct = (
+            created_value / overall_average_monthly_volume * 100
+            if overall_average_monthly_volume
+            else None
+        )
+        created_label = math.ceil(created_value)
+        pct_text = f"{volume_pct:.1f}%" if volume_pct is not None else "N/A"
+        points.append(
+            {
+                "application_name": str(row["application_name"]),
+                "average_created": created_value,
+                "average_canceled_closed_incomplete": canceled_value,
+                "created_label": created_label,
+                "canceled_label": math.ceil(canceled_value),
+                "volume_pct": volume_pct,
+                "display_label": f"{created_label:,} ({pct_text})",
+            },
+        )
+    return points
+
+
 def volumetrics_top_applications(db: Session, request: Any) -> dict[str, Any]:
     top_n = normalized_top_n(getattr(request, "top_n", 10))
-    window_start, window_end = rolling_six_complete_month_window()
+    window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
     rows = volumetrics_top_application_rows(db, request, top_n=top_n)
-    points = pareto_top_application_points(
+    overall_average = volumetrics_overall_average_created_volume(db, request)
+    points = top_application_volume_points(
         rows,
-        created_key="average_created",
-        canceled_key="average_canceled",
-        created_label_key="created_label",
-        canceled_label_key="canceled_label",
-        output_created_key="average_created",
-        output_canceled_key="average_canceled_closed_incomplete",
+        overall_average_monthly_volume=overall_average,
     )
     return {
         "ranking_window": ranking_window_payload(window_start, window_end),
         "top_n": top_n,
+        "overall_average_monthly_volume": overall_average,
         "points": points,
     }
 
@@ -2735,7 +2873,7 @@ def volumetrics_incident_batch_trend(db: Session, request: Any) -> dict[str, Any
 
 def volumetrics_top_incident_batch_applications(db: Session, request: Any) -> dict[str, Any]:
     top_n = normalized_top_n(getattr(request, "top_n", 10))
-    window_start, window_end = rolling_six_complete_month_window()
+    window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
     if is_batch_chart_not_applicable(request):
         return {
             "applicable": False,
@@ -2766,6 +2904,557 @@ def volumetrics_top_incident_batch_applications(db: Session, request: Any) -> di
         "ranking_window": ranking_window_payload(window_start, window_end),
         "top_n": top_n,
         "points": points,
+    }
+
+
+def volumetrics_split_rows(
+    db: Session,
+    request: Any,
+    *,
+    field_name: str,
+    ticket_type: str,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    effective_request = replace_request_value(request, "ticket_type", ticket_type)
+    split_expression = volumetrics_display_expression(getattr(source.c, field_name))
+    statement = (
+        select(
+            split_expression.label("label"),
+            (func.count(source.c.id) / 6.0).label("average_monthly_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                effective_request,
+                include_date_bounds=False,
+            ),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= window_start,
+            source.c.created_at <= window_end,
+        )
+        .group_by(split_expression)
+        .order_by(func.count(source.c.id).desc(), split_expression.asc())
+    )
+    rows = [dict(row) for row in db.execute(statement).mappings().all()]
+    total_average = sum(float(row["average_monthly_count"] or 0) for row in rows)
+    return [
+        {
+            "label": str(row["label"]),
+            "average_monthly_count": float(row["average_monthly_count"] or 0),
+            "display_count": math.ceil(float(row["average_monthly_count"] or 0)),
+            "percentage": (
+                float(row["average_monthly_count"] or 0) / total_average * 100
+                if total_average
+                else None
+            ),
+        }
+        for row in rows
+    ]
+
+
+def volumetrics_detailed_architecture_install_splits(
+    db: Session,
+    request: Any,
+) -> dict[str, Any]:
+    window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
+    return {
+        "rolling_window": latest_complete_window_payload(window_start, window_end),
+        "architecture_type": {
+            "incidents": volumetrics_split_rows(
+                db,
+                request,
+                field_name="architecture_type",
+                ticket_type="incident",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            "sc_tasks": volumetrics_split_rows(
+                db,
+                request,
+                field_name="architecture_type",
+                ticket_type="sc_task",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+        },
+        "install_type": {
+            "incidents": volumetrics_split_rows(
+                db,
+                request,
+                field_name="install_type",
+                ticket_type="incident",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            "sc_tasks": volumetrics_split_rows(
+                db,
+                request,
+                field_name="install_type",
+                ticket_type="sc_task",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+        },
+    }
+
+
+def format_tickets_per_user(value: float) -> str:
+    if value < 10:
+        return f"{value:.2f}"
+    if value < 100:
+        return f"{value:.1f}"
+    return f"{round(value):,}"
+
+
+def inventory_active_users_subquery(project_id: UUID) -> Any:
+    application_key = func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name))
+    return (
+        select(
+            application_key.label("application_key"),
+            func.max(ApplicationInventoryItem.business_service_ci_name).label("application_name"),
+            func.max(ApplicationInventoryItem.active_users).label("active_users"),
+        )
+        .where(
+            ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.active.is_(True),
+            ApplicationInventoryItem.active_users.is_not(None),
+            ApplicationInventoryItem.active_users > 0,
+            ApplicationInventoryItem.business_service_ci_name.is_not(None),
+            func.btrim(ApplicationInventoryItem.business_service_ci_name) != "",
+        )
+        .group_by(application_key)
+        .subquery("inventory_active_users")
+    )
+
+
+def volumetrics_tickets_per_user(db: Session, request: Any) -> dict[str, Any]:
+    top_n = normalized_top_n(getattr(request, "top_n", 10))
+    window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
+    source = volumetrics_source_subquery(request)
+    inventory = inventory_active_users_subquery(request.project_id)
+    source_application_key = func.lower(func.btrim(source.c.business_service_ci_name))
+    average_volume_expression = (func.count(source.c.id) / 6.0).label(
+        "average_monthly_ticket_volume",
+    )
+    ratio_expression = (
+        (func.count(source.c.id) / 6.0) / cast(inventory.c.active_users, Float)
+    ).label("tickets_per_user_per_month")
+    statement = (
+        select(
+            inventory.c.application_name,
+            inventory.c.active_users,
+            average_volume_expression,
+            ratio_expression,
+        )
+        .select_from(source)
+        .join(inventory, inventory.c.application_key == source_application_key)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                request,
+                include_date_bounds=False,
+            ),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= window_start,
+            source.c.created_at <= window_end,
+        )
+        .group_by(inventory.c.application_name, inventory.c.active_users)
+        .order_by(ratio_expression.desc(), inventory.c.application_name.asc())
+        .limit(top_n)
+    )
+    points = []
+    for row in db.execute(statement).mappings().all():
+        ratio = float(row["tickets_per_user_per_month"] or 0)
+        points.append(
+            {
+                "application_name": str(row["application_name"]),
+                "active_users": int(row["active_users"] or 0),
+                "average_monthly_ticket_volume": float(
+                    row["average_monthly_ticket_volume"] or 0,
+                ),
+                "tickets_per_user_per_month": ratio,
+                "display_label": format_tickets_per_user(ratio),
+            },
+        )
+    return {
+        "ranking_window": latest_complete_window_payload(window_start, window_end),
+        "top_n": top_n,
+        "points": points,
+    }
+
+
+def volumetrics_distribution_split_rows(
+    db: Session,
+    request: Any,
+    *,
+    field_name: str,
+    ticket_type: str,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    effective_request = (
+        replace_request_value(request, "ticket_type", ticket_type)
+        if ticket_type != "all"
+        else replace_request_value(request, "ticket_type", "all")
+    )
+    split_expression = volumetrics_display_expression(getattr(source.c, field_name))
+    statement = (
+        select(
+            split_expression.label("label"),
+            (func.count(source.c.id) / 6.0).label("average_monthly_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                effective_request,
+                include_date_bounds=False,
+            ),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= window_start,
+            source.c.created_at <= window_end,
+        )
+        .group_by(split_expression)
+        .order_by(func.count(source.c.id).desc(), split_expression.asc())
+    )
+    rows = [dict(row) for row in db.execute(statement).mappings().all()]
+    total_average = sum(float(row["average_monthly_count"] or 0) for row in rows)
+    return [
+        {
+            "label": str(row["label"]),
+            "average_monthly_count": float(row["average_monthly_count"] or 0),
+            "display_count": math.ceil(float(row["average_monthly_count"] or 0)),
+            "percentage": (
+                float(row["average_monthly_count"] or 0) / total_average * 100
+                if total_average
+                else None
+            ),
+        }
+        for row in rows
+    ]
+
+
+def volumetrics_distribution_splits(db: Session, request: Any) -> dict[str, Any]:
+    window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
+
+    def group(field_name: str) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "all": volumetrics_distribution_split_rows(
+                db,
+                request,
+                field_name=field_name,
+                ticket_type="all",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            "incidents": volumetrics_distribution_split_rows(
+                db,
+                request,
+                field_name=field_name,
+                ticket_type="incident",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            "sc_tasks": volumetrics_distribution_split_rows(
+                db,
+                request,
+                field_name=field_name,
+                ticket_type="sc_task",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+        }
+
+    return {
+        "ranking_window": latest_complete_window_payload(window_start, window_end),
+        "sap_non_sap": group("sap_non_sap"),
+        "architecture_type": group("architecture_type"),
+        "install_type": group("install_type"),
+    }
+
+
+def priority_bucket_expression(source: Any) -> Any:
+    normalized = func.lower(func.trim(func.coalesce(source.c.priority, "")))
+    # ServiceNow priority values can arrive as P1/P2 labels or as numbered labels.
+    return case(
+        (
+            or_(
+                normalized.like("p1%"),
+                normalized.like("1%"),
+                normalized.like("%critical%"),
+            ),
+            literal("P1"),
+        ),
+        (
+            or_(
+                normalized.like("p2%"),
+                normalized.like("2%"),
+                normalized.like("%high%"),
+            ),
+            literal("P2"),
+        ),
+        (
+            or_(
+                normalized.like("p3%"),
+                normalized.like("3%"),
+                normalized.like("%moderate%"),
+                normalized.like("%medium%"),
+            ),
+            literal("P3"),
+        ),
+        (
+            or_(
+                normalized.like("p4%"),
+                normalized.like("4%"),
+                normalized.like("%low%"),
+            ),
+            literal("P4"),
+        ),
+        else_=None,
+    )
+
+
+def empty_mttr_priority_set() -> dict[str, list[dict[str, Any]]]:
+    return {priority: [] for priority in MTTR_PRIORITIES}
+
+
+def mttr_show_label(priority: str, period_index: int) -> bool:
+    start_index = MTTR_LABEL_START_INDEX[priority]
+    return period_index >= start_index and (period_index - start_index) % 3 == 0
+
+
+def mttr_label_text(average_mttr_days: float | None, ticket_count: int) -> str | None:
+    if average_mttr_days is None or ticket_count <= 0:
+        return None
+    return f"{average_mttr_days:.1f}d\nn={ticket_count:,}"
+
+
+def complete_month_clamped_request(db: Session, request: Any) -> Any:
+    completion_end = volumetrics_data_range(db, request.project_id)["completion_date_max"]
+    if completion_end is None:
+        return request
+    request_end = normalize_dashboard_datetime(request.end_datetime)
+    clamped_end = min(request_end, normalize_dashboard_datetime(completion_end))
+    if clamped_end == request_end:
+        return request
+    return replace_request_value(request, "end_datetime", clamped_end)
+
+
+def mttr_rows_for_ticket_type(
+    db: Session,
+    request: Any,
+    *,
+    ticket_type: str,
+    completion_field: str,
+) -> dict[str, list[dict[str, Any]]]:
+    complete_request = complete_month_clamped_request(db, request)
+    grain = normalize_volumetrics_time_grain(complete_request.time_grain)
+    periods = build_volumetrics_periods(complete_request)
+    source = volumetrics_source_subquery(complete_request)
+    completion_expression = getattr(source.c, completion_field)
+    period_expression = volumetrics_period_start_expression(completion_expression, grain)
+    priority_expression = priority_bucket_expression(source)
+    business_days_expression = cast(source.c.business_duration_seconds, Float) / SECONDS_PER_DAY
+    effective_request = replace_request_value(complete_request, "ticket_type", ticket_type)
+    statement = (
+        select(
+            period_expression.label("period_start"),
+            priority_expression.label("priority_bucket"),
+            func.avg(business_days_expression).label("average_mttr_days"),
+            func.count(source.c.id).label("ticket_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                effective_request,
+                include_date_bounds=False,
+            ),
+            completion_expression.is_not(None),
+            completion_expression >= normalize_dashboard_datetime(complete_request.start_datetime),
+            completion_expression <= normalize_dashboard_datetime(complete_request.end_datetime),
+            source.c.business_duration_seconds.is_not(None),
+            source.c.business_duration_seconds >= 0,
+            priority_expression.in_(MTTR_PRIORITIES),
+        )
+        .group_by(period_expression, priority_expression)
+    )
+    rows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in db.execute(statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], grain)
+        priority = row["priority_bucket"]
+        if period_start is None or priority is None:
+            continue
+        rows_by_key[(volumetrics_period_lookup_key(period_start, grain), priority)] = {
+            "average_mttr_days": float(row["average_mttr_days"] or 0),
+            "ticket_count": int_count(row["ticket_count"]),
+        }
+
+    rows = empty_mttr_priority_set()
+    for priority in MTTR_PRIORITIES:
+        for period_index, period in enumerate(periods):
+            period_key = volumetrics_period_lookup_key(period.start, grain)
+            values = rows_by_key.get((period_key, priority))
+            average_mttr_days = (
+                float(values["average_mttr_days"]) if values is not None else None
+            )
+            ticket_count = int_count(values.get("ticket_count") if values else None)
+            show_label = mttr_show_label(priority, period_index) and average_mttr_days is not None
+            rows[priority].append(
+                {
+                    "period_key": period_key,
+                    "period_label": period.label,
+                    "average_mttr_days": average_mttr_days,
+                    "ticket_count": ticket_count,
+                    "show_label": show_label,
+                    "label_text": mttr_label_text(average_mttr_days, ticket_count)
+                    if show_label
+                    else None,
+                },
+            )
+    return rows
+
+
+def volumetrics_kpi_mttr_trends(db: Session, request: Any) -> dict[str, Any]:
+    grain = normalize_volumetrics_time_grain(request.time_grain)
+    return {
+        "time_grain": grain,
+        "incident": mttr_rows_for_ticket_type(
+            db,
+            request,
+            ticket_type="incident",
+            completion_field="resolved_at",
+        ),
+        "sc_task": mttr_rows_for_ticket_type(
+            db,
+            request,
+            ticket_type="sc_task",
+            completion_field="closed_at",
+        ),
+    }
+
+
+def latest_complete_month_periods(
+    db: Session,
+    project_id: UUID,
+    month_count: int,
+) -> list[VolumetricsPeriod]:
+    start_datetime, end_datetime = latest_complete_month_window(db, project_id, month_count)
+    request = type(
+        "MonthlyPeriodRequest",
+        (),
+        {
+            "time_grain": "monthly",
+            "start_datetime": start_datetime,
+            "end_datetime": end_datetime,
+        },
+    )()
+    return build_volumetrics_periods(request)
+
+
+def duration_bucket_expression(duration_seconds: Any) -> Any:
+    # Four bars are implemented because the requirements provided four explicit buckets.
+    return case(
+        (duration_seconds <= SECONDS_PER_DAY, literal("0-1 day")),
+        (
+            and_(duration_seconds > SECONDS_PER_DAY, duration_seconds <= SECONDS_PER_DAY * 3),
+            literal("1-3 days"),
+        ),
+        (
+            and_(duration_seconds > SECONDS_PER_DAY * 3, duration_seconds <= SECONDS_PER_DAY * 10),
+            literal("3-10 days"),
+        ),
+        (duration_seconds > SECONDS_PER_DAY * 10, literal(">10 days")),
+        else_=None,
+    )
+
+
+def duration_bucket_rows_for_ticket_type(
+    db: Session,
+    request: Any,
+    *,
+    ticket_type: str,
+    completion_field: str,
+) -> list[dict[str, Any]]:
+    periods = latest_complete_month_periods(db, request.project_id, 3)
+    if not periods:
+        return []
+
+    source = volumetrics_source_subquery(request)
+    completion_expression = getattr(source.c, completion_field)
+    period_expression = volumetrics_period_start_expression(completion_expression, "monthly")
+    duration_seconds = func.extract("epoch", completion_expression - source.c.created_at)
+    bucket_expression = duration_bucket_expression(duration_seconds)
+    effective_request = replace_request_value(request, "ticket_type", ticket_type)
+    statement = (
+        select(
+            period_expression.label("period_start"),
+            bucket_expression.label("bucket"),
+            func.count(source.c.id).label("ticket_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                effective_request,
+                include_date_bounds=False,
+            ),
+            source.c.created_at.is_not(None),
+            completion_expression.is_not(None),
+            completion_expression >= periods[0].start,
+            completion_expression <= periods[-1].end,
+            completion_expression >= source.c.created_at,
+            bucket_expression.is_not(None),
+        )
+        .group_by(period_expression, bucket_expression)
+    )
+    counts: dict[tuple[str, str], int] = {}
+    for row in db.execute(statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], "monthly")
+        bucket = row["bucket"]
+        if period_start is None or bucket is None:
+            continue
+        counts[(volumetrics_period_lookup_key(period_start, "monthly"), str(bucket))] = int_count(
+            row["ticket_count"],
+        )
+
+    return [
+        {
+            "period_key": volumetrics_period_lookup_key(period.start, "monthly"),
+            "period_label": period.label,
+            "buckets": {
+                bucket: counts.get(
+                    (volumetrics_period_lookup_key(period.start, "monthly"), bucket),
+                    0,
+                )
+                for bucket in DURATION_BUCKETS
+            },
+        }
+        for period in periods
+    ]
+
+
+def volumetrics_kpi_duration_buckets(db: Session, request: Any) -> dict[str, Any]:
+    periods = latest_complete_month_periods(db, request.project_id, 3)
+    months = [volumetrics_period_lookup_key(period.start, "monthly") for period in periods]
+    return {
+        "months": months,
+        "incident": duration_bucket_rows_for_ticket_type(
+            db,
+            request,
+            ticket_type="incident",
+            completion_field="resolved_at",
+        ),
+        "sc_task": duration_bucket_rows_for_ticket_type(
+            db,
+            request,
+            ticket_type="sc_task",
+            completion_field="closed_at",
+        ),
     }
 
 

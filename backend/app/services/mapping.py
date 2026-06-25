@@ -38,6 +38,8 @@ MAPPING_SOURCE_BUILT_IN_SUGGESTION = "BUILT_IN_SUGGESTION"
 MAPPING_SOURCE_REQUEST_BODY = "REQUEST_BODY"
 APPLY_SCOPE_BATCH = "BATCH"
 APPLY_SCOPE_TICKET_TYPE = "TICKET_TYPE"
+CMDB_ARCHITECTURE_TYPE_KEYS = ("Architecture type", "Architecture Type")
+CMDB_INSTALL_TYPE_KEYS = ("Install type", "Install Type")
 
 NORMALIZED_FIELDS = (
     "ticket_id",
@@ -924,6 +926,21 @@ def apply_inventory_enrichment_to_ticket(
     ticket.supported_by_vendor = inventory_item.supported_by_vendor
     ticket.assignment_group_owner = inventory_item.assignment_group_owner
     ticket.derived_vendor = inventory_item.supported_by_vendor
+    ticket.architecture_type = cmdb_payload_text(
+        inventory_item.cmdb_payload,
+        *CMDB_ARCHITECTURE_TYPE_KEYS,
+    )
+    ticket.install_type = cmdb_payload_text(inventory_item.cmdb_payload, *CMDB_INSTALL_TYPE_KEYS)
+
+
+def cmdb_payload_text(payload: Mapping[str, Any] | None, *keys: str) -> str | None:
+    if not payload:
+        return None
+    for key in keys:
+        value = text_or_none(payload.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def build_out_of_scope_ticket(
@@ -988,6 +1005,8 @@ def build_out_of_scope_ticket(
         supported_by_vendor=ticket.supported_by_vendor,
         assignment_group_owner=ticket.assignment_group_owner,
         sap_non_sap=ticket.sap_non_sap,
+        architecture_type=ticket.architecture_type,
+        install_type=ticket.install_type,
         is_batch_related=ticket.is_batch_related,
         out_of_scope_reason=reason,
     )

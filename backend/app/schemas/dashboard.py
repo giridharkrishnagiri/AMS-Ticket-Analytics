@@ -250,6 +250,10 @@ class ApplicationsDataRequest(BaseModel):
     offset: int = Field(default=0, ge=0)
 
 
+class ApplicationsTopActiveUsersRequest(ApplicationsDataRequest):
+    top_n: int = Field(default=10, ge=10, le=20)
+
+
 class ApplicationsSummaryResponse(BaseModel):
     applications: int
     functional_groups: int
@@ -275,6 +279,9 @@ class ApplicationsListRow(BaseModel):
     functional_track: str
     ams_owner: str
     supported_by_vendor: str
+    active_users: int | None
+    avg_monthly_ticket_volume_6m: float | None
+    tickets_per_user_per_month: float | None
     app_family: str
     biz_process: str
     app_category: str
@@ -308,10 +315,20 @@ class ApplicationsChartDatum(BaseModel):
     count: int
 
 
+class ApplicationsTopActiveUsersPoint(BaseModel):
+    application_name: str
+    active_users: int
+
+
+class ApplicationsTopActiveUsersResponse(BaseModel):
+    top_n: int
+    points: list[ApplicationsTopActiveUsersPoint]
+
+
 class ApplicationsChartsResponse(BaseModel):
     lifecycle_stage: list[ApplicationsChartDatum]
-    operating_system: list[ApplicationsChartDatum]
-    sox_scope: list[ApplicationsChartDatum]
+    architecture_type: list[ApplicationsChartDatum]
+    install_type: list[ApplicationsChartDatum]
     strategic: list[ApplicationsChartDatum]
 
 
@@ -501,12 +518,14 @@ class VolumetricsTopApplicationPoint(BaseModel):
     average_canceled_closed_incomplete: float
     created_label: int
     canceled_label: int
-    pareto_cumulative_pct: float | None
+    volume_pct: float | None
+    display_label: str
 
 
 class VolumetricsTopApplicationsResponse(BaseModel):
     ranking_window: VolumetricsRankingWindow
     top_n: int
+    overall_average_monthly_volume: float
     points: list[VolumetricsTopApplicationPoint]
 
 
@@ -543,3 +562,82 @@ class VolumetricsTopIncidentBatchApplicationsResponse(BaseModel):
     ranking_window: VolumetricsRankingWindow
     top_n: int
     points: list[VolumetricsTopIncidentBatchApplicationPoint]
+
+
+class VolumetricsSplitDatum(BaseModel):
+    label: str
+    average_monthly_count: float
+    display_count: int
+    percentage: float | None
+
+
+class VolumetricsTicketTypeSplit(BaseModel):
+    incidents: list[VolumetricsSplitDatum]
+    sc_tasks: list[VolumetricsSplitDatum]
+
+
+class VolumetricsDetailedArchitectureInstallSplitsResponse(BaseModel):
+    rolling_window: VolumetricsRankingWindow
+    architecture_type: VolumetricsTicketTypeSplit
+    install_type: VolumetricsTicketTypeSplit
+
+
+class VolumetricsTicketsPerUserPoint(BaseModel):
+    application_name: str
+    active_users: int
+    average_monthly_ticket_volume: float
+    tickets_per_user_per_month: float
+    display_label: str
+
+
+class VolumetricsTicketsPerUserResponse(BaseModel):
+    ranking_window: VolumetricsRankingWindow
+    top_n: int
+    points: list[VolumetricsTicketsPerUserPoint]
+
+
+class VolumetricsTripleTicketTypeSplit(BaseModel):
+    all: list[VolumetricsSplitDatum]
+    incidents: list[VolumetricsSplitDatum]
+    sc_tasks: list[VolumetricsSplitDatum]
+
+
+class VolumetricsDistributionSplitsResponse(BaseModel):
+    ranking_window: VolumetricsRankingWindow
+    sap_non_sap: VolumetricsTripleTicketTypeSplit
+    architecture_type: VolumetricsTripleTicketTypeSplit
+    install_type: VolumetricsTripleTicketTypeSplit
+
+
+class VolumetricsKpiMttrPoint(BaseModel):
+    period_key: str
+    period_label: str
+    average_mttr_days: float | None
+    ticket_count: int
+    show_label: bool
+    label_text: str | None
+
+
+class VolumetricsKpiMttrPrioritySet(BaseModel):
+    P1: list[VolumetricsKpiMttrPoint]
+    P2: list[VolumetricsKpiMttrPoint]
+    P3: list[VolumetricsKpiMttrPoint]
+    P4: list[VolumetricsKpiMttrPoint]
+
+
+class VolumetricsKpiMttrTrendsResponse(BaseModel):
+    time_grain: str
+    incident: VolumetricsKpiMttrPrioritySet
+    sc_task: VolumetricsKpiMttrPrioritySet
+
+
+class VolumetricsDurationBucketRow(BaseModel):
+    period_key: str
+    period_label: str
+    buckets: dict[str, int]
+
+
+class VolumetricsKpiDurationBucketsResponse(BaseModel):
+    months: list[str]
+    incident: list[VolumetricsDurationBucketRow]
+    sc_task: list[VolumetricsDurationBucketRow]

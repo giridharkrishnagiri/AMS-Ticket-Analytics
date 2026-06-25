@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Integer, case, cast, func, literal, select, union_all
+from sqlalchemy import Float, Integer, case, cast, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -26,6 +26,8 @@ from app.models import (
 from app.services.dashboard import (
     APPLICATION_LIST_FIELDS,
     BLANK_LABEL,
+    DURATION_BUCKETS,
+    MTTR_PRIORITIES,
     VOLUMETRICS_SCOPE_LABELS,
     VOLUMETRICS_TICKET_TYPE_LABELS,
     application_display_expression,
@@ -36,11 +38,14 @@ from app.services.dashboard import (
     date_counts_by_day_of_month,
     date_counts_by_weekday,
     day_count_for_week_part,
+    duration_bucket_expression,
+    latest_complete_month_window,
+    latest_complete_window_payload,
     normalize_dashboard_datetime,
     overview_summary,
+    priority_bucket_expression,
     priority_sort_key,
     ranking_window_payload,
-    rolling_six_complete_month_window,
     volumetrics_base_conditions,
     volumetrics_cancelled_expression,
     volumetrics_data_range,
@@ -888,6 +893,8 @@ def build_detailed_volume_payload(
     dimensions = volumetrics_dimension_expressions(source)
     period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
     application_expression = volumetrics_display_expression(source.c.business_service_ci_name)
+    architecture_expression = volumetrics_display_expression(source.c.architecture_type)
+    install_expression = volumetrics_display_expression(source.c.install_type)
     cancelled_condition = volumetrics_cancelled_expression(source)
     incident_batch_condition = (
         (source.c.ticket_type == "INCIDENT") & source.c.is_batch_related.is_(True)
@@ -896,6 +903,8 @@ def build_detailed_volume_payload(
         select(
             *[expression.label(name) for name, expression in dimensions.items()],
             application_expression.label("application_name"),
+            architecture_expression.label("architecture_type"),
+            install_expression.label("install_type"),
             period_expression.label("period_start"),
             func.count(source.c.id).label("created_count"),
             func.count(source.c.id)
@@ -910,7 +919,13 @@ def build_detailed_volume_payload(
         )
         .select_from(source)
         .where(*volumetrics_base_conditions(source, request))
-        .group_by(*dimensions.values(), application_expression, period_expression)
+        .group_by(
+            *dimensions.values(),
+            application_expression,
+            architecture_expression,
+            install_expression,
+            period_expression,
+        )
     )
     rows = []
     for row in db.execute(statement).mappings().all():
@@ -921,6 +936,8 @@ def build_detailed_volume_payload(
             {
                 **dimension_dict(dimension_key(row)),
                 "application_name": str(row["application_name"]),
+                "architecture_type": str(row["architecture_type"]),
+                "install_type": str(row["install_type"]),
                 "period_key": month_key(period_start),
                 "period_label": f"{period_start:%b-%y}",
                 "created_count": int(row["created_count"] or 0),
@@ -932,10 +949,13 @@ def build_detailed_volume_payload(
             },
         )
 
-    window_start, window_end = rolling_six_complete_month_window()
+    window_start, window_end = latest_complete_month_window(db, project_id, 6)
+    split_window_start, split_window_end = latest_complete_month_window(db, project_id, 6)
     return {
         "ranking_window": ranking_window_payload(window_start, window_end),
+        "split_window": latest_complete_window_payload(split_window_start, split_window_end),
         "application_rows": rows,
+        "split_rows": build_detailed_split_rows(db, project_id),
         "batch_rule": {
             "field": "short_description",
             "rule_description": (
@@ -943,6 +963,169 @@ def build_detailed_volume_payload(
                 "case-insensitive."
             ),
         },
+    }
+
+
+def build_detailed_split_rows(db: Session, project_id: UUID) -> list[dict[str, Any]]:
+    window_start, window_end = latest_complete_month_window(db, project_id, 6)
+    request = monthly_request(project_id, window_start, window_end)
+    source = build_volumetrics_source(project_id)
+    dimensions = volumetrics_dimension_expressions(source)
+    rows: list[dict[str, Any]] = []
+
+    for split_type in ("architecture_type", "install_type"):
+        split_expression = volumetrics_display_expression(getattr(source.c, split_type))
+        statement = (
+            select(
+                *[expression.label(name) for name, expression in dimensions.items()],
+                literal(split_type).label("split_type"),
+                split_expression.label("split_label"),
+                func.count(source.c.id).label("created_count"),
+            )
+            .select_from(source)
+            .where(*volumetrics_base_conditions(source, request))
+            .group_by(*dimensions.values(), split_expression)
+        )
+        for row in db.execute(statement).mappings().all():
+            rows.append(
+                {
+                    **dimension_dict(dimension_key(row)),
+                    "split_type": str(row["split_type"]),
+                    "split_label": str(row["split_label"]),
+                    "created_count": int(row["created_count"] or 0),
+                },
+            )
+    return rows
+
+
+def build_kpi_mttr_payload(
+    db: Session,
+    project_id: UUID,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> dict[str, Any]:
+    request = monthly_request(project_id, start_datetime, end_datetime)
+    source = build_volumetrics_source(project_id)
+    dimensions = volumetrics_dimension_expressions(source)
+    rows: list[dict[str, Any]] = []
+
+    for ticket_type, completion_field in (
+        ("incident", "resolved_at"),
+        ("sc_task", "closed_at"),
+    ):
+        completion_expression = getattr(source.c, completion_field)
+        period_expression = volumetrics_period_start_expression(completion_expression, "monthly")
+        priority_expression = priority_bucket_expression(source)
+        effective_request = SimpleNamespace(**{**request.__dict__, "ticket_type": ticket_type})
+        statement = (
+            select(
+                *[expression.label(name) for name, expression in dimensions.items()],
+                period_expression.label("period_start"),
+                priority_expression.label("priority_bucket"),
+                func.sum(cast(source.c.business_duration_seconds, Float)).label(
+                    "business_duration_seconds_sum",
+                ),
+                func.count(source.c.id).label("ticket_count"),
+            )
+            .select_from(source)
+            .where(
+                *volumetrics_base_conditions(
+                    source,
+                    effective_request,
+                    include_date_bounds=False,
+                ),
+                completion_expression.is_not(None),
+                completion_expression >= normalize_dashboard_datetime(start_datetime),
+                completion_expression <= normalize_dashboard_datetime(end_datetime),
+                source.c.business_duration_seconds.is_not(None),
+                source.c.business_duration_seconds >= 0,
+                priority_expression.in_(MTTR_PRIORITIES),
+            )
+            .group_by(*dimensions.values(), period_expression, priority_expression)
+        )
+        for row in db.execute(statement).mappings().all():
+            period_start = row["period_start"]
+            if period_start is None or row["priority_bucket"] is None:
+                continue
+            rows.append(
+                {
+                    **dimension_dict(dimension_key(row)),
+                    "period_key": month_key(period_start),
+                    "period_label": f"{period_start:%b-%y}",
+                    "priority": str(row["priority_bucket"]),
+                    "business_duration_seconds_sum": float(
+                        row["business_duration_seconds_sum"] or 0,
+                    ),
+                    "ticket_count": int(row["ticket_count"] or 0),
+                },
+            )
+    return {"rows": rows}
+
+
+def build_duration_bucket_payload(db: Session, project_id: UUID) -> dict[str, Any]:
+    window_start, window_end = latest_complete_month_window(db, project_id, 3)
+    request = monthly_request(project_id, window_start, window_end)
+    source = build_volumetrics_source(project_id)
+    dimensions = volumetrics_dimension_expressions(source)
+    periods = [
+        {
+            "period_key": month_key(period.start),
+            "period_label": period.label,
+        }
+        for period in build_volumetrics_periods(request)
+    ]
+    rows: list[dict[str, Any]] = []
+
+    for ticket_type, completion_field in (
+        ("incident", "resolved_at"),
+        ("sc_task", "closed_at"),
+    ):
+        completion_expression = getattr(source.c, completion_field)
+        period_expression = volumetrics_period_start_expression(completion_expression, "monthly")
+        duration_seconds = func.extract("epoch", completion_expression - source.c.created_at)
+        bucket_expression = duration_bucket_expression(duration_seconds)
+        effective_request = SimpleNamespace(**{**request.__dict__, "ticket_type": ticket_type})
+        statement = (
+            select(
+                *[expression.label(name) for name, expression in dimensions.items()],
+                period_expression.label("period_start"),
+                bucket_expression.label("bucket"),
+                func.count(source.c.id).label("ticket_count"),
+            )
+            .select_from(source)
+            .where(
+                *volumetrics_base_conditions(
+                    source,
+                    effective_request,
+                    include_date_bounds=False,
+                ),
+                source.c.created_at.is_not(None),
+                completion_expression.is_not(None),
+                completion_expression >= normalize_dashboard_datetime(window_start),
+                completion_expression <= normalize_dashboard_datetime(window_end),
+                completion_expression >= source.c.created_at,
+                bucket_expression.is_not(None),
+            )
+            .group_by(*dimensions.values(), period_expression, bucket_expression)
+        )
+        for row in db.execute(statement).mappings().all():
+            period_start = row["period_start"]
+            if period_start is None or row["bucket"] is None:
+                continue
+            rows.append(
+                {
+                    **dimension_dict(dimension_key(row)),
+                    "period_key": month_key(period_start),
+                    "period_label": f"{period_start:%b-%y}",
+                    "bucket": str(row["bucket"]),
+                    "ticket_count": int(row["ticket_count"] or 0),
+                },
+            )
+
+    return {
+        "periods": periods,
+        "buckets": list(DURATION_BUCKETS),
+        "rows": rows,
     }
 
 
@@ -1002,11 +1185,16 @@ def build_volumetrics_payload(
             "overall_sla_trends": {"rows": [], "logic": {}},
             "detailed_volume_trends": {
                 "ranking_window": {},
+                "split_window": {},
                 "application_rows": [],
+                "split_rows": [],
                 "batch_rule": {},
             },
+            "kpi_trends": {
+                "mttr": {"rows": []},
+                "duration_buckets": {"periods": [], "buckets": [], "rows": []},
+            },
             "placeholders": {
-                "kpi_trends": "Detailed requirements for this section will be added in the next prompts.",
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
             },
             "complete_month_from": None,
@@ -1034,11 +1222,16 @@ def build_volumetrics_payload(
             "overall_sla_trends": {"rows": [], "logic": {}},
             "detailed_volume_trends": {
                 "ranking_window": {},
+                "split_window": {},
                 "application_rows": [],
+                "split_rows": [],
                 "batch_rule": {},
             },
+            "kpi_trends": {
+                "mttr": {"rows": []},
+                "duration_buckets": {"periods": [], "buckets": [], "rows": []},
+            },
             "placeholders": {
-                "kpi_trends": "Detailed requirements for this section will be added in the next prompts.",
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
             },
             "complete_month_from": None,
@@ -1099,8 +1292,11 @@ def build_volumetrics_payload(
             start_datetime,
             end_datetime,
         ),
+        "kpi_trends": {
+            "mttr": build_kpi_mttr_payload(db, project_id, start_datetime, end_datetime),
+            "duration_buckets": build_duration_bucket_payload(db, project_id),
+        },
         "placeholders": {
-            "kpi_trends": "Detailed requirements for this section will be added in the next prompts.",
             "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
         },
         "complete_month_from": start_datetime,
@@ -1457,6 +1653,27 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       min-inline-size: 0;
       overflow-x: hidden;
     }
+    .chart-grid-three {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: hidden;
+    }
+    .kpi-stack {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+      min-width: 0;
+    }
+    .duration-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      min-width: 0;
+    }
     .chart-card {
       width: 100%;
       inline-size: 100%;
@@ -1470,6 +1687,41 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       padding: 10px;
     }
     .chart-card.full { grid-column: 1 / -1; }
+    .chart-copy-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      min-height: 30px;
+      margin-top: 8px;
+    }
+    .copy-chart-button {
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid #0f766e;
+      border-radius: 7px;
+      background: #ffffff;
+      color: #0f766e;
+      font-size: 0.75rem;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .copy-chart-button:hover,
+    .copy-chart-button:focus-visible {
+      background: #ecfdf5;
+      outline: none;
+    }
+    .copy-chart-button:disabled {
+      cursor: wait;
+      opacity: 0.7;
+    }
+    .copy-chart-status {
+      color: #475569;
+      font-size: 0.74rem;
+      font-weight: 800;
+      min-width: 92px;
+      text-align: right;
+    }
     .chart-frame {
       display: flex;
       flex-direction: column;
@@ -1615,6 +1867,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     .main-content,
     .cards-grid,
     .chart-grid,
+    .chart-grid-three,
     .chart-card,
     .chart-stage,
     .table-card,
@@ -1626,13 +1879,15 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     @media (max-width: 1100px) {
       .chart-grid { grid-template-columns: 1fr; }
+      .chart-grid-three { grid-template-columns: 1fr; }
+      .duration-grid { grid-template-columns: 1fr; }
       #volumetrics .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 980px) {
       .topbar, .layout { grid-template-columns: 1fr; display: grid; }
       .topbar { max-height: none; min-height: 0; }
       .dashboard-title, #export-meta { text-align: left; }
-      .summary-grid, .chart-grid, #volumetrics .summary-grid { grid-template-columns: 1fr; }
+      .summary-grid, .chart-grid, .chart-grid-three, .duration-grid, #volumetrics .summary-grid { grid-template-columns: 1fr; }
       .overview-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .filters { position: static; max-height: none; }
       .main { overflow-y: visible; }
@@ -1689,7 +1944,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       hourlyDayType: "weekdays",
       priorityView: "graph",
       topVolumeN: "10",
-      topBatchN: "10"
+      topBatchN: "10",
+      topActiveUsersN: "10",
+      ticketsPerUserN: "10"
     };
     function fmt(value, digits = 0) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "N/A";
@@ -1805,6 +2062,34 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ${bars.join("")}${labels.join("")}
       </svg>${legend(series)}`;
     }
+    function horizontalBarChart(data, options = {}) {
+      if (!data.length) return `<p class="muted" style="padding:12px">${esc(options.emptyMessage || "No chart data available.")}</p>`;
+      const width = Math.max(760, Math.min(options.width || 1040, 1120));
+      const height = options.height || Math.max(420, data.length * 34 + 110);
+      const margin = { top: 32, right: options.right || 132, bottom: 42, left: options.left || 280 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const valueKey = options.valueKey || "value";
+      const maxValue = Math.max(1, ...data.map((row) => Number(row[valueKey] || 0)));
+      const bandHeight = plotHeight / Math.max(1, data.length);
+      const barHeight = Math.max(14, Math.min(28, bandHeight * 0.58));
+      const bars = data.map((row, index) => {
+        const value = Number(row[valueKey] || 0);
+        const barWidth = (value / maxValue) * plotWidth;
+        const y = margin.top + index * bandHeight + (bandHeight - barHeight) / 2;
+        const labelY = y + barHeight / 2 + 4;
+        const display = row.displayLabel || fmt(value, options.digits || 0);
+        return `
+          <text x="${margin.left - 12}" y="${labelY}" text-anchor="end" font-size="12" font-weight="800" fill="#334155"><title>${esc(row.label)}</title>${esc(truncateLabel(row.label, 36))}</text>
+          <rect x="${margin.left}" y="${y}" width="${barWidth}" height="${barHeight}" rx="5" fill="${options.color || COLORS.teal}"></rect>
+          <text x="${Math.min(width - margin.right + 8, margin.left + barWidth + 8)}" y="${labelY}" font-size="12" font-weight="900" fill="#334155">${esc(display)}</text>
+        `;
+      });
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(options.title || "Horizontal bar chart")}">
+        <line x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}" stroke="#64748b"></line>
+        ${bars.join("")}
+      </svg>${legend([{ name: options.legend || "Value", color: options.color || COLORS.teal }])}`;
+    }
     function lineChart(data, key, averageKey) {
       const width = 1040;
       const height = 360;
@@ -1861,6 +2146,162 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function legend(items) {
       return `<div class="legend">${items.map((item) => `<span><i class="swatch" style="background:${item.color}"></i>${esc(item.name)}</span>`).join("")}</div>`;
     }
+    function chartSvgSize(svg) {
+      const viewBox = (svg.getAttribute("viewBox") || "").trim().split(/\s+/).map(Number);
+      if (viewBox.length === 4 && viewBox.every((value) => Number.isFinite(value))) {
+        return { width: Math.max(1, viewBox[2]), height: Math.max(1, viewBox[3]) };
+      }
+      const width = Number(svg.getAttribute("width")) || Math.ceil(svg.getBoundingClientRect().width) || 960;
+      const height = Number(svg.getAttribute("height")) || Math.ceil(svg.getBoundingClientRect().height) || 360;
+      return { width, height };
+    }
+    function serializedChartSvg(svg, width, height) {
+      const clone = svg.cloneNode(true);
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      clone.setAttribute("width", String(width));
+      clone.setAttribute("height", String(height));
+      return new XMLSerializer().serializeToString(clone);
+    }
+    function loadImageFromBlob(blob) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(blob);
+        const image = new Image();
+        image.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(image);
+        };
+        image.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error("Chart image could not be prepared."));
+        };
+        image.src = url;
+      });
+    }
+    function canvasToPngBlob(canvas) {
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("Chart image could not be encoded."));
+        }, "image/png");
+      });
+    }
+    function chartLegendItems(frame) {
+      return Array.from(frame.querySelectorAll(".legend span")).map((item) => {
+        const swatch = item.querySelector(".swatch");
+        return {
+          name: item.textContent.trim(),
+          color: swatch ? getComputedStyle(swatch).backgroundColor : COLORS.slate
+        };
+      }).filter((item) => item.name);
+    }
+    async function chartFramePngBlob(frame) {
+      const svg = frame.querySelector("svg");
+      if (!svg) throw new Error("No chart image is available to copy.");
+      const { width, height } = chartSvgSize(svg);
+      const svgMarkup = serializedChartSvg(svg, width, height);
+      const image = await loadImageFromBlob(new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" }));
+      const legendItems = chartLegendItems(frame);
+      const scale = 2;
+      const measureCanvas = document.createElement("canvas");
+      const measureContext = measureCanvas.getContext("2d");
+      if (!measureContext) throw new Error("Canvas copy is not available in this browser.");
+      measureContext.font = "700 13px Arial, sans-serif";
+      const legendRows = [];
+      let currentRow = [];
+      let currentWidth = 12;
+      legendItems.forEach((item) => {
+        const itemWidth = 24 + measureContext.measureText(item.name).width + 18;
+        if (currentRow.length && currentWidth + itemWidth > width - 12) {
+          legendRows.push(currentRow);
+          currentRow = [];
+          currentWidth = 12;
+        }
+        currentRow.push({ ...item, width: itemWidth });
+        currentWidth += itemWidth;
+      });
+      if (currentRow.length) legendRows.push(currentRow);
+      const legendHeight = legendRows.length ? 18 + legendRows.length * 24 : 0;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(width * scale);
+      canvas.height = Math.ceil((height + legendHeight) * scale);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Canvas copy is not available in this browser.");
+      context.scale(scale, scale);
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height + legendHeight);
+      context.drawImage(image, 0, 0, width, height);
+      context.font = "700 13px Arial, sans-serif";
+      context.textBaseline = "middle";
+      legendRows.forEach((row, rowIndex) => {
+        let x = 12;
+        const y = height + 18 + rowIndex * 24;
+        row.forEach((item) => {
+          context.fillStyle = item.color;
+          context.fillRect(x, y - 5, 10, 10);
+          context.fillStyle = "#334155";
+          context.fillText(item.name, x + 16, y);
+          x += item.width;
+        });
+      });
+      return { blob: await canvasToPngBlob(canvas), svgMarkup };
+    }
+    function setCopyStatus(button, message, isError = false) {
+      const status = button.closest(".chart-copy-toolbar")?.querySelector(".copy-chart-status");
+      if (!status) return;
+      status.textContent = message;
+      status.style.color = isError ? "#b91c1c" : "#0f766e";
+      window.clearTimeout(status._resetTimer);
+      status._resetTimer = window.setTimeout(() => {
+        status.textContent = "";
+        status.style.color = "#475569";
+      }, 3200);
+    }
+    async function copyOfflineChart(button) {
+      const card = button.closest(".chart-card");
+      const frame = card?.querySelector(".chart-frame");
+      if (!frame) {
+        setCopyStatus(button, "No chart found", true);
+        return;
+      }
+      button.disabled = true;
+      try {
+        const { blob, svgMarkup } = await chartFramePngBlob(frame);
+        if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+          setCopyStatus(button, "Chart copied");
+        } else if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(svgMarkup);
+          setCopyStatus(button, "SVG copied");
+        } else {
+          throw new Error("Clipboard image copy is not supported in this browser.");
+        }
+      } catch (error) {
+        setCopyStatus(button, error instanceof Error ? error.message : "Copy failed", true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+    function installChartCopyButtons(root = document) {
+      // Future offline charts only need the standard .chart-card + .chart-frame SVG pattern.
+      root.querySelectorAll(".chart-card").forEach((card) => {
+        if (card.dataset.copyReady === "true") return;
+        const frame = card.querySelector(".chart-frame");
+        if (!frame || !frame.querySelector("svg")) return;
+        const toolbar = document.createElement("div");
+        toolbar.className = "chart-copy-toolbar";
+        const status = document.createElement("span");
+        status.className = "copy-chart-status";
+        status.setAttribute("aria-live", "polite");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "copy-chart-button";
+        button.textContent = "Copy Chart";
+        button.addEventListener("click", () => copyOfflineChart(button));
+        toolbar.append(status, button);
+        card.insertBefore(toolbar, frame);
+        card.dataset.copyReady = "true";
+      });
+    }
     function countBy(rows, field) {
       const map = new Map();
       rows.forEach((row) => map.set(row[field] || "(blank)", (map.get(row[field] || "(blank)") || 0) + 1));
@@ -1910,8 +2351,23 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         (state.appSap === "all" || row.sap_non_sap === state.appSap)
       );
     }
+    function topActiveUsersPoints(rows) {
+      return rows
+        .filter((row) => Number(row.active_users || 0) > 0)
+        .map((row) => ({
+          label: row.business_service_ci_name || "(blank)",
+          value: Number(row.active_users || 0),
+          displayLabel: fmt(row.active_users)
+        }))
+        .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label))
+        .slice(0, Number(state.topActiveUsersN || 10));
+    }
+    function topActiveUsersToggle() {
+      return ["10", "20"].map((value) => `<button type="button" data-top-active-users="${value}" class="${state.topActiveUsersN === value ? "active" : ""}">Top ${value}</button>`).join("");
+    }
     function renderApplications() {
       const rows = filteredApplications();
+      const topActiveUsers = topActiveUsersPoints(rows);
       const functionalValues = uniqueSorted(DASHBOARD.applications.rows, "functional_track_ams_owner");
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
       const businessCount = rows.filter((row) => ["business", "business application"].includes(String(row.app_type).toLowerCase())).length;
@@ -1936,18 +2392,23 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           <div class="chart-grid">
             <section class="chart-card panel"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
             <section class="chart-card panel"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
-            <section class="chart-card panel"><h3>Operating System</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "operating_system").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
-            <section class="chart-card panel"><h3>SOX Scope</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "sox_scope").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
           </div>
+          <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top Applications by Active Users</h3><p class="muted">Application Inventory only. Highest Active Users appear first.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
           <section class="panel table-card" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
         </section>
       </div>`;
       document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; renderApplications(); });
       document.getElementById("app-sap").addEventListener("change", (event) => { state.appSap = event.target.value; renderApplications(); });
+      document.querySelectorAll("[data-top-active-users]").forEach((button) => {
+        button.addEventListener("click", () => { state.topActiveUsersN = button.dataset.topActiveUsers; renderApplications(); });
+      });
+      installChartCopyButtons(document.getElementById("applications"));
     }
     function applicationTable(rows) {
-      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "app_type", "architecture_type", "biz_criticality", "install_status", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
-      return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(row[column] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
+      return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(column === "active_users" && row[column] !== null && row[column] !== undefined ? fmt(row[column]) : (row[column] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function filteredVolumetricsRows() {
       return DASHBOARD.volumetrics.monthly_rows.filter((row) =>
@@ -2030,6 +2491,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll("[data-top-batch]").forEach((button) => {
         button.addEventListener("click", () => { state.topBatchN = button.dataset.topBatch; renderVolumetrics(); });
       });
+      document.querySelectorAll("[data-top-tickets-user]").forEach((button) => {
+        button.addEventListener("click", () => { state.ticketsPerUserN = button.dataset.topTicketsUser; renderVolumetrics(); });
+      });
+      installChartCopyButtons(document.getElementById("volumetrics"));
     }
     function volSubTabs() {
       const labels = {
@@ -2044,7 +2509,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function renderVolumetricsSubTab(periods) {
       if (state.volSubTab === "overall_sla_trends") return renderSlaTrends();
       if (state.volSubTab === "detailed_volume_trends") return renderDetailedVolumeTrends();
-      if (state.volSubTab === "kpi_trends") return placeholder("KPI Trends");
+      if (state.volSubTab === "kpi_trends") return renderKpiTrends();
       if (state.volSubTab === "category_wise_trends") return placeholder("Category-wise Trends");
       return renderOverallVolume(periods);
     }
@@ -2054,11 +2519,18 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return `Ranking uses average monthly created tickets for ${esc(window.start_month)} to ${esc(window.end_month)}, excluding the current month.`;
     }
     function topToggle(kind, selected) {
-      const attribute = kind === "batch" ? "data-top-batch" : "data-top-volume";
+      const attribute = kind === "batch"
+        ? "data-top-batch"
+        : kind === "tickets-user"
+          ? "data-top-tickets-user"
+          : "data-top-volume";
       return ["10", "20"].map((value) => `<button type="button" ${attribute}="${value}" class="${selected === value ? "active" : ""}">Top ${value}</button>`).join("");
     }
     function detailedVolumeRows() {
       return DASHBOARD.volumetrics.detailed_volume_trends?.application_rows || [];
+    }
+    function detailedSplitRows() {
+      return DASHBOARD.volumetrics.detailed_volume_trends?.split_rows || [];
     }
     function incidentBatchFilterMatch(row) {
       return (
@@ -2087,15 +2559,26 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         current.canceledSum += Number(row[canceledKey] || 0);
         byApp.set(appName, current);
       });
-      const points = [...byApp.values()]
+      const allPoints = [...byApp.values()]
         .map((row) => ({
           label: row.label,
           created: row.createdSum / 6,
           canceled: row.canceledSum / 6
         }))
         .filter((row) => row.created > 0 || row.canceled > 0)
-        .sort((left, right) => right.created - left.created || left.label.localeCompare(right.label))
-        .slice(0, topN);
+        .sort((left, right) => right.created - left.created || left.label.localeCompare(right.label));
+      const overallCreated = allPoints.reduce((total, row) => total + row.created, 0);
+      const points = allPoints.slice(0, topN);
+      if (!options.batch) {
+        return points.map((row) => {
+          const volumePct = overallCreated > 0 ? (row.created / overallCreated) * 100 : null;
+          return {
+            ...row,
+            volumePct,
+            displayLabel: `${rounded(row.created)} (${volumePct === null ? "N/A" : `${volumePct.toFixed(1)}%`})`
+          };
+        });
+      }
       const totalCreated = points.reduce((total, row) => total + row.created, 0);
       let runningCreated = 0;
       return points.map((row) => {
@@ -2106,6 +2589,68 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         };
       });
     }
+    function ticketsPerUserPoints() {
+      const activeUsersByApp = new Map();
+      filteredApplications().forEach((row) => {
+        const users = Number(row.active_users || 0);
+        if (users > 0) activeUsersByApp.set(row.business_service_ci_name || "(blank)", users);
+      });
+      const rows = detailedVolumeRows().filter(offlineFilterMatch).filter(inRankingWindow);
+      const byApp = new Map();
+      rows.forEach((row) => {
+        const appName = row.application_name || "(blank)";
+        if (!activeUsersByApp.has(appName)) return;
+        byApp.set(appName, (byApp.get(appName) || 0) + Number(row.created_count || 0));
+      });
+      return [...byApp.entries()]
+        .map(([label, createdSum]) => {
+          const activeUsers = activeUsersByApp.get(label);
+          const avgMonthly = createdSum / 6;
+          const ratio = activeUsers > 0 ? avgMonthly / activeUsers : 0;
+          return {
+            label,
+            value: ratio,
+            displayLabel: ratio < 10 ? ratio.toFixed(2) : ratio < 100 ? ratio.toFixed(1) : fmt(Math.round(ratio)),
+            activeUsers,
+            avgMonthly
+          };
+        })
+        .filter((row) => row.value > 0)
+        .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label))
+        .slice(0, Number(state.ticketsPerUserN || 10));
+    }
+    function distributionTicketMatch(row, ticketType) {
+      return (
+        (ticketType === "all" || row.ticket_type === ticketType) &&
+        (state.volScope === "all" || row.scope === state.volScope) &&
+        (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+      );
+    }
+    function distributionItems(field, ticketType) {
+      const totals = new Map();
+      detailedVolumeRows()
+        .filter(inRankingWindow)
+        .filter((row) => distributionTicketMatch(row, ticketType))
+        .forEach((row) => {
+          const label = row[field] || "(blank)";
+          totals.set(label, (totals.get(label) || 0) + Number(row.created_count || 0));
+        });
+      return [...totals.entries()]
+        .map(([label, count]) => ({ label, count: count / 6 }))
+        .filter((row) => row.count > 0)
+        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+    }
+    function distributionNotApplicable(ticketType) {
+      if (state.volTicketType === "all") return false;
+      if (state.volTicketType === "incident") return ticketType !== "incident";
+      return ticketType !== "sc_task";
+    }
+    function distributionPieSection(title, field, ticketType) {
+      const notApplicable = distributionNotApplicable(ticketType);
+      const items = distributionItems(field, ticketType);
+      return `<section class="chart-card panel"><h3>${esc(title)}</h3><p class="muted">${splitWindowText()}</p><div class="chart-frame chart-stage">${notApplicable ? `<p class="muted" style="padding:12px">This distribution chart is not applicable for the selected ticket type.</p>` : pieChart(items)}</div></section>`;
+    }
     function incidentBatchTrendPoints() {
       const rows = detailedVolumeRows().filter(incidentBatchFilterMatch);
       return DASHBOARD.volumetrics.periods.map((period) => ({
@@ -2113,19 +2658,41 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         batch_created: sum(rows.filter((row) => row.period_key === period.period_key), "incident_batch_created_count")
       }));
     }
+    function splitWindowText() {
+      const window = DASHBOARD.volumetrics.detailed_volume_trends?.split_window || {};
+      if (!window.start_month || !window.end_month) return "Uses the latest complete 6 months and excludes the current partial month.";
+      return `Uses average monthly created volume for ${esc(window.start_month)} to ${esc(window.end_month)}.`;
+    }
     function renderDetailedVolumeTrends() {
       const topVolume = topApplicationPoints({ topN: state.topVolumeN, batch: false });
       const topBatch = state.volTicketType === "sc_task"
         ? []
         : topApplicationPoints({ topN: state.topBatchN, batch: true });
       const batchTrend = state.volTicketType === "sc_task" ? [] : incidentBatchTrendPoints();
+      const ticketUserPoints = ticketsPerUserPoints();
       const batchMessage = state.volTicketType === "sc_task"
         ? "Batch-related ticket charts are applicable only for Incidents. SC Task catalog item charts will be added separately."
         : "Batch-related charts are Incident-only and use Incident tickets within the selected filters.";
       return `
-        <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top High-Volume Applications</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("volume", state.topVolumeN)}</div></div><div class="chart-frame chart-stage">${paretoBarLineChart(topVolume, "Average Created Count", "Average Canceled / Closed Incomplete Count")}</div></section>
+        <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top High-Volume Applications</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("volume", state.topVolumeN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topVolume.map((row) => ({ label: row.label, value: row.created, displayLabel: row.displayLabel })), { title: "Top High-Volume Applications", legend: "Average monthly tickets", color: COLORS.teal, height: state.topVolumeN === "20" ? 820 : 520 })}</div></section>
         <section class="chart-card panel full"><h3>Incident Batch-Related Tickets Created Trend</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
         <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top Applications with Incident Batch-Related Tickets</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("batch", state.topBatchN)}</div></div><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : paretoBarLineChart(topBatch, "Average Batch Created Count", "Average Batch Canceled Count")}</div></section>
+        <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Tickets per User per Month by Application</h3><p class="muted">Calculated as latest complete 6-month average monthly ticket volume divided by Active Users.</p></div><div class="pattern-buttons">${topToggle("tickets-user", state.ticketsPerUserN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(ticketUserPoints, { title: "Tickets per User per Month by Application", legend: "Tickets per user per month", color: COLORS.purple, digits: 2, height: state.ticketsPerUserN === "20" ? 780 : 500, emptyMessage: "No applications with non-zero Active Users are available." })}</div></section>
+        <div class="chart-grid-three">
+          ${distributionPieSection("Average Monthly Tickets by SAP / Non-SAP", "sap_non_sap", "all")}
+          ${distributionPieSection("Average Monthly Incidents by SAP / Non-SAP", "sap_non_sap", "incident")}
+          ${distributionPieSection("Average Monthly SC Tasks by SAP / Non-SAP", "sap_non_sap", "sc_task")}
+        </div>
+        <div class="chart-grid-three">
+          ${distributionPieSection("Average Monthly Tickets by Architecture Type", "architecture_type", "all")}
+          ${distributionPieSection("Average Monthly Incidents by Architecture Type", "architecture_type", "incident")}
+          ${distributionPieSection("Average Monthly SC Tasks by Architecture Type", "architecture_type", "sc_task")}
+        </div>
+        <div class="chart-grid-three">
+          ${distributionPieSection("Average Monthly Tickets by Install Type", "install_type", "all")}
+          ${distributionPieSection("Average Monthly Incidents by Install Type", "install_type", "incident")}
+          ${distributionPieSection("Average Monthly SC Tasks by Install Type", "install_type", "sc_task")}
+        </div>
       `;
     }
     function truncateLabel(value, maxLength = 28) {
@@ -2172,6 +2739,135 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ${linePoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${COLORS.purple}" stroke-width="2"></circle><text x="${point.x}" y="${Math.max(margin.top + 12, point.y - 10)}" text-anchor="middle" font-size="11" font-weight="900" fill="${COLORS.purple}" stroke="#fff" stroke-width="3" paint-order="stroke">${point.pct.toFixed(0)}%</text>`).join("")}
         ${labels.join("")}
       </svg>${legend([{ name: createdName, color: COLORS.teal }, { name: canceledName, color: COLORS.red }, { name: "Pareto cumulative %", color: COLORS.purple }])}`;
+    }
+    const MTTR_LABEL_START_INDEX = { P1: 0, P2: 1, P3: 2, P4: 3 };
+    const MTTR_PRIORITY_COLORS = { P1: COLORS.blue, P2: COLORS.orange, P3: COLORS.teal, P4: COLORS.purple };
+    function kpiFilterMatch(row, ticketType) {
+      return (
+        row.ticket_type === ticketType &&
+        (state.volScope === "all" || row.scope === state.volScope) &&
+        (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+      );
+    }
+    function mttrShowLabel(priority, index) {
+      const startIndex = MTTR_LABEL_START_INDEX[priority] || 0;
+      return index >= startIndex && (index - startIndex) % 3 === 0;
+    }
+    function mttrPoints(ticketType, priority) {
+      const rows = (DASHBOARD.volumetrics.kpi_trends?.mttr?.rows || [])
+        .filter((row) => kpiFilterMatch(row, ticketType) && row.priority === priority);
+      const totals = new Map();
+      rows.forEach((row) => {
+        const current = totals.get(row.period_key) || { seconds: 0, count: 0 };
+        current.seconds += Number(row.business_duration_seconds_sum || 0);
+        current.count += Number(row.ticket_count || 0);
+        totals.set(row.period_key, current);
+      });
+      return DASHBOARD.volumetrics.periods.map((period) => {
+        const values = totals.get(period.period_key) || { seconds: 0, count: 0 };
+        return {
+          label: period.period_label,
+          period_key: period.period_key,
+          mttr: values.count ? values.seconds / values.count / 86400 : null,
+          ticket_count: values.count,
+          show_label: values.count > 0 && mttrShowLabel(priority, index),
+        };
+        point.label_text = point.show_label ? `${fmt(point.mttr, 1)}d\nn=${fmt(point.ticket_count)}` : "";
+        return point;
+      });
+    }
+    function mttrCombinedLineChart(ticketType, priorities, title) {
+      const width = 1040;
+      const height = 340;
+      const margin = { top: 46, right: 52, bottom: 76, left: 58 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const series = priorities.map((priority) => ({ priority, data: mttrPoints(ticketType, priority) }));
+      const values = series.flatMap((item) => item.data.map((row) => row.mttr)).filter((value) => value !== null);
+      if (!values.length) return `<p class="muted" style="padding:12px">No MTTR data available.</p>`;
+      const maxValue = Math.max(1, ...values);
+      const dataLength = Math.max(...series.map((item) => item.data.length), 1);
+      const xAt = (index) => margin.left + (plotWidth * index) / Math.max(1, dataLength - 1);
+      const yAt = (value) => margin.top + plotHeight - (Number(value || 0) / maxValue) * plotHeight;
+      const gridLines = Array.from({ length: 4 }, (_, index) => {
+        const y = margin.top + (plotHeight * index) / 3;
+        return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#e2e8f0"></line>`;
+      }).join("");
+      const labels = series.flatMap((item, seriesIndex) => {
+        const offset = seriesIndex === 0 ? -18 : 20;
+        return item.data.map((row, index) => ({ x: xAt(index), y: row.mttr === null ? null : yAt(row.mttr), row, offset }))
+          .filter((point) => point.row.show_label && point.y !== null)
+          .map((point) => {
+            const y = Math.max(margin.top + 12, point.y + point.offset);
+            const parts = String(point.row.label_text || "").split("\n");
+            return `<text x="${point.x}" y="${y}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${parts.map((part, index) => `<tspan x="${point.x}" dy="${index === 0 ? 0 : 12}">${esc(part)}</tspan>`).join("")}</text>`;
+          });
+      }).join("");
+      const seriesMarkup = series.map((item) => {
+        const points = item.data.map((row, index) => ({ x: xAt(index), y: row.mttr === null ? null : yAt(row.mttr), row }));
+        const linePath = points.filter((point) => point.y !== null).map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
+        const color = MTTR_PRIORITY_COLORS[item.priority] || COLORS.blue;
+        return `<path d="${linePath}" fill="none" stroke="${color}" stroke-width="3"></path>
+          ${points.filter((point) => point.y !== null).map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${color}" stroke-width="2"><title>${esc(item.priority)} MTTR ${fmt(point.row.mttr, 2)} days, n=${fmt(point.row.ticket_count)}</title></circle>`).join("")}`;
+      }).join("");
+      const axisLabels = (series[0]?.data || []).map((row, index) => {
+        const x = xAt(index);
+        return `<text x="${x}" y="${height - 36}" text-anchor="end" transform="rotate(-35 ${x} ${height - 36})" font-size="10" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
+      }).join("");
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(title)}">
+        ${gridLines}
+        <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + plotHeight}" stroke="#94a3b8"></line>
+        <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
+        <text x="18" y="${margin.top + plotHeight / 2}" transform="rotate(-90 18 ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">MTTR days</text>
+        ${seriesMarkup}
+        ${labels}
+        ${axisLabels}
+      </svg>${legend(priorities.map((priority) => ({ name: `${priority} MTTR`, color: MTTR_PRIORITY_COLORS[priority] || COLORS.blue })))}`;
+    }
+    function mttrGroup(title, ticketType) {
+      const notApplicable = state.volTicketType !== "all" && state.volTicketType !== ticketType;
+      if (notApplicable) {
+        return `<section class="panel full"><h3>${esc(title)}</h3><p class="muted">This MTTR group is not applicable for the selected ticket type.</p></section>`;
+      }
+      const prefix = ticketType === "incident" ? "Incident" : "SC Task";
+      return `<section class="panel full"><p class="label">KPI Trends</p><h3>${esc(title)}</h3><div class="kpi-stack">
+        <section class="chart-card panel full"><h3>${esc(prefix)} P1 / P2 MTTR</h3><p class="muted">Average business duration in days. Labels show MTTR days and ticket count.</p><div class="chart-frame chart-stage">${mttrCombinedLineChart(ticketType, ["P1", "P2"], `${prefix} P1 / P2 MTTR`)}</div></section>
+        <section class="chart-card panel full"><h3>${esc(prefix)} P3 / P4 MTTR</h3><p class="muted">Average business duration in days. Labels show MTTR days and ticket count.</p><div class="chart-frame chart-stage">${mttrCombinedLineChart(ticketType, ["P3", "P4"], `${prefix} P3 / P4 MTTR`)}</div></section>
+      </div></section>`;
+    }
+    function durationRows(ticketType) {
+      const source = DASHBOARD.volumetrics.kpi_trends?.duration_buckets || {};
+      const buckets = source.buckets || ["0-1 day", "1-3 days", "3-10 days", ">10 days"];
+      return (source.periods || []).map((period) => {
+        const matching = (source.rows || []).filter((row) => kpiFilterMatch(row, ticketType) && row.period_key === period.period_key);
+        return {
+          label: period.period_label,
+          period_key: period.period_key,
+          buckets: buckets.map((bucket) => ({
+            label: bucket,
+            count: sum(matching.filter((row) => row.bucket === bucket), "ticket_count")
+          }))
+        };
+      });
+    }
+    function durationBucketChart(row) {
+      return `<section class="chart-card panel"><h3>${esc(row.label)}</h3><div class="chart-frame chart-stage">${barChart(row.buckets, [{ key: "count", name: "Tickets", color: COLORS.purple }], { width: 420 })}</div></section>`;
+    }
+    function durationGroup(title, ticketType) {
+      const notApplicable = state.volTicketType !== "all" && state.volTicketType !== ticketType;
+      if (notApplicable) {
+        return `<section class="panel full"><h3>${esc(title)}</h3><p class="muted">This duration group is not applicable for the selected ticket type.</p></section>`;
+      }
+      return `<section class="panel full"><p class="label">Duration Buckets</p><h3>${esc(title)}</h3><div class="duration-grid">${durationRows(ticketType).map(durationBucketChart).join("")}</div></section>`;
+    }
+    function renderKpiTrends() {
+      return `
+        ${mttrGroup("Incident MTTR by Priority", "incident")}
+        ${mttrGroup("SC Task MTTR by Priority", "sc_task")}
+        ${durationGroup("Incident Resolved Volume by Resolution Duration", "incident")}
+        ${durationGroup("SC Task Closed Volume by Closed Duration", "sc_task")}
+      `;
     }
     function placeholder(title) {
       return `<section class="panel" style="padding:18px"><p class="label">${esc(title)}</p><h3>Detailed requirements for this section will be added in the next prompts.</h3></section>`;

@@ -19,6 +19,9 @@ class ApplicationInventoryItemUpdateRequest(BaseModel):
     ams_owner: str | None = None
     supported_by_vendor: str | None = None
     active: bool | None = None
+    active_users: int | None = None
+    avg_monthly_ticket_volume_6m: float | None = None
+    tickets_per_user_per_month: float | None = None
     cmdb_payload: dict[str, Any] | None = None
 
 
@@ -36,6 +39,9 @@ class ApplicationInventoryItemResponse(BaseModel):
     ams_owner: str | None
     supported_by_vendor: str | None
     active: bool | None
+    active_users: int | None
+    avg_monthly_ticket_volume_6m: float | None
+    tickets_per_user_per_month: float | None
     cmdb_payload: dict[str, Any] | None
     source_filename: str | None
     source_row_number: int | None
@@ -68,6 +74,15 @@ class ApplicationInventoryUploadResponse(BaseModel):
 class ApplicationInventoryEnrichRequest(BaseModel):
     project_id: UUID
     replace_existing: bool = True
+
+
+class ApplicationTicketUserMetricsRecomputeResponse(BaseModel):
+    project_id: UUID
+    inventory_count: int
+    active_users_count: int
+    metrics_updated_count: int
+    window_start: datetime
+    window_end: datetime
 
 
 class ValueCountResponse(BaseModel):

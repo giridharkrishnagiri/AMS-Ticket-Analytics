@@ -276,6 +276,9 @@ export type DashboardApplicationRow = {
   functional_track: string;
   ams_owner: string;
   supported_by_vendor: string;
+  active_users: number | null;
+  avg_monthly_ticket_volume_6m: number | null;
+  tickets_per_user_per_month: number | null;
   app_family: string;
   biz_process: string;
   app_category: string;
@@ -299,6 +302,16 @@ export type DashboardApplicationRow = {
   strategic: string;
 };
 
+export type DashboardApplicationsTopActiveUsersPoint = {
+  application_name: string;
+  active_users: number;
+};
+
+export type DashboardApplicationsTopActiveUsers = {
+  top_n: number;
+  points: DashboardApplicationsTopActiveUsersPoint[];
+};
+
 export type DashboardApplicationsList = {
   total: number;
   rows: DashboardApplicationRow[];
@@ -311,8 +324,8 @@ export type DashboardApplicationsChartDatum = {
 
 export type DashboardApplicationsCharts = {
   lifecycle_stage: DashboardApplicationsChartDatum[];
-  operating_system: DashboardApplicationsChartDatum[];
-  sox_scope: DashboardApplicationsChartDatum[];
+  architecture_type: DashboardApplicationsChartDatum[];
+  install_type: DashboardApplicationsChartDatum[];
   strategic: DashboardApplicationsChartDatum[];
 };
 
@@ -492,12 +505,14 @@ export type DashboardVolumetricsTopApplicationPoint = {
   average_canceled_closed_incomplete: number;
   created_label: number;
   canceled_label: number;
-  pareto_cumulative_pct: number | null;
+  volume_pct: number | null;
+  display_label: string;
 };
 
 export type DashboardVolumetricsTopApplications = {
   ranking_window: DashboardVolumetricsRankingWindow;
   top_n: number;
+  overall_average_monthly_volume: number;
   points: DashboardVolumetricsTopApplicationPoint[];
 };
 
@@ -532,6 +547,85 @@ export type DashboardVolumetricsTopIncidentBatchApplications = {
   ranking_window: DashboardVolumetricsRankingWindow;
   top_n: number;
   points: DashboardVolumetricsTopIncidentBatchApplicationPoint[];
+};
+
+export type DashboardVolumetricsSplitDatum = {
+  label: string;
+  average_monthly_count: number;
+  display_count: number;
+  percentage: number | null;
+};
+
+export type DashboardVolumetricsTicketTypeSplit = {
+  incidents: DashboardVolumetricsSplitDatum[];
+  sc_tasks: DashboardVolumetricsSplitDatum[];
+};
+
+export type DashboardVolumetricsDetailedArchitectureInstallSplits = {
+  rolling_window: DashboardVolumetricsRankingWindow;
+  architecture_type: DashboardVolumetricsTicketTypeSplit;
+  install_type: DashboardVolumetricsTicketTypeSplit;
+};
+
+export type DashboardVolumetricsTicketsPerUserPoint = {
+  application_name: string;
+  active_users: number;
+  average_monthly_ticket_volume: number;
+  tickets_per_user_per_month: number;
+  display_label: string;
+};
+
+export type DashboardVolumetricsTicketsPerUser = {
+  ranking_window: DashboardVolumetricsRankingWindow;
+  top_n: number;
+  points: DashboardVolumetricsTicketsPerUserPoint[];
+};
+
+export type DashboardVolumetricsTripleTicketTypeSplit = {
+  all: DashboardVolumetricsSplitDatum[];
+  incidents: DashboardVolumetricsSplitDatum[];
+  sc_tasks: DashboardVolumetricsSplitDatum[];
+};
+
+export type DashboardVolumetricsDistributionSplits = {
+  ranking_window: DashboardVolumetricsRankingWindow;
+  sap_non_sap: DashboardVolumetricsTripleTicketTypeSplit;
+  architecture_type: DashboardVolumetricsTripleTicketTypeSplit;
+  install_type: DashboardVolumetricsTripleTicketTypeSplit;
+};
+
+export type DashboardVolumetricsKpiMttrPoint = {
+  period_key: string;
+  period_label: string;
+  average_mttr_days: number | null;
+  ticket_count: number;
+  show_label: boolean;
+  label_text: string | null;
+};
+
+export type DashboardVolumetricsKpiMttrPrioritySet = {
+  P1: DashboardVolumetricsKpiMttrPoint[];
+  P2: DashboardVolumetricsKpiMttrPoint[];
+  P3: DashboardVolumetricsKpiMttrPoint[];
+  P4: DashboardVolumetricsKpiMttrPoint[];
+};
+
+export type DashboardVolumetricsKpiMttrTrends = {
+  time_grain: VolumetricsTimeGrain;
+  incident: DashboardVolumetricsKpiMttrPrioritySet;
+  sc_task: DashboardVolumetricsKpiMttrPrioritySet;
+};
+
+export type DashboardVolumetricsDurationBucketRow = {
+  period_key: string;
+  period_label: string;
+  buckets: Record<string, number>;
+};
+
+export type DashboardVolumetricsKpiDurationBuckets = {
+  months: string[];
+  incident: DashboardVolumetricsDurationBucketRow[];
+  sc_task: DashboardVolumetricsDurationBucketRow[];
 };
 
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
@@ -681,6 +775,16 @@ export function getDashboardApplicationsCharts(
   );
 }
 
+export function getDashboardApplicationsTopActiveUsers(
+  input: DashboardApplicationsRequest,
+  topN: 10 | 20
+): Promise<DashboardApplicationsTopActiveUsers> {
+  return postApplicationsRequest<DashboardApplicationsTopActiveUsers>(
+    "/dashboard/applications/top-active-users",
+    { ...input, top_n: topN } as DashboardApplicationsRequest & { top_n: 10 | 20 }
+  );
+}
+
 function postVolumetricsRequest<T>(
   path: string,
   input: DashboardVolumetricsRequest
@@ -814,6 +918,52 @@ export function getDashboardVolumetricsTopIncidentBatchApplications(
   return postVolumetricsRequest<DashboardVolumetricsTopIncidentBatchApplications>(
     "/dashboard/volumetrics/top-incident-batch-applications",
     { ...input, top_n: topN } as DashboardVolumetricsRequest & { top_n: 10 | 20 }
+  );
+}
+
+export function getDashboardVolumetricsDetailedArchitectureInstallSplits(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsDetailedArchitectureInstallSplits> {
+  return postVolumetricsRequest<DashboardVolumetricsDetailedArchitectureInstallSplits>(
+    "/dashboard/volumetrics/detailed-architecture-install-splits",
+    input
+  );
+}
+
+export function getDashboardVolumetricsTicketsPerUser(
+  input: DashboardVolumetricsRequest,
+  topN: 10 | 20
+): Promise<DashboardVolumetricsTicketsPerUser> {
+  return postVolumetricsRequest<DashboardVolumetricsTicketsPerUser>(
+    "/dashboard/volumetrics/tickets-per-user",
+    { ...input, top_n: topN } as DashboardVolumetricsRequest & { top_n: 10 | 20 }
+  );
+}
+
+export function getDashboardVolumetricsDistributionSplits(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsDistributionSplits> {
+  return postVolumetricsRequest<DashboardVolumetricsDistributionSplits>(
+    "/dashboard/volumetrics/distribution-splits",
+    input
+  );
+}
+
+export function getDashboardVolumetricsKpiMttrTrends(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsKpiMttrTrends> {
+  return postVolumetricsRequest<DashboardVolumetricsKpiMttrTrends>(
+    "/dashboard/volumetrics/kpi-mttr-trends",
+    input
+  );
+}
+
+export function getDashboardVolumetricsKpiDurationBuckets(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsKpiDurationBuckets> {
+  return postVolumetricsRequest<DashboardVolumetricsKpiDurationBuckets>(
+    "/dashboard/volumetrics/kpi-duration-buckets",
+    input
   );
 }
 

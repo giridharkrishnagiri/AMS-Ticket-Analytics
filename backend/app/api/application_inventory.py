@@ -16,6 +16,7 @@ from app.schemas.application_inventory import (
     ApplicationInventoryItemResponse,
     ApplicationInventoryItemUpdateRequest,
     ApplicationInventoryUploadResponse,
+    ApplicationTicketUserMetricsRecomputeResponse,
     ScopeSummaryResponse,
     ScopeSummaryValueCountResponse,
     UnmatchedBusinessServiceResponse,
@@ -37,6 +38,10 @@ from app.services.application_inventory import (
     unmatched_business_services,
     update_inventory_item,
     upload_application_inventory_file,
+)
+from app.services.application_metrics import (
+    ApplicationTicketUserMetricsSummary,
+    recompute_application_ticket_user_metrics,
 )
 
 router = APIRouter(prefix="/application-inventory", tags=["application-inventory"])
@@ -110,6 +115,19 @@ def enrichment_response(
         top_unmatched_assignment_groups=value_count_response(
             summary.top_unmatched_assignment_groups
         ),
+    )
+
+
+def ticket_user_metrics_response(
+    summary: ApplicationTicketUserMetricsSummary,
+) -> ApplicationTicketUserMetricsRecomputeResponse:
+    return ApplicationTicketUserMetricsRecomputeResponse(
+        project_id=summary.project_id,
+        inventory_count=summary.inventory_count,
+        active_users_count=summary.active_users_count,
+        metrics_updated_count=summary.metrics_updated_count,
+        window_start=summary.window_start,
+        window_end=summary.window_end,
     )
 
 
@@ -215,6 +233,22 @@ def enrich_application_inventory_tickets(
     except (FileNotFoundError, ApplicationInventoryError) as exc:
         raise_inventory_http_error(exc)
     return enrichment_response(summary)
+
+
+@router.post(
+    "/recompute-ticket-user-metrics",
+    response_model=ApplicationTicketUserMetricsRecomputeResponse,
+)
+def recompute_application_inventory_ticket_user_metrics(
+    request: ApplicationInventoryEnrichRequest,
+    db: DbSession,
+) -> ApplicationTicketUserMetricsRecomputeResponse:
+    try:
+        summary = recompute_application_ticket_user_metrics(db, request.project_id)
+        db.commit()
+    except (FileNotFoundError, ApplicationInventoryError) as exc:
+        raise_inventory_http_error(exc)
+    return ticket_user_metrics_response(summary)
 
 
 @router.get(

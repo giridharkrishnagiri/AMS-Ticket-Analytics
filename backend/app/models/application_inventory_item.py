@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -74,6 +74,9 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     supported_by_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    avg_monthly_ticket_volume_6m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tickets_per_user_per_month: Mapped[float | None] = mapped_column(Float, nullable=True)
     cmdb_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     source_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -200,6 +200,10 @@ def add_application_inventory_scope(
             functional_track="Mapping Track",
             ams_owner="Mapping AMS Owner",
             supported_by_vendor="HCLTech",
+            cmdb_payload={
+                "Architecture type": "Vendor Managed",
+                "Install type": "Cloud",
+            },
             active=True,
             source_filename="mapping-inventory.xlsx",
             source_row_number=1,
@@ -714,6 +718,8 @@ def test_apply_mapping_normalizes_incident_rows_and_is_idempotent() -> None:
         assert ticket.ticket_type == "INCIDENT"
         assert ticket.short_description == "Email unavailable"
         assert ticket.priority == "P1"
+        assert ticket.architecture_type == "Vendor Managed"
+        assert ticket.install_type == "Cloud"
         assert ticket.sla_breached is False
         assert ticket.reopen_count == 2
         assert ticket.normalized_payload is not None
@@ -830,8 +836,12 @@ def test_apply_mapping_derives_sap_non_sap_for_in_scope_and_out_of_scope_rows() 
         assert result.out_of_scope_ticket_count == 1
         assert in_scope_ticket is not None
         assert in_scope_ticket.sap_non_sap == "SAP"
+        assert in_scope_ticket.architecture_type == "Vendor Managed"
+        assert in_scope_ticket.install_type == "Cloud"
         assert out_of_scope_ticket is not None
         assert out_of_scope_ticket.sap_non_sap == "Non-SAP"
+        assert out_of_scope_ticket.architecture_type is None
+        assert out_of_scope_ticket.install_type is None
     finally:
         cleanup_client(db, client_id)
 

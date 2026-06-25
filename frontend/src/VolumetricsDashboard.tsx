@@ -3,11 +3,14 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ComposedChart,
   Customized,
   LabelList,
   Legend,
   Line,
+  Pie,
+  PieChart,
   ReferenceLine,
   Tooltip,
   XAxis,
@@ -19,12 +22,17 @@ import {
   getDashboardVolumetricsCreatedPattern,
   getDashboardVolumetricsCreatedResolvedCanceled,
   getDashboardVolumetricsDataRange,
+  getDashboardVolumetricsDetailedArchitectureInstallSplits,
+  getDashboardVolumetricsDistributionSplits,
   getDashboardVolumetricsFilterValues,
   getDashboardVolumetricsHourlyCreatedResolved,
   getDashboardVolumetricsIncidentBatchTrend,
+  getDashboardVolumetricsKpiDurationBuckets,
+  getDashboardVolumetricsKpiMttrTrends,
   getDashboardVolumetricsPriorityDistribution,
   getDashboardVolumetricsSlaTrends,
   getDashboardVolumetricsSummary,
+  getDashboardVolumetricsTicketsPerUser,
   getDashboardVolumetricsTopApplications,
   getDashboardVolumetricsTopIncidentBatchApplications,
 } from "./api/dashboard";
@@ -34,14 +42,24 @@ import type {
   DashboardVolumetricsCreatedPattern,
   DashboardVolumetricsCreatedResolvedCanceled,
   DashboardVolumetricsDataRange,
+  DashboardVolumetricsDetailedArchitectureInstallSplits,
+  DashboardVolumetricsDistributionSplits,
+  DashboardVolumetricsDurationBucketRow,
   DashboardVolumetricsFilterValues,
   DashboardVolumetricsFilters,
   DashboardVolumetricsHourlyCreatedResolved,
   DashboardVolumetricsIncidentBatchTrend,
+  DashboardVolumetricsKpiDurationBuckets,
+  DashboardVolumetricsKpiMttrPoint,
+  DashboardVolumetricsKpiMttrPrioritySet,
+  DashboardVolumetricsKpiMttrTrends,
   DashboardVolumetricsPriorityDistribution,
+  DashboardVolumetricsRankingWindow,
   DashboardVolumetricsRequest,
   DashboardVolumetricsSlaTrends,
+  DashboardVolumetricsSplitDatum,
   DashboardVolumetricsSummary,
+  DashboardVolumetricsTicketsPerUser,
   DashboardVolumetricsTopApplications,
   DashboardVolumetricsTopIncidentBatchApplications,
   VolumetricsDayType,
@@ -168,6 +186,7 @@ const emptyTopApplications: DashboardVolumetricsTopApplications = {
     description: "Last 6 complete months excluding current month",
   },
   top_n: 10,
+  overall_average_monthly_volume: 0,
   points: [],
 };
 
@@ -194,6 +213,58 @@ const emptyTopIncidentBatchApplications: DashboardVolumetricsTopIncidentBatchApp
   points: [],
 };
 
+const emptyDetailedSplits: DashboardVolumetricsDetailedArchitectureInstallSplits = {
+  rolling_window: {
+    start_month: "",
+    end_month: "",
+    description: "Latest complete 6 months",
+  },
+  architecture_type: { incidents: [], sc_tasks: [] },
+  install_type: { incidents: [], sc_tasks: [] },
+};
+
+const emptyTicketsPerUser: DashboardVolumetricsTicketsPerUser = {
+  ranking_window: {
+    start_month: "",
+    end_month: "",
+    description: "Latest complete 6 months",
+  },
+  top_n: 10,
+  points: [],
+};
+
+const emptyDistributionGroup = { all: [], incidents: [], sc_tasks: [] };
+
+const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
+  ranking_window: {
+    start_month: "",
+    end_month: "",
+    description: "Latest complete 6 months",
+  },
+  sap_non_sap: emptyDistributionGroup,
+  architecture_type: emptyDistributionGroup,
+  install_type: emptyDistributionGroup,
+};
+
+const emptyMttrPrioritySet: DashboardVolumetricsKpiMttrPrioritySet = {
+  P1: [],
+  P2: [],
+  P3: [],
+  P4: [],
+};
+
+const emptyKpiMttrTrends: DashboardVolumetricsKpiMttrTrends = {
+  time_grain: "monthly",
+  incident: emptyMttrPrioritySet,
+  sc_task: emptyMttrPrioritySet,
+};
+
+const emptyDurationBuckets: DashboardVolumetricsKpiDurationBuckets = {
+  months: [],
+  incident: [],
+  sc_task: [],
+};
+
 const chartColors = {
   created: "#0f766e",
   resolved: "#2563eb",
@@ -203,6 +274,7 @@ const chartColors = {
   pattern: "#0891b2",
   patternAlt: "#7c3aed",
   priority: ["#0f766e", "#2563eb", "#d97706", "#7c3aed", "#dc2626", "#64748b"],
+  pie: ["#2563eb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#64748b"],
 };
 
 const chartImagePadding = 18;
@@ -539,6 +611,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [priorityView, setPriorityView] = useState<PriorityDistributionView>("graph");
   const [topApplicationsN, setTopApplicationsN] = useState<TopNSelection>(10);
   const [topBatchApplicationsN, setTopBatchApplicationsN] = useState<TopNSelection>(10);
+  const [ticketsPerUserN, setTicketsPerUserN] = useState<TopNSelection>(10);
   const [filters, setFilters] = useState<DashboardVolumetricsFilters>(emptyFilters);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardVolumetricsFilterValues>>(
     createLoadState(emptyFilterValues)
@@ -576,6 +649,21 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [topIncidentBatchApplications, setTopIncidentBatchApplications] = useState<
     LoadState<DashboardVolumetricsTopIncidentBatchApplications>
   >(createLoadState(emptyTopIncidentBatchApplications));
+  const [detailedSplits, setDetailedSplits] = useState<
+    LoadState<DashboardVolumetricsDetailedArchitectureInstallSplits>
+  >(createLoadState(emptyDetailedSplits));
+  const [ticketsPerUser, setTicketsPerUser] = useState<
+    LoadState<DashboardVolumetricsTicketsPerUser>
+  >(createLoadState(emptyTicketsPerUser));
+  const [distributionSplits, setDistributionSplits] = useState<
+    LoadState<DashboardVolumetricsDistributionSplits>
+  >(createLoadState(emptyDistributionSplits));
+  const [kpiMttrTrends, setKpiMttrTrends] = useState<
+    LoadState<DashboardVolumetricsKpiMttrTrends>
+  >(createLoadState(emptyKpiMttrTrends));
+  const [kpiDurationBuckets, setKpiDurationBuckets] = useState<
+    LoadState<DashboardVolumetricsKpiDurationBuckets>
+  >(createLoadState(emptyDurationBuckets));
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
 
@@ -684,6 +772,11 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     setTopApplications(createLoadState(emptyTopApplications, "loading"));
     setIncidentBatchTrend(createLoadState(emptyIncidentBatchTrend, "loading"));
     setTopIncidentBatchApplications(createLoadState(emptyTopIncidentBatchApplications, "loading"));
+    setDetailedSplits(createLoadState(emptyDetailedSplits, "loading"));
+    setTicketsPerUser(createLoadState(emptyTicketsPerUser, "loading"));
+    setDistributionSplits(createLoadState(emptyDistributionSplits, "loading"));
+    setKpiMttrTrends(createLoadState(emptyKpiMttrTrends, "loading"));
+    setKpiDurationBuckets(createLoadState(emptyDurationBuckets, "loading"));
 
     void getDashboardVolumetricsSummary(requestBody)
       .then((nextSummary) => {
@@ -824,6 +917,70 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
         });
       });
 
+    void getDashboardVolumetricsDetailedArchitectureInstallSplits(requestBody)
+      .then((nextDetailedSplits) => {
+        setDetailedSplits({ status: "success", data: nextDetailedSplits, error: null });
+      })
+      .catch((error) => {
+        setDetailedSplits({
+          status: "error",
+          data: emptyDetailedSplits,
+          error: errorMessage(error, "Unable to load architecture/install split charts"),
+        });
+      });
+
+    void getDashboardVolumetricsTicketsPerUser(requestBody, ticketsPerUserN)
+      .then((nextTicketsPerUser) => {
+        setTicketsPerUser({ status: "success", data: nextTicketsPerUser, error: null });
+      })
+      .catch((error) => {
+        setTicketsPerUser({
+          status: "error",
+          data: emptyTicketsPerUser,
+          error: errorMessage(error, "Unable to load tickets per user"),
+        });
+      });
+
+    void getDashboardVolumetricsDistributionSplits(requestBody)
+      .then((nextDistributionSplits) => {
+        setDistributionSplits({ status: "success", data: nextDistributionSplits, error: null });
+      })
+      .catch((error) => {
+        setDistributionSplits({
+          status: "error",
+          data: emptyDistributionSplits,
+          error: errorMessage(error, "Unable to load distribution splits"),
+        });
+      });
+
+    void getDashboardVolumetricsKpiMttrTrends(requestBody)
+      .then((nextKpiMttrTrends) => {
+        setKpiMttrTrends({ status: "success", data: nextKpiMttrTrends, error: null });
+      })
+      .catch((error) => {
+        setKpiMttrTrends({
+          status: "error",
+          data: emptyKpiMttrTrends,
+          error: errorMessage(error, "Unable to load KPI MTTR trends"),
+        });
+      });
+
+    void getDashboardVolumetricsKpiDurationBuckets(requestBody)
+      .then((nextKpiDurationBuckets) => {
+        setKpiDurationBuckets({
+          status: "success",
+          data: nextKpiDurationBuckets,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setKpiDurationBuckets({
+          status: "error",
+          data: emptyDurationBuckets,
+          error: errorMessage(error, "Unable to load duration bucket charts"),
+        });
+      });
+
     void getDashboardVolumetricsFilterValues(requestBody)
       .then((nextFilterValues) => {
         setFilterValues({ status: "success", data: nextFilterValues, error: null });
@@ -839,6 +996,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     createdPatternType,
     hourlyDayType,
     requestBody,
+    ticketsPerUserN,
     topApplicationsN,
     topBatchApplicationsN,
   ]);
@@ -854,6 +1012,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       setPriorityView("graph");
       setTopApplicationsN(10);
       setTopBatchApplicationsN(10);
+      setTicketsPerUserN(10);
       setFilterValues(createLoadState(emptyFilterValues));
       setSummary(createLoadState(emptySummary));
       setDataRange(createLoadState(emptyDataRange));
@@ -866,6 +1025,11 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       setTopApplications(createLoadState(emptyTopApplications));
       setIncidentBatchTrend(createLoadState(emptyIncidentBatchTrend));
       setTopIncidentBatchApplications(createLoadState(emptyTopIncidentBatchApplications));
+      setDetailedSplits(createLoadState(emptyDetailedSplits));
+      setTicketsPerUser(createLoadState(emptyTicketsPerUser));
+      setDistributionSplits(createLoadState(emptyDistributionSplits));
+      setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
+      setKpiDurationBuckets(createLoadState(emptyDurationBuckets));
       setRangeInitializedProjectId("");
     }
   }, [loadedProjectId, projectId]);
@@ -1247,12 +1411,23 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
 
         {activeSubTab === "detailed_volume" ? (
           <DetailedVolumeTrends
+            detailedSplits={detailedSplits.data}
+            detailedSplitsError={detailedSplits.error}
+            detailedSplitsStatus={detailedSplits.status}
+            distributionSplits={distributionSplits.data}
+            distributionSplitsError={distributionSplits.error}
+            distributionSplitsStatus={distributionSplits.status}
             incidentBatchTrend={incidentBatchTrend.data}
             incidentBatchTrendError={incidentBatchTrend.error}
             incidentBatchTrendStatus={incidentBatchTrend.status}
             onTopApplicationsNChange={setTopApplicationsN}
             onTopBatchApplicationsNChange={setTopBatchApplicationsN}
+            onTicketsPerUserNChange={setTicketsPerUserN}
             ticketType={ticketType}
+            ticketsPerUser={ticketsPerUser.data}
+            ticketsPerUserError={ticketsPerUser.error}
+            ticketsPerUserN={ticketsPerUserN}
+            ticketsPerUserStatus={ticketsPerUser.status}
             topApplications={topApplications.data}
             topApplicationsError={topApplications.error}
             topApplicationsN={topApplicationsN}
@@ -1263,7 +1438,18 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
             topBatchApplicationsN={topBatchApplicationsN}
           />
         ) : null}
-        {activeSubTab === "kpi" ? <VolumetricsPlaceholder title="KPI Trends" /> : null}
+        {activeSubTab === "kpi" ? (
+          <KpiTrends
+            durationBuckets={kpiDurationBuckets.data}
+            durationBucketsError={kpiDurationBuckets.error}
+            durationBucketsStatus={kpiDurationBuckets.status}
+            mttr={kpiMttrTrends.data}
+            mttrError={kpiMttrTrends.error}
+            mttrStatus={kpiMttrTrends.status}
+            ticketType={ticketType}
+            timeGrain={timeGrain}
+          />
+        ) : null}
         {activeSubTab === "category" ? (
           <VolumetricsPlaceholder title="Category-wise Trends" />
         ) : null}
@@ -1387,12 +1573,23 @@ function rankingWindowText(
 }
 
 function DetailedVolumeTrends({
+  detailedSplits,
+  detailedSplitsError,
+  detailedSplitsStatus,
+  distributionSplits,
+  distributionSplitsError,
+  distributionSplitsStatus,
   incidentBatchTrend,
   incidentBatchTrendError,
   incidentBatchTrendStatus,
   onTopApplicationsNChange,
   onTopBatchApplicationsNChange,
+  onTicketsPerUserNChange,
   ticketType,
+  ticketsPerUser,
+  ticketsPerUserError,
+  ticketsPerUserN,
+  ticketsPerUserStatus,
   topApplications,
   topApplicationsError,
   topApplicationsN,
@@ -1402,12 +1599,23 @@ function DetailedVolumeTrends({
   topIncidentBatchApplicationsError,
   topIncidentBatchApplicationsStatus,
 }: {
+  detailedSplits: DashboardVolumetricsDetailedArchitectureInstallSplits;
+  detailedSplitsError: string | null;
+  detailedSplitsStatus: LoadStatus;
+  distributionSplits: DashboardVolumetricsDistributionSplits;
+  distributionSplitsError: string | null;
+  distributionSplitsStatus: LoadStatus;
   incidentBatchTrend: DashboardVolumetricsIncidentBatchTrend;
   incidentBatchTrendError: string | null;
   incidentBatchTrendStatus: LoadStatus;
   onTopApplicationsNChange: (value: TopNSelection) => void;
   onTopBatchApplicationsNChange: (value: TopNSelection) => void;
+  onTicketsPerUserNChange: (value: TopNSelection) => void;
   ticketType: VolumetricsTicketType;
+  ticketsPerUser: DashboardVolumetricsTicketsPerUser;
+  ticketsPerUserError: string | null;
+  ticketsPerUserN: TopNSelection;
+  ticketsPerUserStatus: LoadStatus;
   topApplications: DashboardVolumetricsTopApplications;
   topApplicationsError: string | null;
   topApplicationsN: TopNSelection;
@@ -1419,23 +1627,8 @@ function DetailedVolumeTrends({
 }) {
   return (
     <>
-      <TopApplicationsParetoChart
-        canceledLabel={
-          ticketType === "incident"
-            ? "Average Canceled Count"
-            : ticketType === "sc_task"
-              ? "Average Closed Incomplete Count"
-              : "Average Canceled / Closed Incomplete Count"
-        }
-        createdLabel="Average Created Count"
-        data={topApplications.points.map((point) => ({
-          application_name: point.application_name,
-          average_created: point.average_created,
-          average_canceled: point.average_canceled_closed_incomplete,
-          created_label: point.created_label,
-          canceled_label: point.canceled_label,
-          pareto_cumulative_pct: point.pareto_cumulative_pct,
-        }))}
+      <TopApplicationsHorizontalChart
+        data={topApplications}
         description={rankingWindowText(topApplications.ranking_window)}
         error={topApplicationsError}
         onTopNChange={onTopApplicationsNChange}
@@ -1472,7 +1665,490 @@ function DetailedVolumeTrends({
         title="Top Applications with Incident Batch-Related Tickets"
         topN={topBatchApplicationsN}
       />
+
+      <TicketsPerUserChart
+        data={ticketsPerUser}
+        error={ticketsPerUserError}
+        onTopNChange={onTicketsPerUserNChange}
+        status={ticketsPerUserStatus}
+        topN={ticketsPerUserN}
+      />
+
+      <DistributionPieRow
+        data={distributionSplits.sap_non_sap}
+        error={distributionSplitsError}
+        status={distributionSplitsStatus}
+        ticketType={ticketType}
+        titlePrefix="SAP / Non-SAP"
+        titles={{
+          all: "Average Monthly Tickets by SAP / Non-SAP",
+          incidents: "Average Monthly Incidents by SAP / Non-SAP",
+          sc_tasks: "Average Monthly SC Tasks by SAP / Non-SAP",
+        }}
+        window={distributionSplits.ranking_window}
+      />
+      <DistributionPieRow
+        data={distributionSplits.architecture_type}
+        error={distributionSplitsError}
+        status={distributionSplitsStatus}
+        ticketType={ticketType}
+        titlePrefix="Architecture Type"
+        titles={{
+          all: "Average Monthly Tickets by Architecture Type",
+          incidents: "Average Monthly Incidents by Architecture Type",
+          sc_tasks: "Average Monthly SC Tasks by Architecture Type",
+        }}
+        window={distributionSplits.ranking_window}
+      />
+      <DistributionPieRow
+        data={distributionSplits.install_type}
+        error={distributionSplitsError}
+        status={distributionSplitsStatus}
+        ticketType={ticketType}
+        titlePrefix="Install Type"
+        titles={{
+          all: "Average Monthly Tickets by Install Type",
+          incidents: "Average Monthly Incidents by Install Type",
+          sc_tasks: "Average Monthly SC Tasks by Install Type",
+        }}
+        window={distributionSplits.ranking_window}
+      />
     </>
+  );
+}
+
+function splitChartNotApplicable(
+  selectedTicketType: VolumetricsTicketType,
+  valueTicketType: Exclude<VolumetricsTicketType, "all">
+): boolean {
+  return selectedTicketType !== "all" && selectedTicketType !== valueTicketType;
+}
+
+function splitWindowText(window: DashboardVolumetricsRankingWindow): string {
+  if (!window.start_month || !window.end_month) {
+    return "Uses the latest complete 6 months and excludes the current partial month.";
+  }
+  return `Uses average monthly created volume for ${window.start_month} to ${window.end_month}.`;
+}
+
+function SplitPieChart({
+  data,
+  error,
+  status,
+  ticketType,
+  title,
+  valueTicketType,
+  window,
+}: {
+  data: DashboardVolumetricsDetailedArchitectureInstallSplits["architecture_type"]["incidents"];
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  title: string;
+  valueTicketType: Exclude<VolumetricsTicketType, "all">;
+  window: DashboardVolumetricsRankingWindow;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const notApplicable = splitChartNotApplicable(ticketType, valueTicketType);
+  const hasRows = data.length > 0;
+  const chartWidth = Math.max(420, plotWidth - 24);
+  const canCopy = status !== "loading" && hasRows && !notApplicable;
+  const total = data.reduce((sum, item) => sum + item.average_monthly_count, 0);
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">{splitWindowText(window)}</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">
+          This split chart is not applicable for the selected ticket type.
+        </p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && !hasRows ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && !notApplicable && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-stage">
+            <PieChart width={chartWidth} height={330}>
+              <Pie
+                data={data}
+                cx="50%"
+                cy="45%"
+                dataKey="average_monthly_count"
+                nameKey="label"
+                outerRadius={96}
+              >
+                {data.map((entry, index) => (
+                  <Cell
+                    fill={chartColors.pie[index % chartColors.pie.length]}
+                    key={entry.label}
+                  />
+                ))}
+              </Pie>
+              <Tooltip formatter={(value) => formatNumber(Number(value), 1)} />
+              <Legend
+                formatter={(value) => {
+                  const row = data.find((item) => item.label === value);
+                  const share = row && total ? `, ${formatPercent(row.percentage)}` : "";
+                  return `${value} (${formatNumber(row?.average_monthly_count, 1)} avg${share})`;
+                }}
+              />
+            </PieChart>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function TopApplicationsHorizontalChart({
+  data,
+  description,
+  error,
+  onTopNChange,
+  status,
+  title,
+  topN,
+}: {
+  data: DashboardVolumetricsTopApplications;
+  description: string;
+  error: string | null;
+  onTopNChange: (value: TopNSelection) => void;
+  status: LoadStatus;
+  title: string;
+  topN: TopNSelection;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.points.length > 0;
+  const chartWidth = Math.max(840, plotWidth - 24);
+  const chartHeight = topN === 20 ? 800 : 500;
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">{description}</p>
+        </div>
+        <div className="volumetrics-chart-actions">
+          {topNSelector(`${title} top N`, topN, onTopNChange)}
+          <button
+            className="secondary-button chart-copy-button"
+            type="button"
+            disabled={!canCopy}
+            onClick={handleCopy}
+          >
+            Copy chart
+          </button>
+        </div>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={data.points}
+                height={chartHeight}
+                layout="vertical"
+                margin={{ top: 22, right: 116, bottom: 28, left: 260 }}
+                width={chartWidth}
+              >
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" />
+                <XAxis type="number" />
+                <YAxis
+                  dataKey="application_name"
+                  interval={0}
+                  tick={{ fontSize: 12, fontWeight: 700 }}
+                  type="category"
+                  width={250}
+                />
+                <Tooltip
+                  formatter={(value, name) =>
+                    name === "Average monthly created tickets"
+                      ? formatNumber(Number(value), 1)
+                      : String(value)
+                  }
+                />
+                <Bar
+                  dataKey="average_created"
+                  fill={chartColors.created}
+                  name="Average monthly created tickets"
+                  radius={[0, 5, 5, 0]}
+                >
+                  <LabelList dataKey="display_label" position="right" fontSize={12} />
+                </Bar>
+              </BarChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function TicketsPerUserChart({
+  data,
+  error,
+  onTopNChange,
+  status,
+  topN,
+}: {
+  data: DashboardVolumetricsTicketsPerUser;
+  error: string | null;
+  onTopNChange: (value: TopNSelection) => void;
+  status: LoadStatus;
+  topN: TopNSelection;
+}) {
+  const title = "Tickets per User per Month by Application";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.points.length > 0;
+  const chartWidth = Math.max(840, plotWidth - 24);
+  const chartHeight = topN === 20 ? 760 : 480;
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Calculated as latest complete 6-month average monthly ticket volume divided by
+            Active Users.
+          </p>
+        </div>
+        <div className="volumetrics-chart-actions">
+          {topNSelector(`${title} top N`, topN, onTopNChange)}
+          <button
+            className="secondary-button chart-copy-button"
+            type="button"
+            disabled={!canCopy}
+            onClick={handleCopy}
+          >
+            Copy chart
+          </button>
+        </div>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">
+          No applications with non-zero Active Users are available.
+        </p>
+      ) : null}
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={data.points}
+                height={chartHeight}
+                layout="vertical"
+                margin={{ top: 22, right: 96, bottom: 28, left: 260 }}
+                width={chartWidth}
+              >
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" />
+                <XAxis type="number" />
+                <YAxis
+                  dataKey="application_name"
+                  interval={0}
+                  tick={{ fontSize: 12, fontWeight: 700 }}
+                  type="category"
+                  width={250}
+                />
+                <Tooltip
+                  formatter={(value, name) =>
+                    name === "Tickets per user per month"
+                      ? formatNumber(Number(value), 2)
+                      : formatNumber(Number(value), 1)
+                  }
+                />
+                <Bar
+                  dataKey="tickets_per_user_per_month"
+                  fill={chartColors.patternAlt}
+                  name="Tickets per user per month"
+                  radius={[0, 5, 5, 0]}
+                >
+                  <LabelList dataKey="display_label" position="right" fontSize={12} />
+                </Bar>
+              </BarChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+type DistributionTicketTypeKey = "all" | "incidents" | "sc_tasks";
+
+function distributionChartNotApplicable(
+  selectedTicketType: VolumetricsTicketType,
+  valueTicketType: DistributionTicketTypeKey
+): boolean {
+  if (selectedTicketType === "all") {
+    return false;
+  }
+  if (selectedTicketType === "incident") {
+    return valueTicketType !== "incidents";
+  }
+  return valueTicketType !== "sc_tasks";
+}
+
+function DistributionPieRow({
+  data,
+  error,
+  status,
+  ticketType,
+  titles,
+  window,
+}: {
+  data: DashboardVolumetricsDistributionSplits["sap_non_sap"];
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  titlePrefix: string;
+  titles: Record<DistributionTicketTypeKey, string>;
+  window: DashboardVolumetricsRankingWindow;
+}) {
+  const entries: Array<{ key: DistributionTicketTypeKey; points: typeof data.all }> = [
+    { key: "all", points: data.all },
+    { key: "incidents", points: data.incidents },
+    { key: "sc_tasks", points: data.sc_tasks },
+  ];
+  return (
+    <section className="volumetrics-three-column-grid">
+      {entries.map((entry) => (
+        <DistributionPieChart
+          data={entry.points}
+          error={error}
+          key={entry.key}
+          status={status}
+          ticketType={ticketType}
+          title={titles[entry.key]}
+          valueTicketType={entry.key}
+          window={window}
+        />
+      ))}
+    </section>
+  );
+}
+
+function DistributionPieChart({
+  data,
+  error,
+  status,
+  ticketType,
+  title,
+  valueTicketType,
+  window,
+}: {
+  data: DashboardVolumetricsSplitDatum[];
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  title: string;
+  valueTicketType: DistributionTicketTypeKey;
+  window: DashboardVolumetricsRankingWindow;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const notApplicable = distributionChartNotApplicable(ticketType, valueTicketType);
+  const hasRows = data.length > 0;
+  const chartWidth = Math.max(360, plotWidth - 24);
+  const canCopy = status !== "loading" && hasRows && !notApplicable;
+  const total = data.reduce((sum, item) => sum + item.average_monthly_count, 0);
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">{splitWindowText(window)}</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">
+          This distribution chart is not applicable for the selected ticket type.
+        </p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && !hasRows ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-stage">
+            <PieChart width={chartWidth} height={330}>
+              <Pie
+                data={data}
+                cx="50%"
+                cy="45%"
+                dataKey="average_monthly_count"
+                nameKey="label"
+                outerRadius={92}
+              >
+                {data.map((entry, index) => (
+                  <Cell
+                    fill={chartColors.pie[index % chartColors.pie.length]}
+                    key={entry.label}
+                  />
+                ))}
+              </Pie>
+              <Tooltip formatter={(value) => formatNumber(Number(value), 1)} />
+              <Legend
+                formatter={(value) => {
+                  const row = data.find((item) => item.label === value);
+                  const share = row && total ? `, ${formatPercent(row.percentage)}` : "";
+                  return `${value} (${formatNumber(row?.average_monthly_count, 1)} avg${share})`;
+                }}
+              />
+            </PieChart>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
   );
 }
 
@@ -1700,6 +2376,390 @@ function IncidentBatchTrendChart({
         </div>
       ) : null}
 
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+const mttrPriorityKeys: Array<keyof DashboardVolumetricsKpiMttrPrioritySet> = [
+  "P1",
+  "P2",
+  "P3",
+  "P4",
+];
+const mttrPriorityPairs: Array<Array<keyof DashboardVolumetricsKpiMttrPrioritySet>> = [
+  ["P1", "P2"],
+  ["P3", "P4"],
+];
+
+const durationBucketLabels = ["0-1 day", "1-3 days", "3-10 days", ">10 days"];
+
+function KpiTrends({
+  durationBuckets,
+  durationBucketsError,
+  durationBucketsStatus,
+  mttr,
+  mttrError,
+  mttrStatus,
+  ticketType,
+  timeGrain,
+}: {
+  durationBuckets: DashboardVolumetricsKpiDurationBuckets;
+  durationBucketsError: string | null;
+  durationBucketsStatus: LoadStatus;
+  mttr: DashboardVolumetricsKpiMttrTrends;
+  mttrError: string | null;
+  mttrStatus: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  timeGrain: VolumetricsTimeGrain;
+}) {
+  return (
+    <>
+      <MttrPriorityGroup
+        data={mttr.incident}
+        error={mttrError}
+        selectedTicketType={ticketType}
+        status={mttrStatus}
+        title="Incident MTTR by Priority"
+        valueTicketType="incident"
+        timeGrain={timeGrain}
+      />
+      <MttrPriorityGroup
+        data={mttr.sc_task}
+        error={mttrError}
+        selectedTicketType={ticketType}
+        status={mttrStatus}
+        title="SC Task MTTR by Priority"
+        valueTicketType="sc_task"
+        timeGrain={timeGrain}
+      />
+      <DurationBucketGroup
+        data={durationBuckets.incident}
+        error={durationBucketsError}
+        selectedTicketType={ticketType}
+        status={durationBucketsStatus}
+        title="Incident Resolved Volume by Resolution Duration"
+        valueTicketType="incident"
+      />
+      <DurationBucketGroup
+        data={durationBuckets.sc_task}
+        error={durationBucketsError}
+        selectedTicketType={ticketType}
+        status={durationBucketsStatus}
+        title="SC Task Closed Volume by Closed Duration"
+        valueTicketType="sc_task"
+      />
+    </>
+  );
+}
+
+function MttrPriorityGroup({
+  data,
+  error,
+  selectedTicketType,
+  status,
+  timeGrain,
+  title,
+  valueTicketType,
+}: {
+  data: DashboardVolumetricsKpiMttrPrioritySet;
+  error: string | null;
+  selectedTicketType: VolumetricsTicketType;
+  status: LoadStatus;
+  timeGrain: VolumetricsTimeGrain;
+  title: string;
+  valueTicketType: Exclude<VolumetricsTicketType, "all">;
+}) {
+  const notApplicable = splitChartNotApplicable(selectedTicketType, valueTicketType);
+  return (
+    <section className="panel kpi-trends-section">
+      <div className="panel-heading">
+        <div>
+          <p className="label">KPI Trends</p>
+          <h3>{title}</h3>
+        </div>
+      </div>
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">
+          This MTTR group is not applicable for the selected ticket type.
+        </p>
+      ) : (
+        <div className="kpi-mttr-stack">
+          {mttrPriorityPairs.map((priorities) => (
+            <MttrCombinedLineChart
+              data={data}
+              key={priorities.join("-")}
+              priorities={priorities}
+              status={status}
+              timeGrain={timeGrain}
+              title={`${valueTicketType === "incident" ? "Incident" : "SC Task"} ${priorities.join(
+                " / "
+              )} MTTR`}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function mttrCombinedRows(
+  data: DashboardVolumetricsKpiMttrPrioritySet,
+  priorities: Array<keyof DashboardVolumetricsKpiMttrPrioritySet>
+) {
+  const baseRows = data[priorities[0]] ?? [];
+  return baseRows.map((point, index) => {
+    const row: Record<string, string | number | null> = {
+      period_key: point.period_key,
+      period_label: point.period_label,
+    };
+    priorities.forEach((priority) => {
+      const priorityPoint = data[priority]?.[index];
+      row[`${priority}_mttr`] = priorityPoint?.average_mttr_days ?? null;
+      row[`${priority}_ticket_count`] = priorityPoint?.ticket_count ?? 0;
+      row[`${priority}_label_text`] = priorityPoint?.show_label
+        ? priorityPoint.label_text ?? null
+        : null;
+    });
+    return row;
+  });
+}
+
+function renderMttrPointLabel(props: {
+  x?: number | string;
+  y?: number | string;
+  value?: unknown;
+  verticalOffset: number;
+}) {
+  if (typeof props.value !== "string" && typeof props.value !== "number") {
+    return null;
+  }
+  const x = Number(props.x ?? 0);
+  const y = Number(props.y ?? 0) + props.verticalOffset;
+  const lines = String(props.value).split("\n");
+  return (
+    <text
+      x={x}
+      y={y}
+      textAnchor="middle"
+      fontSize={10}
+      fontWeight={800}
+      fill="#334155"
+      stroke="#ffffff"
+      strokeWidth={3}
+      paintOrder="stroke"
+    >
+      {lines.map((line, index) => (
+        <tspan key={line} x={x} dy={index === 0 ? 0 : 12}>
+          {line}
+        </tspan>
+      ))}
+    </text>
+  );
+}
+
+function MttrCombinedLineChart({
+  data,
+  priorities,
+  status,
+  timeGrain,
+  title,
+}: {
+  data: DashboardVolumetricsKpiMttrPrioritySet;
+  priorities: Array<keyof DashboardVolumetricsKpiMttrPrioritySet>;
+  status: LoadStatus;
+  timeGrain: VolumetricsTimeGrain;
+  title: string;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const rows = mttrCombinedRows(data, priorities);
+  const hasValues = priorities.some((priority) =>
+    data[priority].some((point) => point.average_mttr_days !== null)
+  );
+  const chartWidth = trendChartWidth(rows.length, timeGrain, plotWidth);
+  const canCopy = status !== "loading" && hasValues;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">Average business duration in days.</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status !== "loading" && !hasValues ? (
+        <p className="muted-text chart-state-text">No MTTR data available.</p>
+      ) : null}
+
+      {status !== "loading" && hasValues ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <ComposedChart
+                data={rows}
+                width={chartWidth}
+                height={320}
+                margin={{ top: 46, right: 52, bottom: 76, left: 58 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="period_label"
+                  angle={-35}
+                  height={78}
+                  interval={0}
+                  textAnchor="end"
+                  tickMargin={12}
+                />
+                <YAxis
+                  label={{ value: "MTTR days", angle: -90, position: "insideLeft" }}
+                  tickFormatter={(value) => formatNumber(Number(value), 1)}
+                />
+                <Tooltip
+                  formatter={(value, name, item) => {
+                    const priority = String(item.dataKey ?? "").replace("_mttr", "");
+                    const count = item.payload?.[`${priority}_ticket_count`] ?? 0;
+                    return [`${formatNumber(Number(value), 2)} days (n=${count})`, name];
+                  }}
+                />
+                <Legend />
+                {priorities.map((priority, index) => (
+                  <Line
+                    connectNulls
+                    dataKey={`${priority}_mttr`}
+                    dot={{ r: 3 }}
+                    key={priority}
+                    name={`${priority} MTTR`}
+                    stroke={chartColors.priority[mttrPriorityKeys.indexOf(priority)]}
+                    strokeWidth={2.5}
+                    type="monotone"
+                  >
+                    <LabelList
+                      content={(props) =>
+                        renderMttrPointLabel({
+                          ...props,
+                          verticalOffset: index === 0 ? -14 : 24,
+                        })
+                      }
+                      dataKey={`${priority}_label_text`}
+                    />
+                  </Line>
+                ))}
+              </ComposedChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function DurationBucketGroup({
+  data,
+  error,
+  selectedTicketType,
+  status,
+  title,
+  valueTicketType,
+}: {
+  data: DashboardVolumetricsDurationBucketRow[];
+  error: string | null;
+  selectedTicketType: VolumetricsTicketType;
+  status: LoadStatus;
+  title: string;
+  valueTicketType: Exclude<VolumetricsTicketType, "all">;
+}) {
+  const notApplicable = splitChartNotApplicable(selectedTicketType, valueTicketType);
+  return (
+    <section className="panel kpi-trends-section">
+      <div className="panel-heading">
+        <div>
+          <p className="label">Duration Buckets</p>
+          <h3>{title}</h3>
+        </div>
+      </div>
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">
+          This duration group is not applicable for the selected ticket type.
+        </p>
+      ) : (
+        <div className="duration-bucket-grid">
+          {data.map((row) => (
+            <DurationBucketChart data={row} key={row.period_key} status={status} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DurationBucketChart({
+  data,
+  status,
+}: {
+  data: DashboardVolumetricsDurationBucketRow;
+  status: LoadStatus;
+}) {
+  const title = data.period_label;
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const rows = durationBucketLabels.map((bucket) => ({
+    bucket,
+    count: data.buckets[bucket] ?? 0,
+  }));
+  const hasValues = rows.some((row) => row.count > 0);
+  const chartWidth = Math.max(320, plotWidth - 24);
+  const canCopy = status !== "loading" && hasValues;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <h3>{title}</h3>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status !== "loading" && !hasValues ? (
+        <p className="muted-text chart-state-text">No duration data available.</p>
+      ) : null}
+      {status !== "loading" && hasValues ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-stage">
+            <BarChart
+              data={rows}
+              width={chartWidth}
+              height={280}
+              margin={{ top: 32, right: 24, bottom: 64, left: 24 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="bucket" angle={-25} height={62} interval={0} textAnchor="end" />
+              <YAxis hide />
+              <Tooltip />
+              <Bar dataKey="count" fill={chartColors.patternAlt} name="Tickets" radius={[4, 4, 0, 0]}>
+                <LabelList dataKey="count" position="top" fontSize={11} />
+              </Bar>
+            </BarChart>
+          </div>
+        </div>
+      ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
     </section>
   );

@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
-from sqlalchemy import delete, event, select
+from sqlalchemy import delete, event, func, select
 
 from app.db.session import SessionLocal
 from app.main import app
@@ -18,6 +18,7 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
+from app.services.application_inventory import update_application_inventory_active_users_from_file
 
 
 def create_project():
@@ -83,6 +84,7 @@ def add_inventory_item(
     vendor: str = "Vendor A",
     row_number: int = 10,
     active: bool | None = True,
+    active_users: int | None = None,
 ) -> ApplicationInventoryItem:
     item = ApplicationInventoryItem(
         project_id=project_id,
@@ -97,6 +99,7 @@ def add_inventory_item(
         ams_owner=ams_owner,
         supported_by_vendor=vendor,
         active=active,
+        active_users=active_users,
         cmdb_payload={"Application family": "Claims"},
         source_filename="inventory.csv",
         source_row_number=row_number,
@@ -151,14 +154,14 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
                 "Application Number (APM),Parent Business Application,Support group name,"
                 "Support group's owner,Application Owner,Business Service CI Name,"
                 "Support Lead (Managed by),Functional Track,AMS Owner,Supported By Vendor,"
-                "Active,Application family,Business criticality,Total USD$",
+                "Active,Active Users,Application family,Business criticality,Total USD$",
                 " APM-1 , Parent App , IT-SAP-Claims , Group Owner , Owner One , "
                 "Claims Service , Lead One , Claims , AMS Owner , Vendor A , true , "
-                "Claims Family , High , #N/A",
+                "100, Claims Family , High , #N/A",
                 "APM-1,Parent App,IT-SAP-Claims,Group Owner,Owner Two,Claims Service,"
-                "Lead Two,Claims,AMS Owner,Vendor A,true,Claims Family,#N/A,#N/A",
+                "Lead Two,Claims,AMS Owner,Vendor A,true,250,Claims Family,#N/A,#N/A",
                 "APM-2,Parent App,IT-SAP-Claims,Group Owner,Owner Missing,,Lead,Claims,"
-                "AMS Owner,Vendor A,true,Family,Low,#N/A",
+                "AMS Owner,Vendor A,true,15,Family,Low,#N/A",
             ]
         )
 
@@ -190,6 +193,7 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
         assert item.sap_non_sap == "SAP"
         assert item.business_service_ci_name == "Claims Service"
         assert item.active is True
+        assert item.active_users == 250
         assert item.cmdb_payload == {
             "Application family": "Claims Family",
             "Business criticality": None,
@@ -219,6 +223,7 @@ def test_xlsx_upload_detects_second_row_header() -> None:
                 "AMS Owner",
                 "Supported By Vendor",
                 "Active",
+                "Active Users",
                 "Application family",
             ]
         )
@@ -235,6 +240,7 @@ def test_xlsx_upload_detects_second_row_header() -> None:
                 "AMS Excel Owner",
                 "Vendor Excel",
                 "Yes",
+                1234,
                 "Excel Family",
             ]
         )
@@ -266,7 +272,88 @@ def test_xlsx_upload_detects_second_row_header() -> None:
         )
         assert item is not None
         assert item.source_row_number == 3
+        assert item.active_users == 1234
         assert item.cmdb_payload == {"Application family": "Excel Family"}
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_focused_active_users_update_only_changes_active_users(tmp_path) -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_project()
+    try:
+        item = add_inventory_item(
+            db,
+            project_id,
+            "Claims Service",
+            parent_application="Claims Parent",
+            assignment_group="AMS Claims",
+            application_owner="Original Owner",
+            active_users=None,
+            row_number=88,
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Untouched Service",
+            parent_application="Other Parent",
+            assignment_group="Other Group",
+            active_users=7,
+            row_number=89,
+        )
+        db.commit()
+
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Group-App-BizService"
+        worksheet.append(["helper"])
+        worksheet.append(
+            [
+                "Parent Business Application",
+                "Support group name",
+                "Business Service CI Name",
+                "Active Users",
+                "Application Owner",
+            ]
+        )
+        worksheet.append(
+            [
+                "Claims Parent",
+                "AMS Claims",
+                "Claims Service",
+                "3,210",
+                "Should Not Be Used",
+            ]
+        )
+        worksheet.append(["Missing Parent", "Missing Group", "Missing Service", 99, "Ignored"])
+        worksheet.append(["Claims Parent", "AMS Claims", "Claims Service", "bad", "Ignored"])
+
+        workbook_path = tmp_path / "inventory-active-users.xlsx"
+        workbook.save(workbook_path)
+
+        result = update_application_inventory_active_users_from_file(
+            db,
+            project_id,
+            workbook_path,
+        )
+
+        assert result.total_rows == 3
+        assert result.matched_count == 1
+        assert result.updated_count == 1
+        assert result.unmatched_count == 1
+        assert result.invalid_count == 1
+        assert result.skipped_count == 1
+
+        db.refresh(item)
+        assert item.active_users == 3210
+        assert item.application_owner == "Original Owner"
+        assert item.cmdb_payload == {"Application family": "Claims"}
+        assert item.source_row_number == 88
+
+        item_count = db.scalar(
+            select(func.count(ApplicationInventoryItem.id))
+            .where(ApplicationInventoryItem.project_id == project_id)
+        )
+        assert item_count == 2
     finally:
         cleanup_client(db, client_id)
 

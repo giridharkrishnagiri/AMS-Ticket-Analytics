@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
+  CartesianGrid,
   Cell,
   LabelList,
   Legend,
@@ -9,6 +10,7 @@ import {
   PieChart,
   Tooltip,
   XAxis,
+  YAxis,
 } from "recharts";
 
 import {
@@ -16,6 +18,7 @@ import {
   getDashboardApplicationsFilterValues,
   getDashboardApplicationsList,
   getDashboardApplicationsSummary,
+  getDashboardApplicationsTopActiveUsers,
 } from "./api/dashboard";
 import type {
   DashboardApplicationRow,
@@ -27,6 +30,7 @@ import type {
   DashboardApplicationsRequest,
   DashboardApplicationsSort,
   DashboardApplicationsSummary,
+  DashboardApplicationsTopActiveUsers,
 } from "./api/dashboard";
 import ExcelMultiSelectFilter from "./components/ExcelMultiSelectFilter";
 import type { ExcelFilterOption } from "./components/ExcelMultiSelectFilter";
@@ -44,6 +48,7 @@ type ApplicationsDashboardProps = {
   isActive: boolean;
 };
 
+type TopNSelection = 10 | 20;
 type FilterKey = keyof DashboardApplicationsFilters;
 type TableColumnKey = keyof DashboardApplicationRow;
 
@@ -98,9 +103,14 @@ const emptyList: DashboardApplicationsList = {
 
 const emptyCharts: DashboardApplicationsCharts = {
   lifecycle_stage: [],
-  operating_system: [],
-  sox_scope: [],
+  architecture_type: [],
+  install_type: [],
   strategic: [],
+};
+
+const emptyTopActiveUsers: DashboardApplicationsTopActiveUsers = {
+  top_n: 10,
+  points: [],
 };
 
 const defaultSort: DashboardApplicationsSort = {
@@ -119,6 +129,7 @@ const tableColumns: Array<{ key: TableColumnKey; label: string }> = [
   { key: "functional_track", label: "Functional Track" },
   { key: "ams_owner", label: "AMS Owner" },
   { key: "supported_by_vendor", label: "Supported By Vendor" },
+  { key: "active_users", label: "Active Users" },
   { key: "app_family", label: "App Family" },
   { key: "biz_process", label: "Biz Process" },
   { key: "app_category", label: "App Category" },
@@ -173,6 +184,20 @@ function formatNumber(value: number | null | undefined): string {
     return "Not available";
   }
   return value.toLocaleString();
+}
+
+function formatTableValue(row: DashboardApplicationRow, column: TableColumnKey): string {
+  const value = row[column];
+  if (column === "active_users") {
+    return typeof value === "number" ? value.toLocaleString() : "";
+  }
+  if (column === "avg_monthly_ticket_volume_6m") {
+    return typeof value === "number" ? value.toLocaleString(undefined, { maximumFractionDigits: 1 }) : "";
+  }
+  if (column === "tickets_per_user_per_month") {
+    return typeof value === "number" ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "";
+  }
+  return value === null || value === undefined ? "" : String(value);
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -339,6 +364,10 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
   const [charts, setCharts] = useState<LoadState<DashboardApplicationsCharts>>(
     createLoadState(emptyCharts)
   );
+  const [topActiveUsersN, setTopActiveUsersN] = useState<TopNSelection>(10);
+  const [topActiveUsers, setTopActiveUsers] = useState<
+    LoadState<DashboardApplicationsTopActiveUsers>
+  >(createLoadState(emptyTopActiveUsers));
   const [loadedProjectId, setLoadedProjectId] = useState("");
 
   const filterOptions = useMemo(
@@ -419,22 +448,26 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
     setSummary(createLoadState(emptySummary, "loading"));
     setApplicationList(createLoadState(emptyList, "loading"));
     setCharts(createLoadState(emptyCharts, "loading"));
+    setTopActiveUsers(createLoadState(emptyTopActiveUsers, "loading"));
     try {
-      const [nextSummary, nextList, nextCharts] = await Promise.all([
+      const [nextSummary, nextList, nextCharts, nextTopActiveUsers] = await Promise.all([
         getDashboardApplicationsSummary(requestBody),
         getDashboardApplicationsList(requestBody),
         getDashboardApplicationsCharts(requestBody),
+        getDashboardApplicationsTopActiveUsers(requestBody, topActiveUsersN),
       ]);
       setSummary({ status: "success", data: nextSummary, error: null });
       setApplicationList({ status: "success", data: nextList, error: null });
       setCharts({ status: "success", data: nextCharts, error: null });
+      setTopActiveUsers({ status: "success", data: nextTopActiveUsers, error: null });
     } catch (error) {
       const message = errorMessage(error, "Unable to load Application dashboard data");
       setSummary({ status: "error", data: emptySummary, error: message });
       setApplicationList({ status: "error", data: emptyList, error: message });
       setCharts({ status: "error", data: emptyCharts, error: message });
+      setTopActiveUsers({ status: "error", data: emptyTopActiveUsers, error: message });
     }
-  }, [requestBody]);
+  }, [requestBody, topActiveUsersN]);
 
   useEffect(() => {
     if (projectId !== loadedProjectId) {
@@ -445,6 +478,8 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
       setSummary(createLoadState(emptySummary));
       setApplicationList(createLoadState(emptyList));
       setCharts(createLoadState(emptyCharts));
+      setTopActiveUsersN(10);
+      setTopActiveUsers(createLoadState(emptyTopActiveUsers));
     }
   }, [loadedProjectId, projectId]);
 
@@ -725,7 +760,7 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
                   applicationList.data.rows.map((row) => (
                     <tr key={row.business_service_ci_name}>
                       {tableColumns.map((column) => (
-                        <td key={column.key}>{row[column.key]}</td>
+                        <td key={column.key}>{formatTableValue(row, column.key)}</td>
                       ))}
                     </tr>
                   ))
@@ -748,18 +783,120 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
             status={charts.status}
           />
           <BarApplicationChart
-            title="Operating System"
-            data={charts.data.operating_system}
+            title="Architecture Type"
+            data={charts.data.architecture_type}
             status={charts.status}
           />
           <BarApplicationChart
-            title="SOX Scope"
-            data={charts.data.sox_scope}
+            title="Install Type"
+            data={charts.data.install_type}
             status={charts.status}
           />
         </section>
         {charts.status === "error" ? <p className="error-text">{charts.error}</p> : null}
+
+        <TopActiveUsersChart
+          data={topActiveUsers.data}
+          error={topActiveUsers.error}
+          onTopNChange={setTopActiveUsersN}
+          status={topActiveUsers.status}
+          topN={topActiveUsersN}
+        />
       </div>
+    </section>
+  );
+}
+
+function TopActiveUsersChart({
+  data,
+  error,
+  onTopNChange,
+  status,
+  topN,
+}: {
+  data: DashboardApplicationsTopActiveUsers;
+  error: string | null;
+  onTopNChange: (value: TopNSelection) => void;
+  status: LoadStatus;
+  topN: TopNSelection;
+}) {
+  const title = "Top Applications by Active Users";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartCopy(title);
+  const hasRows = data.points.length > 0;
+  const chartWidth = Math.max(760, plotWidth - 24);
+  const chartHeight = topN === 20 ? 700 : 460;
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card applications-chart-card applications-wide-chart" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">Application Inventory only. Highest Active Users appear first.</p>
+        </div>
+        <div className="volumetrics-chart-actions">
+          <div className="segmented-control" aria-label="Top Active Users">
+            {[10, 20].map((value) => (
+              <button
+                className={topN === value ? "active" : ""}
+                key={value}
+                type="button"
+                onClick={() => onTopNChange(value as TopNSelection)}
+              >
+                Top {value}
+              </button>
+            ))}
+          </div>
+          <button
+            className="secondary-button chart-copy-button"
+            type="button"
+            disabled={!canCopy}
+            onClick={handleCopy}
+          >
+            Copy chart
+          </button>
+        </div>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">Active Users data is not available yet.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-chart-plot applications-horizontal-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={data.points}
+                layout="vertical"
+                width={chartWidth}
+                height={chartHeight}
+                margin={{ top: 22, right: 96, bottom: 24, left: 220 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" tickFormatter={(value) => formatNumber(Number(value))} />
+                <YAxis
+                  dataKey="application_name"
+                  interval={0}
+                  tick={{ fontSize: 12, fontWeight: 700 }}
+                  type="category"
+                  width={210}
+                />
+                <Tooltip formatter={(value) => formatNumber(Number(value))} />
+                <Bar dataKey="active_users" fill="#0f766e" name="Active Users" radius={[0, 5, 5, 0]}>
+                  <LabelList
+                    dataKey="active_users"
+                    formatter={(value) => formatNumber(Number(value))}
+                    position="right"
+                  />
+                </Bar>
+              </BarChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
     </section>
   );
 }

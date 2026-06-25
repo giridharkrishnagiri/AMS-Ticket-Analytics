@@ -1611,6 +1611,11 @@ h2 {
   overflow: hidden;
 }
 
+.applications-wide-chart {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .applications-chart-header {
   display: flex;
   align-items: center;
@@ -1639,6 +1644,10 @@ h2 {
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.applications-horizontal-chart-plot {
+  min-height: 468px;
 }
 
 .applications-chart-scroll {
@@ -1847,6 +1856,39 @@ h2 {
   flex-wrap: wrap;
 }
 
+.volumetrics-two-column-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
+.volumetrics-three-column-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
+.kpi-trends-section {
+  display: grid;
+  gap: 14px;
+}
+
+.kpi-mttr-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.duration-bucket-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
 .volumetrics-compact-toggle {
   min-height: 32px;
 }
@@ -1922,6 +1964,12 @@ h2 {
   }
 
   .volumetrics-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .volumetrics-two-column-grid,
+  .volumetrics-three-column-grid,
+  .duration-bucket-grid {
     grid-template-columns: 1fr;
   }
 }

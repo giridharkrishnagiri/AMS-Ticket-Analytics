@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models import ApplicationInventoryItem, AssessmentOutOfScopeTicket, Project, Ticket
+from app.services.application_metrics import recompute_application_ticket_user_metrics
 from app.services.ingestion import (
     CSV_ENCODING_CANDIDATES,
     INGESTION_BATCH_SIZE,
@@ -56,6 +57,7 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "ams_owner": ("AMS Owner",),
     "supported_by_vendor": ("Supported By Vendor", "Support vendor", "Vendor"),
     "active": ("Active",),
+    "active_users": ("Active Users", "Active User", "Active Users Count"),
 }
 CORE_FIELD_NAMES = set(CORE_FIELD_ALIASES)
 CORE_ALIAS_TO_FIELD = {
@@ -101,6 +103,28 @@ class InventoryUploadResult:
     distinct_functional_tracks: set[str] = field(default_factory=set)
     distinct_ams_owners: set[str] = field(default_factory=set)
     distinct_supported_vendors: set[str] = field(default_factory=set)
+
+    @property
+    def error_count(self) -> int:
+        return len(self.errors)
+
+    @property
+    def warning_count(self) -> int:
+        return len(self.warnings)
+
+
+@dataclass
+class InventoryActiveUsersUpdateResult:
+    project_id: UUID
+    total_rows: int = 0
+    matched_count: int = 0
+    updated_count: int = 0
+    unchanged_count: int = 0
+    unmatched_count: int = 0
+    skipped_count: int = 0
+    invalid_count: int = 0
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def error_count(self) -> int:
@@ -180,6 +204,16 @@ def get_raw_value(raw_data: dict[str, Any], field_name: str) -> Any:
     return None
 
 
+def raw_data_has_core_field(raw_data: dict[str, Any], field_name: str) -> bool:
+    normalized_headers = {
+        normalize_source_column_name(column_name) for column_name in raw_data
+    }
+    return any(
+        normalize_source_column_name(alias) in normalized_headers
+        for alias in CORE_FIELD_ALIASES[field_name]
+    )
+
+
 def build_cmdb_payload(raw_data: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     for column_name, value in raw_data.items():
@@ -211,6 +245,53 @@ def parse_active(value: Any, row_number: int, result: InventoryUploadResult) -> 
             f"Row {row_number}: Active value '{text}' could not be parsed.",
         )
     return parsed
+
+
+def parse_active_users(value: Any, row_number: int, result: InventoryUploadResult) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        append_sample_message(
+            result.warnings,
+            f"Row {row_number}: Active Users value '{value}' could not be parsed.",
+        )
+        return None
+    if isinstance(value, int):
+        if value >= 0:
+            return value
+        append_sample_message(
+            result.warnings,
+            f"Row {row_number}: Active Users value '{value}' could not be parsed.",
+        )
+        return None
+    if isinstance(value, float):
+        if value >= 0 and value.is_integer():
+            return int(value)
+        append_sample_message(
+            result.warnings,
+            f"Row {row_number}: Active Users value '{value}' could not be parsed.",
+        )
+        return None
+
+    text = text_or_none(value)
+    if text is None:
+        return None
+    normalized = text.replace(",", "")
+    try:
+        parsed = float(normalized)
+    except ValueError:
+        append_sample_message(
+            result.warnings,
+            f"Row {row_number}: Active Users value '{text}' could not be parsed.",
+        )
+        return None
+    if parsed >= 0 and parsed.is_integer():
+        return int(parsed)
+    append_sample_message(
+        result.warnings,
+        f"Row {row_number}: Active Users value '{text}' could not be parsed.",
+    )
+    return None
 
 
 def clean_inventory_values(
@@ -247,6 +328,11 @@ def clean_inventory_values(
         "sap_non_sap": derive_sap_non_sap(assignment_group),
         "active": parse_active(
             get_raw_value(parsed_row.raw_data, "active"),
+            parsed_row.row_number,
+            result,
+        ),
+        "active_users": parse_active_users(
+            get_raw_value(parsed_row.raw_data, "active_users"),
             parsed_row.row_number,
             result,
         ),
@@ -302,6 +388,30 @@ def duplicate_key_condition(values: dict[str, Any]) -> Any:
     )
 
 
+def inventory_match_condition(
+    project_id: UUID,
+    *,
+    business_service_ci_name: str,
+    parent_application_name: str | None,
+    assignment_group: str | None,
+) -> Any:
+    return and_(
+        ApplicationInventoryItem.project_id == project_id,
+        func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name))
+        == normalize_match_key(business_service_ci_name),
+        func.coalesce(
+            func.lower(func.btrim(ApplicationInventoryItem.parent_application_name)),
+            "",
+        )
+        == (normalize_match_key(parent_application_name) or ""),
+        func.coalesce(
+            func.lower(func.btrim(ApplicationInventoryItem.assignment_group)),
+            "",
+        )
+        == (normalize_match_key(assignment_group) or ""),
+    )
+
+
 def upsert_inventory_item(db: Session, values: dict[str, Any]) -> bool:
     item = db.scalar(
         select(ApplicationInventoryItem).where(duplicate_key_condition(values)).limit(1)
@@ -315,6 +425,105 @@ def upsert_inventory_item(db: Session, values: dict[str, Any]) -> bool:
         setattr(item, field_name, value)
     db.flush()
     return False
+
+
+def update_application_inventory_active_users_from_file(
+    db: Session,
+    project_id: UUID,
+    path: Path,
+) -> InventoryActiveUsersUpdateResult:
+    """Update only active_users from an inventory workbook; never insert or upsert rows."""
+    ensure_project_exists(db, project_id)
+    result = InventoryActiveUsersUpdateResult(project_id=project_id)
+
+    try:
+        for parsed_row in iter_inventory_file_rows(path, result):
+            result.total_rows += 1
+            if not raw_data_has_core_field(parsed_row.raw_data, "active_users"):
+                raise ApplicationInventoryError("Active Users column was not found.")
+
+            business_service_ci_name = text_or_none(
+                get_raw_value(parsed_row.raw_data, "business_service_ci_name")
+            )
+            if business_service_ci_name is None:
+                result.skipped_count += 1
+                append_sample_message(
+                    result.errors,
+                    f"Row {parsed_row.row_number}: Business Service CI Name is required.",
+                )
+                continue
+
+            raw_active_users = get_raw_value(parsed_row.raw_data, "active_users")
+            raw_active_users_text = text_or_none(raw_active_users)
+            warning_count_before = result.warning_count
+            active_users = parse_active_users(
+                raw_active_users,
+                parsed_row.row_number,
+                result,
+            )
+            if (
+                raw_active_users_text is not None
+                and active_users is None
+                and result.warning_count > warning_count_before
+            ):
+                result.invalid_count += 1
+                result.skipped_count += 1
+                continue
+
+            parent_application_name = text_or_none(
+                get_raw_value(parsed_row.raw_data, "parent_application_name")
+            )
+            assignment_group = text_or_none(get_raw_value(parsed_row.raw_data, "assignment_group"))
+            item = db.scalar(
+                select(ApplicationInventoryItem)
+                .where(
+                    inventory_match_condition(
+                        project_id,
+                        business_service_ci_name=business_service_ci_name,
+                        parent_application_name=parent_application_name,
+                        assignment_group=assignment_group,
+                    )
+                )
+                .limit(1)
+            )
+            if item is None:
+                result.unmatched_count += 1
+                append_sample_message(
+                    result.warnings,
+                    "Row "
+                    f"{parsed_row.row_number}: no existing inventory row matched "
+                    f"Business Service CI Name '{business_service_ci_name}'.",
+                )
+                continue
+
+            result.matched_count += 1
+            if item.active_users == active_users:
+                result.unchanged_count += 1
+            else:
+                item.active_users = active_users
+                result.updated_count += 1
+
+            if result.updated_count and result.updated_count % INGESTION_BATCH_SIZE == 0:
+                db.commit()
+
+        recompute_application_ticket_user_metrics(db, project_id)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise ApplicationInventoryError(
+            f"Application inventory active users could not be updated: {exc}"
+        ) from exc
+    except UnicodeDecodeError as exc:
+        db.rollback()
+        raise ApplicationInventoryError(
+            "Application inventory CSV could not be decoded using supported encodings: "
+            + ", ".join(CSV_ENCODING_CANDIDATES)
+        ) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    return result
 
 
 def iter_inventory_csv_rows(path: Path) -> Iterator[ParsedSourceRow]:
@@ -467,6 +676,7 @@ def update_inventory_item(
     for field_name, value in values.items():
         if hasattr(item, field_name):
             setattr(item, field_name, value)
+    recompute_application_ticket_user_metrics(db, item.project_id)
     db.commit()
     db.refresh(item)
     return item
@@ -784,6 +994,7 @@ def enrich_tickets_from_inventory(
         ticket_column="application",
         table_name="assessment_out_of_scope_tickets",
     )
+    recompute_application_ticket_user_metrics(db, project_id)
     db.commit()
 
     return build_inventory_enrichment_summary(
