@@ -278,7 +278,7 @@ const chartColors = {
 };
 
 const chartImagePadding = 18;
-const chartImageTitleHeight = 42;
+const chartImageHeaderMinHeight = 54;
 
 function createLoadState<T>(data: T, status: LoadStatus = "idle"): LoadState<T> {
   return { status, data, error: null };
@@ -566,6 +566,46 @@ function chartLegendItems(chartElement: HTMLElement): Array<{ color: string; nam
     .filter((item) => item.name);
 }
 
+function wrapExportText(value: string, maxLength = 128): string[] {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  words.forEach((word) => {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > maxLength && current) {
+      lines.push(current);
+      current = word;
+      return;
+    }
+    current = next;
+  });
+  if (current) {
+    lines.push(current);
+  }
+  return lines.length ? lines : [value.trim()];
+}
+
+function chartExportText(chartElement: HTMLElement, fallbackTitle: string) {
+  const card = chartElement.closest(".chart-card") as HTMLElement | null;
+  const titleText = card?.querySelector("h3")?.textContent?.trim() || fallbackTitle;
+  const subtitles = card
+    ? Array.from(card.querySelectorAll(".muted-text"))
+        .filter((element) => {
+          const htmlElement = element as HTMLElement;
+          const text = htmlElement.textContent?.trim();
+          return (
+            Boolean(text) &&
+            !htmlElement.classList.contains("chart-state-text") &&
+            !htmlElement.classList.contains("chart-copy-status") &&
+            !chartElement.contains(htmlElement)
+          );
+        })
+        .flatMap((element) => wrapExportText(element.textContent?.trim() ?? ""))
+        .slice(0, 3)
+    : [];
+  return { title: titleText, subtitles };
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -582,19 +622,24 @@ function safeChartFilename(title: string) {
 }
 
 async function copyChartToClipboard(chartElement: HTMLElement, title: string): Promise<string> {
+  const exportText = chartExportText(chartElement, title);
   const sourceSvg = chartElement.querySelector("svg");
   if (!sourceSvg) {
     throw new Error("No chart image is available to copy.");
   }
 
   const { chartWidth, chartHeight, viewBoxText } = chartSvgSize(sourceSvg);
+  const headerHeight = Math.max(
+    chartImageHeaderMinHeight,
+    42 + exportText.subtitles.length * 17
+  );
   const outputWidth = chartWidth + chartImagePadding * 2;
-  const outputHeight = chartHeight + chartImageTitleHeight + chartImagePadding;
+  const outputHeight = chartHeight + headerHeight + chartImagePadding;
   const clonedSvg = sourceSvg.cloneNode(true) as SVGSVGElement;
   inlineSvgComputedStyles(sourceSvg, clonedSvg);
   clonedSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   clonedSvg.setAttribute("x", String(chartImagePadding));
-  clonedSvg.setAttribute("y", String(chartImageTitleHeight));
+  clonedSvg.setAttribute("y", String(headerHeight));
   clonedSvg.setAttribute("width", String(chartWidth));
   clonedSvg.setAttribute("height", String(chartHeight));
   clonedSvg.setAttribute("viewBox", viewBoxText);
@@ -603,8 +648,16 @@ async function copyChartToClipboard(chartElement: HTMLElement, title: string): P
     <svg xmlns="http://www.w3.org/2000/svg" width="${outputWidth}" height="${outputHeight}" viewBox="0 0 ${outputWidth} ${outputHeight}">
       <rect x="0" y="0" width="${outputWidth}" height="${outputHeight}" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
       <text x="${chartImagePadding}" y="27" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">${escapeXml(
-        title
+        exportText.title
       )}</text>
+      ${exportText.subtitles
+        .map(
+          (line, index) =>
+            `<text x="${chartImagePadding}" y="${47 + index * 17}" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="500">${escapeXml(
+              line
+            )}</text>`
+        )
+        .join("")}
       ${new XMLSerializer().serializeToString(clonedSvg)}
     </svg>
   `;
@@ -657,7 +710,7 @@ async function copyChartToClipboard(chartElement: HTMLElement, title: string): P
     await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
     return "Copied chart image to clipboard.";
   } catch (error) {
-    downloadBlob(pngBlob, safeChartFilename(title));
+    downloadBlob(pngBlob, safeChartFilename(exportText.title));
     const message = errorMessage(error, "This browser could not copy the chart image.");
     return `Copy blocked by browser. PNG downloaded instead. ${message}`;
   }

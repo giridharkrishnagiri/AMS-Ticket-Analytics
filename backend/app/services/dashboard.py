@@ -1214,28 +1214,50 @@ def applications_charts(db: Session, request: Any) -> dict[str, list[dict[str, A
 
 def applications_top_active_users(db: Session, request: Any) -> dict[str, Any]:
     top_n = normalized_top_n(getattr(request, "top_n", 10))
-    name_expression = application_display_expression("business_service_ci_name")
-    statement = (
+    parent_expression = nonblank_text_expression(ApplicationInventoryItem.parent_application_name)
+    distinct_pairs = (
         select(
-            name_expression.label("application_name"),
+            parent_expression.label("parent_application_name"),
             ApplicationInventoryItem.active_users.label("active_users"),
         )
         .where(
             *applications_filter_conditions(request.project_id, request.filters),
+            parent_expression.is_not(None),
             ApplicationInventoryItem.active_users.is_not(None),
             ApplicationInventoryItem.active_users > 0,
         )
-        .order_by(ApplicationInventoryItem.active_users.desc(), name_expression.asc())
-        .limit(top_n)
+        .distinct()
+        .subquery("distinct_parent_active_users")
+    )
+    statement = (
+        select(
+            distinct_pairs.c.parent_application_name.label("parent_application_name"),
+            func.max(distinct_pairs.c.active_users).label("active_users"),
+            func.count(distinct_pairs.c.active_users).label("active_user_value_count"),
+        )
+        .group_by(distinct_pairs.c.parent_application_name)
+        .order_by(
+            func.max(distinct_pairs.c.active_users).desc(),
+            distinct_pairs.c.parent_application_name.asc(),
+        )
+    )
+    rows = db.execute(statement).mappings().all()
+    duplicate_parent_count = sum(
+        1 for row in rows if int(row["active_user_value_count"] or 0) > 1
     )
     points = [
         {
-            "application_name": str(row["application_name"]),
+            "application_name": str(row["parent_application_name"]),
+            "parent_application_name": str(row["parent_application_name"]),
             "active_users": int(row["active_users"] or 0),
         }
-        for row in db.execute(statement).mappings().all()
+        for row in rows[:top_n]
     ]
-    return {"top_n": top_n, "points": points}
+    return {
+        "top_n": top_n,
+        "duplicate_parent_active_user_count": duplicate_parent_count,
+        "points": points,
+    }
 
 
 def normalize_volumetrics_scope(value: str | None) -> str:

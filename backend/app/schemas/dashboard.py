@@ -317,11 +317,13 @@ class ApplicationsChartDatum(BaseModel):
 
 class ApplicationsTopActiveUsersPoint(BaseModel):
     application_name: str
+    parent_application_name: str
     active_users: int
 
 
 class ApplicationsTopActiveUsersResponse(BaseModel):
     top_n: int
+    duplicate_parent_active_user_count: int = 0
     points: list[ApplicationsTopActiveUsersPoint]
 
 

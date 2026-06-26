@@ -2272,13 +2272,44 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         };
       }).filter((item) => item.name);
     }
-    async function chartFramePngBlob(frame) {
+    function wrapExportText(value, maxLength = 128) {
+      const words = String(value || "").trim().split(/\s+/).filter(Boolean);
+      const lines = [];
+      let current = "";
+      words.forEach((word) => {
+        const next = current ? `${current} ${word}` : word;
+        if (next.length > maxLength && current) {
+          lines.push(current);
+          current = word;
+          return;
+        }
+        current = next;
+      });
+      if (current) lines.push(current);
+      return lines.length ? lines : [String(value || "").trim()];
+    }
+    function chartExportText(card, frame) {
+      const title = card?.querySelector("h3")?.textContent?.trim() || "chart";
+      const subtitles = card
+        ? Array.from(card.querySelectorAll(".muted, .muted-text"))
+            .filter((element) => {
+              const text = element.textContent?.trim();
+              return text && !element.classList.contains("copy-chart-status") && !frame.contains(element);
+            })
+            .flatMap((element) => wrapExportText(element.textContent?.trim() || ""))
+            .slice(0, 3)
+        : [];
+      return { title, subtitles };
+    }
+    async function chartFramePngBlob(frame, card) {
       const svg = frame.querySelector("svg");
       if (!svg) throw new Error("No chart image is available to copy.");
       const { width, height, viewBoxText } = chartSvgSize(svg);
       const svgMarkup = serializedChartSvg(svg, width, height, viewBoxText);
       const image = await loadImageFromBlob(new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" }));
       const legendItems = chartLegendItems(frame);
+      const exportText = chartExportText(card, frame);
+      const headerHeight = Math.max(54, 42 + exportText.subtitles.length * 17);
       const scale = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
       const measureCanvas = document.createElement("canvas");
       const measureContext = measureCanvas.getContext("2d");
@@ -2301,18 +2332,27 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const legendHeight = legendRows.length ? 18 + legendRows.length * 24 : 0;
       const canvas = document.createElement("canvas");
       canvas.width = Math.ceil(width * scale);
-      canvas.height = Math.ceil((height + legendHeight) * scale);
+      canvas.height = Math.ceil((headerHeight + height + legendHeight) * scale);
       const context = canvas.getContext("2d");
       if (!context) throw new Error("Canvas copy is not available in this browser.");
       context.scale(scale, scale);
       context.fillStyle = "#ffffff";
-      context.fillRect(0, 0, width, height + legendHeight);
-      context.drawImage(image, 0, 0, width, height);
+      context.fillRect(0, 0, width, headerHeight + height + legendHeight);
+      context.fillStyle = "#111827";
+      context.font = "700 17px Arial, sans-serif";
+      context.textBaseline = "alphabetic";
+      context.fillText(exportText.title, 14, 28);
+      context.fillStyle = "#475569";
+      context.font = "500 13px Arial, sans-serif";
+      exportText.subtitles.forEach((line, index) => {
+        context.fillText(line, 14, 48 + index * 17);
+      });
+      context.drawImage(image, 0, headerHeight, width, height);
       context.font = "700 13px Arial, sans-serif";
       context.textBaseline = "middle";
       legendRows.forEach((row, rowIndex) => {
         let x = 12;
-        const y = height + 18 + rowIndex * 24;
+        const y = headerHeight + height + 18 + rowIndex * 24;
         row.forEach((item) => {
           context.fillStyle = item.color;
           context.fillRect(x, y - 5, 10, 10);
@@ -2321,7 +2361,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           x += item.width;
         });
       });
-      return { blob: await canvasToPngBlob(canvas), svgMarkup };
+      return { blob: await canvasToPngBlob(canvas), svgMarkup, title: exportText.title };
     }
     function safeChartFilename(title) {
       const cleaned = String(title || "chart").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -2357,10 +2397,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       }
       button.disabled = true;
       let blob = null;
-      const title = card?.querySelector("h3")?.textContent?.trim() || "chart";
+      let title = card?.querySelector("h3")?.textContent?.trim() || "chart";
       try {
-        const result = await chartFramePngBlob(frame);
+        const result = await chartFramePngBlob(frame, card);
         blob = result.blob;
+        title = result.title;
         if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
           throw new Error("Clipboard image copy is not supported in this browser.");
         }
@@ -2449,13 +2490,21 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       );
     }
     function topActiveUsersPoints(rows) {
-      return rows
-        .filter((row) => Number(row.active_users || 0) > 0)
-        .map((row) => ({
-          label: row.business_service_ci_name || "(blank)",
-          value: Number(row.active_users || 0),
-          displayLabel: fmt(row.active_users)
-        }))
+      const byParentApplication = new Map();
+      rows.forEach((row) => {
+        const parentName = String(row.parent_application_name || "").trim();
+        const activeUsers = Number(row.active_users || 0);
+        if (!parentName || activeUsers <= 0) return;
+        const current = byParentApplication.get(parentName);
+        if (!current || activeUsers > current.value) {
+          byParentApplication.set(parentName, {
+            label: parentName,
+            value: activeUsers,
+            displayLabel: fmt(activeUsers)
+          });
+        }
+      });
+      return [...byParentApplication.values()]
         .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label))
         .slice(0, Number(state.topActiveUsersN || 10));
     }
@@ -2492,7 +2541,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
             <section class="chart-card panel"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
             <section class="chart-card panel"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
           </div>
-          <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top Applications by Active Users</h3><p class="muted">Application Inventory only. Highest Active Users appear first.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
+          <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top Parent Business Applications by Active Users</h3><p class="muted">Application Inventory only. One row per Parent Business Application, using the highest Active Users value when duplicates exist.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Parent Business Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
           <section class="panel table-card" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
         </section>
       </div>`;

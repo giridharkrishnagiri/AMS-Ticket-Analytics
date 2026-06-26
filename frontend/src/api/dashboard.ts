@@ -304,11 +304,13 @@ export type DashboardApplicationRow = {
 
 export type DashboardApplicationsTopActiveUsersPoint = {
   application_name: string;
+  parent_application_name: string;
   active_users: number;
 };
 
 export type DashboardApplicationsTopActiveUsers = {
   top_n: number;
+  duplicate_parent_active_user_count: number;
   points: DashboardApplicationsTopActiveUsersPoint[];
 };
 

@@ -682,17 +682,151 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         assert top_active_users_response.status_code == 200
         top_active_payload = top_active_users_response.json()
         assert top_active_payload["top_n"] == 10
+        assert top_active_payload["duplicate_parent_active_user_count"] == 0
         assert top_active_payload["points"] == [
-            {"application_name": "Service A", "active_users": 1200},
-            {"application_name": "Service C", "active_users": 600},
+            {
+                "application_name": "Parent A",
+                "parent_application_name": "Parent A",
+                "active_users": 1200,
+            },
+            {
+                "application_name": "Parent B",
+                "parent_application_name": "Parent B",
+                "active_users": 600,
+            },
         ]
         assert filtered_top_active_users_response.status_code == 200
         assert filtered_top_active_users_response.json()["points"] == [
-            {"application_name": "Service A", "active_users": 1200},
+            {
+                "application_name": "Parent A",
+                "parent_application_name": "Parent A",
+                "active_users": 1200,
+            },
         ]
         assert lifecycle_filtered_chart_response.status_code == 200
         assert lifecycle_filtered_chart_response.json()["lifecycle_stage"] == []
         assert bad_sort_response.status_code == 400
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_dashboard_top_active_users_groups_by_parent_business_application() -> None:
+    db, client_id, project_id, _, _, _ = create_dashboard_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "Service A1",
+            supported_by_vendor="Vendor A",
+            functional_track="Data",
+            ams_owner="Owner A",
+            assignment_group="IT-SAP-A",
+            application_owner="App Owner A",
+            parent_application_name="Parent A",
+            active_users=1000,
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Service A2 Duplicate Pair",
+            supported_by_vendor="Vendor A",
+            functional_track="Data",
+            ams_owner="Owner A",
+            assignment_group="IT-SAP-A",
+            application_owner="App Owner A",
+            parent_application_name="Parent A",
+            active_users=1000,
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Service A3 Lower Users",
+            supported_by_vendor="Vendor A",
+            functional_track="Data",
+            ams_owner="Owner A",
+            assignment_group="IT-SAP-A",
+            application_owner="App Owner A",
+            parent_application_name="Parent A",
+            active_users=700,
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Service B",
+            supported_by_vendor="Vendor B",
+            functional_track="Run",
+            ams_owner="Owner B",
+            assignment_group="IT-NSA-B",
+            application_owner="App Owner B",
+            parent_application_name="Parent B",
+            active_users=800,
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Service C Inactive",
+            supported_by_vendor="Vendor C",
+            functional_track="Run",
+            ams_owner="Owner C",
+            assignment_group="IT-NSA-C",
+            application_owner="App Owner C",
+            parent_application_name="Parent C",
+            active=False,
+            active_users=2000,
+        )
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "filters": {},
+            "sort": {"column": "business_service_ci_name", "direction": "asc"},
+            "top_n": 20,
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/applications/top-active-users",
+                json=request_body,
+            )
+            filtered_response = client.post(
+                "/api/dashboard/applications/top-active-users",
+                json={
+                    **request_body,
+                    "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
+                    "top_n": 10,
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["top_n"] == 20
+        assert payload["duplicate_parent_active_user_count"] == 1
+        assert payload["points"] == [
+            {
+                "application_name": "Parent A",
+                "parent_application_name": "Parent A",
+                "active_users": 1000,
+            },
+            {
+                "application_name": "Parent B",
+                "parent_application_name": "Parent B",
+                "active_users": 800,
+            },
+        ]
+        assert {point["application_name"] for point in payload["points"]} == {
+            point["parent_application_name"] for point in payload["points"]
+        }
+        assert "Service A1" not in str(payload)
+        assert "Service B" not in str(payload)
+
+        assert filtered_response.status_code == 200
+        assert filtered_response.json()["points"] == [
+            {
+                "application_name": "Parent A",
+                "parent_application_name": "Parent A",
+                "active_users": 1000,
+            },
+        ]
     finally:
         cleanup_client(db, client_id)
 
@@ -1860,7 +1994,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert document.count("Average Monthly SC Tasks by Install Type") == 1
         assert "Incident Resolved Volume by Resolution Duration" in document
         assert "SC Task Closed Volume by Closed Duration" in document
-        assert "Top Applications by Active Users" in document
+        assert "Top Parent Business Applications by Active Users" in document
+        assert "Top Applications by Active Users" not in document
         assert "Tickets per User per Month by Application" in document
         assert "Average Monthly Tickets by SAP / Non-SAP" in document
         assert "Average Monthly Incidents by SAP / Non-SAP" in document
@@ -1928,6 +2063,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function safeRenderSection" in document
         assert "function renderFatalDashboardError" in document
         assert "function inlineSvgComputedStyles" in document
+        assert "function wrapExportText" in document
+        assert "function chartExportText" in document
         assert "function downloadOfflineChartPng" in document
         assert (
             "Future offline charts only need the standard .chart-card + .chart-frame SVG pattern."
