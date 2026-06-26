@@ -867,6 +867,15 @@ function TicketDetailsWorkflow({
       return;
     }
 
+    if (usesProblemChangeWorkflow) {
+      setNormalizeResult(null);
+      setMessage(
+        `${recordLabelPlural} are staged. Review and save the column mapping, then apply mapping to create normalized ${recordLabelPlural.toLowerCase()}.`
+      );
+      setActiveStep("mapping");
+      return;
+    }
+
     const confirmed = window.confirm(
       "This will normalize the selected/uploaded batch data. Raw uploaded files are preserved."
     );
@@ -1336,7 +1345,7 @@ function TicketDetailsWorkflow({
             <p className="label">Normalize</p>
             <h2>
               {usesProblemChangeWorkflow
-                ? `Normalize ${recordLabelPlural}`
+                ? `Review ${recordLabelPlural} Mapping`
                 : "Split In-Scope and Out-of-Scope Tickets"}
             </h2>
           </div>
@@ -1346,11 +1355,19 @@ function TicketDetailsWorkflow({
             type="button"
             onClick={() => void handleNormalizeFiles()}
           >
-            {isNormalizing ? "Normalizing..." : "Normalize Files"}
+            {isNormalizing
+              ? "Normalizing..."
+              : usesProblemChangeWorkflow
+                ? "Continue to Mapping"
+                : "Normalize Files"}
           </button>
         </div>
 
-        {renderWorkflowFileTable({ title: "Files Ready for Normalize" })}
+        {renderWorkflowFileTable({
+          title: usesProblemChangeWorkflow
+            ? "Files Ready for Mapping"
+            : "Files Ready for Normalize",
+        })}
 
         {normalizeResult ? (
           <div className="summary-grid summary-block">
