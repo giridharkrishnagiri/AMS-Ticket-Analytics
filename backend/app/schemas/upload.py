@@ -140,6 +140,8 @@ class UploadBatchNormalizeResultResponse(BaseModel):
     raw_rows: int
     in_scope_inserted: int
     out_of_scope_inserted: int
+    assignment_group_not_in_inventory_rows: int = 0
+    duplicate_skipped_rows: int = 0
     failed_rows: int
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
@@ -149,6 +151,8 @@ class UploadBatchNormalizeTotalsResponse(BaseModel):
     raw_rows: int
     in_scope_inserted: int
     out_of_scope_inserted: int
+    assignment_group_not_in_inventory_rows: int = 0
+    duplicate_skipped_rows: int = 0
     failed_batches: int
 
 
@@ -179,6 +183,7 @@ class UploadBatchApplyMappingFileResponse(BaseModel):
     out_of_scope_rows: int
     blank_assignment_group_rows: int = 0
     assignment_group_not_in_inventory_rows: int = 0
+    duplicate_skipped_rows: int = 0
     failed_rows: int = 0
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
@@ -195,6 +200,7 @@ class UploadBatchApplyMappingTotalsResponse(BaseModel):
     out_of_scope_rows: int
     blank_assignment_group_rows: int
     assignment_group_not_in_inventory_rows: int
+    duplicate_skipped_rows: int = 0
     failed_rows: int
 
 

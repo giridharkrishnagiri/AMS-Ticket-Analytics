@@ -72,6 +72,8 @@ function Maintenance() {
   const [confirmation, setConfirmation] = useState("");
   const [resetIncidents, setResetIncidents] = useState(false);
   const [resetScTasks, setResetScTasks] = useState(false);
+  const [resetProblems, setResetProblems] = useState(false);
+  const [resetChanges, setResetChanges] = useState(false);
   const [resetIncidentSla, setResetIncidentSla] = useState(false);
   const [result, setResult] = useState<OperationalDataResetResponse | null>(null);
   const [scopeSummary, setScopeSummary] = useState<ScopeSummary | null>(null);
@@ -86,7 +88,8 @@ function Maintenance() {
       : resetMode === "project-data"
         ? projectDataConfirmation
         : customerDataConfirmation;
-  const hasSelectedResetCategory = resetIncidents || resetScTasks || resetIncidentSla;
+  const hasSelectedResetCategory =
+    resetIncidents || resetScTasks || resetProblems || resetChanges || resetIncidentSla;
   const canRun =
     Boolean(projectId.trim()) &&
     confirmation === requiredConfirmation &&
@@ -98,6 +101,8 @@ function Maintenance() {
     setConfirmation("");
     setResetIncidents(false);
     setResetScTasks(false);
+    setResetProblems(false);
+    setResetChanges(false);
     setResetIncidentSla(false);
     setResult(null);
     setScopeSummary(null);
@@ -177,6 +182,8 @@ function Maintenance() {
           ? await resetProjectOperationalData(projectId.trim(), confirmation, {
               resetIncidents,
               resetScTasks,
+              resetProblems,
+              resetChanges,
               resetIncidentSla,
             })
           : resetMode === "project-data"
@@ -252,7 +259,7 @@ function Maintenance() {
             onClick={() => handleModeChange("selected-data")}
           >
             <strong>Clear selected data reset</strong>
-            <span>Reset Incidents, SC Tasks, and/or Incident SLA operational data.</span>
+            <span>Reset Incidents, SC Tasks, Problems, Changes, and/or Incident SLA data.</span>
           </button>
           <button
             className={resetMode === "project-data" ? "reset-mode-card active" : "reset-mode-card"}
@@ -291,6 +298,22 @@ function Maintenance() {
                   onChange={(event) => setResetScTasks(event.target.checked)}
                 />
                 <span>SC Tasks</span>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={resetProblems}
+                  onChange={(event) => setResetProblems(event.target.checked)}
+                />
+                <span>Problems</span>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={resetChanges}
+                  onChange={(event) => setResetChanges(event.target.checked)}
+                />
+                <span>Changes</span>
               </label>
               <label className="checkbox-label">
                 <input

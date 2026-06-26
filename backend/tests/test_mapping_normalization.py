@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -7,7 +8,9 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentChangeRecord,
     AssessmentOutOfScopeTicket,
+    AssessmentProblemRecord,
     Client,
     IngestionJob,
     Project,
@@ -16,6 +19,7 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
+from app.services.admin_reset import reset_project_operational_data
 from app.services.batch_classification import derive_is_batch_related
 from app.services.ingestion import build_validation_summary, recalculate_upload_batch_status
 from app.services.mapping import (
@@ -1284,3 +1288,435 @@ def test_business_duration_parsing() -> None:
     assert parse_business_duration_seconds("not a duration") is None
     assert parse_business_duration_seconds("2 days 3 hours") == 183600
     assert parse_business_duration_seconds("1 02:03:04") == 93784
+
+
+def test_problem_register_mapping_inserts_separate_records_and_enriches_inventory() -> None:
+    rows = [
+        in_scope_raw(
+            {
+                "number": "PRB001",
+                "problem_statement": "Recurring payroll failure",
+                "state": "Open",
+                "problem_state": "Assess",
+                "priority": "2 - High",
+                "created": "2026-05-01 08:00:00",
+                "opened": "2026-05-01 08:30:00",
+                "business_duration": "86400",
+                "duration": "172800",
+                "made_sla": "true",
+                "major_problem": "Y",
+                "known_error": "N",
+                "workaround": "Restart integration",
+            }
+        )
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
+        rows,
+        ticket_type="PROBLEM",
+    )
+    mapping = {
+        "number": "number",
+        "problem_statement": "problem_statement",
+        "state": "state",
+        "problem_state": "problem_state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "priority": "priority",
+        "created_at_source": "created",
+        "opened_at": "opened",
+        "business_duration_seconds": "business_duration",
+        "duration_seconds": "duration",
+        "made_sla": "made_sla",
+        "major_problem": "major_problem",
+        "known_error": "known_error",
+        "workaround": "workaround",
+    }
+
+    try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
+
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        problem = db.scalar(
+            select(AssessmentProblemRecord).where(
+                AssessmentProblemRecord.project_id == project_id
+            )
+        )
+
+        assert result.normalized_ticket_count == 1
+        assert result.out_of_scope_ticket_count == 0
+        assert result.duplicate_skipped_count == 0
+        assert db.scalar(select(func.count(Ticket.id)).where(Ticket.project_id == project_id)) == 0
+        assert (
+            db.scalar(
+                select(func.count(AssessmentOutOfScopeTicket.id)).where(
+                    AssessmentOutOfScopeTicket.project_id == project_id
+                )
+            )
+            == 0
+        )
+        assert problem is not None
+        assert problem.number == "PRB001"
+        assert problem.priority == "P2"
+        assert problem.business_duration_seconds == 86400
+        assert problem.duration_seconds == 172800
+        assert problem.made_sla is True
+        assert problem.major_problem is True
+        assert problem.known_error is False
+        assert problem.workaround == "Restart integration"
+        assert problem.application_inventory_match_status == "matched"
+        assert problem.functional_track == "Mapping Track"
+        assert problem.ams_owner == "Mapping AMS Owner"
+        assert problem.architecture_type == "Vendor Managed"
+        assert problem.install_type == "Cloud"
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_change_register_mapping_inserts_separate_records_and_preserves_links() -> None:
+    rows = [
+        in_scope_raw(
+            {
+                "number": "CHG001",
+                "short_description": "Payroll release",
+                "type": "Normal",
+                "state": "Closed",
+                "phase": "Review",
+                "phase_state": "Complete",
+                "priority": "3 - Moderate",
+                "risk": "Medium",
+                "risk_value": "3",
+                "created": "2026-05-02",
+                "opened": "2026-05-02",
+                "planned_start_date": "2026-05-03",
+                "planned_end_date": "2026-05-04",
+                "closed": "2026-05-05",
+                "business_duration": "2 days",
+                "made_sla": "yes",
+                "unauthorized": "no",
+                "outside_maintenance_schedule": "false",
+                "cab_required": "true",
+                "cab_date": "2026-05-02 09:00:00",
+                "incident": "INC001",
+                "problem": "PRB001",
+                "implementation_plan": "Deploy",
+                "backout_plan": "Rollback",
+                "test_plan": "Smoke test",
+            }
+        )
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
+        rows,
+        ticket_type="CHANGE",
+    )
+    mapping = {
+        "number": "number",
+        "short_description": "short_description",
+        "type": "type",
+        "state": "state",
+        "phase": "phase",
+        "phase_state": "phase_state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "priority": "priority",
+        "risk": "risk",
+        "risk_value": "risk_value",
+        "created_at_source": "created",
+        "opened_at": "opened",
+        "planned_start_at": "planned_start_date",
+        "planned_end_at": "planned_end_date",
+        "closed_at": "closed",
+        "business_duration_seconds": "business_duration",
+        "made_sla": "made_sla",
+        "unauthorized": "unauthorized",
+        "outside_maintenance_schedule": "outside_maintenance_schedule",
+        "cab_required": "cab_required",
+        "cab_date": "cab_date",
+        "incident": "incident",
+        "problem": "problem",
+        "implementation_plan": "implementation_plan",
+        "backout_plan": "backout_plan",
+        "test_plan": "test_plan",
+    }
+
+    try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
+
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        change = db.scalar(
+            select(AssessmentChangeRecord).where(AssessmentChangeRecord.project_id == project_id)
+        )
+
+        assert result.normalized_ticket_count == 1
+        assert result.out_of_scope_ticket_count == 0
+        assert db.scalar(select(func.count(Ticket.id)).where(Ticket.project_id == project_id)) == 0
+        assert change is not None
+        assert change.number == "CHG001"
+        assert change.priority == "P3"
+        assert change.business_duration_seconds == 172800
+        assert change.made_sla is True
+        assert change.unauthorized is False
+        assert change.outside_maintenance_schedule is False
+        assert change.cab_required is True
+        assert change.incident == "INC001"
+        assert change.problem == "PRB001"
+        assert change.implementation_plan == "Deploy"
+        assert change.application_inventory_match_status == "matched"
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_problem_duplicate_upload_rows_are_skipped_by_project_fingerprint() -> None:
+    row = in_scope_raw({"number": "PRB-DUP", "problem_statement": "Duplicate"})
+    db, client_id, project_id, first_batch_id, _, first_raw_rows = create_raw_batch_fixture(
+        [row],
+        ticket_type="PROBLEM",
+    )
+    second_batch_id = add_upload_batch_with_raw_rows(
+        db,
+        project_id,
+        [row],
+        "PROBLEM",
+        "problem-duplicate-second",
+    )
+    mapping = {
+        "number": "number",
+        "problem_statement": "problem_statement",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+    }
+
+    try:
+        add_application_inventory_scope(db, project_id)
+        first_raw_rows[0].row_hash = "same-problem-row"
+        second_raw_row = db.scalar(
+            select(TicketRawRow).where(TicketRawRow.upload_batch_id == second_batch_id)
+        )
+        assert second_raw_row is not None
+        second_raw_row.row_hash = "same-problem-row"
+        db.commit()
+
+        first_result = apply_mapping_to_batch(db, first_batch_id, mapping)
+        second_result = apply_mapping_to_batch(db, second_batch_id, mapping)
+
+        assert first_result.normalized_ticket_count == 1
+        assert first_result.duplicate_skipped_count == 0
+        assert second_result.normalized_ticket_count == 0
+        assert second_result.duplicate_skipped_count == 1
+        assert (
+            db.scalar(
+                select(func.count(AssessmentProblemRecord.id)).where(
+                    AssessmentProblemRecord.project_id == project_id
+                )
+            )
+            == 1
+        )
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_selected_reset_clears_problem_or_change_without_ticket_tables() -> None:
+    problem_row = in_scope_raw({"number": "PRB-RESET", "problem_statement": "Problem"})
+    change_row = in_scope_raw({"number": "CHG-RESET", "short_description": "Change"})
+    db, client_id, project_id, problem_batch_id, _, _ = create_raw_batch_fixture(
+        [problem_row],
+        ticket_type="PROBLEM",
+    )
+    change_batch_id = add_upload_batch_with_raw_rows(
+        db,
+        project_id,
+        [change_row],
+        "CHANGE",
+        "change-reset",
+    )
+    ticket_batch_id = add_upload_batch_with_raw_rows(
+        db,
+        project_id,
+        [
+            in_scope_raw(
+                {
+                    "number": "INC-RESET",
+                    "short_description": "Incident",
+                    "sys_created_on": "2026-05-01",
+                }
+            )
+        ],
+        "INCIDENT",
+        "incident-reset",
+    )
+
+    try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
+        apply_mapping_to_batch(
+            db,
+            problem_batch_id,
+            {
+                "number": "number",
+                "problem_statement": "problem_statement",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
+            },
+        )
+        apply_mapping_to_batch(
+            db,
+            change_batch_id,
+            {
+                "number": "number",
+                "short_description": "short_description",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
+            },
+        )
+        apply_mapping_to_batch(
+            db,
+            ticket_batch_id,
+            {
+                "ticket_id": "number",
+                "title": "short_description",
+                "assignment_group": "assignment_group",
+                "business_service": "business_service",
+                "created_at": "sys_created_on",
+            },
+        )
+
+        result = reset_project_operational_data(
+            db,
+            project_id,
+            "RESET OPERATIONAL DATA",
+            reset_problems=True,
+        )
+
+        assert result.reset_problems is True
+        assert result.reset_changes is False
+        assert (
+            db.scalar(
+                select(func.count(AssessmentProblemRecord.id)).where(
+                    AssessmentProblemRecord.project_id == project_id
+                )
+            )
+            == 0
+        )
+        assert (
+            db.scalar(
+                select(func.count(AssessmentChangeRecord.id)).where(
+                    AssessmentChangeRecord.project_id == project_id
+                )
+            )
+            == 1
+        )
+        assert db.scalar(select(func.count(Ticket.id)).where(Ticket.project_id == project_id)) == 1
+
+        reset_project_operational_data(
+            db,
+            project_id,
+            "RESET OPERATIONAL DATA",
+            reset_changes=True,
+        )
+        assert (
+            db.scalar(
+                select(func.count(AssessmentChangeRecord.id)).where(
+                    AssessmentChangeRecord.project_id == project_id
+                )
+            )
+            == 0
+        )
+        assert db.scalar(select(func.count(Ticket.id)).where(Ticket.project_id == project_id)) == 1
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_dashboard_generic_ticket_counts_ignore_problem_and_change_records() -> None:
+    db, client_id, project_id, upload_batch_id, uploaded_file_id, _ = (
+        create_raw_batch_fixture([])
+    )
+    try:
+        db.add_all(
+            [
+                Ticket(
+                    project_id=project_id,
+                    upload_batch_id=upload_batch_id,
+                    uploaded_file_id=uploaded_file_id,
+                    ticket_number="INC-DASH",
+                    ticket_type="INCIDENT",
+                    month_key="2026-05",
+                    created_at=datetime(2026, 5, 1, tzinfo=UTC),
+                    resolved_at=datetime(2026, 5, 2, tzinfo=UTC),
+                    short_description="Incident",
+                    state="Resolved",
+                    priority="P3",
+                    assignment_group=IN_SCOPE_ASSIGNMENT_GROUP,
+                    business_service=IN_SCOPE_BUSINESS_SERVICE,
+                    reopen_count=0,
+                    normalized_payload={},
+                ),
+                Ticket(
+                    project_id=project_id,
+                    upload_batch_id=upload_batch_id,
+                    uploaded_file_id=uploaded_file_id,
+                    ticket_number="SCTASK-DASH",
+                    ticket_type="SERVICE_CATALOG_TASK",
+                    month_key="2026-05",
+                    created_at=datetime(2026, 5, 1, tzinfo=UTC),
+                    closed_at=datetime(2026, 5, 3, tzinfo=UTC),
+                    short_description="SC Task",
+                    state="Closed",
+                    priority="P4",
+                    assignment_group=IN_SCOPE_ASSIGNMENT_GROUP,
+                    business_service=IN_SCOPE_BUSINESS_SERVICE,
+                    reopen_count=0,
+                    normalized_payload={},
+                ),
+            ]
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            before_response = client.get(
+                "/api/dashboard/overview",
+                params={"project_id": str(project_id)},
+            )
+        assert before_response.status_code == 200
+        before_tickets = before_response.json()["tickets"]
+
+        db.add_all(
+            [
+                AssessmentProblemRecord(
+                    project_id=project_id,
+                    upload_batch_id=upload_batch_id,
+                    uploaded_file_id=uploaded_file_id,
+                    row_fingerprint="dashboard-problem",
+                    number="PRB-DASH",
+                    source_row_number=1,
+                    assignment_group=IN_SCOPE_ASSIGNMENT_GROUP,
+                    business_service=IN_SCOPE_BUSINESS_SERVICE,
+                    normalized_payload={},
+                ),
+                AssessmentChangeRecord(
+                    project_id=project_id,
+                    upload_batch_id=upload_batch_id,
+                    uploaded_file_id=uploaded_file_id,
+                    row_fingerprint="dashboard-change",
+                    number="CHG-DASH",
+                    source_row_number=2,
+                    assignment_group=IN_SCOPE_ASSIGNMENT_GROUP,
+                    business_service=IN_SCOPE_BUSINESS_SERVICE,
+                    normalized_payload={},
+                ),
+            ]
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            after_response = client.get(
+                "/api/dashboard/overview",
+                params={"project_id": str(project_id)},
+            )
+        assert after_response.status_code == 200
+        after_tickets = after_response.json()["tickets"]
+
+        assert db.scalar(select(func.count(Ticket.id)).where(Ticket.project_id == project_id)) == 2
+        assert after_tickets == before_tickets
+    finally:
+        cleanup_client(db, client_id)

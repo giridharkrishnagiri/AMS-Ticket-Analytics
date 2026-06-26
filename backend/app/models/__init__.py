@@ -8,6 +8,7 @@ from app.models.export_job import ExportJob
 from app.models.incident_sla_row import IncidentSlaRow
 from app.models.incident_sla_upload import IncidentSlaUpload
 from app.models.ingestion_job import IngestionJob
+from app.models.problem_change_record import AssessmentChangeRecord, AssessmentProblemRecord
 from app.models.project import Project
 from app.models.source_column_mapping import SourceColumnMapping
 from app.models.ticket import Ticket
@@ -27,6 +28,8 @@ __all__ = [
     "IncidentSlaRow",
     "IncidentSlaUpload",
     "Project",
+    "AssessmentChangeRecord",
+    "AssessmentProblemRecord",
     "SourceColumnMapping",
     "Ticket",
     "TicketRawRow",

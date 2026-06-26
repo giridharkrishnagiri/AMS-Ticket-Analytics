@@ -6,6 +6,8 @@ export type OperationalDataResetResponse = {
   preserved: string[];
   reset_incidents?: boolean | null;
   reset_sc_tasks?: boolean | null;
+  reset_problems?: boolean | null;
+  reset_changes?: boolean | null;
   reset_incident_sla?: boolean | null;
   incident_sla_reset_reason?: string | null;
 };
@@ -26,6 +28,8 @@ export function resetProjectOperationalData(
   options: {
     resetIncidents: boolean;
     resetScTasks: boolean;
+    resetProblems: boolean;
+    resetChanges: boolean;
     resetIncidentSla: boolean;
   }
 ): Promise<OperationalDataResetResponse> {
@@ -37,6 +41,8 @@ export function resetProjectOperationalData(
       confirmation,
       reset_incidents: options.resetIncidents,
       reset_sc_tasks: options.resetScTasks,
+      reset_problems: options.resetProblems,
+      reset_changes: options.resetChanges,
       reset_incident_sla: options.resetIncidentSla,
     }),
   });

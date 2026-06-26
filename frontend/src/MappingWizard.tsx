@@ -19,9 +19,11 @@ import { formatDisplayDate, formatDisplayMonth } from "./utils/dateFormat";
 const ticketTypeOptions = [
   { label: "Incident", value: "INCIDENT" },
   { label: "Service Catalog Task", value: "SERVICE_CATALOG_TASK" },
+  { label: "Problem", value: "PROBLEM" },
+  { label: "Change", value: "CHANGE" },
 ];
 
-const normalizedFields = [
+const ticketNormalizedFields = [
   "ticket_id",
   "title",
   "description",
@@ -50,7 +52,106 @@ const normalizedFields = [
   "resolution_notes",
 ];
 
-const importantFields = ["ticket_id", "title", "created_at"];
+const problemNormalizedFields = [
+  "number",
+  "state",
+  "problem_statement",
+  "business_application",
+  "business_service",
+  "configuration_item",
+  "category",
+  "subcategory",
+  "assignment_group",
+  "assigned_to",
+  "urgency",
+  "priority",
+  "active",
+  "created_at_source",
+  "opened_at",
+  "actual_start_at",
+  "actual_end_at",
+  "closed_at",
+  "resolved_at",
+  "business_duration_seconds",
+  "duration_seconds",
+  "made_sla",
+  "major_incident",
+  "major_problem",
+  "known_error",
+  "related_incidents",
+  "change_request",
+  "caused_by_change",
+  "problem_state",
+  "close_notes",
+  "cause_notes",
+  "fix_notes",
+  "workaround",
+  "description",
+];
+
+const changeNormalizedFields = [
+  "number",
+  "short_description",
+  "type",
+  "state",
+  "phase",
+  "phase_state",
+  "business_application",
+  "business_service",
+  "application_name",
+  "affected_ci_service",
+  "category",
+  "assignment_group",
+  "assigned_to",
+  "priority",
+  "urgency",
+  "impact",
+  "risk",
+  "risk_value",
+  "vendor",
+  "created_at_source",
+  "opened_at",
+  "planned_start_at",
+  "planned_end_at",
+  "actual_start_at",
+  "actual_end_at",
+  "closed_at",
+  "business_duration_seconds",
+  "duration_seconds",
+  "made_sla",
+  "unauthorized",
+  "outside_maintenance_schedule",
+  "cab_required",
+  "cab_approval",
+  "cab_date",
+  "change_reason",
+  "close_code",
+  "close_code_sub_category",
+  "incident",
+  "problem",
+  "caused_by_change",
+  "implementation_plan",
+  "backout_plan",
+  "test_plan",
+  "communication_plan",
+];
+
+function normalizedFieldsForTicketType(ticketType: string): string[] {
+  if (ticketType === "PROBLEM") {
+    return problemNormalizedFields;
+  }
+  if (ticketType === "CHANGE") {
+    return changeNormalizedFields;
+  }
+  return ticketNormalizedFields;
+}
+
+function importantFieldsForTicketType(ticketType: string): string[] {
+  if (ticketType === "PROBLEM" || ticketType === "CHANGE") {
+    return ["number"];
+  }
+  return ["ticket_id", "title", "created_at"];
+}
 
 function formatBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) {
@@ -105,6 +206,15 @@ function MappingWizard() {
   const [isApplyingMapping, setIsApplyingMapping] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const normalizedFields = useMemo(
+    () => normalizedFieldsForTicketType(ticketType),
+    [ticketType]
+  );
+  const importantFields = useMemo(
+    () => importantFieldsForTicketType(ticketType),
+    [ticketType]
+  );
+  const isProblemOrChange = ticketType === "PROBLEM" || ticketType === "CHANGE";
 
   const knownProjectIds = useMemo(
     () => Array.from(new Set(batches.map((batch) => batch.project_id))),
@@ -229,6 +339,7 @@ function MappingWizard() {
     return warnings;
   }, [
     applyScope,
+    importantFields,
     mapping,
     projectId,
     selectedBatch,
@@ -392,10 +503,11 @@ function MappingWizard() {
           applyScope === "TICKET_TYPE" ? true : rememberMapping,
       });
       setApplyResult(result);
+      const outputNoun = isProblemOrChange ? "record(s)" : "ticket(s)";
       setMessage(
         applyScope === "TICKET_TYPE"
-          ? `Normalized ${result.normalized_ticket_count} ticket(s) across ${result.batch_results.length} batch(es).`
-          : "Normalized tickets created for the selected batch."
+          ? `Normalized ${result.normalized_ticket_count} ${outputNoun} across ${result.batch_results.length} batch(es); skipped ${result.duplicate_skipped_count} duplicate row(s).`
+          : `Normalized ${outputNoun} for the selected batch; skipped ${result.duplicate_skipped_count} duplicate row(s).`
       );
       await refreshBatches();
     } catch (requestError) {
@@ -701,8 +813,12 @@ function MappingWizard() {
                 <strong>{applyResult.total_raw_rows}</strong>
               </div>
               <div>
-                <p className="label">Tickets Created</p>
+                <p className="label">{isProblemOrChange ? "Records Created" : "Tickets Created"}</p>
                 <strong>{applyResult.normalized_ticket_count}</strong>
+              </div>
+              <div>
+                <p className="label">Duplicates Skipped</p>
+                <strong>{applyResult.duplicate_skipped_count}</strong>
               </div>
               <div>
                 <p className="label">Failed Rows</p>
@@ -725,7 +841,8 @@ function MappingWizard() {
                     <th>Batch</th>
                     <th>Status</th>
                     <th>Total Raw Rows</th>
-                    <th>Tickets Created</th>
+                    <th>{isProblemOrChange ? "Records Created" : "Tickets Created"}</th>
+                    <th>Duplicates Skipped</th>
                     <th>Failed Rows</th>
                     <th>Warnings</th>
                     <th>Errors</th>
@@ -741,6 +858,7 @@ function MappingWizard() {
                       <td>{batchResult.status ?? "Not available"}</td>
                       <td>{batchResult.total_raw_rows}</td>
                       <td>{batchResult.normalized_ticket_count}</td>
+                      <td>{batchResult.duplicate_skipped_count}</td>
                       <td>{batchResult.failed_row_count}</td>
                       <td>{batchResult.warnings.length}</td>
                       <td>{batchResult.errors.length}</td>

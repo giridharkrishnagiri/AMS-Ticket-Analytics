@@ -15,6 +15,8 @@ class OperationalDataResetResponse(BaseModel):
     preserved: list[str]
     reset_incidents: bool | None = None
     reset_sc_tasks: bool | None = None
+    reset_problems: bool | None = None
+    reset_changes: bool | None = None
     reset_incident_sla: bool | None = None
     incident_sla_reset_reason: str | None = None
 
@@ -24,6 +26,8 @@ class ProjectOperationalDataResetRequest(BaseModel):
     confirmation: str
     reset_incidents: bool = False
     reset_sc_tasks: bool = False
+    reset_problems: bool = False
+    reset_changes: bool = False
     reset_incident_sla: bool = False
 
 

@@ -6,7 +6,13 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Ticket, UploadBatch
+from app.models import (
+    AssessmentChangeRecord,
+    AssessmentProblemRecord,
+    Ticket,
+    UploadBatch,
+    UploadedFile,
+)
 
 BATCH_STATUS_UPLOADED = "UPLOADED"
 BATCH_STATUS_INGESTING = "INGESTING"
@@ -33,6 +39,31 @@ def utc_now() -> datetime:
 
 
 def count_normalized_tickets(db: Session, upload_batch_id: UUID) -> int:
+    ticket_type = db.scalar(
+        select(UploadedFile.ticket_type)
+        .where(UploadedFile.upload_batch_id == upload_batch_id)
+        .order_by(UploadedFile.created_at.asc())
+        .limit(1)
+    )
+    normalized_ticket_type = str(ticket_type).strip().upper() if ticket_type else ""
+    if normalized_ticket_type == "PROBLEM":
+        return int(
+            db.scalar(
+                select(func.count(AssessmentProblemRecord.id)).where(
+                    AssessmentProblemRecord.upload_batch_id == upload_batch_id
+                )
+            )
+            or 0
+        )
+    if normalized_ticket_type == "CHANGE":
+        return int(
+            db.scalar(
+                select(func.count(AssessmentChangeRecord.id)).where(
+                    AssessmentChangeRecord.upload_batch_id == upload_batch_id
+                )
+            )
+            or 0
+        )
     return int(
         db.scalar(select(func.count(Ticket.id)).where(Ticket.upload_batch_id == upload_batch_id))
         or 0

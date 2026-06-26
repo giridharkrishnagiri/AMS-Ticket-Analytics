@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from app.models import (
     ApplicationDimension,
     ApplicationInventoryItem,
+    AssessmentChangeRecord,
     AssessmentOutOfScopeTicket,
+    AssessmentProblemRecord,
     Client,
     DashboardAggregate,
     ExportJob,
@@ -52,6 +54,8 @@ class OperationalResetResult:
     updated_counts: dict[str, int] | None = None
     reset_incidents: bool | None = None
     reset_sc_tasks: bool | None = None
+    reset_problems: bool | None = None
+    reset_changes: bool | None = None
     reset_incident_sla: bool | None = None
     incident_sla_reset_reason: str | None = None
 
@@ -80,6 +84,8 @@ RESET_MODELS: tuple[tuple[str, Any], ...] = (
     ("export_jobs", ExportJob),
     ("tickets", Ticket),
     ("assessment_out_of_scope_tickets", AssessmentOutOfScopeTicket),
+    ("assessment_problem_records", AssessmentProblemRecord),
+    ("assessment_change_records", AssessmentChangeRecord),
     ("incident_sla_rows", IncidentSlaRow),
     ("incident_sla_uploads", IncidentSlaUpload),
     ("ticket_raw_rows", TicketRawRow),
@@ -94,6 +100,8 @@ PROJECT_OPERATIONAL_MODELS: tuple[tuple[str, Any], ...] = (
     ("export_jobs", ExportJob),
     ("tickets", Ticket),
     ("assessment_out_of_scope_tickets", AssessmentOutOfScopeTicket),
+    ("assessment_problem_records", AssessmentProblemRecord),
+    ("assessment_change_records", AssessmentChangeRecord),
     ("incident_sla_rows", IncidentSlaRow),
     ("incident_sla_uploads", IncidentSlaUpload),
     ("ticket_raw_rows", TicketRawRow),
@@ -403,6 +411,63 @@ def clear_project_ticket_type_operational_data(
     return deleted_counts
 
 
+def clear_project_problem_change_operational_data(
+    db: Session,
+    project_id: UUID,
+    ticket_type: str,
+) -> dict[str, int]:
+    normalized_ticket_type = ticket_type.strip().upper()
+    if normalized_ticket_type == "PROBLEM":
+        table_name = "assessment_problem_records"
+        model = AssessmentProblemRecord
+    elif normalized_ticket_type == "CHANGE":
+        table_name = "assessment_change_records"
+        model = AssessmentChangeRecord
+    else:
+        return {}
+
+    uploaded_file_ids = uploaded_file_ids_for_project_ticket_types(
+        db,
+        project_id,
+        [normalized_ticket_type],
+    )
+    upload_batch_ids = upload_batch_ids_for_project_ticket_types(
+        db,
+        project_id,
+        [normalized_ticket_type],
+    )
+    deleted_counts = {
+        table_name: count_project_rows(db, model, [project_id]),
+        "ticket_raw_rows": count_ticket_type_rows(
+            db,
+            TicketRawRow,
+            project_id,
+            [normalized_ticket_type],
+        ),
+        "ingestion_jobs": count_ingestion_jobs_for_file_or_batch_ids(
+            db,
+            uploaded_file_ids,
+            upload_batch_ids,
+        ),
+        "uploaded_files": len(uploaded_file_ids),
+        "upload_batches": len(upload_batch_ids),
+    }
+
+    db.execute(delete(model).where(model.project_id == project_id))
+    delete_ingestion_jobs_for_file_or_batch_ids(db, uploaded_file_ids, upload_batch_ids)
+    db.execute(
+        delete(TicketRawRow).where(
+            TicketRawRow.project_id == project_id,
+            TicketRawRow.ticket_type == normalized_ticket_type,
+        )
+    )
+    if uploaded_file_ids:
+        db.execute(delete(UploadedFile).where(UploadedFile.id.in_(uploaded_file_ids)))
+    if upload_batch_ids:
+        db.execute(delete(UploadBatch).where(UploadBatch.id.in_(upload_batch_ids)))
+    return deleted_counts
+
+
 def clear_project_operational_tables(
     db: Session,
     project_ids: list[UUID],
@@ -463,12 +528,16 @@ def reset_project_operational_data(
     *,
     reset_incidents: bool = False,
     reset_sc_tasks: bool = False,
+    reset_problems: bool = False,
+    reset_changes: bool = False,
     reset_incident_sla: bool = False,
 ) -> OperationalResetResult:
     legacy_full_reset = (
         confirmation == PROJECT_RESET_CONFIRMATION
         and not reset_incidents
         and not reset_sc_tasks
+        and not reset_problems
+        and not reset_changes
         and not reset_incident_sla
     )
     if confirmation != RESET_CONFIRMATION and not legacy_full_reset:
@@ -478,8 +547,16 @@ def reset_project_operational_data(
     if legacy_full_reset:
         reset_incidents = True
         reset_sc_tasks = True
+        reset_problems = True
+        reset_changes = True
         reset_incident_sla = True
-    if not reset_incidents and not reset_sc_tasks and not reset_incident_sla:
+    if (
+        not reset_incidents
+        and not reset_sc_tasks
+        and not reset_problems
+        and not reset_changes
+        and not reset_incident_sla
+    ):
         raise AdminResetError("Select at least one operational data category to reset.")
 
     incident_sla_reset_reason = None
@@ -502,6 +579,14 @@ def reset_project_operational_data(
             deleted_counts.update(
                 clear_project_ticket_type_operational_data(db, project_id, ticket_types)
             )
+        if reset_problems:
+            deleted_counts.update(
+                clear_project_problem_change_operational_data(db, project_id, "PROBLEM")
+            )
+        if reset_changes:
+            deleted_counts.update(
+                clear_project_problem_change_operational_data(db, project_id, "CHANGE")
+            )
         if reset_incident_sla:
             sla_deleted_counts, sla_updated_counts = clear_incident_sla_data(db, project_id)
             deleted_counts.update(sla_deleted_counts)
@@ -517,6 +602,8 @@ def reset_project_operational_data(
         preserved=PROJECT_OPERATIONAL_PRESERVED_TABLES,
         reset_incidents=reset_incidents,
         reset_sc_tasks=reset_sc_tasks,
+        reset_problems=reset_problems,
+        reset_changes=reset_changes,
         reset_incident_sla=reset_incident_sla,
         incident_sla_reset_reason=incident_sla_reset_reason,
     )

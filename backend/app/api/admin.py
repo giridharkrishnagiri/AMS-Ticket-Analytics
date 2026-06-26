@@ -58,6 +58,8 @@ def post_reset_project_operational_data(
             request.confirmation,
             reset_incidents=request.reset_incidents,
             reset_sc_tasks=request.reset_sc_tasks,
+            reset_problems=request.reset_problems,
+            reset_changes=request.reset_changes,
             reset_incident_sla=request.reset_incident_sla,
         )
     except AdminResetError as exc:
@@ -69,6 +71,8 @@ def post_reset_project_operational_data(
         preserved=result.preserved,
         reset_incidents=result.reset_incidents,
         reset_sc_tasks=result.reset_sc_tasks,
+        reset_problems=result.reset_problems,
+        reset_changes=result.reset_changes,
         reset_incident_sla=result.reset_incident_sla,
         incident_sla_reset_reason=result.incident_sla_reset_reason,
     )

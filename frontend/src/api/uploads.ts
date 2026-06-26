@@ -116,6 +116,8 @@ export type UploadBatchNormalizeResult = {
   raw_rows: number;
   in_scope_inserted: number;
   out_of_scope_inserted: number;
+  assignment_group_not_in_inventory_rows: number;
+  duplicate_skipped_rows: number;
   failed_rows: number;
   warnings: string[];
   errors: string[];
@@ -129,6 +131,8 @@ export type UploadBatchNormalizeMultipleResponse = {
     raw_rows: number;
     in_scope_inserted: number;
     out_of_scope_inserted: number;
+    assignment_group_not_in_inventory_rows: number;
+    duplicate_skipped_rows: number;
     failed_batches: number;
   };
 };
@@ -143,6 +147,7 @@ export type UploadBatchApplyMappingFile = {
   out_of_scope_rows: number;
   blank_assignment_group_rows: number;
   assignment_group_not_in_inventory_rows: number;
+  duplicate_skipped_rows: number;
   failed_rows: number;
   warnings: string[];
   errors: string[];
@@ -163,6 +168,7 @@ export type UploadBatchApplyMappingMultipleResponse = {
     out_of_scope_rows: number;
     blank_assignment_group_rows: number;
     assignment_group_not_in_inventory_rows: number;
+    duplicate_skipped_rows: number;
     failed_rows: number;
   };
 };

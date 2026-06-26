@@ -201,6 +201,7 @@ def apply_mapping(
         assignment_group_not_in_inventory_count=(
             result.assignment_group_not_in_inventory_count
         ),
+        duplicate_skipped_count=result.duplicate_skipped_count,
         failed_row_count=result.failed_row_count,
         warnings=result.warnings,
         errors=result.errors,
@@ -245,6 +246,7 @@ def apply_mapping_for_scope(
         assignment_group_not_in_inventory_count=(
             result.assignment_group_not_in_inventory_count
         ),
+        duplicate_skipped_count=result.duplicate_skipped_count,
         failed_row_count=result.failed_row_count,
         warnings=result.warnings,
         errors=result.errors,

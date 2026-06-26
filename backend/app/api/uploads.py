@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import (
+    AssessmentChangeRecord,
     AssessmentOutOfScopeTicket,
+    AssessmentProblemRecord,
     IngestionJob,
     Project,
     Ticket,
@@ -101,12 +103,46 @@ def get_count(db: Session, statement) -> int:
 
 
 def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
+    upload_batch = db.get(UploadBatch, upload_batch_id)
+    ticket_type = (get_batch_ticket_type(db, upload_batch_id) or "").strip().upper()
     raw_rows = get_count(
         db,
         select(func.count(TicketRawRow.id)).where(
             TicketRawRow.upload_batch_id == upload_batch_id
         ),
     )
+    if ticket_type in {"PROBLEM", "CHANGE"}:
+        model = AssessmentProblemRecord if ticket_type == "PROBLEM" else AssessmentChangeRecord
+        normalized_rows = get_count(
+            db,
+            select(func.count(model.id)).where(model.upload_batch_id == upload_batch_id),
+        )
+        unmatched_rows = get_count(
+            db,
+            select(func.count(model.id)).where(
+                model.upload_batch_id == upload_batch_id,
+                model.application_inventory_match_status == "unmatched",
+            ),
+        )
+        output_rows = normalized_rows
+        effective_output_rows = (
+            raw_rows
+            if upload_batch is not None and upload_batch.status == BATCH_STATUS_NORMALIZED
+            else output_rows
+        )
+        return {
+            "raw_rows": raw_rows,
+            "in_scope_rows": normalized_rows,
+            "out_of_scope_rows": 0,
+            "blank_assignment_group_rows": 0,
+            "assignment_group_not_in_inventory_rows": unmatched_rows,
+            "duplicate_skipped_rows": max(raw_rows - output_rows, 0)
+            if upload_batch is not None and upload_batch.status == BATCH_STATUS_NORMALIZED
+            else 0,
+            "failed_rows": max(raw_rows - effective_output_rows, 0),
+            "output_rows": effective_output_rows,
+        }
+
     in_scope_rows = get_count(
         db,
         select(func.count(Ticket.id)).where(Ticket.upload_batch_id == upload_batch_id),
@@ -139,6 +175,7 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
         "out_of_scope_rows": out_of_scope_rows,
         "blank_assignment_group_rows": blank_assignment_group_rows,
         "assignment_group_not_in_inventory_rows": assignment_group_not_in_inventory_rows,
+        "duplicate_skipped_rows": 0,
         "failed_rows": max(raw_rows - output_rows, 0),
         "output_rows": output_rows,
     }
@@ -163,6 +200,7 @@ def build_apply_mapping_totals(
         assignment_group_not_in_inventory_rows=sum(
             file.assignment_group_not_in_inventory_rows for file in files
         ),
+        duplicate_skipped_rows=sum(file.duplicate_skipped_rows for file in files),
         failed_rows=sum(file.failed_rows for file in files),
     )
 
@@ -876,6 +914,10 @@ def normalize_upload_batches(
                     raw_rows=result.total_raw_rows,
                     in_scope_inserted=result.normalized_ticket_count,
                     out_of_scope_inserted=result.out_of_scope_ticket_count,
+                    assignment_group_not_in_inventory_rows=(
+                        result.assignment_group_not_in_inventory_count
+                    ),
+                    duplicate_skipped_rows=result.duplicate_skipped_count,
                     failed_rows=result.failed_row_count,
                     warnings=result.warnings,
                     errors=[
@@ -916,6 +958,10 @@ def normalize_upload_batches(
             raw_rows=sum(result.raw_rows for result in results),
             in_scope_inserted=sum(result.in_scope_inserted for result in results),
             out_of_scope_inserted=sum(result.out_of_scope_inserted for result in results),
+            assignment_group_not_in_inventory_rows=sum(
+                result.assignment_group_not_in_inventory_rows for result in results
+            ),
+            duplicate_skipped_rows=sum(result.duplicate_skipped_rows for result in results),
             failed_batches=sum(
                 1
                 for result in results
@@ -1012,6 +1058,7 @@ def apply_mapping_to_upload_batches(
                     assignment_group_not_in_inventory_rows=counts[
                         "assignment_group_not_in_inventory_rows"
                     ],
+                    duplicate_skipped_rows=counts["duplicate_skipped_rows"],
                     failed_rows=counts["failed_rows"],
                     error=(
                         f"Batch ticket type is {batch_ticket_type}, not "
@@ -1037,6 +1084,7 @@ def apply_mapping_to_upload_batches(
                         assignment_group_not_in_inventory_rows=counts[
                             "assignment_group_not_in_inventory_rows"
                         ],
+                        duplicate_skipped_rows=counts["duplicate_skipped_rows"],
                         failed_rows=0,
                         warnings=["Batch already has complete mapped output and was skipped."],
                     )
@@ -1055,6 +1103,7 @@ def apply_mapping_to_upload_batches(
                         assignment_group_not_in_inventory_rows=counts[
                             "assignment_group_not_in_inventory_rows"
                         ],
+                        duplicate_skipped_rows=counts["duplicate_skipped_rows"],
                         failed_rows=counts["failed_rows"],
                         error=(
                             "Batch has partial mapped output. It was not reprocessed "
@@ -1084,6 +1133,7 @@ def apply_mapping_to_upload_batches(
                     assignment_group_not_in_inventory_rows=(
                         result.assignment_group_not_in_inventory_count
                     ),
+                    duplicate_skipped_rows=result.duplicate_skipped_count,
                     failed_rows=result.failed_row_count,
                     warnings=result.warnings,
                     errors=[
@@ -1107,6 +1157,7 @@ def apply_mapping_to_upload_batches(
                     assignment_group_not_in_inventory_rows=failed_counts[
                         "assignment_group_not_in_inventory_rows"
                     ],
+                    duplicate_skipped_rows=failed_counts["duplicate_skipped_rows"],
                     failed_rows=failed_counts["failed_rows"],
                     error=str(exc),
                 )

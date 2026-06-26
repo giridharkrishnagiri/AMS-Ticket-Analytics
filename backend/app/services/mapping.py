@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentChangeRecord,
     AssessmentOutOfScopeTicket,
+    AssessmentProblemRecord,
     Project,
     SourceColumnMapping,
     Ticket,
@@ -38,6 +40,9 @@ MAPPING_SOURCE_BUILT_IN_SUGGESTION = "BUILT_IN_SUGGESTION"
 MAPPING_SOURCE_REQUEST_BODY = "REQUEST_BODY"
 APPLY_SCOPE_BATCH = "BATCH"
 APPLY_SCOPE_TICKET_TYPE = "TICKET_TYPE"
+PROBLEM_TICKET_TYPE = "PROBLEM"
+CHANGE_TICKET_TYPE = "CHANGE"
+PROBLEM_CHANGE_TICKET_TYPES = {PROBLEM_TICKET_TYPE, CHANGE_TICKET_TYPE}
 CMDB_ARCHITECTURE_TYPE_KEYS = ("Architecture type", "Architecture Type")
 CMDB_INSTALL_TYPE_KEYS = ("Install type", "Install Type")
 
@@ -74,6 +79,65 @@ NORMALIZED_FIELDS = (
     "source_system",
     "month_key",
 )
+
+PROBLEM_CHANGE_NORMALIZED_FIELDS = (
+    "number",
+    "state",
+    "problem_state",
+    "problem_statement",
+    "short_description_or_statement",
+    "short_description",
+    "type",
+    "phase",
+    "phase_state",
+    "business_application",
+    "application_name",
+    "affected_ci_service",
+    "active",
+    "created_at_source",
+    "opened_at",
+    "actual_start_at",
+    "actual_end_at",
+    "planned_start_at",
+    "planned_end_at",
+    "duration_seconds",
+    "made_sla",
+    "major_incident",
+    "major_problem",
+    "known_error",
+    "related_incidents",
+    "change_request",
+    "caused_by_change",
+    "duplicate_of",
+    "parent",
+    "close_notes",
+    "cause_notes",
+    "fix_notes",
+    "workaround",
+    "source",
+    "contact_type",
+    "company",
+    "vendor_or_supplier_if_available",
+    "risk",
+    "risk_value",
+    "unauthorized",
+    "outside_maintenance_schedule",
+    "cab_required",
+    "cab_approval",
+    "cab_date",
+    "change_reason",
+    "close_code",
+    "close_code_sub_category",
+    "incident",
+    "problem",
+    "service_outage_required",
+    "implementation_plan",
+    "backout_plan",
+    "test_plan",
+    "communication_plan",
+)
+
+NORMALIZED_FIELDS = tuple(dict.fromkeys((*NORMALIZED_FIELDS, *PROBLEM_CHANGE_NORMALIZED_FIELDS)))
 
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "ticket_id": (
@@ -146,6 +210,86 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "month_key": ("month_key", "month", "period"),
 }
 
+FIELD_ALIASES.update(
+    {
+        "number": ("number", "effective_number"),
+        "state": ("state", "problem_state", "phase_state"),
+        "problem_state": ("problem_state", "problem state"),
+        "problem_statement": ("problem_statement", "problem statement"),
+        "short_description_or_statement": (
+            "problem_statement",
+            "short_description",
+            "description",
+        ),
+        "short_description": ("short_description", "short description"),
+        "type": ("type", "change_type", "task_type"),
+        "phase": ("phase",),
+        "phase_state": ("phase_state", "phase state"),
+        "business_application": ("business_application", "business application"),
+        "application_name": ("application_name", "application name"),
+        "affected_ci_service": (
+            "affected_ci_service",
+            "affected ci/service",
+            "affected_ci",
+        ),
+        "active": ("active",),
+        "created_at_source": ("created", "created_at", "sys_created_on"),
+        "opened_at": ("opened", "opened_at", "opened_date"),
+        "actual_start_at": ("actual_start", "actual start", "actual_start_date"),
+        "actual_end_at": ("actual_end", "actual end", "actual_end_date"),
+        "planned_start_at": ("planned_start_date", "planned start date"),
+        "planned_end_at": ("planned_end_date", "planned end date"),
+        "duration_seconds": ("duration", "duration_seconds"),
+        "made_sla": ("made_sla", "made sla"),
+        "major_incident": ("major_incident", "major incident"),
+        "major_problem": ("major_problem", "major problem"),
+        "known_error": ("known_error", "known error"),
+        "related_incidents": ("related_incidents", "related incidents"),
+        "change_request": ("change_request", "change request"),
+        "caused_by_change": ("caused_by_change", "caused by change"),
+        "duplicate_of": ("duplicate_of", "duplicate of"),
+        "parent": ("parent",),
+        "close_notes": ("close_notes", "close notes"),
+        "cause_notes": ("cause_notes", "cause notes"),
+        "fix_notes": ("fix_notes", "fix notes"),
+        "workaround": ("workaround",),
+        "source": ("source",),
+        "contact_type": ("contact_type", "contact type"),
+        "company": ("company",),
+        "vendor_or_supplier_if_available": (
+            "vendor",
+            "vendor_or_supplier_if_available",
+            "supplier",
+        ),
+        "risk": ("risk",),
+        "risk_value": ("risk_value", "risk value"),
+        "unauthorized": ("unauthorized",),
+        "outside_maintenance_schedule": (
+            "outside_maintenance_schedule",
+            "outside maintenance schedule",
+        ),
+        "cab_required": ("cab_required", "cab required"),
+        "cab_approval": ("cab_approval", "cab approval"),
+        "cab_date": ("cab_date", "cab date", "cab_date_time", "cab date/time"),
+        "change_reason": ("change_reason", "change reason"),
+        "close_code": ("close_code", "close code"),
+        "close_code_sub_category": (
+            "close_code_sub_category",
+            "close code sub-category",
+        ),
+        "incident": ("incident",),
+        "problem": ("problem",),
+        "service_outage_required": (
+            "service_outage_required",
+            "service outage required?",
+        ),
+        "implementation_plan": ("implementation_plan", "implementation plan"),
+        "backout_plan": ("backout_plan", "backout plan"),
+        "test_plan": ("test_plan", "test plan"),
+        "communication_plan": ("communication_plan", "communication plan"),
+    }
+)
+
 FIELD_DATA_TYPES: dict[str, str] = {
     "created_at": "datetime",
     "resolved_at": "datetime",
@@ -156,6 +300,28 @@ FIELD_DATA_TYPES: dict[str, str] = {
     "reopen_count": "integer",
     "reassignment_count": "integer",
 }
+
+FIELD_DATA_TYPES.update(
+    {
+        "active": "boolean",
+        "created_at_source": "datetime",
+        "opened_at": "datetime",
+        "actual_start_at": "datetime",
+        "actual_end_at": "datetime",
+        "planned_start_at": "datetime",
+        "planned_end_at": "datetime",
+        "cab_date": "datetime",
+        "duration_seconds": "integer",
+        "made_sla": "boolean",
+        "major_incident": "boolean",
+        "major_problem": "boolean",
+        "known_error": "boolean",
+        "unauthorized": "boolean",
+        "outside_maintenance_schedule": "boolean",
+        "cab_required": "boolean",
+        "service_outage_required": "boolean",
+    }
+)
 
 BUILT_IN_DEFAULT_MAPPINGS: dict[str, dict[str, str]] = {
     "INCIDENT": {
@@ -207,6 +373,88 @@ BUILT_IN_DEFAULT_MAPPINGS: dict[str, dict[str, str]] = {
         "reassignment_count": "reassignment_count",
         "vendor": "u_vendor",
     },
+    PROBLEM_TICKET_TYPE: {
+        "number": "number",
+        "state": "state",
+        "problem_statement": "problem_statement",
+        "business_application": "business_application",
+        "business_service": "business_service",
+        "configuration_item": "configuration_item",
+        "category": "category",
+        "subcategory": "subcategory",
+        "assignment_group": "assignment_group",
+        "assigned_to": "assigned_to",
+        "urgency": "urgency",
+        "priority": "priority",
+        "active": "active",
+        "created_at_source": "created",
+        "opened_at": "opened",
+        "actual_start_at": "actual_start",
+        "actual_end_at": "actual_end",
+        "closed_at": "closed",
+        "resolved_at": "resolved",
+        "business_duration_seconds": "business_duration",
+        "duration_seconds": "duration",
+        "made_sla": "made_sla",
+        "major_incident": "major_incident",
+        "major_problem": "major_problem",
+        "known_error": "known_error",
+        "related_incidents": "related_incidents",
+        "change_request": "change_request",
+        "caused_by_change": "caused_by_change",
+        "problem_state": "problem_state",
+        "close_notes": "close_notes",
+        "cause_notes": "cause_notes",
+        "fix_notes": "fix_notes",
+        "workaround": "workaround",
+        "description": "description",
+    },
+    CHANGE_TICKET_TYPE: {
+        "number": "number",
+        "short_description": "short_description",
+        "type": "type",
+        "state": "state",
+        "phase": "phase",
+        "phase_state": "phase_state",
+        "business_application": "business_application",
+        "business_service": "business_service",
+        "application_name": "application_name",
+        "affected_ci_service": "affected_ci_service",
+        "category": "category",
+        "assignment_group": "assignment_group",
+        "assigned_to": "assigned_to",
+        "priority": "priority",
+        "urgency": "urgency",
+        "impact": "impact",
+        "risk": "risk",
+        "risk_value": "risk_value",
+        "vendor": "vendor",
+        "created_at_source": "created",
+        "opened_at": "opened",
+        "planned_start_at": "planned_start_date",
+        "planned_end_at": "planned_end_date",
+        "actual_start_at": "actual_start_date",
+        "actual_end_at": "actual_end_date",
+        "closed_at": "closed",
+        "business_duration_seconds": "business_duration",
+        "duration_seconds": "duration",
+        "made_sla": "made_sla",
+        "unauthorized": "unauthorized",
+        "outside_maintenance_schedule": "outside_maintenance_schedule",
+        "cab_required": "cab_required",
+        "cab_approval": "cab_approval",
+        "cab_date": "cab_date",
+        "change_reason": "change_reason",
+        "close_code": "close_code",
+        "close_code_sub_category": "close_code_sub_category",
+        "incident": "incident",
+        "problem": "problem",
+        "caused_by_change": "caused_by_change",
+        "implementation_plan": "implementation_plan",
+        "backout_plan": "backout_plan",
+        "test_plan": "test_plan",
+        "communication_plan": "communication_plan",
+    },
 }
 
 DATE_FORMATS = (
@@ -257,6 +505,7 @@ class ApplyMappingResult:
     out_of_scope_ticket_count: int
     blank_assignment_group_count: int
     assignment_group_not_in_inventory_count: int
+    duplicate_skipped_count: int
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSample]
@@ -283,6 +532,7 @@ class BatchApplyMappingResult:
     out_of_scope_ticket_count: int
     blank_assignment_group_count: int
     assignment_group_not_in_inventory_count: int
+    duplicate_skipped_count: int
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSample]
@@ -301,6 +551,7 @@ class ScopedApplyMappingResult:
     out_of_scope_ticket_count: int
     blank_assignment_group_count: int
     assignment_group_not_in_inventory_count: int
+    duplicate_skipped_count: int
     failed_row_count: int
     warnings: list[str]
     errors: list[NormalizationErrorSample]
@@ -438,6 +689,12 @@ def field_aliases_for_ticket_type(ticket_type: str | None) -> dict[str, tuple[st
             "business_duration",
             "business_duration_seconds",
         )
+    elif normalized_ticket_type in PROBLEM_CHANGE_TICKET_TYPES:
+        aliases["business_duration_seconds"] = (
+            "business_duration",
+            "business duration",
+            "business_duration_seconds",
+        )
     return aliases
 
 
@@ -531,7 +788,14 @@ def get_suggested_mapping_result_for_batch(
     )
 
 
-def clean_mapping(mapping: Mapping[str, str]) -> dict[str, str]:
+def mapping_required_fields(ticket_type: str | None) -> set[str]:
+    normalized_ticket_type = normalize_ticket_type_value(ticket_type or "")
+    if normalized_ticket_type in PROBLEM_CHANGE_TICKET_TYPES:
+        return {"number"}
+    return {"ticket_id"}
+
+
+def clean_mapping(mapping: Mapping[str, str], ticket_type: str | None = None) -> dict[str, str]:
     cleaned: dict[str, str] = {}
 
     for normalized_field, source_column in mapping.items():
@@ -544,8 +808,13 @@ def clean_mapping(mapping: Mapping[str, str]) -> dict[str, str]:
 
         cleaned[normalized_field] = source_column
 
-    if "ticket_id" not in cleaned:
-        raise MappingError("Mapping must include ticket_id.")
+    required_fields = mapping_required_fields(ticket_type)
+    if required_fields == {"number"} and "number" not in cleaned and "ticket_id" in cleaned:
+        required_fields = {"ticket_id"}
+    missing_required_fields = sorted(required_fields - set(cleaned))
+    if missing_required_fields:
+        joined = ", ".join(missing_required_fields)
+        raise MappingError(f"Mapping must include {joined}.")
 
     return cleaned
 
@@ -562,7 +831,10 @@ def save_mapping_template(
         raise FileNotFoundError(f"Project {project_id} was not found.")
 
     ticket_type = normalize_ticket_type_value(ticket_type)
-    cleaned_mapping = clean_mapping(mapping)
+    cleaned_mapping = clean_mapping(mapping, ticket_type)
+    required_fields = mapping_required_fields(ticket_type)
+    if required_fields == {"number"} and "number" not in cleaned_mapping:
+        required_fields = {"ticket_id"}
 
     try:
         db.execute(
@@ -578,7 +850,7 @@ def save_mapping_template(
                 source_column_name=source_column,
                 normalized_field_name=normalized_field,
                 data_type=FIELD_DATA_TYPES.get(normalized_field, "string"),
-                is_required=normalized_field in {"ticket_id", "created_at"},
+                is_required=normalized_field in required_fields,
                 notes=notes,
             )
             for normalized_field, source_column in cleaned_mapping.items()
@@ -850,20 +1122,23 @@ def load_active_inventory_items(
     return list(db.scalars(statement).all())
 
 
-def inventory_sort_key(
+def inventory_sort_key_for_values(
     inventory_item: ApplicationInventoryItem,
-    ticket: Ticket,
+    *,
+    assignment_group: str | None,
+    business_service: str | None,
+    application: str | None,
 ) -> tuple[int, int, int, datetime, str]:
     active_rank = 0 if inventory_item.active is True else 1
     business_service_rank = 0
     if normalize_match_key(inventory_item.business_service_ci_name) != normalize_match_key(
-        ticket.business_service
+        business_service
     ):
         business_service_rank = 1
 
     assignment_group_rank = 0
     if normalize_match_key(inventory_item.assignment_group) != normalize_match_key(
-        ticket.assignment_group
+        assignment_group
     ):
         assignment_group_rank = 1
 
@@ -877,35 +1152,76 @@ def inventory_sort_key(
     )
 
 
-def select_inventory_item_for_ticket(
+def inventory_sort_key(
+    inventory_item: ApplicationInventoryItem,
     ticket: Ticket,
+) -> tuple[int, int, int, datetime, str]:
+    return inventory_sort_key_for_values(
+        inventory_item,
+        assignment_group=ticket.assignment_group,
+        business_service=ticket.business_service,
+        application=ticket.application,
+    )
+
+
+def select_inventory_item_for_values(
     inventory_items: list[ApplicationInventoryItem],
+    *,
+    assignment_group: str | None,
+    business_service: str | None,
+    application: str | None,
 ) -> ApplicationInventoryItem | None:
-    ticket_assignment_group = normalize_match_key(ticket.assignment_group)
-    ticket_business_service = normalize_match_key(ticket.business_service)
-    ticket_application = normalize_match_key(ticket.application)
+    assignment_group_key = normalize_match_key(assignment_group)
+    business_service_key = normalize_match_key(business_service)
+    application_key = normalize_match_key(application)
 
     assignment_group_matches = [
         item
         for item in inventory_items
-        if normalize_match_key(item.assignment_group) == ticket_assignment_group
+        if normalize_match_key(item.assignment_group) == assignment_group_key
     ]
     if assignment_group_matches:
         return sorted(
             assignment_group_matches,
-            key=lambda item: inventory_sort_key(item, ticket),
+            key=lambda item: inventory_sort_key_for_values(
+                item,
+                assignment_group=assignment_group,
+                business_service=business_service,
+                application=application,
+            ),
         )[0]
 
-    service_keys = {ticket_business_service, ticket_application}
+    service_keys = {business_service_key, application_key}
+    service_keys.discard(None)
     service_matches = [
         item
         for item in inventory_items
         if normalize_match_key(item.business_service_ci_name) in service_keys
     ]
     if service_matches:
-        return sorted(service_matches, key=lambda item: inventory_sort_key(item, ticket))[0]
+        return sorted(
+            service_matches,
+            key=lambda item: inventory_sort_key_for_values(
+                item,
+                assignment_group=assignment_group,
+                business_service=business_service,
+                application=application,
+            ),
+        )[0]
 
     return None
+
+
+def select_inventory_item_for_ticket(
+    ticket: Ticket,
+    inventory_items: list[ApplicationInventoryItem],
+) -> ApplicationInventoryItem | None:
+    return select_inventory_item_for_values(
+        inventory_items,
+        assignment_group=ticket.assignment_group,
+        business_service=ticket.business_service,
+        application=ticket.application,
+    )
 
 
 def apply_inventory_enrichment_to_ticket(
@@ -931,6 +1247,28 @@ def apply_inventory_enrichment_to_ticket(
         *CMDB_ARCHITECTURE_TYPE_KEYS,
     )
     ticket.install_type = cmdb_payload_text(inventory_item.cmdb_payload, *CMDB_INSTALL_TYPE_KEYS)
+
+
+def apply_inventory_enrichment_to_operational_record(
+    record: AssessmentProblemRecord | AssessmentChangeRecord,
+    inventory_item: ApplicationInventoryItem | None,
+) -> None:
+    if inventory_item is None:
+        record.application_inventory_match_status = "unmatched"
+        return
+
+    record.application_inventory_id = inventory_item.id
+    record.functional_track = inventory_item.functional_track
+    record.ams_owner = inventory_item.ams_owner
+    record.parent_business_application = inventory_item.parent_application_name
+    record.supported_by_vendor = inventory_item.supported_by_vendor
+    record.sap_non_sap = inventory_item.sap_non_sap or record.sap_non_sap
+    record.architecture_type = cmdb_payload_text(
+        inventory_item.cmdb_payload,
+        *CMDB_ARCHITECTURE_TYPE_KEYS,
+    )
+    record.install_type = cmdb_payload_text(inventory_item.cmdb_payload, *CMDB_INSTALL_TYPE_KEYS)
+    record.application_inventory_match_status = "matched"
 
 
 def cmdb_payload_text(payload: Mapping[str, Any] | None, *keys: str) -> str | None:
@@ -1017,25 +1355,66 @@ def resolve_apply_mapping(
     upload_batch: UploadBatch,
     mapping: Mapping[str, str] | None,
 ) -> dict[str, str]:
-    if mapping:
-        return clean_mapping(mapping)
-
-    ticket_type_statement = (
-        select(TicketRawRow.ticket_type)
-        .where(TicketRawRow.upload_batch_id == upload_batch.id)
-        .order_by(TicketRawRow.created_at.asc())
-        .limit(1)
-    )
-    ticket_type = db.scalar(ticket_type_statement)
+    ticket_type = get_batch_ticket_type(db, upload_batch.id)
     if not ticket_type:
         raise MappingError("No raw rows found. Ingest files before applying a mapping.")
+
+    if mapping:
+        return clean_mapping(mapping, ticket_type)
 
     template_rows = get_mapping_template(db, upload_batch.project_id, ticket_type)
     if not template_rows:
         raise MappingError(
             "No saved mapping template found. Pass a mapping in the request or save a template."
         )
-    return clean_mapping(mapping_rows_to_field_mapping(template_rows))
+    return clean_mapping(mapping_rows_to_field_mapping(template_rows), ticket_type)
+
+
+def collect_normalized_values(
+    raw_data: Mapping[str, Any],
+    mapping: Mapping[str, str],
+) -> dict[str, Any]:
+    return {
+        field: get_mapped_value(raw_data, mapping, field)
+        for field in NORMALIZED_FIELDS
+        if field in mapping
+    }
+
+
+def normalized_payload_for_raw_row(
+    raw_row: TicketRawRow,
+    mapping: Mapping[str, str],
+    normalized_values: Mapping[str, Any],
+) -> dict[str, Any]:
+    mapped_source_keys = {
+        normalize_source_column_name(source_column) for source_column in mapping.values()
+    }
+    unmapped_fields = {
+        source_column: raw_value
+        for source_column, raw_value in raw_row.raw_data.items()
+        if normalize_source_column_name(source_column) not in mapped_source_keys
+    }
+    return {
+        "raw_payload_json": raw_row.raw_data,
+        "unmapped_fields": unmapped_fields,
+        "mapped_fields": {
+            field: text_or_none(value) for field, value in normalized_values.items()
+        },
+    }
+
+
+def record_number_from_values(normalized_values: Mapping[str, Any]) -> str | None:
+    return text_or_none(normalized_values.get("number")) or text_or_none(
+        normalized_values.get("ticket_id")
+    )
+
+
+def first_text_value(*values: Any) -> str | None:
+    for value in values:
+        text = text_or_none(value)
+        if text is not None:
+            return text
+    return None
 
 
 def build_ticket_from_raw_row(
@@ -1047,19 +1426,7 @@ def build_ticket_from_raw_row(
     if ticket_number is None:
         raise MappingError("Mapped ticket_id is empty.")
 
-    normalized_values = {
-        field: get_mapped_value(raw_row.raw_data, mapping, field)
-        for field in NORMALIZED_FIELDS
-        if field in mapping
-    }
-    mapped_source_keys = {
-        normalize_source_column_name(source_column) for source_column in mapping.values()
-    }
-    unmapped_fields = {
-        source_column: raw_value
-        for source_column, raw_value in raw_row.raw_data.items()
-        if normalize_source_column_name(source_column) not in mapped_source_keys
-    }
+    normalized_values = collect_normalized_values(raw_row.raw_data, mapping)
     mapped_ticket_type = text_or_none(normalized_values.get("ticket_type"))
     ticket_type = mapped_ticket_type.upper() if mapped_ticket_type else raw_row.ticket_type
     source_system = (
@@ -1111,13 +1478,321 @@ def build_ticket_from_raw_row(
         ),
         reopen_count=parse_int_value(normalized_values.get("reopen_count")),
         reassignment_count=parse_optional_int_value(normalized_values.get("reassignment_count")),
-        normalized_payload={
-            "raw_payload_json": raw_row.raw_data,
-            "unmapped_fields": unmapped_fields,
-            "mapped_fields": {
-                field: text_or_none(value) for field, value in normalized_values.items()
-            },
-        },
+        normalized_payload=normalized_payload_for_raw_row(
+            raw_row,
+            mapping,
+            normalized_values,
+        ),
+    )
+
+
+def build_problem_record_from_raw_row(
+    raw_row: TicketRawRow,
+    upload_batch: UploadBatch,
+    mapping: Mapping[str, str],
+) -> AssessmentProblemRecord:
+    normalized_values = collect_normalized_values(raw_row.raw_data, mapping)
+    number = record_number_from_values(normalized_values)
+    if number is None:
+        raise MappingError("Mapped Problem Number is empty.")
+
+    assignment_group = text_or_none(normalized_values.get("assignment_group"))
+    problem_statement = text_or_none(normalized_values.get("problem_statement"))
+    description = text_or_none(normalized_values.get("description"))
+    short_description_or_statement = first_text_value(
+        normalized_values.get("short_description_or_statement"),
+        problem_statement,
+        description,
+    )
+
+    return AssessmentProblemRecord(
+        project_id=raw_row.project_id,
+        upload_batch_id=upload_batch.id,
+        uploaded_file_id=raw_row.uploaded_file_id,
+        raw_row_id=raw_row.id,
+        source_row_number=raw_row.row_number,
+        row_fingerprint=raw_row.row_hash or str(raw_row.id),
+        number=number,
+        state=text_or_none(normalized_values.get("state")),
+        problem_state=text_or_none(normalized_values.get("problem_state")),
+        problem_statement=problem_statement,
+        short_description_or_statement=short_description_or_statement,
+        description=description,
+        business_application=text_or_none(normalized_values.get("business_application")),
+        business_service=text_or_none(normalized_values.get("business_service")),
+        configuration_item=text_or_none(normalized_values.get("configuration_item")),
+        category=text_or_none(normalized_values.get("category")),
+        subcategory=text_or_none(normalized_values.get("subcategory")),
+        assignment_group=assignment_group,
+        assigned_to=text_or_none(normalized_values.get("assigned_to")),
+        urgency=text_or_none(normalized_values.get("urgency")),
+        priority=normalize_priority(normalized_values.get("priority")),
+        active=parse_bool_value(normalized_values.get("active")),
+        created_at_source=parse_datetime_value(normalized_values.get("created_at_source")),
+        opened_at=parse_datetime_value(normalized_values.get("opened_at")),
+        actual_start_at=parse_datetime_value(normalized_values.get("actual_start_at")),
+        actual_end_at=parse_datetime_value(normalized_values.get("actual_end_at")),
+        closed_at=parse_datetime_value(normalized_values.get("closed_at")),
+        resolved_at=parse_datetime_value(normalized_values.get("resolved_at")),
+        business_duration_seconds=parse_business_duration_seconds(
+            normalized_values.get("business_duration_seconds"),
+        ),
+        duration_seconds=parse_business_duration_seconds(
+            normalized_values.get("duration_seconds"),
+        ),
+        made_sla=parse_bool_value(normalized_values.get("made_sla")),
+        major_incident=parse_bool_value(normalized_values.get("major_incident")),
+        major_problem=parse_bool_value(normalized_values.get("major_problem")),
+        known_error=parse_bool_value(normalized_values.get("known_error")),
+        related_incidents=text_or_none(normalized_values.get("related_incidents")),
+        change_request=text_or_none(normalized_values.get("change_request")),
+        caused_by_change=text_or_none(normalized_values.get("caused_by_change")),
+        duplicate_of=text_or_none(normalized_values.get("duplicate_of")),
+        parent=text_or_none(normalized_values.get("parent")),
+        reassignment_count=parse_optional_int_value(
+            normalized_values.get("reassignment_count"),
+        ),
+        reopen_count=parse_optional_int_value(normalized_values.get("reopen_count")),
+        resolution_code=text_or_none(normalized_values.get("resolution_code")),
+        close_notes=text_or_none(normalized_values.get("close_notes")),
+        cause_notes=text_or_none(normalized_values.get("cause_notes")),
+        fix_notes=text_or_none(normalized_values.get("fix_notes")),
+        workaround=text_or_none(normalized_values.get("workaround")),
+        source=text_or_none(normalized_values.get("source")),
+        contact_type=text_or_none(normalized_values.get("contact_type")),
+        company=text_or_none(normalized_values.get("company")),
+        vendor_or_supplier_if_available=text_or_none(
+            normalized_values.get("vendor_or_supplier_if_available"),
+        ),
+        sap_non_sap=derive_sap_non_sap(assignment_group),
+        normalized_payload=normalized_payload_for_raw_row(
+            raw_row,
+            mapping,
+            normalized_values,
+        ),
+    )
+
+
+def build_change_record_from_raw_row(
+    raw_row: TicketRawRow,
+    upload_batch: UploadBatch,
+    mapping: Mapping[str, str],
+) -> AssessmentChangeRecord:
+    normalized_values = collect_normalized_values(raw_row.raw_data, mapping)
+    number = record_number_from_values(normalized_values)
+    if number is None:
+        raise MappingError("Mapped Change Number is empty.")
+
+    assignment_group = text_or_none(normalized_values.get("assignment_group"))
+
+    return AssessmentChangeRecord(
+        project_id=raw_row.project_id,
+        upload_batch_id=upload_batch.id,
+        uploaded_file_id=raw_row.uploaded_file_id,
+        raw_row_id=raw_row.id,
+        source_row_number=raw_row.row_number,
+        row_fingerprint=raw_row.row_hash or str(raw_row.id),
+        number=number,
+        short_description=text_or_none(normalized_values.get("short_description")),
+        type=text_or_none(normalized_values.get("type")),
+        state=text_or_none(normalized_values.get("state")),
+        phase=text_or_none(normalized_values.get("phase")),
+        phase_state=text_or_none(normalized_values.get("phase_state")),
+        business_application=text_or_none(normalized_values.get("business_application")),
+        business_service=text_or_none(normalized_values.get("business_service")),
+        application_name=text_or_none(normalized_values.get("application_name")),
+        affected_ci_service=text_or_none(normalized_values.get("affected_ci_service")),
+        category=text_or_none(normalized_values.get("category")),
+        assignment_group=assignment_group,
+        assigned_to=text_or_none(normalized_values.get("assigned_to")),
+        priority=normalize_priority(normalized_values.get("priority")),
+        urgency=text_or_none(normalized_values.get("urgency")),
+        impact=text_or_none(normalized_values.get("impact")),
+        risk=text_or_none(normalized_values.get("risk")),
+        risk_value=text_or_none(normalized_values.get("risk_value")),
+        vendor=text_or_none(normalized_values.get("vendor")),
+        created_at_source=parse_datetime_value(normalized_values.get("created_at_source")),
+        opened_at=parse_datetime_value(normalized_values.get("opened_at")),
+        planned_start_at=parse_datetime_value(normalized_values.get("planned_start_at")),
+        planned_end_at=parse_datetime_value(normalized_values.get("planned_end_at")),
+        actual_start_at=parse_datetime_value(normalized_values.get("actual_start_at")),
+        actual_end_at=parse_datetime_value(normalized_values.get("actual_end_at")),
+        closed_at=parse_datetime_value(normalized_values.get("closed_at")),
+        business_duration_seconds=parse_business_duration_seconds(
+            normalized_values.get("business_duration_seconds"),
+        ),
+        duration_seconds=parse_business_duration_seconds(
+            normalized_values.get("duration_seconds"),
+        ),
+        made_sla=parse_bool_value(normalized_values.get("made_sla")),
+        unauthorized=parse_bool_value(normalized_values.get("unauthorized")),
+        outside_maintenance_schedule=parse_bool_value(
+            normalized_values.get("outside_maintenance_schedule"),
+        ),
+        cab_required=parse_bool_value(normalized_values.get("cab_required")),
+        cab_approval=text_or_none(normalized_values.get("cab_approval")),
+        cab_date=parse_datetime_value(normalized_values.get("cab_date")),
+        change_reason=text_or_none(normalized_values.get("change_reason")),
+        close_code=text_or_none(normalized_values.get("close_code")),
+        close_code_sub_category=text_or_none(
+            normalized_values.get("close_code_sub_category"),
+        ),
+        incident=text_or_none(normalized_values.get("incident")),
+        problem=text_or_none(normalized_values.get("problem")),
+        caused_by_change=text_or_none(normalized_values.get("caused_by_change")),
+        parent=text_or_none(normalized_values.get("parent")),
+        reassignment_count=parse_optional_int_value(
+            normalized_values.get("reassignment_count"),
+        ),
+        service_outage_required=parse_bool_value(
+            normalized_values.get("service_outage_required"),
+        ),
+        implementation_plan=text_or_none(normalized_values.get("implementation_plan")),
+        backout_plan=text_or_none(normalized_values.get("backout_plan")),
+        test_plan=text_or_none(normalized_values.get("test_plan")),
+        communication_plan=text_or_none(normalized_values.get("communication_plan")),
+        sap_non_sap=derive_sap_non_sap(assignment_group),
+        normalized_payload=normalized_payload_for_raw_row(
+            raw_row,
+            mapping,
+            normalized_values,
+        ),
+    )
+
+
+def select_inventory_item_for_operational_record(
+    record: AssessmentProblemRecord | AssessmentChangeRecord,
+    inventory_items: list[ApplicationInventoryItem],
+) -> ApplicationInventoryItem | None:
+    application = first_text_value(
+        getattr(record, "business_application", None),
+        getattr(record, "business_service", None),
+        getattr(record, "configuration_item", None),
+        getattr(record, "application_name", None),
+        getattr(record, "affected_ci_service", None),
+    )
+    return select_inventory_item_for_values(
+        inventory_items,
+        assignment_group=record.assignment_group,
+        business_service=record.business_service,
+        application=application,
+    )
+
+
+def apply_problem_or_change_mapping_to_batch(
+    db: Session,
+    upload_batch: UploadBatch,
+    resolved_mapping: Mapping[str, str],
+    ticket_type: str,
+    delete_existing: bool,
+) -> ApplyMappingResult:
+    model: type[AssessmentProblemRecord] | type[AssessmentChangeRecord]
+    if ticket_type == PROBLEM_TICKET_TYPE:
+        model = AssessmentProblemRecord
+        builder = build_problem_record_from_raw_row
+        record_label = "Problem"
+    else:
+        model = AssessmentChangeRecord
+        builder = build_change_record_from_raw_row
+        record_label = "Change"
+
+    total_raw_rows = 0
+    normalized_record_count = 0
+    unmatched_inventory_count = 0
+    duplicate_skipped_count = 0
+    failed_row_count = 0
+    errors: list[NormalizationErrorSample] = []
+    warnings: list[str] = []
+    seen_fingerprints: set[str] = set()
+
+    mark_upload_batch_normalizing(upload_batch)
+    db.flush()
+
+    if delete_existing:
+        db.execute(delete(model).where(model.upload_batch_id == upload_batch.id))
+        db.flush()
+
+    inventory_items = load_active_inventory_items(db, upload_batch.project_id)
+    existing_fingerprint_statement = select(model.row_fingerprint).where(
+        model.project_id == upload_batch.project_id,
+        model.upload_batch_id != upload_batch.id,
+    )
+    existing_fingerprints = set(db.scalars(existing_fingerprint_statement).all())
+
+    raw_row_statement = (
+        select(TicketRawRow)
+        .where(TicketRawRow.upload_batch_id == upload_batch.id)
+        .order_by(TicketRawRow.uploaded_file_id.asc(), TicketRawRow.row_number.asc())
+    )
+
+    for raw_row in db.scalars(raw_row_statement).yield_per(INGESTION_BATCH_SIZE):
+        total_raw_rows += 1
+        try:
+            record = builder(raw_row, upload_batch, resolved_mapping)
+            if (
+                record.row_fingerprint in existing_fingerprints
+                or record.row_fingerprint in seen_fingerprints
+            ):
+                duplicate_skipped_count += 1
+                continue
+            seen_fingerprints.add(record.row_fingerprint)
+
+            inventory_item = select_inventory_item_for_operational_record(
+                record,
+                inventory_items,
+            )
+            apply_inventory_enrichment_to_operational_record(record, inventory_item)
+            if record.application_inventory_match_status == "unmatched":
+                unmatched_inventory_count += 1
+
+            db.add(record)
+            normalized_record_count += 1
+            if normalized_record_count % INGESTION_BATCH_SIZE == 0:
+                db.flush()
+        except MappingError as exc:
+            failed_row_count += 1
+            if len(errors) < MAX_ERROR_SAMPLES:
+                errors.append(
+                    NormalizationErrorSample(
+                        row_number=raw_row.row_number,
+                        raw_row_id=raw_row.id,
+                        message=str(exc),
+                    )
+                )
+
+    if total_raw_rows == 0:
+        warnings.append("No raw rows found. Ingest files before applying a mapping.")
+    elif failed_row_count > MAX_ERROR_SAMPLES:
+        warnings.append(
+            f"{failed_row_count - MAX_ERROR_SAMPLES} additional row errors were omitted."
+        )
+    if duplicate_skipped_count:
+        warnings.append(
+            f"{duplicate_skipped_count} duplicate {record_label} row(s) were skipped."
+        )
+    if unmatched_inventory_count:
+        warnings.append(
+            f"{unmatched_inventory_count} {record_label} row(s) did not match "
+            "Application Inventory enrichment."
+        )
+
+    if total_raw_rows > 0 and failed_row_count == 0:
+        mark_upload_batch_normalized(upload_batch)
+    else:
+        mark_upload_batch_normalization_failed(upload_batch)
+
+    return ApplyMappingResult(
+        upload_batch_id=upload_batch.id,
+        total_raw_rows=total_raw_rows,
+        normalized_ticket_count=normalized_record_count,
+        out_of_scope_ticket_count=0,
+        blank_assignment_group_count=0,
+        assignment_group_not_in_inventory_count=unmatched_inventory_count,
+        duplicate_skipped_count=duplicate_skipped_count,
+        failed_row_count=failed_row_count,
+        warnings=warnings[:MAX_WARNING_SAMPLES],
+        errors=errors,
+        status=upload_batch.status,
     )
 
 
@@ -1128,7 +1803,28 @@ def apply_mapping_to_batch(
     delete_existing: bool = True,
 ) -> ApplyMappingResult:
     upload_batch = get_upload_batch_or_raise(db, upload_batch_id)
+    batch_ticket_type = get_batch_ticket_type(db, upload_batch_id)
     resolved_mapping = resolve_apply_mapping(db, upload_batch, mapping)
+
+    if batch_ticket_type in PROBLEM_CHANGE_TICKET_TYPES:
+        try:
+            result = apply_problem_or_change_mapping_to_batch(
+                db=db,
+                upload_batch=upload_batch,
+                resolved_mapping=resolved_mapping,
+                ticket_type=batch_ticket_type,
+                delete_existing=delete_existing,
+            )
+            db.commit()
+        except SQLAlchemyError as exc:
+            db.rollback()
+            failed_batch = db.get(UploadBatch, upload_batch_id)
+            if failed_batch is not None:
+                mark_upload_batch_normalization_failed(failed_batch)
+                db.commit()
+            raise MappingError(f"Mapping apply failed: {exc}") from exc
+        db.refresh(upload_batch)
+        return result
 
     total_raw_rows = 0
     normalized_ticket_count = 0
@@ -1303,6 +1999,7 @@ def apply_mapping_to_batch(
         out_of_scope_ticket_count=out_of_scope_ticket_count,
         blank_assignment_group_count=blank_assignment_group_count,
         assignment_group_not_in_inventory_count=assignment_group_not_in_inventory_count,
+        duplicate_skipped_count=0,
         failed_row_count=failed_row_count,
         warnings=warnings[:MAX_WARNING_SAMPLES],
         errors=errors,
@@ -1316,13 +2013,14 @@ def resolve_mapping_for_project_ticket_type(
     ticket_type: str,
     mapping: Mapping[str, str] | None,
 ) -> tuple[dict[str, str], str]:
+    ticket_type = normalize_ticket_type_value(ticket_type)
     if mapping:
-        return clean_mapping(mapping), MAPPING_SOURCE_REQUEST_BODY
+        return clean_mapping(mapping, ticket_type), MAPPING_SOURCE_REQUEST_BODY
 
     template_rows = get_mapping_template(db, project_id, ticket_type)
     if template_rows:
         return (
-            clean_mapping(mapping_rows_to_field_mapping(template_rows)),
+            clean_mapping(mapping_rows_to_field_mapping(template_rows), ticket_type),
             MAPPING_SOURCE_SAVED_TEMPLATE,
         )
 
@@ -1331,7 +2029,7 @@ def resolve_mapping_for_project_ticket_type(
         for source_column in infer_source_columns_for_ticket_type(db, project_id, ticket_type)
     ]
     return (
-        clean_mapping(suggest_mapping(source_columns, ticket_type)),
+        clean_mapping(suggest_mapping(source_columns, ticket_type), ticket_type),
         MAPPING_SOURCE_BUILT_IN_SUGGESTION,
     )
 
@@ -1409,6 +2107,7 @@ def apply_mapping_with_scope(
             assignment_group_not_in_inventory_count=(
                 result.assignment_group_not_in_inventory_count
             ),
+            duplicate_skipped_count=result.duplicate_skipped_count,
             failed_row_count=result.failed_row_count,
             warnings=result.warnings,
             errors=result.errors,
@@ -1435,6 +2134,7 @@ def apply_mapping_with_scope(
         assignment_group_not_in_inventory_count=sum(
             result.assignment_group_not_in_inventory_count for result in batch_results
         ),
+        duplicate_skipped_count=sum(result.duplicate_skipped_count for result in batch_results),
         failed_row_count=sum(result.failed_row_count for result in batch_results),
         warnings=all_warnings[:MAX_WARNING_SAMPLES],
         errors=all_errors[:MAX_ERROR_SAMPLES],

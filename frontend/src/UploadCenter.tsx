@@ -44,7 +44,12 @@ import type {
 } from "./api/uploads";
 
 type UploadCenterTab = "application-inventory" | "ticket-details";
-type TicketUploadType = "INCIDENT" | "SERVICE_CATALOG_TASK" | "INCIDENT_SLA";
+type TicketUploadType =
+  | "INCIDENT"
+  | "SERVICE_CATALOG_TASK"
+  | "PROBLEM"
+  | "CHANGE"
+  | "INCIDENT_SLA";
 type WorkflowStepId = "upload" | "ingest" | "normalize" | "mapping" | "apply" | "summary";
 
 type WorkflowStep = {
@@ -69,17 +74,23 @@ const ticketUploadTypes: Array<{
     description: "Service Catalog Task extracts",
   },
   {
+    label: "Problems",
+    value: "PROBLEM",
+    description: "Problem Register extracts",
+  },
+  {
+    label: "Changes",
+    value: "CHANGE",
+    description: "Change Register extracts",
+  },
+  {
     label: "Incident SLAs",
     value: "INCIDENT_SLA",
     description: "Incident SLA dump files",
   },
 ];
 
-const futureUploadTypes = [
-  "Problem Tickets",
-  "Change Tickets",
-  "SC Task SLAs",
-];
+const futureUploadTypes = ["Problem SLAs", "Change SLAs", "SC Task SLAs"];
 
 const workflowSteps: WorkflowStep[] = [
   { id: "upload", label: "Upload", helper: "Select type and files" },
@@ -90,7 +101,7 @@ const workflowSteps: WorkflowStep[] = [
   { id: "summary", label: "Summary", helper: "Review results" },
 ];
 
-const normalizedFields = [
+const ticketNormalizedFields = [
   "ticket_id",
   "title",
   "description",
@@ -119,7 +130,106 @@ const normalizedFields = [
   "resolution_notes",
 ];
 
-const importantFields = ["ticket_id", "title", "created_at"];
+const problemNormalizedFields = [
+  "number",
+  "state",
+  "problem_statement",
+  "business_application",
+  "business_service",
+  "configuration_item",
+  "category",
+  "subcategory",
+  "assignment_group",
+  "assigned_to",
+  "urgency",
+  "priority",
+  "active",
+  "created_at_source",
+  "opened_at",
+  "actual_start_at",
+  "actual_end_at",
+  "closed_at",
+  "resolved_at",
+  "business_duration_seconds",
+  "duration_seconds",
+  "made_sla",
+  "major_incident",
+  "major_problem",
+  "known_error",
+  "related_incidents",
+  "change_request",
+  "caused_by_change",
+  "problem_state",
+  "close_notes",
+  "cause_notes",
+  "fix_notes",
+  "workaround",
+  "description",
+];
+
+const changeNormalizedFields = [
+  "number",
+  "short_description",
+  "type",
+  "state",
+  "phase",
+  "phase_state",
+  "business_application",
+  "business_service",
+  "application_name",
+  "affected_ci_service",
+  "category",
+  "assignment_group",
+  "assigned_to",
+  "priority",
+  "urgency",
+  "impact",
+  "risk",
+  "risk_value",
+  "vendor",
+  "created_at_source",
+  "opened_at",
+  "planned_start_at",
+  "planned_end_at",
+  "actual_start_at",
+  "actual_end_at",
+  "closed_at",
+  "business_duration_seconds",
+  "duration_seconds",
+  "made_sla",
+  "unauthorized",
+  "outside_maintenance_schedule",
+  "cab_required",
+  "cab_approval",
+  "cab_date",
+  "change_reason",
+  "close_code",
+  "close_code_sub_category",
+  "incident",
+  "problem",
+  "caused_by_change",
+  "implementation_plan",
+  "backout_plan",
+  "test_plan",
+  "communication_plan",
+];
+
+function normalizedFieldsForUploadType(ticketType: TicketUploadType): string[] {
+  if (ticketType === "PROBLEM") {
+    return problemNormalizedFields;
+  }
+  if (ticketType === "CHANGE") {
+    return changeNormalizedFields;
+  }
+  return ticketNormalizedFields;
+}
+
+function importantFieldsForUploadType(ticketType: TicketUploadType): string[] {
+  if (ticketType === "PROBLEM" || ticketType === "CHANGE") {
+    return ["number"];
+  }
+  return ["ticket_id", "title", "created_at"];
+}
 
 function getTodayDateInputValue(): string {
   return new Date().toISOString().slice(0, 10);
@@ -220,6 +330,7 @@ type WorkflowBatchRow = {
   inputRows: number | null;
   inScopeRows: number | null;
   outOfScopeRows: number | null;
+  duplicateSkippedRows: number | null;
   error: string | null;
 };
 
@@ -277,6 +388,29 @@ function TicketDetailsWorkflow({
   const [error, setError] = useState<string | null>(null);
 
   const isSlaUpload = ticketType === "INCIDENT_SLA";
+  const normalizedFields = useMemo(
+    () => normalizedFieldsForUploadType(ticketType),
+    [ticketType]
+  );
+  const importantFields = useMemo(
+    () => importantFieldsForUploadType(ticketType),
+    [ticketType]
+  );
+  const recordLabelPlural =
+    ticketType === "PROBLEM"
+      ? "Problem records"
+      : ticketType === "CHANGE"
+        ? "Change records"
+        : "tickets";
+  const uploadFileLabel =
+    ticketType === "PROBLEM"
+      ? "Problem Register Files"
+      : ticketType === "CHANGE"
+        ? "Change Register Files"
+        : isSlaUpload
+          ? "Incident SLA Files"
+          : "Ticket Files";
+  const usesProblemChangeWorkflow = ticketType === "PROBLEM" || ticketType === "CHANGE";
 
   const filteredBatches = useMemo(
     () =>
@@ -387,6 +521,8 @@ function TicketDetailsWorkflow({
           batch?.normalized_ticket_count ??
           null,
         outOfScopeRows: apply?.out_of_scope_rows ?? normalize?.out_of_scope_inserted ?? null,
+        duplicateSkippedRows:
+          apply?.duplicate_skipped_rows ?? normalize?.duplicate_skipped_rows ?? null,
         error: apply?.error ?? normalize?.errors?.[0] ?? ingest?.error ?? upload?.message ?? null,
       };
     });
@@ -422,7 +558,7 @@ function TicketDetailsWorkflow({
       }
     }
     return warnings;
-  }, [isSlaUpload, mapping, projectId, targetBatchIds.length]);
+  }, [importantFields, isSlaUpload, mapping, projectId, targetBatchIds.length]);
 
   const hasUploaded = isSlaUpload
     ? Boolean(slaUploadResult || slaUploadHistory.length > 0)
@@ -742,11 +878,19 @@ function TicketDetailsWorkflow({
     try {
       const result = await normalizeUploadBatches(projectId.trim(), ticketType, actionBatchIds, true);
       setNormalizeResult(result);
-      setMessage(
-        `Normalized ${formatNumber(result.totals.in_scope_inserted)} in-scope and ${formatNumber(
-          result.totals.out_of_scope_inserted
-        )} out-of-scope ticket(s).`
-      );
+      if (usesProblemChangeWorkflow) {
+        setMessage(
+          `Normalized ${formatNumber(result.totals.in_scope_inserted)} ${recordLabelPlural.toLowerCase()}, skipped ${formatNumber(
+            result.totals.duplicate_skipped_rows
+          )} duplicate row(s).`
+        );
+      } else {
+        setMessage(
+          `Normalized ${formatNumber(result.totals.in_scope_inserted)} in-scope and ${formatNumber(
+            result.totals.out_of_scope_inserted
+          )} out-of-scope ticket(s).`
+        );
+      }
       await refreshBatches();
       setActiveStep("mapping");
     } catch (requestError) {
@@ -866,13 +1010,25 @@ function TicketDetailsWorkflow({
         true
       );
       setApplyResult(result);
-      setMessage(
-        `Applied mapping to ${formatNumber(result.totals.applied)} batch(es), skipped ${formatNumber(
-          result.totals.skipped
-        )} already-applied batch(es), and produced ${formatNumber(
-          result.totals.in_scope_rows
-        )} in-scope ticket(s).`
-      );
+      if (usesProblemChangeWorkflow) {
+        setMessage(
+          `Applied mapping to ${formatNumber(result.totals.applied)} batch(es), skipped ${formatNumber(
+            result.totals.skipped
+          )} already-applied batch(es), produced ${formatNumber(
+            result.totals.in_scope_rows
+          )} ${recordLabelPlural.toLowerCase()}, and skipped ${formatNumber(
+            result.totals.duplicate_skipped_rows
+          )} duplicate row(s).`
+        );
+      } else {
+        setMessage(
+          `Applied mapping to ${formatNumber(result.totals.applied)} batch(es), skipped ${formatNumber(
+            result.totals.skipped
+          )} already-applied batch(es), and produced ${formatNumber(
+            result.totals.in_scope_rows
+          )} in-scope ticket(s).`
+        );
+      }
       await refreshBatches();
       setActiveStep("summary");
     } catch (requestError) {
@@ -951,8 +1107,9 @@ function TicketDetailsWorkflow({
                   <th>Normalize</th>
                   <th>Apply Mapping</th>
                   <th>Input Rows</th>
-                  <th>In-Scope</th>
-                  <th>Out-of-Scope</th>
+                  <th>{usesProblemChangeWorkflow ? "Records" : "In-Scope"}</th>
+                  <th>{usesProblemChangeWorkflow ? "Unmatched" : "Out-of-Scope"}</th>
+                  <th>Duplicates</th>
                   <th>Error</th>
                 </tr>
               </thead>
@@ -976,7 +1133,18 @@ function TicketDetailsWorkflow({
                     <td>{row.applyStatus}</td>
                     <td>{formatNumber(row.inputRows)}</td>
                     <td>{formatNumber(row.inScopeRows)}</td>
-                    <td>{formatNumber(row.outOfScopeRows)}</td>
+                    <td>
+                      {formatNumber(
+                        usesProblemChangeWorkflow
+                          ? applyResult?.files.find((file) => file.upload_batch_id === row.batchId)
+                              ?.assignment_group_not_in_inventory_rows ??
+                            normalizeResult?.batches.find(
+                              (batch) => batch.upload_batch_id === row.batchId
+                            )?.assignment_group_not_in_inventory_rows
+                          : row.outOfScopeRows
+                      )}
+                    </td>
+                    <td>{formatNumber(row.duplicateSkippedRows)}</td>
                     <td>{row.error ?? "-"}</td>
                   </tr>
                 ))}
@@ -1027,7 +1195,7 @@ function TicketDetailsWorkflow({
         </div>
 
         <label className="file-input">
-          <span>{isSlaUpload ? "Incident SLA Files" : "Ticket Files"}</span>
+          <span>{uploadFileLabel}</span>
           <input
             accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             multiple
@@ -1166,7 +1334,11 @@ function TicketDetailsWorkflow({
         <div className="panel-heading compact-heading">
           <div>
             <p className="label">Normalize</p>
-            <h2>Split In-Scope and Out-of-Scope Tickets</h2>
+            <h2>
+              {usesProblemChangeWorkflow
+                ? `Normalize ${recordLabelPlural}`
+                : "Split In-Scope and Out-of-Scope Tickets"}
+            </h2>
           </div>
           <button
             className="primary-button"
@@ -1183,11 +1355,29 @@ function TicketDetailsWorkflow({
         {normalizeResult ? (
           <div className="summary-grid summary-block">
             <MetricCard label="Raw Rows" value={formatNumber(normalizeResult.totals.raw_rows)} />
-            <MetricCard label="In Scope" value={formatNumber(normalizeResult.totals.in_scope_inserted)} />
             <MetricCard
-              label="Out of Scope"
-              value={formatNumber(normalizeResult.totals.out_of_scope_inserted)}
+              label={usesProblemChangeWorkflow ? "Records" : "In Scope"}
+              value={formatNumber(normalizeResult.totals.in_scope_inserted)}
             />
+            {usesProblemChangeWorkflow ? (
+              <>
+                <MetricCard
+                  label="Unmatched Inventory"
+                  value={formatNumber(
+                    normalizeResult.totals.assignment_group_not_in_inventory_rows
+                  )}
+                />
+                <MetricCard
+                  label="Duplicates Skipped"
+                  value={formatNumber(normalizeResult.totals.duplicate_skipped_rows)}
+                />
+              </>
+            ) : (
+              <MetricCard
+                label="Out of Scope"
+                value={formatNumber(normalizeResult.totals.out_of_scope_inserted)}
+              />
+            )}
             <MetricCard label="Failed Batches" value={formatNumber(normalizeResult.totals.failed_batches)} />
           </div>
         ) : null}
@@ -1371,7 +1561,11 @@ function TicketDetailsWorkflow({
         <div className="panel-heading compact-heading">
           <div>
             <p className="label">Apply Mapping</p>
-            <h2>Finalize Normalized Ticket Data</h2>
+            <h2>
+              {usesProblemChangeWorkflow
+                ? `Finalize ${recordLabelPlural}`
+                : "Finalize Normalized Ticket Data"}
+            </h2>
           </div>
           <button
             className="primary-button"
@@ -1397,13 +1591,26 @@ function TicketDetailsWorkflow({
             <MetricCard label="Failed" value={formatNumber(applyResult.totals.failed)} />
             <MetricCard label="Raw Rows" value={formatNumber(applyResult.totals.input_rows)} />
             <MetricCard
-              label="In Scope"
+              label={usesProblemChangeWorkflow ? "Records" : "In Scope"}
               value={formatNumber(applyResult.totals.in_scope_rows)}
             />
-            <MetricCard
-              label="Out of Scope"
-              value={formatNumber(applyResult.totals.out_of_scope_rows)}
-            />
+            {usesProblemChangeWorkflow ? (
+              <>
+                <MetricCard
+                  label="Unmatched Inventory"
+                  value={formatNumber(applyResult.totals.assignment_group_not_in_inventory_rows)}
+                />
+                <MetricCard
+                  label="Duplicates Skipped"
+                  value={formatNumber(applyResult.totals.duplicate_skipped_rows)}
+                />
+              </>
+            ) : (
+              <MetricCard
+                label="Out of Scope"
+                value={formatNumber(applyResult.totals.out_of_scope_rows)}
+              />
+            )}
             <MetricCard label="Failed Rows" value={formatNumber(applyResult.totals.failed_rows)} />
           </div>
         ) : null}
@@ -1519,17 +1726,28 @@ function TicketDetailsWorkflow({
             )}
           />
           <MetricCard
-            label="In-Scope Output"
+            label={usesProblemChangeWorkflow ? "Records Output" : "In-Scope Output"}
             value={formatNumber(
               applyResult?.totals.in_scope_rows ?? normalizeResult?.totals.in_scope_inserted
             )}
           />
-          <MetricCard
-            label="Out-of-Scope Output"
-            value={formatNumber(
-              applyResult?.totals.out_of_scope_rows ?? normalizeResult?.totals.out_of_scope_inserted
-            )}
-          />
+          {usesProblemChangeWorkflow ? (
+            <MetricCard
+              label="Duplicates Skipped"
+              value={formatNumber(
+                applyResult?.totals.duplicate_skipped_rows ??
+                  normalizeResult?.totals.duplicate_skipped_rows
+              )}
+            />
+          ) : (
+            <MetricCard
+              label="Out-of-Scope Output"
+              value={formatNumber(
+                applyResult?.totals.out_of_scope_rows ??
+                  normalizeResult?.totals.out_of_scope_inserted
+              )}
+            />
+          )}
           <MetricCard
             label="Blank Assignment Group"
             value={formatNumber(applyResult?.totals.blank_assignment_group_rows)}

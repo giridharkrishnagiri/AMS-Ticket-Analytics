@@ -47,6 +47,7 @@ export type ApplyMappingResponse = {
   out_of_scope_ticket_count: number;
   blank_assignment_group_count: number;
   assignment_group_not_in_inventory_count: number;
+  duplicate_skipped_count: number;
   failed_row_count: number;
   warnings: string[];
   errors: NormalizationErrorSample[];
@@ -68,6 +69,7 @@ export type ScopedApplyMappingResponse = {
   out_of_scope_ticket_count: number;
   blank_assignment_group_count: number;
   assignment_group_not_in_inventory_count: number;
+  duplicate_skipped_count: number;
   failed_row_count: number;
   warnings: string[];
   errors: NormalizationErrorSample[];
