@@ -1462,6 +1462,7 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         assert priority_payload["time_grain"] == "monthly"
         assert "P1" in priority_payload["priorities"]
         assert priority_payload["points"][0]["values"]["P1"] == 3
+        assert priority_payload["points"][0]["percentages"]["P1"] == 100.0
         assert priority_payload["points"][0]["total"] == 3
 
         assert sla_trends_response.status_code == 200
@@ -2222,10 +2223,33 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "max-height: none; min-height: 0;" in document
         assert "#applications .legend" in document
         assert "font-size: 0.82rem" in document
-        assert "const dataLabelFontSize = isApplicationChart ? 14 : 10;" in document
-        assert "const axisLabelFontSize = isApplicationChart ? 13 : 10;" in document
+        assert (
+            "const dataLabelFontSize = isApplicationChart ? 14 : isDurationBucketChart ? 14 : 10;"
+            in document
+        )
+        assert (
+            "const axisLabelFontSize = isApplicationChart ? 13 : isDurationBucketChart ? 13 : 10;"
+            in document
+        )
         assert "barWidth = Math.max(22" in document
+        assert "barWidth = Math.max(28" in document
         assert "applicationChart: true" in document
+        assert "durationBucketChart: true" in document
+        assert 'data-commentary-skip="true"' in document
+        assert 'data-commentary-key="top_high_volume_applications"' in document
+        assert 'data-commentary-key="tickets_per_user_application"' in document
+        assert "sap_non_sap_distribution_row" in document
+        assert "architecture_type_distribution_row" in document
+        assert "install_type_distribution_row" in document
+        assert "incident_duration_buckets_row" in document
+        assert "sc_task_duration_buckets_row" in document
+        assert "sap_non_sap_tickets_individual" not in document
+        assert "architecture_incidents_individual" not in document
+        assert "install_sc_tasks_individual" not in document
+        assert "incident_duration_mar_individual" not in document
+        assert "function priorityLabelRequired" in document
+        assert "function priorityCellText" in document
+        assert '(${Number(percentage || 0).toFixed(1)}%)' in document
         assert "chart-stage" in document
         assert "chart-copy-toolbar" in document
         assert "copy-chart-button" in document
@@ -2385,6 +2409,50 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "normalized_payload" not in kpi_row
         assert "ticket_number" not in payload["volumetrics"]["monthly_rows"][0]
         assert "normalized_payload" not in payload["volumetrics"]["monthly_rows"][0]
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_priority_distribution_returns_period_percentages() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        priorities = ["P1", "P2", "P3", "P3", "P4"]
+        for index, priority in enumerate(priorities, start=1):
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"INC-PRIORITY-{index}",
+                "INCIDENT",
+                dt(f"2026-01-{index:02d}T00:00:00"),
+                priority=priority,
+            )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/priority-distribution",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "in_scope",
+                    "ticket_type": "incident",
+                    "time_grain": "monthly",
+                    "start_datetime": "2026-01-01T00:00:00+00:00",
+                    "end_datetime": "2026-01-31T23:59:59+00:00",
+                    "filters": {},
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        point = payload["points"][0]
+        assert point["total"] == 5
+        assert point["values"]["P3"] == 2
+        assert point["values"]["P4"] == 1
+        assert point["percentages"]["P3"] == 40.0
+        assert point["percentages"]["P4"] == 20.0
+        assert round(sum(point["percentages"].values()), 1) == 100.0
     finally:
         cleanup_client(db, client_id)
 

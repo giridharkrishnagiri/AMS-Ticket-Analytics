@@ -2262,12 +2262,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       if (!root) return;
       root.querySelectorAll(".chart-card, .table-card").forEach((card) => {
         if (card.querySelector(".commentary-box")) return;
+        if (card.dataset.commentarySkip === "true") return;
         const title = card.querySelector("h3")?.textContent || card.getAttribute("aria-label") || "section";
+        const chartKey = card.dataset.commentaryKey || normalizeChartKey(title);
+        const sectionKey = card.dataset.commentarySection || context.section_key;
         card.insertAdjacentHTML(
           "beforeend",
           commentaryMarkup({
             ...context,
-            chart_key: normalizeChartKey(title)
+            section_key: sectionKey,
+            chart_key: chartKey
           })
         );
       });
@@ -2358,9 +2362,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function barChart(data, series, options = {}) {
       const width = Math.max(640, Math.min(options.width || 960, 1120));
       const isApplicationChart = Boolean(options.applicationChart);
-      const height = options.height || (isApplicationChart ? 380 : 360);
+      const isDurationBucketChart = Boolean(options.durationBucketChart);
+      const height = options.height || (isApplicationChart ? 380 : isDurationBucketChart ? 340 : 360);
       const margin = isApplicationChart
         ? { top: 46, right: 28, bottom: 96, left: 42 }
+        : isDurationBucketChart
+          ? { top: 52, right: 30, bottom: 92, left: 40 }
         : { top: 42, right: 28, bottom: 86, left: 36 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
@@ -2378,12 +2385,14 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       } else if (isApplicationChart) {
         const totalBarWidth = Math.max(24, Math.min(52, groupWidth * 0.36));
         barWidth = Math.max(22, totalBarWidth / Math.max(1, series.length));
+      } else if (isDurationBucketChart) {
+        barWidth = Math.max(28, Math.min(58, (groupWidth - 16) / series.length));
       } else {
         barWidth = Math.max(5, Math.min(18, (groupWidth - 8) / series.length));
       }
-      const dataLabelFontSize = isApplicationChart ? 14 : 10;
-      const axisLabelFontSize = isApplicationChart ? 13 : 10;
-      const labelFontWeight = isApplicationChart ? 800 : 700;
+      const dataLabelFontSize = isApplicationChart ? 14 : isDurationBucketChart ? 14 : 10;
+      const axisLabelFontSize = isApplicationChart ? 13 : isDurationBucketChart ? 13 : 10;
+      const labelFontWeight = isApplicationChart || isDurationBucketChart ? 800 : 700;
       const bars = [];
       data.forEach((row, index) => {
         series.forEach((item, seriesIndex) => {
@@ -2850,13 +2859,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           </div>
           ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_summary", chart_key: "", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}
           <div class="chart-grid">
-            <section class="chart-card panel"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
-            <section class="chart-card panel"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
-            <section class="chart-card panel"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
-            <section class="chart-card panel"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel" data-commentary-key="strategic"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
+            <section class="chart-card panel" data-commentary-key="lifecycle_stage"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel" data-commentary-key="architecture_type"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel" data-commentary-key="install_type"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
           </div>
-          <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top Parent Business Applications by Active Users</h3><p class="muted">Application Inventory only. One row per Parent Business Application, using the highest Active Users value when duplicates exist.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Parent Business Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
-          <section class="panel table-card" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
+          <section class="chart-card panel full" data-commentary-key="top_active_users"><div class="chart-title-row"><div><h3>Top Parent Business Applications by Active Users</h3><p class="muted">Application Inventory only. One row per Parent Business Application, using the highest Active Users value when duplicates exist.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Parent Business Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
+          <section class="panel table-card" data-commentary-key="application_list" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
         </section>
       </div>`;
       document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
@@ -3111,7 +3120,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function distributionPieSection(title, field, ticketType) {
       const notApplicable = distributionNotApplicable(ticketType);
       const items = distributionItems(field, ticketType);
-      return `<section class="chart-card panel"><h3>${esc(title)}</h3><p class="muted">${splitWindowText()}</p><div class="chart-frame chart-stage">${notApplicable ? `<p class="muted" style="padding:12px">This distribution chart is not applicable for the selected ticket type.</p>` : pieChart(items)}</div></section>`;
+      return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">${splitWindowText()}</p><div class="chart-frame chart-stage">${notApplicable ? `<p class="muted" style="padding:12px">This distribution chart is not applicable for the selected ticket type.</p>` : pieChart(items)}</div></section>`;
     }
     function incidentBatchTrendPoints() {
       const rows = detailedVolumeRows().filter(incidentBatchFilterMatch);
@@ -3136,25 +3145,28 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ? "Batch-related ticket charts are applicable only for Incidents. SC Task catalog item charts will be added separately."
         : "Batch-related charts are Incident-only and use Incident tickets within the selected filters.";
       return `
-        <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top High-Volume Applications</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("volume", state.topVolumeN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topVolume.map((row) => ({ label: row.label, value: row.created, displayLabel: row.displayLabel })), { title: "Top High-Volume Applications", legend: "Average monthly tickets", color: COLORS.teal, height: state.topVolumeN === "20" ? 820 : 520 })}</div></section>
-        <section class="chart-card panel full"><h3>Batch-related Incidents Created</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
-        <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top Applications with Incident Batch-Related Tickets</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("batch", state.topBatchN)}</div></div><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : paretoBarLineChart(topBatch, "Average Batch Created Count", "Average Batch Canceled Count")}</div></section>
-        <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Tickets per User per Month by Application</h3><p class="muted">Calculated as latest complete 6-month average monthly ticket volume divided by Active Users.</p></div><div class="pattern-buttons">${topToggle("tickets-user", state.ticketsPerUserN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(ticketUserPoints, { title: "Tickets per User per Month by Application", legend: "Tickets per user per month", color: COLORS.purple, digits: 2, height: state.ticketsPerUserN === "20" ? 780 : 500, emptyMessage: "No applications with non-zero Active Users are available." })}</div></section>
+        <section class="chart-card panel full" data-commentary-key="top_high_volume_applications"><div class="chart-title-row"><div><h3>Top High-Volume Applications</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("volume", state.topVolumeN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topVolume.map((row) => ({ label: row.label, value: row.created, displayLabel: row.displayLabel })), { title: "Top High-Volume Applications", legend: "Average monthly tickets", color: COLORS.teal, height: state.topVolumeN === "20" ? 820 : 520 })}</div></section>
+        <section class="chart-card panel full" data-commentary-key="batch_related_incidents_created"><h3>Batch-related Incidents Created</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
+        <section class="chart-card panel full" data-commentary-key="top_incident_batch_applications"><div class="chart-title-row"><div><h3>Top Applications with Incident Batch-Related Tickets</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("batch", state.topBatchN)}</div></div><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : paretoBarLineChart(topBatch, "Average Batch Created Count", "Average Batch Canceled Count")}</div></section>
+        <section class="chart-card panel full" data-commentary-key="tickets_per_user_application"><div class="chart-title-row"><div><h3>Tickets per User per Month by Application</h3><p class="muted">Calculated as latest complete 6-month average monthly ticket volume divided by Active Users.</p></div><div class="pattern-buttons">${topToggle("tickets-user", state.ticketsPerUserN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(ticketUserPoints, { title: "Tickets per User per Month by Application", legend: "Tickets per user per month", color: COLORS.purple, digits: 2, height: state.ticketsPerUserN === "20" ? 780 : 500, emptyMessage: "No applications with non-zero Active Users are available." })}</div></section>
         <div class="chart-grid-three">
           ${distributionPieSection("Average Monthly Tickets by SAP / Non-SAP", "sap_non_sap", "all")}
           ${distributionPieSection("Average Monthly Incidents by SAP / Non-SAP", "sap_non_sap", "incident")}
           ${distributionPieSection("Average Monthly SC Tasks by SAP / Non-SAP", "sap_non_sap", "sc_task")}
         </div>
+        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "sap_non_sap_distribution_row" })}
         <div class="chart-grid-three">
           ${distributionPieSection("Average Monthly Tickets by Architecture Type", "architecture_type", "all")}
           ${distributionPieSection("Average Monthly Incidents by Architecture Type", "architecture_type", "incident")}
           ${distributionPieSection("Average Monthly SC Tasks by Architecture Type", "architecture_type", "sc_task")}
         </div>
+        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "architecture_type_distribution_row" })}
         <div class="chart-grid-three">
           ${distributionPieSection("Average Monthly Tickets by Install Type", "install_type", "all")}
           ${distributionPieSection("Average Monthly Incidents by Install Type", "install_type", "incident")}
           ${distributionPieSection("Average Monthly SC Tasks by Install Type", "install_type", "sc_task")}
         </div>
+        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "install_type_distribution_row" })}
       `;
     }
     function truncateLabel(value, maxLength = 28) {
@@ -3314,14 +3326,15 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
     }
     function durationBucketChart(row) {
-      return `<section class="chart-card panel"><h3>${esc(row.label)}</h3><div class="chart-frame chart-stage">${barChart(row.buckets, [{ key: "count", name: "Tickets", color: COLORS.purple }], { width: 420 })}</div></section>`;
+      return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(row.label)}</h3><div class="chart-frame chart-stage">${barChart(row.buckets, [{ key: "count", name: "Tickets", color: COLORS.purple }], { width: 520, height: 340, durationBucketChart: true })}</div></section>`;
     }
     function durationGroup(title, ticketType) {
       const notApplicable = state.volTicketType !== "all" && state.volTicketType !== ticketType;
       if (notApplicable) {
         return `<section class="panel full"><h3>${esc(title)}</h3><p class="muted">This duration group is not applicable for the selected ticket type.</p></section>`;
       }
-      return `<section class="panel full"><p class="label">Duration Buckets</p><h3>${esc(title)}</h3><div class="duration-grid">${durationRows(ticketType).map(durationBucketChart).join("")}</div></section>`;
+      const commentaryKey = ticketType === "incident" ? "incident_duration_buckets_row" : "sc_task_duration_buckets_row";
+      return `<section class="panel full"><p class="label">Duration Buckets</p><h3>${esc(title)}</h3><div class="duration-grid">${durationRows(ticketType).map(durationBucketChart).join("")}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: commentaryKey })}</section>`;
     }
     function renderKpiTrends() {
       return `
@@ -3350,11 +3363,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${tile("Response SLA", responseAverage === null ? "N/A" : `${responseAverage.toFixed(1)}%`, "Avg monthly adherence", 3, 5)}
           ${tile("Resolution SLA", resolutionAverage === null ? "N/A" : `${resolutionAverage.toFixed(1)}%`, "Avg monthly adherence", 4, 5)}
         </div>
-        <section class="chart-card panel full"><h3>Created vs Resolved/Closed vs Canceled / Closed Incomplete</h3><div class="chart-frame chart-stage">${barChart(periods, [{ key: "created", name: "Created", color: COLORS.teal }, { key: "resolved", name: "Resolved/Closed", color: COLORS.blue }, { key: "canceled", name: "Canceled", color: COLORS.red }], { width: 1040 })}</div></section>
-        <section class="chart-card panel full"><h3>Backlog(Open)</h3><div class="chart-frame chart-stage">${lineChart(periods, "backlog", "average")}</div></section>
-        <section class="chart-card panel full"><h3>Created Pattern</h3><p class="muted">Average created/opened tickets across the available monthly range.</p><div class="pattern-buttons">${patternButtons()}</div><div class="chart-frame chart-stage">${createdPatternChart()}</div></section>
-        <section class="chart-card panel full"><h3>Created vs Resolved by hour of the day</h3><div class="pattern-buttons">${hourlyButtons()}</div><div class="chart-frame chart-stage">${hourlyCreatedResolvedChart()}</div></section>
-        <section class="chart-card panel full"><div class="chart-title-row"><h3>Priority-wise ticket distribution</h3><div class="pattern-buttons">${priorityToggle()}</div></div><div class="chart-frame chart-stage">${priorityDistributionContent()}</div></section>
+        <section class="chart-card panel full" data-commentary-key="created_resolved_canceled"><h3>Created vs Resolved/Closed vs Canceled / Closed Incomplete</h3><div class="chart-frame chart-stage">${barChart(periods, [{ key: "created", name: "Created", color: COLORS.teal }, { key: "resolved", name: "Resolved/Closed", color: COLORS.blue }, { key: "canceled", name: "Canceled", color: COLORS.red }], { width: 1040 })}</div></section>
+        <section class="chart-card panel full" data-commentary-key="backlog"><h3>Backlog(Open)</h3><div class="chart-frame chart-stage">${lineChart(periods, "backlog", "average")}</div></section>
+        <section class="chart-card panel full" data-commentary-key="created_pattern"><h3>Created Pattern</h3><p class="muted">Average created/opened tickets across the available monthly range.</p><div class="pattern-buttons">${patternButtons()}</div><div class="chart-frame chart-stage">${createdPatternChart()}</div></section>
+        <section class="chart-card panel full" data-commentary-key="hourly_created_resolved"><h3>Created vs Resolved by hour of the day</h3><div class="pattern-buttons">${hourlyButtons()}</div><div class="chart-frame chart-stage">${hourlyCreatedResolvedChart()}</div></section>
+        <section class="chart-card panel full" data-commentary-key="priority_distribution"><div class="chart-title-row"><h3>Priority-wise ticket distribution</h3><div class="pattern-buttons">${priorityToggle()}</div></div><div class="chart-frame chart-stage">${priorityDistributionContent()}</div></section>
       `;
     }
     function average(values) {
@@ -3408,6 +3421,27 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function priorityToggle() {
       return ["graph", "table"].map((value) => `<button type="button" data-priority-view="${esc(value)}" class="${state.priorityView === value ? "active" : ""}">${value === "graph" ? "Graph" : "Data table"}</button>`).join("");
     }
+    function priorityRank(label) {
+      const normalized = String(label || "").toLowerCase();
+      const pMatch = normalized.match(/\bp\s*([1-4])\b/);
+      if (pMatch) return Number(pMatch[1]);
+      const digitMatch = normalized.match(/\b([1-4])\b/);
+      if (digitMatch) return Number(digitMatch[1]);
+      if (normalized.includes("moderate") || normalized.includes("medium")) return 3;
+      if (normalized.includes("low")) return 4;
+      if (normalized.includes("critical")) return 1;
+      if (normalized.includes("high")) return 2;
+      return null;
+    }
+    function priorityLabelRequired(label) {
+      const rank = priorityRank(label);
+      return rank === 3 || rank === 4;
+    }
+    function priorityCellText(point, priority) {
+      const count = Number(point.values[priority] || 0);
+      const percentage = point.percentages?.[priority] ?? (point.total > 0 ? (count / point.total) * 100 : 0);
+      return `${fmt(count)} (${Number(percentage || 0).toFixed(1)}%)`;
+    }
     function priorityDistributionContent() {
       const priorities = DASHBOARD.volumetrics.overall_volume_trends?.priority_distribution?.priorities || [];
       const rows = filteredPriorityRows();
@@ -3417,10 +3451,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         rows.filter((row) => row.period_key === period.period_key).forEach((row) => {
           values[row.priority] = (values[row.priority] || 0) + Number(row.ticket_count || 0);
         });
+        const total = priorities.reduce((sumValue, priority) => sumValue + (values[priority] || 0), 0);
+        const percentages = {};
+        priorities.forEach((priority) => {
+          percentages[priority] = total > 0 ? (values[priority] / total) * 100 : 0;
+        });
         return {
           label: period.period_label,
           values,
-          total: priorities.reduce((sumValue, priority) => sumValue + (values[priority] || 0), 0)
+          percentages,
+          total
         };
       });
       if (state.priorityView === "table") {
@@ -3430,7 +3470,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return stackedBarChart(periodRows, series);
     }
     function priorityDistributionTable(points, priorities) {
-      return `<div class="table-frame table-scroll"><table><thead><tr><th>Period</th>${priorities.map((priority) => `<th>${esc(priority)}</th>`).join("")}<th>Total</th></tr></thead><tbody>${points.map((point) => `<tr><td>${esc(point.label)}</td>${priorities.map((priority) => `<td>${fmt(point.values[priority] || 0)}</td>`).join("")}<td>${fmt(point.total)}</td></tr>`).join("")}</tbody></table></div>`;
+      return `<div class="table-frame table-scroll"><table><thead><tr><th>Period</th>${priorities.map((priority) => `<th>${esc(priority)}</th>`).join("")}<th>Total</th></tr></thead><tbody>${points.map((point) => `<tr><td>${esc(point.label)}</td>${priorities.map((priority) => `<td>${priorityCellText(point, priority)}</td>`).join("")}<td>${fmt(point.total)}</td></tr>`).join("")}</tbody></table></div>`;
     }
     function stackedBarChart(data, series) {
       const width = 1040;
@@ -3449,8 +3489,15 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           const barHeight = (value / maxValue) * plotHeight;
           const x = margin.left + index * groupWidth + (groupWidth - barWidth) / 2;
           const y = stackTop - barHeight;
+          const segmentPct = row.percentages?.[item.key] ?? (row.total > 0 ? (value / row.total) * 100 : 0);
           if (value > 0) {
-            bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${item.color}"><title>${esc(item.name)}: ${fmt(value)}</title></rect>`);
+            bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${item.color}"><title>${esc(item.name)}: ${fmt(value)} (${segmentPct.toFixed(1)}%)</title></rect>`);
+            if (priorityLabelRequired(item.name)) {
+              const label = `${fmt(value)} (${segmentPct.toFixed(1)}%)`;
+              const inside = barHeight >= 24 && barWidth >= 42;
+              const labelY = inside ? y + barHeight / 2 + 4 : Math.max(margin.top + 12, y - 6);
+              bars.push(`<text x="${x + barWidth / 2}" y="${labelY}" text-anchor="middle" font-size="10" font-weight="900" fill="${inside ? "#ffffff" : "#334155"}" stroke="${inside ? "none" : "#ffffff"}" stroke-width="${inside ? 0 : 3}" paint-order="stroke">${esc(label)}</text>`);
+            }
           }
           stackTop = y;
         });
@@ -3472,8 +3519,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const response = slaTrendPoints(rows, "response");
       const resolution = slaTrendPoints(rows, "resolution");
       return `
-        <section class="chart-card panel full"><h3>Response SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame chart-stage">${slaLineChart(response, COLORS.teal, "Response SLA adherence %")}</div>${slaTrendTable(response, "Response SLA")}</section>
-        <section class="chart-card panel full"><h3>Resolution SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame chart-stage">${slaLineChart(resolution, COLORS.blue, "Resolution SLA adherence %")}</div>${slaTrendTable(resolution, "Resolution SLA")}</section>
+        <section class="chart-card panel full" data-commentary-key="response_sla_adherence"><h3>Response SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame chart-stage">${slaLineChart(response, COLORS.teal, "Response SLA adherence %")}</div>${slaTrendTable(response, "Response SLA")}</section>
+        <section class="chart-card panel full" data-commentary-key="resolution_sla_adherence"><h3>Resolution SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame chart-stage">${slaLineChart(resolution, COLORS.blue, "Resolution SLA adherence %")}</div>${slaTrendTable(resolution, "Resolution SLA")}</section>
       `;
     }
     function slaTrendPoints(rows, kind) {

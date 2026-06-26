@@ -518,6 +518,7 @@ export type DashboardVolumetricsPriorityDistributionPoint = {
   period_key: string;
   period_label: string;
   values: Record<string, number>;
+  percentages: Record<string, number | null>;
   total: number;
 };
 

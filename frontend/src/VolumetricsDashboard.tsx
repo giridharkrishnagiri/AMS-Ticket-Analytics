@@ -55,6 +55,7 @@ import type {
   DashboardVolumetricsKpiMttrPrioritySet,
   DashboardVolumetricsKpiMttrTrends,
   DashboardVolumetricsPriorityDistribution,
+  DashboardVolumetricsPriorityDistributionPoint,
   DashboardVolumetricsRankingWindow,
   DashboardVolumetricsRequest,
   DashboardVolumetricsSlaTrends,
@@ -1913,50 +1914,47 @@ function DetailedVolumeTrends({
         onTopNChange={onTicketsPerUserNChange}
         status={ticketsPerUserStatus}
         topN={ticketsPerUserN}
-        commentary={commentaryForChart("tickets_per_user")}
+        commentary={commentaryForChart("tickets_per_user_application")}
       />
 
       <DistributionPieRow
+        commentary={commentaryForChart("sap_non_sap_distribution_row")}
         data={distributionSplits.sap_non_sap}
         error={distributionSplitsError}
         status={distributionSplitsStatus}
         ticketType={ticketType}
-        titlePrefix="SAP / Non-SAP"
         titles={{
           all: "Average Monthly Tickets by SAP / Non-SAP",
           incidents: "Average Monthly Incidents by SAP / Non-SAP",
           sc_tasks: "Average Monthly SC Tasks by SAP / Non-SAP",
         }}
         window={distributionSplits.ranking_window}
-        commentaryForChart={commentaryForChart}
       />
       <DistributionPieRow
+        commentary={commentaryForChart("architecture_type_distribution_row")}
         data={distributionSplits.architecture_type}
         error={distributionSplitsError}
         status={distributionSplitsStatus}
         ticketType={ticketType}
-        titlePrefix="Architecture Type"
         titles={{
           all: "Average Monthly Tickets by Architecture Type",
           incidents: "Average Monthly Incidents by Architecture Type",
           sc_tasks: "Average Monthly SC Tasks by Architecture Type",
         }}
         window={distributionSplits.ranking_window}
-        commentaryForChart={commentaryForChart}
       />
       <DistributionPieRow
+        commentary={commentaryForChart("install_type_distribution_row")}
         data={distributionSplits.install_type}
         error={distributionSplitsError}
         status={distributionSplitsStatus}
         ticketType={ticketType}
-        titlePrefix="Install Type"
         titles={{
           all: "Average Monthly Tickets by Install Type",
           incidents: "Average Monthly Incidents by Install Type",
           sc_tasks: "Average Monthly SC Tasks by Install Type",
         }}
         window={distributionSplits.ranking_window}
-        commentaryForChart={commentaryForChart}
       />
     </>
   );
@@ -2280,7 +2278,7 @@ function distributionChartNotApplicable(
 }
 
 function DistributionPieRow({
-  commentaryForChart,
+  commentary,
   data,
   error,
   status,
@@ -2288,12 +2286,11 @@ function DistributionPieRow({
   titles,
   window,
 }: {
-  commentaryForChart: (chartKey: string) => ReactNode;
+  commentary: ReactNode;
   data: DashboardVolumetricsDistributionSplits["sap_non_sap"];
   error: string | null;
   status: LoadStatus;
   ticketType: VolumetricsTicketType;
-  titlePrefix: string;
   titles: Record<DistributionTicketTypeKey, string>;
   window: DashboardVolumetricsRankingWindow;
 }) {
@@ -2303,28 +2300,27 @@ function DistributionPieRow({
     { key: "sc_tasks", points: data.sc_tasks },
   ];
   return (
-    <section className="volumetrics-three-column-grid">
-      {entries.map((entry) => (
-        <DistributionPieChart
-          commentary={commentaryForChart(
-            `${titles[entry.key].toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}`
-          )}
-          data={entry.points}
-          error={error}
-          key={entry.key}
-          status={status}
-          ticketType={ticketType}
-          title={titles[entry.key]}
-          valueTicketType={entry.key}
-          window={window}
-        />
-      ))}
+    <section className="volumetrics-row-group">
+      <div className="volumetrics-three-column-grid">
+        {entries.map((entry) => (
+          <DistributionPieChart
+            data={entry.points}
+            error={error}
+            key={entry.key}
+            status={status}
+            ticketType={ticketType}
+            title={titles[entry.key]}
+            valueTicketType={entry.key}
+            window={window}
+          />
+        ))}
+      </div>
+      {commentary}
     </section>
   );
 }
 
 function DistributionPieChart({
-  commentary,
   data,
   error,
   status,
@@ -2333,7 +2329,6 @@ function DistributionPieChart({
   valueTicketType,
   window,
 }: {
-  commentary?: ReactNode;
   data: DashboardVolumetricsSplitDatum[];
   error: string | null;
   status: LoadStatus;
@@ -2409,7 +2404,6 @@ function DistributionPieChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
-      {commentary}
     </section>
   );
 }
@@ -2706,22 +2700,22 @@ function KpiTrends({
         commentaryForChart={commentaryForChart}
       />
       <DurationBucketGroup
+        commentary={commentaryForChart("incident_duration_buckets_row")}
         data={durationBuckets.incident}
         error={durationBucketsError}
         selectedTicketType={ticketType}
         status={durationBucketsStatus}
         title="Incident Resolved Volume by Resolution Duration"
         valueTicketType="incident"
-        commentaryForChart={commentaryForChart}
       />
       <DurationBucketGroup
+        commentary={commentaryForChart("sc_task_duration_buckets_row")}
         data={durationBuckets.sc_task}
         error={durationBucketsError}
         selectedTicketType={ticketType}
         status={durationBucketsStatus}
         title="SC Task Closed Volume by Closed Duration"
         valueTicketType="sc_task"
-        commentaryForChart={commentaryForChart}
       />
     </>
   );
@@ -2949,7 +2943,7 @@ function MttrCombinedLineChart({
 }
 
 function DurationBucketGroup({
-  commentaryForChart,
+  commentary,
   data,
   error,
   selectedTicketType,
@@ -2957,7 +2951,7 @@ function DurationBucketGroup({
   title,
   valueTicketType,
 }: {
-  commentaryForChart: (chartKey: string) => ReactNode;
+  commentary: ReactNode;
   data: DashboardVolumetricsDurationBucketRow[];
   error: string | null;
   selectedTicketType: VolumetricsTicketType;
@@ -2980,27 +2974,23 @@ function DurationBucketGroup({
           This duration group is not applicable for the selected ticket type.
         </p>
       ) : (
-        <div className="duration-bucket-grid">
-          {data.map((row) => (
-            <DurationBucketChart
-              commentary={commentaryForChart(`${valueTicketType}_duration_${row.period_key}`)}
-              data={row}
-              key={row.period_key}
-              status={status}
-            />
-          ))}
-        </div>
+        <>
+          <div className="duration-bucket-grid">
+            {data.map((row) => (
+              <DurationBucketChart data={row} key={row.period_key} status={status} />
+            ))}
+          </div>
+          {commentary}
+        </>
       )}
     </section>
   );
 }
 
 function DurationBucketChart({
-  commentary,
   data,
   status,
 }: {
-  commentary?: ReactNode;
   data: DashboardVolumetricsDurationBucketRow;
   status: LoadStatus;
 }) {
@@ -3038,21 +3028,34 @@ function DurationBucketChart({
               data={rows}
               width={chartWidth}
               height={280}
-              margin={{ top: 32, right: 24, bottom: 64, left: 24 }}
+              margin={{ top: 36, right: 24, bottom: 68, left: 24 }}
+              barCategoryGap="18%"
             >
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="bucket" angle={-25} height={62} interval={0} textAnchor="end" />
+              <XAxis
+                dataKey="bucket"
+                angle={-25}
+                height={66}
+                interval={0}
+                textAnchor="end"
+                tick={{ fontSize: 12, fontWeight: 700 }}
+              />
               <YAxis hide />
               <Tooltip />
-              <Bar dataKey="count" fill={chartColors.patternAlt} name="Tickets" radius={[4, 4, 0, 0]}>
-                <LabelList dataKey="count" position="top" fontSize={11} />
+              <Bar
+                barSize={44}
+                dataKey="count"
+                fill={chartColors.patternAlt}
+                name="Tickets"
+                radius={[4, 4, 0, 0]}
+              >
+                <LabelList dataKey="count" position="top" fontSize={13} fontWeight={800} />
               </Bar>
             </BarChart>
           </div>
         </div>
       ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
-      {commentary}
     </section>
   );
 }
@@ -3566,11 +3569,86 @@ function priorityDataForChart(data: DashboardVolumetricsPriorityDistribution) {
       total: point.total,
     };
     series.forEach((item) => {
-      row[item.key] = point.values[item.label] ?? 0;
+      const count = point.values[item.label] ?? 0;
+      const percentage =
+        point.percentages[item.label] ?? (point.total > 0 ? (count / point.total) * 100 : 0);
+      row[item.key] = count;
+      row[`${item.key}_pct`] = percentage;
+      row[`${item.key}_label`] = priorityCountPercentageLabel(count, percentage);
     });
     return row;
   });
   return { points, series };
+}
+
+function priorityRank(label: string): number | null {
+  const normalized = label.toLowerCase();
+  const pMatch = normalized.match(/\bp\s*([1-4])\b/);
+  if (pMatch) {
+    return Number(pMatch[1]);
+  }
+  const digitMatch = normalized.match(/\b([1-4])\b/);
+  if (digitMatch) {
+    return Number(digitMatch[1]);
+  }
+  if (normalized.includes("moderate") || normalized.includes("medium")) {
+    return 3;
+  }
+  if (normalized.includes("low")) {
+    return 4;
+  }
+  if (normalized.includes("critical")) {
+    return 1;
+  }
+  if (normalized.includes("high")) {
+    return 2;
+  }
+  return null;
+}
+
+function priorityLabelRequired(label: string): boolean {
+  const rank = priorityRank(label);
+  return rank === 3 || rank === 4;
+}
+
+function priorityCountPercentageLabel(count: number, percentage: number | null | undefined): string {
+  const pctValue = Number.isFinite(Number(percentage)) ? Number(percentage) : 0;
+  return `${formatNumber(count)} (${pctValue.toFixed(1)}%)`;
+}
+
+function renderPriorityStackLabel(props: {
+  height?: number | string;
+  value?: unknown;
+  width?: number | string;
+  x?: number | string;
+  y?: number | string;
+}) {
+  if (typeof props.value !== "string" || !props.value.trim()) {
+    return null;
+  }
+  const x = Number(props.x ?? 0);
+  const y = Number(props.y ?? 0);
+  const width = Number(props.width ?? 0);
+  const height = Number(props.height ?? 0);
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+  const inside = height >= 22 && width >= 42;
+  return (
+    <text
+      x={x + width / 2}
+      y={inside ? y + height / 2 + 4 : Math.max(14, y - 6)}
+      textAnchor="middle"
+      fontSize={10}
+      fontWeight={800}
+      fill={inside ? "#ffffff" : "#334155"}
+      stroke={inside ? "none" : "#ffffff"}
+      strokeWidth={inside ? 0 : 3}
+      paintOrder="stroke"
+    >
+      {props.value}
+    </text>
+  );
 }
 
 function PriorityDistributionChart({
@@ -3667,7 +3745,14 @@ function PriorityDistributionChart({
                     key={item.key}
                     name={item.label}
                     stackId="priority"
-                  />
+                  >
+                    {priorityLabelRequired(item.label) ? (
+                      <LabelList
+                        content={renderPriorityStackLabel}
+                        dataKey={`${item.key}_label`}
+                      />
+                    ) : null}
+                  </Bar>
                 ))}
               </BarChart>
             </div>
@@ -3680,8 +3765,19 @@ function PriorityDistributionChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
+}
+
+function priorityCellText(
+  point: DashboardVolumetricsPriorityDistributionPoint,
+  priority: string
+): string {
+  const count = point.values[priority] ?? 0;
+  const percentage =
+    point.percentages[priority] ?? (point.total > 0 ? (count / point.total) * 100 : 0);
+  return priorityCountPercentageLabel(count, percentage);
 }
 
 function PriorityDistributionTable({ data }: { data: DashboardVolumetricsPriorityDistribution }) {
@@ -3702,7 +3798,7 @@ function PriorityDistributionTable({ data }: { data: DashboardVolumetricsPriorit
             <tr key={point.period_key}>
               <td>{point.period_label}</td>
               {data.priorities.map((priority) => (
-                <td key={priority}>{formatNumber(point.values[priority] ?? 0)}</td>
+                <td key={priority}>{priorityCellText(point, priority)}</td>
               ))}
               <td>{formatNumber(point.total)}</td>
             </tr>

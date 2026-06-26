@@ -516,6 +516,7 @@ class VolumetricsPriorityDistributionPoint(BaseModel):
     period_key: str
     period_label: str
     values: dict[str, int]
+    percentages: dict[str, float | None]
     total: int
 
 

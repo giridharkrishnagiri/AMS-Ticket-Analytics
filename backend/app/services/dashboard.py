@@ -2444,12 +2444,20 @@ def volumetrics_priority_distribution(db: Session, request: Any) -> dict[str, An
     for period in periods:
         period_key = volumetrics_period_lookup_key(period.start, grain)
         values = rows_by_period.get(period_key, {})
+        period_values = {priority: values.get(priority, 0) for priority in ordered_priorities}
+        period_total = sum(period_values.values())
         points.append(
             {
                 "period_key": period_key,
                 "period_label": period.label,
-                "values": {priority: values.get(priority, 0) for priority in ordered_priorities},
-                "total": sum(values.get(priority, 0) for priority in ordered_priorities),
+                "values": period_values,
+                "percentages": {
+                    priority: (
+                        round((count / period_total) * 100, 1) if period_total > 0 else 0.0
+                    )
+                    for priority, count in period_values.items()
+                },
+                "total": period_total,
             },
         )
 

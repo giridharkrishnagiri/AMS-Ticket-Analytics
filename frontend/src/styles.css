@@ -1870,6 +1870,12 @@ h2 {
   min-width: 0;
 }
 
+.volumetrics-row-group {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
 .kpi-trends-section {
   display: grid;
   gap: 14px;
