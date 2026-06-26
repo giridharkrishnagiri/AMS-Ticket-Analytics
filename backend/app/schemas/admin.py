@@ -31,6 +31,19 @@ class ProjectOperationalDataResetRequest(BaseModel):
     reset_incident_sla: bool = False
 
 
+class DashboardFilterFactsRefreshRequest(BaseModel):
+    project_id: UUID
+
+
+class DashboardFilterFactsRefreshResponse(BaseModel):
+    project_id: UUID
+    rows_deleted: int
+    rows_inserted: int
+    in_scope_rows: int
+    out_of_scope_rows: int
+    duration_ms: int
+
+
 class ProjectDeleteRequest(BaseModel):
     project_id: UUID
     confirmation: str

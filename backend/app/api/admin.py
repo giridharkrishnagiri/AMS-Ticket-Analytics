@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.schemas.admin import (
     ClientDeleteRequest,
+    DashboardFilterFactsRefreshRequest,
+    DashboardFilterFactsRefreshResponse,
     OperationalDataResetRequest,
     OperationalDataResetResponse,
     ProjectDeleteRequest,
@@ -21,6 +23,7 @@ from app.services.admin_reset import (
     reset_operational_data,
     reset_project_operational_data,
 )
+from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -75,6 +78,30 @@ def post_reset_project_operational_data(
         reset_changes=result.reset_changes,
         reset_incident_sla=result.reset_incident_sla,
         incident_sla_reset_reason=result.incident_sla_reset_reason,
+    )
+
+
+@router.post(
+    "/dashboard-filter-facts/refresh",
+    response_model=DashboardFilterFactsRefreshResponse,
+)
+def post_refresh_dashboard_filter_facts(
+    request: DashboardFilterFactsRefreshRequest,
+    db: DbSession,
+) -> DashboardFilterFactsRefreshResponse:
+    try:
+        result = refresh_dashboard_filter_facts(db, request.project_id)
+        db.commit()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return DashboardFilterFactsRefreshResponse(
+        project_id=result.project_id,
+        rows_deleted=result.rows_deleted,
+        rows_inserted=result.rows_inserted,
+        in_scope_rows=result.in_scope_rows,
+        out_of_scope_rows=result.out_of_scope_rows,
+        duration_ms=result.duration_ms,
     )
 
 

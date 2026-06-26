@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models import UploadBatch
 from app.schemas.mapping import (
     ApplyMappingRequest,
     ApplyMappingResponse,
@@ -15,10 +16,12 @@ from app.schemas.mapping import (
     SourceColumnsResponse,
     SuggestedMappingResponse,
 )
+from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 from app.services.mapping import (
     MappingError,
     apply_mapping_to_batch,
     apply_mapping_with_scope,
+    get_batch_ticket_type,
     get_mapping_template,
     get_suggested_mapping_result,
     get_suggested_mapping_result_for_batch,
@@ -31,6 +34,7 @@ from app.services.mapping import (
 
 router = APIRouter(prefix="/mappings", tags=["mappings"])
 DbSession = Annotated[Session, Depends(get_db)]
+GENERIC_FILTER_FACT_TICKET_TYPES = {"INCIDENT", "SERVICE_CATALOG_TASK"}
 
 
 @router.get("/batches/{upload_batch_id}/source-columns", response_model=SourceColumnsResponse)
@@ -183,6 +187,14 @@ def apply_mapping(
             mapping=request.mapping,
             delete_existing=request.delete_existing,
         )
+        batch_ticket_type = get_batch_ticket_type(db, upload_batch_id)
+        upload_batch = db.get(UploadBatch, upload_batch_id)
+        if (
+            batch_ticket_type in GENERIC_FILTER_FACT_TICKET_TYPES
+            and upload_batch is not None
+        ):
+            refresh_dashboard_filter_facts(db, upload_batch.project_id)
+            db.commit()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except MappingError as exc:
@@ -224,6 +236,9 @@ def apply_mapping_for_scope(
             delete_existing=request.delete_existing,
             save_as_default_for_ticket_type=request.save_as_default_for_ticket_type,
         )
+        if result.ticket_type in GENERIC_FILTER_FACT_TICKET_TYPES:
+            refresh_dashboard_filter_facts(db, request.project_id)
+            db.commit()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except MappingError as exc:

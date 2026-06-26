@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Bar,
@@ -840,6 +840,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   >(createLoadState(emptyDurationBuckets));
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
+  const filterValuesCacheRef = useRef<Map<string, DashboardVolumetricsFilterValues>>(new Map());
 
   const effectiveRange = useMemo(() => {
     if (timeGrain === "monthly") {
@@ -930,12 +931,40 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     }
   }, [projectId]);
 
+  const loadVolumetricsFilterValues = useCallback(async () => {
+    if (!requestBody || !requestSignature) {
+      return;
+    }
+
+    const cachedFilterValues = filterValuesCacheRef.current.get(requestSignature);
+    if (cachedFilterValues) {
+      setFilterValues({ status: "success", data: cachedFilterValues, error: null });
+      return;
+    }
+
+    setFilterValues((currentFilterValues) => ({
+      status: "loading",
+      data: currentFilterValues.data,
+      error: null,
+    }));
+    try {
+      const nextFilterValues = await getDashboardVolumetricsFilterValues(requestBody);
+      filterValuesCacheRef.current.set(requestSignature, nextFilterValues);
+      setFilterValues({ status: "success", data: nextFilterValues, error: null });
+    } catch (error) {
+      setFilterValues((currentFilterValues) => ({
+        status: "error",
+        data: currentFilterValues.data,
+        error: errorMessage(error, "Unable to load Volumetrics filters"),
+      }));
+    }
+  }, [requestBody, requestSignature]);
+
   const loadVolumetricsData = useCallback(async () => {
     if (!requestBody) {
       return;
     }
 
-    setFilterValues(createLoadState(emptyFilterValues, "loading"));
     setSummary(createLoadState(emptySummary, "loading"));
     setVolumeTrend(createLoadState(emptyVolumeTrend, "loading"));
     setBacklog(createLoadState(emptyBacklog, "loading"));
@@ -1155,17 +1184,6 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
         });
       });
 
-    void getDashboardVolumetricsFilterValues(requestBody)
-      .then((nextFilterValues) => {
-        setFilterValues({ status: "success", data: nextFilterValues, error: null });
-      })
-      .catch((error) => {
-        setFilterValues({
-          status: "error",
-          data: emptyFilterValues,
-          error: errorMessage(error, "Unable to load Volumetrics filters"),
-        });
-      });
   }, [
     createdPatternType,
     hourlyDayType,
@@ -1177,6 +1195,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
 
   useEffect(() => {
     if (projectId !== loadedProjectId) {
+      filterValuesCacheRef.current.clear();
       setLoadedProjectId(projectId);
       setScope("in_scope");
       setTicketType("all");
@@ -1268,6 +1287,27 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
     requestSignature,
   ]);
 
+  useEffect(() => {
+    if (!isActive || !hasActiveProjectContext || !isDateRangeReady || !requestBody) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void loadVolumetricsFilterValues();
+    }, 400);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    hasActiveProjectContext,
+    isActive,
+    isDateRangeReady,
+    loadVolumetricsFilterValues,
+    requestBody,
+    requestSignature,
+  ]);
+
   function updateFilter(filterName: FilterKey, values: string[]) {
     setFilters((currentFilters) => ({
       ...currentFilters,
@@ -1332,7 +1372,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
         </div>
 
         {filterValues.status === "loading" ? (
-          <p className="muted-text">Loading filter values...</p>
+          <p className="muted-text">Updating filter counts...</p>
         ) : null}
         {filterValues.status === "error" ? (
           <p className="error-text">{filterValues.error}</p>

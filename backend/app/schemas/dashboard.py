@@ -362,6 +362,8 @@ class VolumetricsFilterValuesResponse(BaseModel):
     application_owner: list[ApplicationFilterCountValue]
     supported_by_vendor: list[ApplicationFilterCountValue]
     sap_non_sap: list[ApplicationFilterCountValue]
+    source: str = "dashboard_filter_facts"
+    duration_ms: int | None = None
 
 
 class VolumetricsSummaryMetric(BaseModel):

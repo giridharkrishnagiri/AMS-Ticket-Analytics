@@ -14,6 +14,7 @@ def test_expected_ams_tables_are_registered() -> None:
         "tickets",
         "dashboard_aggregates",
         "dashboard_commentaries",
+        "dashboard_filter_facts",
         "export_jobs",
         "application_dimensions",
         "application_inventory_items",
@@ -159,6 +160,38 @@ def test_dashboard_commentary_columns_exist() -> None:
     assert "functional_track_ams_owner" in commentary_columns
     assert "commentary_html" in commentary_columns
     assert "commentary_text" in commentary_columns
+
+
+def test_dashboard_filter_fact_columns_and_indexes_exist() -> None:
+    fact_table = Base.metadata.tables["dashboard_filter_facts"]
+    fact_columns = fact_table.columns.keys()
+    fact_indexes = {index.name for index in fact_table.indexes}
+
+    assert "customer_id" in fact_columns
+    assert "project_id" in fact_columns
+    assert "record_source" in fact_columns
+    assert "record_type" in fact_columns
+    assert "scope" in fact_columns
+    assert "record_id" in fact_columns
+    assert "record_number" in fact_columns
+    assert "created_at_source" in fact_columns
+    assert "completed_at_source" in fact_columns
+    assert "created_month" in fact_columns
+    assert "completed_month" in fact_columns
+    assert "functional_track_ams_owner" in fact_columns
+    assert "assignment_group_support_owner" in fact_columns
+    assert "parent_business_application" in fact_columns
+    assert "application_owner" in fact_columns
+    assert "supported_by_vendor" in fact_columns
+    assert "sap_non_sap" in fact_columns
+    assert "architecture_type" in fact_columns
+    assert "install_type" in fact_columns
+
+    assert "ix_dashboard_filter_facts_project_scope_type" in fact_indexes
+    assert "ix_dashboard_filter_facts_project_functional" in fact_indexes
+    assert "ix_dashboard_filter_facts_project_assignment" in fact_indexes
+    assert "ix_dashboard_filter_facts_project_parent_app" in fact_indexes
+    assert "ix_dashboard_filter_facts_project_sap" in fact_indexes
 
 
 def test_scope_split_vendor_sla_columns_exist() -> None:

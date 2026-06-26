@@ -47,6 +47,7 @@ from app.schemas.upload import (
     UploadMultipleTotalsResponse,
     ValidationSummaryResponse,
 )
+from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 from app.services.ingestion import (
     IngestionError,
     IngestionJobAlreadyRunningError,
@@ -86,6 +87,7 @@ APPLY_STATUS_APPLIED = "APPLIED"
 APPLY_STATUS_ALREADY_APPLIED = "SKIPPED_ALREADY_APPLIED"
 APPLY_STATUS_PARTIAL_OUTPUT = "FAILED_PARTIAL_OUTPUT"
 APPLY_STATUS_FAILED = "FAILED"
+GENERIC_FILTER_FACT_TICKET_TYPES = {"INCIDENT", "SERVICE_CATALOG_TASK"}
 
 
 def get_batch_ticket_type(db: Session, upload_batch_id: UUID) -> str | None:
@@ -950,6 +952,12 @@ def normalize_upload_batches(
                 )
             )
 
+    if normalized_ticket_type in GENERIC_FILTER_FACT_TICKET_TYPES and any(
+        result.status == BATCH_STATUS_NORMALIZED for result in results
+    ):
+        refresh_dashboard_filter_facts(db, request.project_id)
+        db.commit()
+
     return UploadBatchNormalizeMultipleResponse(
         project_id=request.project_id,
         ticket_type=normalized_ticket_type,
@@ -1162,6 +1170,12 @@ def apply_mapping_to_upload_batches(
                     error=str(exc),
                 )
             )
+
+    if normalized_ticket_type in GENERIC_FILTER_FACT_TICKET_TYPES and any(
+        file.status == APPLY_STATUS_APPLIED for file in files
+    ):
+        refresh_dashboard_filter_facts(db, request.project_id)
+        db.commit()
 
     return UploadBatchApplyMappingMultipleResponse(
         project_id=request.project_id,

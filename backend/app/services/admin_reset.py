@@ -16,6 +16,7 @@ from app.models import (
     AssessmentProblemRecord,
     Client,
     DashboardAggregate,
+    DashboardFilterFact,
     ExportJob,
     IncidentSlaRow,
     IncidentSlaUpload,
@@ -27,6 +28,7 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
+from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 
 RESET_CONFIRMATION = "RESET OPERATIONAL DATA"
 PROJECT_RESET_CONFIRMATION = "RESET PROJECT OPERATIONAL DATA"
@@ -80,6 +82,7 @@ SLA_ENRICHMENT_FIELDS = (
 
 
 RESET_MODELS: tuple[tuple[str, Any], ...] = (
+    ("dashboard_filter_facts", DashboardFilterFact),
     ("dashboard_aggregates", DashboardAggregate),
     ("export_jobs", ExportJob),
     ("tickets", Ticket),
@@ -96,6 +99,7 @@ RESET_MODELS: tuple[tuple[str, Any], ...] = (
 )
 
 PROJECT_OPERATIONAL_MODELS: tuple[tuple[str, Any], ...] = (
+    ("dashboard_filter_facts", DashboardFilterFact),
     ("dashboard_aggregates", DashboardAggregate),
     ("export_jobs", ExportJob),
     ("tickets", Ticket),
@@ -579,6 +583,7 @@ def reset_project_operational_data(
             deleted_counts.update(
                 clear_project_ticket_type_operational_data(db, project_id, ticket_types)
             )
+            refresh_dashboard_filter_facts(db, project_id)
         if reset_problems:
             deleted_counts.update(
                 clear_project_problem_change_operational_data(db, project_id, "PROBLEM")

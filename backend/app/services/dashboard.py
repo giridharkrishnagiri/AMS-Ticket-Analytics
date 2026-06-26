@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
+from time import perf_counter
 from typing import Any
 from uuid import UUID
 
@@ -15,11 +16,13 @@ from app.models import (
     ApplicationInventoryItem,
     AssessmentOutOfScopeTicket,
     Client,
+    DashboardFilterFact,
     IncidentSlaRow,
     Project,
     Ticket,
     TicketRawRow,
 )
+from app.services.dashboard_filter_facts import ensure_dashboard_filter_facts
 
 SECONDS_PER_DAY = 86400
 SECONDS_PER_HOUR = 3600
@@ -192,6 +195,31 @@ SINGLE_VOLUMETRICS_FILTER_FIELDS = {
 COMBINED_VOLUMETRICS_FILTER_FIELDS = {
     "functional_track_ams_owner": ("functional_track", "ams_owner"),
     "assignment_group_support_lead": ("assignment_group", "support_lead"),
+}
+
+FACT_SINGLE_VOLUMETRICS_FILTER_FIELDS = {
+    "parent_application_name": "parent_business_application",
+    "application_owner": "application_owner",
+    "supported_by_vendor": "supported_by_vendor",
+    "sap_non_sap": "sap_non_sap",
+}
+
+FACT_COMBINED_VOLUMETRICS_FILTER_FIELDS = {
+    "functional_track_ams_owner": (
+        "functional_track",
+        "ams_owner",
+        "functional_track_ams_owner",
+    ),
+    "assignment_group_support_lead": (
+        "assignment_group",
+        "support_group_owner",
+        "assignment_group_support_owner",
+    ),
+}
+
+FACT_TICKET_TYPE_VALUES = {
+    "incident": "incident",
+    "sc_task": "sc_task",
 }
 
 
@@ -1603,6 +1631,188 @@ def count_volumetrics_rows(
     return int(db.scalar(statement) or 0)
 
 
+def volumetrics_filter_fact_ticket_type_condition(
+    ticket_type: str,
+) -> Any | None:
+    normalized = normalize_volumetrics_ticket_type(ticket_type)
+    mapped_value = FACT_TICKET_TYPE_VALUES.get(normalized)
+    if mapped_value is None:
+        return None
+    return DashboardFilterFact.record_type == mapped_value
+
+
+def volumetrics_filter_fact_date_conditions(request: Any) -> list[Any]:
+    start_datetime = normalize_dashboard_datetime(request.start_datetime)
+    end_datetime = normalize_dashboard_datetime(request.end_datetime)
+    return [
+        DashboardFilterFact.created_at_source.is_not(None),
+        DashboardFilterFact.created_at_source >= start_datetime,
+        DashboardFilterFact.created_at_source <= end_datetime,
+    ]
+
+
+def volumetrics_filter_fact_filter_conditions(
+    filters: Any,
+    *,
+    excluded_filter_name: str | None = None,
+) -> list[Any]:
+    conditions: list[Any] = []
+    for filter_name, field_name in FACT_SINGLE_VOLUMETRICS_FILTER_FIELDS.items():
+        if filter_name == excluded_filter_name:
+            continue
+        selected_values = selected_volumetrics_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(
+                volumetrics_display_expression(getattr(DashboardFilterFact, field_name)).in_(
+                    selected_values,
+                ),
+            )
+
+    for filter_name, fields in FACT_COMBINED_VOLUMETRICS_FILTER_FIELDS.items():
+        if filter_name == excluded_filter_name:
+            continue
+        selected_values = selected_volumetrics_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(
+                volumetrics_display_expression(getattr(DashboardFilterFact, fields[2])).in_(
+                    selected_values,
+                ),
+            )
+    return conditions
+
+
+def volumetrics_filter_fact_base_conditions(
+    request: Any,
+    *,
+    scope_override: str | None = None,
+    ticket_type_override: str | None = None,
+    excluded_filter_name: str | None = None,
+    exclude_ticket_type: bool = False,
+    include_date_bounds: bool = True,
+) -> list[Any]:
+    scope = normalize_volumetrics_scope(scope_override or request.scope)
+    conditions: list[Any] = [DashboardFilterFact.project_id == request.project_id]
+    if scope != "all":
+        conditions.append(DashboardFilterFact.scope == scope)
+
+    ticket_type = ticket_type_override or request.ticket_type
+    ticket_condition = (
+        None
+        if exclude_ticket_type
+        else volumetrics_filter_fact_ticket_type_condition(ticket_type)
+    )
+    if ticket_condition is not None:
+        conditions.append(ticket_condition)
+    if include_date_bounds:
+        conditions.extend(volumetrics_filter_fact_date_conditions(request))
+    conditions.extend(
+        volumetrics_filter_fact_filter_conditions(
+            request.filters,
+            excluded_filter_name=excluded_filter_name,
+        ),
+    )
+    return conditions
+
+
+def volumetrics_filter_fact_value_count_rows(
+    db: Session,
+    request: Any,
+    filter_name: str,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    expression = volumetrics_display_expression(getattr(DashboardFilterFact, field_name))
+    statement = (
+        select(
+            expression.label("label"),
+            expression.label("value"),
+            func.count(DashboardFilterFact.id).label("count"),
+        )
+        .select_from(DashboardFilterFact)
+        .where(
+            *volumetrics_filter_fact_base_conditions(
+                request,
+                excluded_filter_name=filter_name,
+            ),
+        )
+        .group_by(expression)
+        .order_by(expression.asc())
+    )
+    rows = [
+        {"label": row["label"], "value": row["value"], "count": int(row["count"] or 0)}
+        for row in db.execute(statement).mappings().all()
+    ]
+    return add_missing_selected_volumetrics_single_values(
+        rows,
+        selected_volumetrics_filter_values(request.filters, filter_name),
+    )
+
+
+def combined_volumetrics_filter_fact_value_count_rows(
+    db: Session,
+    request: Any,
+    filter_name: str,
+    left_field: str,
+    right_field: str,
+    label_field: str,
+) -> list[dict[str, Any]]:
+    label_expression = volumetrics_display_expression(getattr(DashboardFilterFact, label_field))
+    left_expression = volumetrics_display_expression(getattr(DashboardFilterFact, left_field))
+    right_expression = volumetrics_display_expression(getattr(DashboardFilterFact, right_field))
+    statement = (
+        select(
+            label_expression.label("label"),
+            left_expression.label("left_value"),
+            right_expression.label("right_value"),
+            func.count(DashboardFilterFact.id).label("count"),
+        )
+        .select_from(DashboardFilterFact)
+        .where(
+            *volumetrics_filter_fact_base_conditions(
+                request,
+                excluded_filter_name=filter_name,
+            ),
+        )
+        .group_by(label_expression, left_expression, right_expression)
+        .order_by(label_expression.asc())
+    )
+    rows = [
+        {
+            "label": row["label"],
+            "left_value": row["left_value"],
+            "right_value": row["right_value"],
+            "count": int(row["count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return add_missing_selected_volumetrics_combined_values(
+        rows,
+        selected_volumetrics_filter_values(request.filters, filter_name),
+    )
+
+
+def count_volumetrics_filter_fact_rows(
+    db: Session,
+    request: Any,
+    *,
+    scope_override: str | None = None,
+    ticket_type_override: str | None = None,
+    exclude_ticket_type: bool = False,
+) -> int:
+    statement = (
+        select(func.count(DashboardFilterFact.id))
+        .select_from(DashboardFilterFact)
+        .where(
+            *volumetrics_filter_fact_base_conditions(
+                request,
+                scope_override=scope_override,
+                ticket_type_override=ticket_type_override,
+                exclude_ticket_type=exclude_ticket_type,
+            ),
+        )
+    )
+    return int(db.scalar(statement) or 0)
+
+
 def replace_request_value(request: Any, field_name: str, value: Any) -> Any:
     # Pydantic v1/v2 compatibility keeps tests and runtime aligned across local installs.
     if hasattr(request, "model_copy"):
@@ -1614,13 +1824,22 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
     normalize_volumetrics_scope(request.scope)
     normalize_volumetrics_ticket_type(request.ticket_type)
     normalize_volumetrics_time_grain(request.time_grain)
+    refreshed = ensure_dashboard_filter_facts(db, request.project_id)
+    if refreshed is not None:
+        db.commit()
+
+    started = perf_counter()
     scope_rows = []
     for scope_key in ("all", "in_scope", "out_of_scope"):
         scope_rows.append(
             {
                 "label": VOLUMETRICS_SCOPE_LABELS[scope_key],
                 "value": scope_key,
-                "count": count_volumetrics_rows(db, request, scope_override=scope_key),
+                "count": count_volumetrics_filter_fact_rows(
+                    db,
+                    request,
+                    scope_override=scope_key,
+                ),
             },
         )
 
@@ -1630,7 +1849,7 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
             {
                 "label": VOLUMETRICS_TICKET_TYPE_LABELS[ticket_type_key],
                 "value": ticket_type_key,
-                "count": count_volumetrics_rows(
+                "count": count_volumetrics_filter_fact_rows(
                     db,
                     request,
                     ticket_type_override=ticket_type_key,
@@ -1642,44 +1861,48 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
     return {
         "scope": scope_rows,
         "ticket_type": ticket_type_rows,
-        "functional_track_ams_owner": combined_volumetrics_filter_value_count_rows(
+        "functional_track_ams_owner": combined_volumetrics_filter_fact_value_count_rows(
             db,
             request,
             "functional_track_ams_owner",
             "functional_track",
             "ams_owner",
+            "functional_track_ams_owner",
         ),
-        "assignment_group_support_lead": combined_volumetrics_filter_value_count_rows(
+        "assignment_group_support_lead": combined_volumetrics_filter_fact_value_count_rows(
             db,
             request,
             "assignment_group_support_lead",
             "assignment_group",
-            "support_lead",
+            "support_group_owner",
+            "assignment_group_support_owner",
         ),
-        "parent_application_name": volumetrics_filter_value_count_rows(
+        "parent_application_name": volumetrics_filter_fact_value_count_rows(
             db,
             request,
             "parent_application_name",
-            "parent_application_name",
+            "parent_business_application",
         ),
-        "application_owner": volumetrics_filter_value_count_rows(
+        "application_owner": volumetrics_filter_fact_value_count_rows(
             db,
             request,
             "application_owner",
             "application_owner",
         ),
-        "supported_by_vendor": volumetrics_filter_value_count_rows(
+        "supported_by_vendor": volumetrics_filter_fact_value_count_rows(
             db,
             request,
             "supported_by_vendor",
             "supported_by_vendor",
         ),
-        "sap_non_sap": volumetrics_filter_value_count_rows(
+        "sap_non_sap": volumetrics_filter_fact_value_count_rows(
             db,
             request,
             "sap_non_sap",
             "sap_non_sap",
         ),
+        "source": "dashboard_filter_facts",
+        "duration_ms": int((perf_counter() - started) * 1000),
     }
 
 

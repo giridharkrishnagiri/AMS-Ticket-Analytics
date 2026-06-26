@@ -416,6 +416,8 @@ export type DashboardVolumetricsFilterValues = {
   application_owner: ApplicationFilterValue[];
   supported_by_vendor: ApplicationFilterValue[];
   sap_non_sap: ApplicationFilterValue[];
+  source?: string;
+  duration_ms?: number | null;
 };
 
 export type DashboardVolumetricsSummaryMetric = {

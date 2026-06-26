@@ -43,6 +43,7 @@ from app.services.application_metrics import (
     ApplicationTicketUserMetricsSummary,
     recompute_application_ticket_user_metrics,
 )
+from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 
 router = APIRouter(prefix="/application-inventory", tags=["application-inventory"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -210,6 +211,8 @@ async def upload_application_inventory(
     temp_path = await copy_upload_to_temp_file(file)
     try:
         result = upload_application_inventory_file(db, project_id, temp_path, filename)
+        refresh_dashboard_filter_facts(db, project_id)
+        db.commit()
     except (FileNotFoundError, ApplicationInventoryError) as exc:
         raise_inventory_http_error(exc)
     finally:
@@ -230,6 +233,8 @@ def enrich_application_inventory_tickets(
             request.project_id,
             replace_existing=request.replace_existing,
         )
+        refresh_dashboard_filter_facts(db, request.project_id)
+        db.commit()
     except (FileNotFoundError, ApplicationInventoryError) as exc:
         raise_inventory_http_error(exc)
     return enrichment_response(summary)
@@ -311,7 +316,10 @@ def put_application_inventory_item(
     db: DbSession,
 ) -> ApplicationInventoryItemResponse:
     try:
-        return update_inventory_item(db, item_id, request.model_dump(exclude_unset=True))
+        item = update_inventory_item(db, item_id, request.model_dump(exclude_unset=True))
+        refresh_dashboard_filter_facts(db, item.project_id)
+        db.commit()
+        return item
     except (FileNotFoundError, ApplicationInventoryError) as exc:
         raise_inventory_http_error(exc)
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to update item.")
@@ -323,7 +331,10 @@ def delete_application_inventory_item(
     db: DbSession,
 ) -> ApplicationInventoryItemResponse:
     try:
-        return deactivate_inventory_item(db, item_id)
+        item = deactivate_inventory_item(db, item_id)
+        refresh_dashboard_filter_facts(db, item.project_id)
+        db.commit()
+        return item
     except (FileNotFoundError, ApplicationInventoryError) as exc:
         raise_inventory_http_error(exc)
     raise HTTPException(
