@@ -32,6 +32,7 @@ from app.schemas.dashboard import (
     IncidentSlaTrendRow,
     MttrTrendRow,
     OfflineDashboardExportRequest,
+    PowerPointDashboardExportRequest,
     ReassignmentTrendRow,
     ReopenTrendRow,
     SlaTrendRow,
@@ -106,6 +107,7 @@ from app.services.dashboard_commentary import (
     upsert_commentary,
 )
 from app.services.offline_dashboard_export import build_offline_dashboard_export
+from app.services.powerpoint_export import build_powerpoint_export
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -506,6 +508,31 @@ def download_offline_dashboard(
     return Response(
         content=document,
         media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/powerpoint-export")
+def download_powerpoint_dashboard(
+    request: PowerPointDashboardExportRequest,
+    db: DbSession,
+) -> Response:
+    try:
+        document, filename = build_powerpoint_export(
+            db,
+            request.project_id,
+            scope_filter=request.scope,
+            ticket_type_filter=request.ticket_type,
+            functional_track_ams_owner=request.functional_track_ams_owner,
+            include_commentary=request.include_commentary,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=document,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        ),
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

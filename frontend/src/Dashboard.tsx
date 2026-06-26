@@ -18,6 +18,7 @@ import {
 
 import {
   downloadOfflineDashboard,
+  exportDashboardPowerPoint,
   getCreatedResolvedOpenTrend,
   getCreationSourceTrend,
   getDashboardFilterValues,
@@ -432,6 +433,7 @@ function Dashboard() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [pageMessage, setPageMessage] = useState<string | null>(null);
   const [downloadStatus, setDownloadStatus] = useState<LoadStatus>("idle");
+  const [powerPointStatus, setPowerPointStatus] = useState<LoadStatus>("idle");
   const [overviewShapeRefreshAttempted, setOverviewShapeRefreshAttempted] = useState(false);
 
   function clearDashboardData() {
@@ -448,6 +450,7 @@ function Dashboard() {
     setTechnicalFunctional(createLoadState(emptyTechnicalFunctional));
     setLastUpdatedAt(null);
     setPageMessage(null);
+    setPowerPointStatus("idle");
     setOverviewShapeRefreshAttempted(false);
   }
 
@@ -487,6 +490,46 @@ function Dashboard() {
       setDownloadStatus("error");
     }
   }, [projectId]);
+
+  const handleExportPowerPoint = useCallback(async () => {
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedProjectId) {
+      setPageMessage("Select a customer and project to export PowerPoint.");
+      return;
+    }
+
+    const exportTicketType =
+      ticketType === "INCIDENT"
+        ? "incident"
+        : ticketType === "SERVICE_CATALOG_TASK"
+          ? "sc_task"
+          : "all";
+
+    setPowerPointStatus("loading");
+    setPageMessage(null);
+    try {
+      const { blob, filename } = await exportDashboardPowerPoint({
+        projectId: cleanedProjectId,
+        scope: "in_scope",
+        ticketType: exportTicketType,
+        functionalTrackAmsOwner: "all",
+        includeCommentary: true,
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setPageMessage("PowerPoint export is ready.");
+      setPowerPointStatus("success");
+    } catch (error) {
+      setPageMessage(errorMessage(error, "Unable to export PowerPoint"));
+      setPowerPointStatus("error");
+    }
+  }, [projectId, ticketType]);
 
   const chartQuery = useMemo<DashboardQuery | null>(() => {
     const cleanedProjectId = projectId.trim();
@@ -795,6 +838,19 @@ function Dashboard() {
               onClick={() => void handleDownloadDashboard()}
             >
               {downloadStatus === "loading" ? "Preparing Download..." : "Download Dashboard"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!projectId.trim() || powerPointStatus === "loading"}
+              title={
+                projectId.trim()
+                  ? "Export the online dashboard as a PowerPoint deck"
+                  : "Select a customer and project to export PowerPoint."
+              }
+              type="button"
+              onClick={() => void handleExportPowerPoint()}
+            >
+              {powerPointStatus === "loading" ? "Preparing PowerPoint..." : "Export PowerPoint"}
             </button>
           </div>
         </div>

@@ -1,7 +1,9 @@
 import inspect
 import json
 import re
+import zipfile
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -2409,6 +2411,140 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "normalized_payload" not in kpi_row
         assert "ticket_number" not in payload["volumetrics"]["monthly_rows"][0]
         assert "normalized_payload" not in payload["volumetrics"]["monthly_rows"][0]
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "Payroll Portal",
+            supported_by_vendor="Vendor A",
+            functional_track="Data",
+            ams_owner="Owner A",
+            assignment_group="IT-SAP-PAYROLL",
+            application_owner="Application Owner A",
+            parent_application_name="Parent Payroll",
+            active_users=500,
+            cmdb_payload={"secret": "raw cmdb payload should not be exported"},
+        )
+        incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-PPTX-RAW-SECRET",
+            "INCIDENT",
+            dt("2026-01-04T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-06T00:00:00"),
+            priority="P3",
+            assignment_group="IT-SAP-PAYROLL",
+            business_duration_seconds=172800,
+            architecture_type="Cloud",
+            install_type="Production",
+            business_service_ci_name="Payroll Portal",
+            raw_payload={"secret": "raw ticket payload should not be exported"},
+        )
+        incident.functional_track = "Data"
+        incident.ams_owner = "Owner A"
+        incident.parent_application_name = "Parent Payroll"
+        incident.response_sla_breached = False
+        incident.resolution_sla_breached = False
+
+        sc_task = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-PPTX-RAW-SECRET",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-07T00:00:00"),
+            state="Closed",
+            closed_at=dt("2026-01-10T00:00:00"),
+            priority="P4",
+            assignment_group="IT-NSA-PAYROLL",
+            business_duration_seconds=259200,
+            architecture_type="Cloud",
+            install_type="Production",
+            business_service_ci_name="Payroll Portal",
+            raw_payload={"secret": "raw sc task payload should not be exported"},
+        )
+        sc_task.functional_track = "Data"
+        sc_task.ams_owner = "Owner A"
+        sc_task.parent_application_name = "Parent Payroll"
+
+        db.add(
+            DashboardCommentary(
+                client_id=client_id,
+                project_id=project_id,
+                dashboard_area="dashboard",
+                tab_name="overview",
+                sub_tab_name="",
+                section_key="overview_summary",
+                chart_key="",
+                scope_filter="all",
+                ticket_type_filter="all",
+                functional_track_ams_owner="all",
+                commentary_html="<p><strong>Executive note</strong></p>",
+                commentary_text="Executive note",
+            ),
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/powerpoint-export",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "in_scope",
+                    "ticket_type": "all",
+                    "functional_track_ams_owner": "all",
+                    "include_commentary": True,
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        assert "AMS_Apps_Volumetrics_Dashboard_" in response.headers["content-disposition"]
+        assert response.headers["content-disposition"].endswith('.pptx"')
+        assert zipfile.is_zipfile(BytesIO(response.content))
+
+        with zipfile.ZipFile(BytesIO(response.content)) as package:
+            slide_names = [
+                name
+                for name in package.namelist()
+                if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
+            ]
+            assert len(slide_names) >= 16
+            slide_xml = "\n".join(
+                package.read(name).decode("utf-8", errors="ignore") for name in slide_names
+            )
+
+        assert "Overview" in slide_xml
+        assert "Applications Summary" in slide_xml
+        assert "Top Parent Business Applications by Active Users" in slide_xml
+        assert "Application List" in slide_xml
+        assert "Overall Volume Trends - Created / Completed / Backlog" in slide_xml
+        assert "Overall SLA Trends - Response SLA" in slide_xml
+        assert "Detailed Volume Trends - Top Applications" in slide_xml
+        assert "KPI Trends - Incident MTTR" in slide_xml
+        assert "KPI Trends - SC Task MTTR" in slide_xml
+        assert "Performance Trends" in slide_xml
+        assert "Category-wise Trends" in slide_xml
+        assert "Executive note" in slide_xml
+        assert "raw ticket payload should not be exported" not in slide_xml
+        assert "raw sc task payload should not be exported" not in slide_xml
+        assert "raw cmdb payload should not be exported" not in slide_xml
+        assert "INC-PPTX-RAW-SECRET" not in slide_xml
+        assert "SCTASK-PPTX-RAW-SECRET" not in slide_xml
+        assert "normalized_payload" not in slide_xml
+        assert "cmdb_payload" not in slide_xml
     finally:
         cleanup_client(db, client_id)
 

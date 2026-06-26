@@ -783,6 +783,48 @@ export async function downloadOfflineDashboard(
   return { blob: await response.blob(), filename };
 }
 
+export async function exportDashboardPowerPoint(input: {
+  functionalTrackAmsOwner?: string;
+  includeCommentary?: boolean;
+  projectId: string;
+  scope?: string;
+  ticketType?: string;
+}): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${apiBaseUrl}/dashboard/powerpoint-export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: input.projectId.trim(),
+      scope: input.scope ?? "in_scope",
+      ticket_type: input.ticketType ?? "all",
+      functional_track_ams_owner: input.functionalTrackAmsOwner ?? "all",
+      include_commentary: input.includeCommentary ?? true,
+    }),
+  });
+
+  if (!response.ok) {
+    let message = `Request failed with HTTP ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") {
+        message = payload.detail;
+      }
+    } catch {
+      // Keep the HTTP status fallback when the response is not JSON.
+    }
+    throw new Error(message);
+  }
+
+  const filename =
+    getDownloadFilename(response.headers.get("Content-Disposition")) ??
+    `AMS_Apps_Volumetrics_Dashboard_${new Date()
+      .toISOString()
+      .slice(0, 16)
+      .replace(/[-:T]/g, "")}.pptx`;
+
+  return { blob: await response.blob(), filename };
+}
+
 export function getDashboardApplicationsFilterValues(
   input: DashboardApplicationsFilterValuesRequest
 ): Promise<DashboardApplicationsFilterValues> {
