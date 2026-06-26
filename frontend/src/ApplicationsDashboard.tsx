@@ -251,45 +251,149 @@ async function svgToImage(svgMarkup: string): Promise<HTMLImageElement> {
   }
 }
 
-async function copyChartToClipboard(chartElement: HTMLElement, title: string) {
-  if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
-    throw new Error("Image clipboard copy is not supported in this browser.");
-  }
+const svgComputedStyleProperties = [
+  "display",
+  "visibility",
+  "fill",
+  "fill-opacity",
+  "stroke",
+  "stroke-width",
+  "stroke-opacity",
+  "stroke-dasharray",
+  "stroke-linecap",
+  "stroke-linejoin",
+  "opacity",
+  "font-family",
+  "font-size",
+  "font-weight",
+  "text-anchor",
+  "dominant-baseline",
+  "paint-order",
+];
 
+function inlineSvgComputedStyles(source: Element, clone: Element) {
+  const sourceElements = [source, ...Array.from(source.querySelectorAll("*"))];
+  const cloneElements = [clone, ...Array.from(clone.querySelectorAll("*"))];
+  sourceElements.forEach((sourceElement, index) => {
+    const cloneElement = cloneElements[index];
+    if (!(cloneElement instanceof SVGElement)) {
+      return;
+    }
+    const computed = window.getComputedStyle(sourceElement);
+    svgComputedStyleProperties.forEach((property) => {
+      const value = computed.getPropertyValue(property);
+      if (value) {
+        cloneElement.style.setProperty(property, value);
+      }
+    });
+  });
+}
+
+function chartSvgSize(sourceSvg: SVGSVGElement) {
+  const rect = sourceSvg.getBoundingClientRect();
+  const viewBox = sourceSvg.viewBox.baseVal;
+  const attrWidth = Number(sourceSvg.getAttribute("width"));
+  const attrHeight = Number(sourceSvg.getAttribute("height"));
+  const chartWidth = Math.max(600, Math.ceil(rect.width || viewBox.width || attrWidth || 900));
+  const chartHeight = Math.max(300, Math.ceil(rect.height || viewBox.height || attrHeight || 420));
+  const viewBoxText =
+    sourceSvg.getAttribute("viewBox") ||
+    `0 0 ${Math.max(1, viewBox.width || attrWidth || chartWidth)} ${Math.max(
+      1,
+      viewBox.height || attrHeight || chartHeight
+    )}`;
+  return { chartWidth, chartHeight, viewBoxText };
+}
+
+function chartLegendItems(chartElement: HTMLElement): Array<{ color: string; name: string }> {
+  const items = Array.from(chartElement.querySelectorAll(".recharts-legend-item"));
+  return items
+    .map((item) => {
+      const text = item.textContent?.trim() ?? "";
+      const icon = item.querySelector("path, rect, circle, line") as SVGElement | null;
+      const color = icon
+        ? icon.getAttribute("fill") ||
+          icon.getAttribute("stroke") ||
+          window.getComputedStyle(icon).fill ||
+          window.getComputedStyle(icon).stroke
+        : "#64748b";
+      return { color: color || "#64748b", name: text };
+    })
+    .filter((item) => item.name);
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function safeChartFilename(title: string) {
+  return `${title.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "chart"}.png`;
+}
+
+async function copyChartToClipboard(chartElement: HTMLElement, title: string): Promise<string> {
   const sourceSvg = chartElement.querySelector("svg");
   if (!sourceSvg) {
     throw new Error("No chart image is available to copy.");
   }
 
-  const chartWidth =
-    Number(sourceSvg.getAttribute("width")) || Math.ceil(sourceSvg.getBoundingClientRect().width);
-  const chartHeight =
-    Number(sourceSvg.getAttribute("height")) || Math.ceil(sourceSvg.getBoundingClientRect().height);
+  const { chartWidth, chartHeight, viewBoxText } = chartSvgSize(sourceSvg);
   const outputWidth = chartWidth + chartImagePadding * 2;
   const outputHeight = chartHeight + chartImageTitleHeight + chartImagePadding;
+  const clonedSvg = sourceSvg.cloneNode(true) as SVGSVGElement;
+  inlineSvgComputedStyles(sourceSvg, clonedSvg);
+  clonedSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clonedSvg.setAttribute("x", String(chartImagePadding));
+  clonedSvg.setAttribute("y", String(chartImageTitleHeight));
+  clonedSvg.setAttribute("width", String(chartWidth));
+  clonedSvg.setAttribute("height", String(chartHeight));
+  clonedSvg.setAttribute("viewBox", viewBoxText);
+
   const svgMarkup = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${outputWidth}" height="${outputHeight}" viewBox="0 0 ${outputWidth} ${outputHeight}">
       <rect x="0" y="0" width="${outputWidth}" height="${outputHeight}" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
       <text x="${chartImagePadding}" y="27" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700">${escapeXml(
         title
       )}</text>
-      <g transform="translate(${chartImagePadding}, ${chartImageTitleHeight})">
-        ${sourceSvg.innerHTML}
-      </g>
+      ${new XMLSerializer().serializeToString(clonedSvg)}
     </svg>
   `;
 
   const image = await svgToImage(svgMarkup);
+  const legendItems = chartLegendItems(chartElement);
+  const legendHeight = legendItems.length ? 28 + Math.ceil(legendItems.length / 3) * 22 : 0;
   const canvas = document.createElement("canvas");
   const scale = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
   canvas.width = Math.ceil(outputWidth * scale);
-  canvas.height = Math.ceil(outputHeight * scale);
+  canvas.height = Math.ceil((outputHeight + legendHeight) * scale);
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("Chart image could not be rendered.");
   }
   context.scale(scale, scale);
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, outputWidth, outputHeight + legendHeight);
   context.drawImage(image, 0, 0, outputWidth, outputHeight);
+  if (legendItems.length) {
+    context.font = "700 13px Inter, Arial, sans-serif";
+    context.textBaseline = "middle";
+    legendItems.forEach((item, index) => {
+      const column = index % 3;
+      const row = Math.floor(index / 3);
+      const x = chartImagePadding + column * Math.max(180, (outputWidth - chartImagePadding * 2) / 3);
+      const y = outputHeight + 18 + row * 22;
+      context.fillStyle = item.color;
+      context.fillRect(x, y - 5, 10, 10);
+      context.fillStyle = "#334155";
+      context.fillText(item.name, x + 16, y);
+    });
+  }
 
   const pngBlob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -303,13 +407,15 @@ async function copyChartToClipboard(chartElement: HTMLElement, title: string) {
 
   window.focus();
   try {
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
-  } catch (error) {
-    const message = errorMessage(error, "This browser could not copy the chart image.");
-    if (message.toLowerCase().includes("not focused")) {
-      throw new Error("Click inside the app window and try Copy chart again.");
+    if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
+      throw new Error("Image clipboard copy is not supported in this browser.");
     }
-    throw error;
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
+    return "Copied chart image to clipboard.";
+  } catch (error) {
+    downloadBlob(pngBlob, safeChartFilename(title));
+    const message = errorMessage(error, "This browser could not copy the chart image.");
+    return `Copy blocked by browser. PNG downloaded instead. ${message}`;
   }
 }
 
@@ -339,8 +445,7 @@ function useChartCopy(title: string) {
       return;
     }
     try {
-      await copyChartToClipboard(chartRef.current, title);
-      setCopyMessage("Copied chart image to clipboard.");
+      setCopyMessage(await copyChartToClipboard(chartRef.current, title));
     } catch (error) {
       setCopyMessage(errorMessage(error, "This browser could not copy the chart image."));
     }

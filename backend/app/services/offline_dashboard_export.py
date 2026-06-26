@@ -1921,7 +1921,20 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     <section class="view" id="volumetrics"></section>
   </main>
   <script>
-    const DASHBOARD = JSON.parse(document.getElementById("dashboard-data").textContent);
+    function parseDashboardPayload() {
+      const payloadElement = document.getElementById("dashboard-data");
+      if (!payloadElement) {
+        console.error("Offline dashboard payload script tag is missing.");
+        return null;
+      }
+      try {
+        return JSON.parse(payloadElement.textContent || "{}");
+      } catch (error) {
+        console.error("Offline dashboard payload could not be parsed.", error);
+        return null;
+      }
+    }
+    const DASHBOARD = parseDashboardPayload();
     const COLORS = {
       teal: "#0f766e",
       blue: "#2563eb",
@@ -1987,6 +2000,27 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#39;");
+    }
+    function renderSectionError(sectionId, title, error) {
+      const node = document.getElementById(sectionId);
+      if (!node) return;
+      const message = error instanceof Error ? error.message : String(error || "Unknown error");
+      console.error(`Offline dashboard render failed for ${title}.`, error);
+      node.innerHTML = `<section class="panel" style="padding:18px"><p class="label">${esc(title)}</p><h3>Unable to render this dashboard section.</h3><p class="muted">${esc(message)}</p></section>`;
+    }
+    function safeRenderSection(sectionId, title, renderFn) {
+      try {
+        renderFn();
+      } catch (error) {
+        renderSectionError(sectionId, title, error);
+      }
+    }
+    function renderFatalDashboardError(message) {
+      ["overview", "applications", "volumetrics"].forEach((sectionId) => {
+        const node = document.getElementById(sectionId);
+        if (!node) return;
+        node.innerHTML = `<section class="panel" style="padding:18px"><p class="label">Dashboard Error</p><h3>${esc(message)}</h3><p class="muted">Open the browser console for details, then download a fresh dashboard export.</p></section>`;
+      });
     }
     function tile(label, value, helper = "", index = null, columns = null) {
       let tone = "";
@@ -2146,21 +2180,65 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function legend(items) {
       return `<div class="legend">${items.map((item) => `<span><i class="swatch" style="background:${item.color}"></i>${esc(item.name)}</span>`).join("")}</div>`;
     }
-    function chartSvgSize(svg) {
-      const viewBox = (svg.getAttribute("viewBox") || "").trim().split(/\s+/).map(Number);
-      if (viewBox.length === 4 && viewBox.every((value) => Number.isFinite(value))) {
-        return { width: Math.max(1, viewBox[2]), height: Math.max(1, viewBox[3]) };
-      }
-      const width = Number(svg.getAttribute("width")) || Math.ceil(svg.getBoundingClientRect().width) || 960;
-      const height = Number(svg.getAttribute("height")) || Math.ceil(svg.getBoundingClientRect().height) || 360;
-      return { width, height };
+    const SVG_COPY_STYLE_PROPERTIES = [
+      "display",
+      "visibility",
+      "fill",
+      "fill-opacity",
+      "stroke",
+      "stroke-width",
+      "stroke-opacity",
+      "stroke-dasharray",
+      "stroke-linecap",
+      "stroke-linejoin",
+      "opacity",
+      "font-family",
+      "font-size",
+      "font-weight",
+      "text-anchor",
+      "dominant-baseline",
+      "paint-order"
+    ];
+    function inlineSvgComputedStyles(source, clone) {
+      const sourceElements = [source, ...Array.from(source.querySelectorAll("*"))];
+      const cloneElements = [clone, ...Array.from(clone.querySelectorAll("*"))];
+      sourceElements.forEach((sourceElement, index) => {
+        const cloneElement = cloneElements[index];
+        if (!(cloneElement instanceof SVGElement)) return;
+        const computed = getComputedStyle(sourceElement);
+        SVG_COPY_STYLE_PROPERTIES.forEach((property) => {
+          const value = computed.getPropertyValue(property);
+          if (value) cloneElement.style.setProperty(property, value);
+        });
+      });
     }
-    function serializedChartSvg(svg, width, height) {
+    function chartSvgSize(svg) {
+      const viewBoxText = svg.getAttribute("viewBox") || "";
+      const viewBox = viewBoxText.trim().split(/\s+/).map(Number);
+      const rect = svg.getBoundingClientRect();
+      const attrWidth = Number(svg.getAttribute("width"));
+      const attrHeight = Number(svg.getAttribute("height"));
+      const viewBoxWidth = viewBox.length === 4 && Number.isFinite(viewBox[2]) ? viewBox[2] : 0;
+      const viewBoxHeight = viewBox.length === 4 && Number.isFinite(viewBox[3]) ? viewBox[3] : 0;
+      const width = Math.max(600, Math.ceil(rect.width || attrWidth || viewBoxWidth || 960));
+      const height = Math.max(300, Math.ceil(rect.height || attrHeight || viewBoxHeight || 360));
+      return {
+        width,
+        height,
+        viewBoxText: viewBoxText || `0 0 ${Math.max(1, viewBoxWidth || attrWidth || width)} ${Math.max(1, viewBoxHeight || attrHeight || height)}`
+      };
+    }
+    function serializedChartSvg(svg, width, height, viewBoxText) {
       const clone = svg.cloneNode(true);
+      inlineSvgComputedStyles(svg, clone);
       clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      clone.setAttribute("x", "0");
+      clone.setAttribute("y", "0");
       clone.setAttribute("width", String(width));
       clone.setAttribute("height", String(height));
-      return new XMLSerializer().serializeToString(clone);
+      clone.setAttribute("viewBox", viewBoxText);
+      const innerSvg = new XMLSerializer().serializeToString(clone);
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff"></rect>${innerSvg}</svg>`;
     }
     function loadImageFromBlob(blob) {
       return new Promise((resolve, reject) => {
@@ -2197,11 +2275,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     async function chartFramePngBlob(frame) {
       const svg = frame.querySelector("svg");
       if (!svg) throw new Error("No chart image is available to copy.");
-      const { width, height } = chartSvgSize(svg);
-      const svgMarkup = serializedChartSvg(svg, width, height);
+      const { width, height, viewBoxText } = chartSvgSize(svg);
+      const svgMarkup = serializedChartSvg(svg, width, height, viewBoxText);
       const image = await loadImageFromBlob(new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" }));
       const legendItems = chartLegendItems(frame);
-      const scale = 2;
+      const scale = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
       const measureCanvas = document.createElement("canvas");
       const measureContext = measureCanvas.getContext("2d");
       if (!measureContext) throw new Error("Canvas copy is not available in this browser.");
@@ -2245,6 +2323,20 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
       return { blob: await canvasToPngBlob(canvas), svgMarkup };
     }
+    function safeChartFilename(title) {
+      const cleaned = String(title || "chart").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      return `${cleaned || "chart"}.png`;
+    }
+    function downloadOfflineChartPng(blob, title) {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = safeChartFilename(title);
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
     function setCopyStatus(button, message, isError = false) {
       const status = button.closest(".chart-copy-toolbar")?.querySelector(".copy-chart-status");
       if (!status) return;
@@ -2264,19 +2356,24 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         return;
       }
       button.disabled = true;
+      let blob = null;
+      const title = card?.querySelector("h3")?.textContent?.trim() || "chart";
       try {
-        const { blob, svgMarkup } = await chartFramePngBlob(frame);
-        if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-          setCopyStatus(button, "Chart copied");
-        } else if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(svgMarkup);
-          setCopyStatus(button, "SVG copied");
-        } else {
+        const result = await chartFramePngBlob(frame);
+        blob = result.blob;
+        if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
           throw new Error("Clipboard image copy is not supported in this browser.");
         }
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        setCopyStatus(button, "Chart copied");
       } catch (error) {
-        setCopyStatus(button, error instanceof Error ? error.message : "Copy failed", true);
+        if (blob) {
+          downloadOfflineChartPng(blob, title);
+          const message = error instanceof Error ? error.message : "Copy blocked by browser.";
+          setCopyStatus(button, `Copy blocked. PNG downloaded instead. ${message}`);
+        } else {
+          setCopyStatus(button, error instanceof Error ? error.message : "Copy failed", true);
+        }
       } finally {
         button.disabled = false;
       }
@@ -2399,10 +2496,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           <section class="panel table-card" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
         </section>
       </div>`;
-      document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; renderApplications(); });
-      document.getElementById("app-sap").addEventListener("change", (event) => { state.appSap = event.target.value; renderApplications(); });
+      document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
+      document.getElementById("app-sap").addEventListener("change", (event) => { state.appSap = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.querySelectorAll("[data-top-active-users]").forEach((button) => {
-        button.addEventListener("click", () => { state.topActiveUsersN = button.dataset.topActiveUsers; renderApplications(); });
+        button.addEventListener("click", () => { state.topActiveUsersN = button.dataset.topActiveUsers; safeRenderSection("applications", "Applications", renderApplications); });
       });
       installChartCopyButtons(document.getElementById("applications"));
     }
@@ -2470,29 +2567,29 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         document.getElementById(id).addEventListener("change", (event) => {
           const map = { "vol-scope": "volScope", "vol-ticket": "volTicketType", "vol-functional": "volFunctional", "vol-sap": "volSap" };
           state[map[id]] = event.target.value;
-          renderVolumetrics();
+          safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics);
         });
       });
       document.querySelectorAll("[data-vol-subtab]").forEach((button) => {
-        button.addEventListener("click", () => { state.volSubTab = button.dataset.volSubtab; renderVolumetrics(); });
+        button.addEventListener("click", () => { state.volSubTab = button.dataset.volSubtab; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       document.querySelectorAll("[data-pattern]").forEach((button) => {
-        button.addEventListener("click", () => { state.pattern = button.dataset.pattern; renderVolumetrics(); });
+        button.addEventListener("click", () => { state.pattern = button.dataset.pattern; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       document.querySelectorAll("[data-hourly-day]").forEach((button) => {
-        button.addEventListener("click", () => { state.hourlyDayType = button.dataset.hourlyDay; renderVolumetrics(); });
+        button.addEventListener("click", () => { state.hourlyDayType = button.dataset.hourlyDay; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       document.querySelectorAll("[data-priority-view]").forEach((button) => {
-        button.addEventListener("click", () => { state.priorityView = button.dataset.priorityView; renderVolumetrics(); });
+        button.addEventListener("click", () => { state.priorityView = button.dataset.priorityView; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       document.querySelectorAll("[data-top-volume]").forEach((button) => {
-        button.addEventListener("click", () => { state.topVolumeN = button.dataset.topVolume; renderVolumetrics(); });
+        button.addEventListener("click", () => { state.topVolumeN = button.dataset.topVolume; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       document.querySelectorAll("[data-top-batch]").forEach((button) => {
-        button.addEventListener("click", () => { state.topBatchN = button.dataset.topBatch; renderVolumetrics(); });
+        button.addEventListener("click", () => { state.topBatchN = button.dataset.topBatch; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       document.querySelectorAll("[data-top-tickets-user]").forEach((button) => {
-        button.addEventListener("click", () => { state.ticketsPerUserN = button.dataset.topTicketsUser; renderVolumetrics(); });
+        button.addEventListener("click", () => { state.ticketsPerUserN = button.dataset.topTicketsUser; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       installChartCopyButtons(document.getElementById("volumetrics"));
     }
@@ -2675,7 +2772,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         : "Batch-related charts are Incident-only and use Incident tickets within the selected filters.";
       return `
         <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top High-Volume Applications</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("volume", state.topVolumeN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topVolume.map((row) => ({ label: row.label, value: row.created, displayLabel: row.displayLabel })), { title: "Top High-Volume Applications", legend: "Average monthly tickets", color: COLORS.teal, height: state.topVolumeN === "20" ? 820 : 520 })}</div></section>
-        <section class="chart-card panel full"><h3>Incident Batch-Related Tickets Created Trend</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
+        <section class="chart-card panel full"><h3>Batch-related Incidents Created</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
         <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Top Applications with Incident Batch-Related Tickets</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("batch", state.topBatchN)}</div></div><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : paretoBarLineChart(topBatch, "Average Batch Created Count", "Average Batch Canceled Count")}</div></section>
         <section class="chart-card panel full"><div class="chart-title-row"><div><h3>Tickets per User per Month by Application</h3><p class="muted">Calculated as latest complete 6-month average monthly ticket volume divided by Active Users.</p></div><div class="pattern-buttons">${topToggle("tickets-user", state.ticketsPerUserN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(ticketUserPoints, { title: "Tickets per User per Month by Application", legend: "Tickets per user per month", color: COLORS.purple, digits: 2, height: state.ticketsPerUserN === "20" ? 780 : 500, emptyMessage: "No applications with non-zero Active Users are available." })}</div></section>
         <div class="chart-grid-three">
@@ -2764,16 +2861,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         current.count += Number(row.ticket_count || 0);
         totals.set(row.period_key, current);
       });
-      return DASHBOARD.volumetrics.periods.map((period) => {
+      return DASHBOARD.volumetrics.periods.map((period, index) => {
         const values = totals.get(period.period_key) || { seconds: 0, count: 0 };
-        return {
+        const point = {
           label: period.period_label,
           period_key: period.period_key,
           mttr: values.count ? values.seconds / values.count / 86400 : null,
           ticket_count: values.count,
           show_label: values.count > 0 && mttrShowLabel(priority, index),
         };
-        point.label_text = point.show_label ? `${fmt(point.mttr, 1)}d\nn=${fmt(point.ticket_count)}` : "";
+        point.label_text = point.show_label ? `${fmt(point.mttr, 1)}d\\nn=${fmt(point.ticket_count)}` : "";
         return point;
       });
     }
@@ -2800,7 +2897,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           .filter((point) => point.row.show_label && point.y !== null)
           .map((point) => {
             const y = Math.max(margin.top + 12, point.y + point.offset);
-            const parts = String(point.row.label_text || "").split("\n");
+            const parts = String(point.row.label_text || "").split("\\n");
             return `<text x="${point.x}" y="${y}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${parts.map((part, index) => `<tspan x="${point.x}" dy="${index === 0 ? 0 : 12}">${esc(part)}</tspan>`).join("")}</text>`;
           });
       }).join("");
@@ -3068,13 +3165,17 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === tab));
     }
     function initialize() {
+      if (!DASHBOARD) {
+        renderFatalDashboardError("The offline dashboard data could not be loaded.");
+        return;
+      }
       document.getElementById("page-title").textContent = "AMS Applications & Volumetric Analysis";
       document.getElementById("export-meta").innerHTML = `Exported: ${dateTimeText(DASHBOARD.metadata.exported_at)}<br>Monthly offline dashboard`;
       renderCustomerLogo();
       document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
-      renderOverview();
-      renderApplications();
-      renderVolumetrics();
+      safeRenderSection("overview", "Overview", renderOverview);
+      safeRenderSection("applications", "Applications", renderApplications);
+      safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics);
     }
     initialize();
   </script>

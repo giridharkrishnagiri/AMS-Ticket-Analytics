@@ -1835,7 +1835,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Response SLA adherence trend" in document
         assert "Resolution SLA adherence trend" in document
         assert "Top High-Volume Applications" in document
-        assert "Incident Batch-Related Tickets Created Trend" in document
+        assert "Batch-related Incidents Created" in document
+        assert "Incident Batch-Related Tickets Created Trend" not in document
         assert "Top Applications with Incident Batch-Related Tickets" in document
         assert "Average Monthly Incidents by Architecture Type" in document
         assert "Average Monthly SC Tasks by Architecture Type" in document
@@ -1923,6 +1924,11 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Copy Chart" in document
         assert "function copyOfflineChart" in document
         assert "function installChartCopyButtons" in document
+        assert "function parseDashboardPayload" in document
+        assert "function safeRenderSection" in document
+        assert "function renderFatalDashboardError" in document
+        assert "function inlineSvgComputedStyles" in document
+        assert "function downloadOfflineChartPng" in document
         assert (
             "Future offline charts only need the standard .chart-card + .chart-frame SVG pattern."
             in document
@@ -1930,7 +1936,10 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "ClipboardItem" in document
         assert '"image/png"' in document
         assert "XMLSerializer" in document
-        assert "navigator.clipboard?.writeText" in document
+        assert "Copy blocked. PNG downloaded instead." in document
+        assert "navigator.clipboard?.writeText" not in document
+        assert 'split("\\n")' in document
+        assert 'split("\n")' not in document
         assert 'installChartCopyButtons(document.getElementById("applications"))' in document
         assert 'installChartCopyButtons(document.getElementById("volumetrics"))' in document
         assert "table-card" in document
