@@ -20,6 +20,11 @@ from app.schemas.dashboard import (
     ApplicationsTopActiveUsersResponse,
     CreatedResolvedOpenRow,
     CreationSourceTrendRow,
+    DashboardCommentaryBatchRequest,
+    DashboardCommentaryBatchResponse,
+    DashboardCommentaryContext,
+    DashboardCommentaryContextResponse,
+    DashboardCommentaryUpsertRequest,
     DashboardOverviewResponse,
     FilterValuesResponse,
     IncidentSlaNameBreakdownResponse,
@@ -94,6 +99,11 @@ from app.services.dashboard import (
     volumetrics_tickets_per_user,
     volumetrics_top_applications,
     volumetrics_top_incident_batch_applications,
+)
+from app.services.dashboard_commentary import (
+    batch_commentaries,
+    get_commentary_by_context,
+    upsert_commentary,
 )
 from app.services.offline_dashboard_export import build_offline_dashboard_export
 
@@ -498,6 +508,42 @@ def download_offline_dashboard(
         media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post(
+    "/commentaries/context",
+    response_model=DashboardCommentaryContextResponse,
+)
+def get_dashboard_commentary_context(
+    request: DashboardCommentaryContext,
+    db: DbSession,
+) -> dict[str, object]:
+    return get_commentary_by_context(db, request)
+
+
+@router.post(
+    "/commentaries/batch",
+    response_model=DashboardCommentaryBatchResponse,
+)
+def get_dashboard_commentaries_batch(
+    request: DashboardCommentaryBatchRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    return batch_commentaries(db, request)
+
+
+@router.post(
+    "/commentaries/upsert",
+    response_model=DashboardCommentaryContextResponse,
+)
+def upsert_dashboard_commentary(
+    request: DashboardCommentaryUpsertRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return upsert_commentary(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get(

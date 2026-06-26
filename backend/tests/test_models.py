@@ -13,6 +13,7 @@ def test_expected_ams_tables_are_registered() -> None:
         "ticket_raw_rows",
         "tickets",
         "dashboard_aggregates",
+        "dashboard_commentaries",
         "export_jobs",
         "application_dimensions",
         "application_inventory_items",
@@ -141,6 +142,23 @@ def test_application_inventory_columns_exist() -> None:
     assert "assignment_group_owner" in ticket_columns
     assert "architecture_type" in ticket_columns
     assert "install_type" in ticket_columns
+
+
+def test_dashboard_commentary_columns_exist() -> None:
+    commentary_columns = Base.metadata.tables["dashboard_commentaries"].columns.keys()
+
+    assert "client_id" in commentary_columns
+    assert "project_id" in commentary_columns
+    assert "dashboard_area" in commentary_columns
+    assert "tab_name" in commentary_columns
+    assert "sub_tab_name" in commentary_columns
+    assert "section_key" in commentary_columns
+    assert "chart_key" in commentary_columns
+    assert "scope_filter" in commentary_columns
+    assert "ticket_type_filter" in commentary_columns
+    assert "functional_track_ams_owner" in commentary_columns
+    assert "commentary_html" in commentary_columns
+    assert "commentary_text" in commentary_columns
 
 
 def test_scope_split_vendor_sla_columns_exist() -> None:

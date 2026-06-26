@@ -47,6 +47,7 @@ import type {
   TimeGrain,
 } from "./api/dashboard";
 import ApplicationsDashboard from "./ApplicationsDashboard";
+import CommentaryEditor from "./components/CommentaryEditor";
 import CustomerSelector from "./CustomerSelector";
 import VolumetricsDashboard from "./VolumetricsDashboard";
 import type { ProjectOption } from "./api/projects";
@@ -890,6 +891,17 @@ function Dashboard() {
             <p className="muted-text">Loading dashboard overview...</p>
           ) : null}
           {overview.status === "error" ? <p className="error-text">{overview.error}</p> : null}
+          {projectId.trim() ? (
+            <CommentaryEditor
+              project_id={projectId}
+              dashboard_area="dashboard"
+              tab_name="overview"
+              section_key="overview_summary"
+              scope_filter="all"
+              ticket_type_filter="all"
+              functional_track_ams_owner="all"
+            />
+          ) : null}
         </section>
       ) : null}
 

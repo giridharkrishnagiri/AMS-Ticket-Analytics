@@ -3,6 +3,7 @@ from app.models.application_inventory_item import ApplicationInventoryItem
 from app.models.assessment_out_of_scope_ticket import AssessmentOutOfScopeTicket
 from app.models.client import Client
 from app.models.dashboard_aggregate import DashboardAggregate
+from app.models.dashboard_commentary import DashboardCommentary
 from app.models.export_job import ExportJob
 from app.models.incident_sla_row import IncidentSlaRow
 from app.models.incident_sla_upload import IncidentSlaUpload
@@ -20,6 +21,7 @@ __all__ = [
     "ApplicationInventoryItem",
     "AssessmentOutOfScopeTicket",
     "DashboardAggregate",
+    "DashboardCommentary",
     "ExportJob",
     "IngestionJob",
     "IncidentSlaRow",

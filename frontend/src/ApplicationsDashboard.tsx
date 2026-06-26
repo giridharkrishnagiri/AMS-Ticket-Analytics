@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Bar,
   BarChart,
@@ -32,6 +33,7 @@ import type {
   DashboardApplicationsSummary,
   DashboardApplicationsTopActiveUsers,
 } from "./api/dashboard";
+import CommentaryEditor from "./components/CommentaryEditor";
 import ExcelMultiSelectFilter from "./components/ExcelMultiSelectFilter";
 import type { ExcelFilterOption } from "./components/ExcelMultiSelectFilter";
 
@@ -209,6 +211,10 @@ function filtersEqual(left: DashboardApplicationsFilters, right: DashboardApplic
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function commentaryFunctionalContext(values: string[]): string {
+  return values.length === 1 ? values[0] : "all";
+}
+
 function combinedFilterOptions(
   values: DashboardApplicationsFilterValues["functional_track_ams_owner"]
 ): ExcelFilterOption[] {
@@ -354,6 +360,7 @@ function chartExportText(chartElement: HTMLElement, fallbackTitle: string) {
             Boolean(text) &&
             !htmlElement.classList.contains("chart-state-text") &&
             !htmlElement.classList.contains("chart-copy-status") &&
+            !htmlElement.closest(".commentary-box") &&
             !chartElement.contains(htmlElement)
           );
         })
@@ -758,6 +765,20 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
     },
   ];
 
+  const commentaryFunctional = commentaryFunctionalContext(filters.functional_track_ams_owner);
+  const applicationCommentary = (sectionKey: string, chartKey?: string): ReactNode => (
+    <CommentaryEditor
+      project_id={projectId}
+      dashboard_area="applications"
+      tab_name="applications"
+      section_key={sectionKey}
+      chart_key={chartKey ?? null}
+      scope_filter="all"
+      ticket_type_filter="all"
+      functional_track_ams_owner={commentaryFunctional}
+    />
+  );
+
   return (
     <section className="applications-dashboard-layout" aria-labelledby="applications-tab-heading">
       <aside className="applications-filter-pane panel" aria-label="Applications filters">
@@ -873,6 +894,7 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
 
           {summary.status === "loading" ? <p className="muted-text">Loading summary...</p> : null}
           {summary.status === "error" ? <p className="error-text">{summary.error}</p> : null}
+          {applicationCommentary("applications_summary")}
         </section>
 
         <section className="panel" aria-labelledby="application-list-heading">
@@ -927,10 +949,16 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
               </tbody>
             </table>
           </div>
+          {applicationCommentary("application_list", "application_list")}
         </section>
 
         <section className="applications-chart-grid">
-          <PieApplicationChart title="Strategic" data={charts.data.strategic} status={charts.status} />
+          <PieApplicationChart
+            title="Strategic"
+            data={charts.data.strategic}
+            status={charts.status}
+            commentary={applicationCommentary("applications_charts", "strategic")}
+          />
           <BarApplicationChart
             title="Lifecycle Stage"
             data={charts.data.lifecycle_stage}
@@ -940,16 +968,19 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
                 : null
             }
             status={charts.status}
+            commentary={applicationCommentary("applications_charts", "lifecycle_stage")}
           />
           <BarApplicationChart
             title="Architecture Type"
             data={charts.data.architecture_type}
             status={charts.status}
+            commentary={applicationCommentary("applications_charts", "architecture_type")}
           />
           <BarApplicationChart
             title="Install Type"
             data={charts.data.install_type}
             status={charts.status}
+            commentary={applicationCommentary("applications_charts", "install_type")}
           />
         </section>
         {charts.status === "error" ? <p className="error-text">{charts.error}</p> : null}
@@ -960,6 +991,7 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
           onTopNChange={setTopActiveUsersN}
           status={topActiveUsers.status}
           topN={topActiveUsersN}
+          commentary={applicationCommentary("applications_charts", "top_active_users")}
         />
       </div>
     </section>
@@ -967,12 +999,14 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
 }
 
 function TopActiveUsersChart({
+  commentary,
   data,
   error,
   onTopNChange,
   status,
   topN,
 }: {
+  commentary?: ReactNode;
   data: DashboardApplicationsTopActiveUsers;
   error: string | null;
   onTopNChange: (value: TopNSelection) => void;
@@ -1059,16 +1093,19 @@ function TopActiveUsersChart({
         </div>
       ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
 
 function PieApplicationChart({
+  commentary,
   data,
   hiddenMessage,
   status,
   title,
 }: {
+  commentary?: ReactNode;
   data: Array<{ label: string; count: number }>;
   hiddenMessage?: string | null;
   status: LoadStatus;
@@ -1122,16 +1159,19 @@ function PieApplicationChart({
         </div>
       ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
 
 function BarApplicationChart({
+  commentary,
   data,
   hiddenMessage,
   status,
   title,
 }: {
+  commentary?: ReactNode;
   data: Array<{ label: string; count: number }>;
   hiddenMessage?: string | null;
   status: LoadStatus;
@@ -1197,6 +1237,7 @@ function BarApplicationChart({
         </div>
       ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }

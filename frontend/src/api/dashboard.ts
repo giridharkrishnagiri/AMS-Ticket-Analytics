@@ -314,6 +314,59 @@ export type DashboardApplicationsTopActiveUsers = {
   points: DashboardApplicationsTopActiveUsersPoint[];
 };
 
+export type DashboardCommentaryContext = {
+  project_id: string;
+  dashboard_area: string;
+  tab_name: string;
+  sub_tab_name?: string | null;
+  section_key: string;
+  chart_key?: string | null;
+  scope_filter?: string;
+  ticket_type_filter?: string;
+  functional_track_ams_owner?: string;
+};
+
+export type DashboardCommentaryRecord = {
+  id: string;
+  project_id: string;
+  dashboard_area: string;
+  tab_name: string;
+  sub_tab_name: string | null;
+  section_key: string;
+  chart_key: string | null;
+  scope_filter: string;
+  ticket_type_filter: string;
+  functional_track_ams_owner: string;
+  commentary_html: string | null;
+  commentary_text: string | null;
+  updated_at: string;
+  updated_by: string | null;
+};
+
+export type DashboardCommentaryResponse = {
+  commentary: DashboardCommentaryRecord | null;
+};
+
+export type DashboardCommentaryBatchRequest = {
+  project_id: string;
+  dashboard_area: string;
+  tab_name: string;
+  sub_tab_name?: string | null;
+  scope_filter?: string;
+  ticket_type_filter?: string;
+  functional_track_ams_owner?: string;
+};
+
+export type DashboardCommentaryBatchResponse = {
+  commentaries: DashboardCommentaryRecord[];
+};
+
+export type DashboardCommentaryUpsertRequest = DashboardCommentaryContext & {
+  commentary_html: string | null;
+  commentary_text: string | null;
+  updated_by?: string | null;
+};
+
 export type DashboardApplicationsList = {
   total: number;
   rows: DashboardApplicationRow[];
@@ -785,6 +838,36 @@ export function getDashboardApplicationsTopActiveUsers(
     "/dashboard/applications/top-active-users",
     { ...input, top_n: topN } as DashboardApplicationsRequest & { top_n: 10 | 20 }
   );
+}
+
+export function getDashboardCommentary(
+  input: DashboardCommentaryContext
+): Promise<DashboardCommentaryResponse> {
+  return requestJson<DashboardCommentaryResponse>("/dashboard/commentaries/context", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function getDashboardCommentariesBatch(
+  input: DashboardCommentaryBatchRequest
+): Promise<DashboardCommentaryBatchResponse> {
+  return requestJson<DashboardCommentaryBatchResponse>("/dashboard/commentaries/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function upsertDashboardCommentary(
+  input: DashboardCommentaryUpsertRequest
+): Promise<DashboardCommentaryResponse> {
+  return requestJson<DashboardCommentaryResponse>("/dashboard/commentaries/upsert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 function postVolumetricsRequest<T>(

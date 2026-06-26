@@ -1923,6 +1923,96 @@ h2 {
   padding: 18px;
 }
 
+.commentary-box {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.commentary-box-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.commentary-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1e293b;
+  line-height: 1.45;
+}
+
+.commentary-preview p,
+.commentary-editor p {
+  margin: 0 0 8px;
+}
+
+.commentary-preview ul,
+.commentary-preview ol,
+.commentary-editor ul,
+.commentary-editor ol {
+  margin: 6px 0 6px 22px;
+}
+
+.commentary-empty,
+.commentary-status {
+  margin: 8px 0 0;
+}
+
+.commentary-editor-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.commentary-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.commentary-toolbar button {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #1e293b;
+  font-size: 0.78rem;
+  font-weight: 800;
+  border-radius: 6px;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
+.commentary-toolbar button:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.commentary-editor {
+  min-height: 110px;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  line-height: 1.45;
+  outline: none;
+}
+
+.commentary-editor:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.commentary-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .maintenance-panel {
   border-color: #fed7aa;
   background: linear-gradient(180deg, #ffffff, #fffbeb);
@@ -2024,6 +2114,8 @@ h2 {
   .selected-files li,
   .dashboard-header,
   .chart-card-heading,
+  .commentary-box-header,
+  .commentary-actions,
   .shell-actions {
     flex-direction: column;
     align-items: stretch;

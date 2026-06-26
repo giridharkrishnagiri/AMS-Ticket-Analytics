@@ -14,6 +14,7 @@ from app.models import (
     ApplicationInventoryItem,
     AssessmentOutOfScopeTicket,
     Client,
+    DashboardCommentary,
     IncidentSlaRow,
     Project,
     Ticket,
@@ -831,6 +832,146 @@ def test_dashboard_top_active_users_groups_by_parent_business_application() -> N
         cleanup_client(db, client_id)
 
 
+def test_dashboard_commentary_upsert_batch_and_context_separation() -> None:
+    db, client_id, project_id, _, _, _ = create_dashboard_project()
+    try:
+        base_context = {
+            "project_id": str(project_id),
+            "dashboard_area": "volumetrics",
+            "tab_name": "volumetrics_sla",
+            "sub_tab_name": "overall_volume_trends",
+            "section_key": "overall_volume_trends",
+            "chart_key": "created_resolved_canceled",
+            "scope_filter": "in_scope",
+            "ticket_type_filter": "all",
+            "functional_track_ams_owner": "all",
+        }
+
+        with TestClient(app) as client:
+            missing_response = client.post(
+                "/api/dashboard/commentaries/context",
+                json=base_context,
+            )
+            create_response = client.post(
+                "/api/dashboard/commentaries/upsert",
+                json={
+                    **base_context,
+                    "commentary_html": (
+                        '<p onclick="bad()"><strong>Created volume</strong> is stable.</p>'
+                        '<script>alert("x")</script><iframe src="bad"></iframe>'
+                    ),
+                    "commentary_text": "Created volume is stable.",
+                    "updated_by": "analyst@example.com",
+                },
+            )
+            update_response = client.post(
+                "/api/dashboard/commentaries/upsert",
+                json={
+                    **base_context,
+                    "commentary_html": "<p><em>Updated</em> commentary</p>",
+                    "commentary_text": "Updated commentary",
+                    "updated_by": "analyst2@example.com",
+                },
+            )
+            incident_context_response = client.post(
+                "/api/dashboard/commentaries/upsert",
+                json={
+                    **base_context,
+                    "ticket_type_filter": "incident",
+                    "commentary_html": "<p>Incident-specific note</p>",
+                    "commentary_text": "Incident-specific note",
+                },
+            )
+            functional_context_response = client.post(
+                "/api/dashboard/commentaries/upsert",
+                json={
+                    **base_context,
+                    "functional_track_ams_owner": "Data - Owner A",
+                    "commentary_html": "<p>Functional owner note</p>",
+                    "commentary_text": "Functional owner note",
+                },
+            )
+            subtab_context_response = client.post(
+                "/api/dashboard/commentaries/upsert",
+                json={
+                    **base_context,
+                    "sub_tab_name": "kpi_trends",
+                    "commentary_html": "<p>KPI note</p>",
+                    "commentary_text": "KPI note",
+                },
+            )
+            batch_response = client.post(
+                "/api/dashboard/commentaries/batch",
+                json={
+                    "project_id": str(project_id),
+                    "dashboard_area": "volumetrics",
+                    "tab_name": "volumetrics_sla",
+                    "sub_tab_name": "overall_volume_trends",
+                    "scope_filter": "in_scope",
+                    "ticket_type_filter": "all",
+                    "functional_track_ams_owner": "all",
+                },
+            )
+            incident_batch_response = client.post(
+                "/api/dashboard/commentaries/batch",
+                json={
+                    "project_id": str(project_id),
+                    "dashboard_area": "volumetrics",
+                    "tab_name": "volumetrics_sla",
+                    "sub_tab_name": "overall_volume_trends",
+                    "scope_filter": "in_scope",
+                    "ticket_type_filter": "incident",
+                    "functional_track_ams_owner": "all",
+                },
+            )
+
+        assert missing_response.status_code == 200
+        assert missing_response.json() == {"commentary": None}
+
+        assert create_response.status_code == 200
+        created = create_response.json()["commentary"]
+        assert created["commentary_html"] == "<p><strong>Created volume</strong> is stable.</p>"
+        assert "onclick" not in created["commentary_html"]
+        assert "alert" not in created["commentary_html"]
+        assert "<script" not in created["commentary_html"]
+        assert "<iframe" not in created["commentary_html"]
+        assert created["commentary_text"] == "Created volume is stable."
+        assert created["updated_by"] == "analyst@example.com"
+
+        assert update_response.status_code == 200
+        updated = update_response.json()["commentary"]
+        assert updated["id"] == created["id"]
+        assert updated["commentary_html"] == "<p><em>Updated</em> commentary</p>"
+        assert updated["commentary_text"] == "Updated commentary"
+        assert updated["updated_by"] == "analyst2@example.com"
+
+        assert incident_context_response.status_code == 200
+        assert functional_context_response.status_code == 200
+        assert subtab_context_response.status_code == 200
+
+        assert batch_response.status_code == 200
+        batch_payload = batch_response.json()
+        assert [row["commentary_text"] for row in batch_payload["commentaries"]] == [
+            "Updated commentary",
+        ]
+        assert batch_payload["commentaries"][0]["sub_tab_name"] == "overall_volume_trends"
+
+        assert incident_batch_response.status_code == 200
+        assert [
+            row["commentary_text"]
+            for row in incident_batch_response.json()["commentaries"]
+        ] == ["Incident-specific note"]
+
+        commentary_rows = (
+            db.query(DashboardCommentary)
+            .filter(DashboardCommentary.project_id == project_id)
+            .all()
+        )
+        assert len(commentary_rows) == 4
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_dashboard_applications_filter_values_use_business_custom_sort_order() -> None:
     db, client_id, project_id, _, _, _ = create_dashboard_project()
     try:
@@ -1063,6 +1204,22 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                 response_sla_breached=False,
                 resolution_sla_breached=False,
                 out_of_scope_reason="assignment_group_not_in_application_inventory",
+            ),
+        )
+        db.add(
+            DashboardCommentary(
+                client_id=client_id,
+                project_id=project_id,
+                dashboard_area="applications",
+                tab_name="applications",
+                sub_tab_name="",
+                section_key="applications_charts",
+                chart_key="strategic",
+                scope_filter="all",
+                ticket_type_filter="all",
+                functional_track_ams_owner="all",
+                commentary_html="<p><strong>Inventory note</strong></p>",
+                commentary_text="Inventory note",
             ),
         )
         db.commit()
@@ -1942,6 +2099,22 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
                 out_of_scope_reason="assignment_group_not_in_application_inventory",
             ),
         )
+        db.add(
+            DashboardCommentary(
+                client_id=client_id,
+                project_id=project_id,
+                dashboard_area="applications",
+                tab_name="applications",
+                sub_tab_name="",
+                section_key="applications_charts",
+                chart_key="strategic",
+                scope_filter="all",
+                ticket_type_filter="all",
+                functional_track_ams_owner="all",
+                commentary_html="<p><strong>Inventory note</strong></p>",
+                commentary_text="Inventory note",
+            ),
+        )
         db.commit()
 
         with TestClient(app) as client:
@@ -2062,6 +2235,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function parseDashboardPayload" in document
         assert "function safeRenderSection" in document
         assert "function renderFatalDashboardError" in document
+        assert "Commentary / Inferences" in document
+        assert "Save locally" in document
+        assert "Download Updated Offline Dashboard" in document
+        assert "function installCommentaryEditors" in document
+        assert "function downloadUpdatedOfflineDashboard" in document
+        assert "localStorage" in document
         assert "function inlineSvgComputedStyles" in document
         assert "function wrapExportText" in document
         assert "function chartExportText" in document
@@ -2144,6 +2323,21 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["overview"]["tickets"]["applications_80pct_monthly_volume_count"] == 1
         assert payload["applications"]["rows"][0]["business_service_ci_name"] == "Payroll Portal"
         assert payload["applications"]["rows"][0]["active_users"] == 500
+        assert payload["commentaries"] == [
+            {
+                "project_id": str(project_id),
+                "dashboard_area": "applications",
+                "tab_name": "applications",
+                "sub_tab_name": None,
+                "section_key": "applications_charts",
+                "chart_key": "strategic",
+                "scope_filter": "all",
+                "ticket_type_filter": "all",
+                "functional_track_ams_owner": "all",
+                "commentary_html": "<p><strong>Inventory note</strong></p>",
+                "commentary_text": "Inventory note",
+            },
+        ]
         assert "cmdb_payload" not in payload["applications"]["rows"][0]
         assert "architecture_type" in payload["applications"]["charts"]
         assert "install_type" in payload["applications"]["charts"]

@@ -438,6 +438,50 @@ class OfflineDashboardExportRequest(BaseModel):
     format: str = Field(default="html", pattern="^html$")
 
 
+class DashboardCommentaryContext(BaseModel):
+    project_id: UUID
+    dashboard_area: str
+    tab_name: str
+    sub_tab_name: str | None = None
+    section_key: str
+    chart_key: str | None = None
+    scope_filter: str = "all"
+    ticket_type_filter: str = "all"
+    functional_track_ams_owner: str = "all"
+
+
+class DashboardCommentaryRecord(DashboardCommentaryContext):
+    id: UUID
+    commentary_html: str | None
+    commentary_text: str | None
+    updated_at: datetime
+    updated_by: str | None = None
+
+
+class DashboardCommentaryContextResponse(BaseModel):
+    commentary: DashboardCommentaryRecord | None
+
+
+class DashboardCommentaryBatchRequest(BaseModel):
+    project_id: UUID
+    dashboard_area: str
+    tab_name: str
+    sub_tab_name: str | None = None
+    scope_filter: str = "all"
+    ticket_type_filter: str = "all"
+    functional_track_ams_owner: str = "all"
+
+
+class DashboardCommentaryBatchResponse(BaseModel):
+    commentaries: list[DashboardCommentaryRecord]
+
+
+class DashboardCommentaryUpsertRequest(DashboardCommentaryContext):
+    commentary_html: str | None = None
+    commentary_text: str | None = None
+    updated_by: str | None = None
+
+
 class VolumetricsCreatedPatternPoint(BaseModel):
     label: str
     average_created: float

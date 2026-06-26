@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Bar,
   BarChart,
@@ -67,6 +68,7 @@ import type {
   VolumetricsTicketType,
   VolumetricsTimeGrain,
 } from "./api/dashboard";
+import CommentaryEditor from "./components/CommentaryEditor";
 import ExcelMultiSelectFilter from "./components/ExcelMultiSelectFilter";
 import type { ExcelFilterOption } from "./components/ExcelMultiSelectFilter";
 
@@ -92,6 +94,14 @@ type VolumetricsSubTab =
   | "category";
 type PriorityDistributionView = "graph" | "table";
 type TopNSelection = 10 | 20;
+
+const subTabCommentaryKeys: Record<VolumetricsSubTab, string> = {
+  overall_volume: "overall_volume_trends",
+  overall_sla: "overall_sla_trends",
+  detailed_volume: "detailed_volume_trends",
+  kpi: "kpi_trends",
+  category: "category_wise_trends",
+};
 
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -286,6 +296,10 @@ function createLoadState<T>(data: T, status: LoadStatus = "idle"): LoadState<T> 
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function commentaryFunctionalContext(values: string[]): string {
+  return values.length === 1 ? values[0] : "all";
 }
 
 function pad(value: number): string {
@@ -597,6 +611,7 @@ function chartExportText(chartElement: HTMLElement, fallbackTitle: string) {
             Boolean(text) &&
             !htmlElement.classList.contains("chart-state-text") &&
             !htmlElement.classList.contains("chart-copy-status") &&
+            !htmlElement.closest(".commentary-box") &&
             !chartElement.contains(htmlElement)
           );
         })
@@ -1283,6 +1298,24 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
 
   const averageLabel = timeGrain === "monthly" ? "Avg monthly" : "Avg weekly";
   const canceledMetricLabel = cancellationMetricLabel(ticketType);
+  const commentaryFunctional = commentaryFunctionalContext(filters.functional_track_ams_owner);
+  const volumetricsCommentary = (
+    subTab: VolumetricsSubTab,
+    sectionKey: string,
+    chartKey?: string
+  ): ReactNode => (
+    <CommentaryEditor
+      project_id={projectId}
+      dashboard_area="volumetrics"
+      tab_name="volumetrics_sla"
+      sub_tab_name={subTabCommentaryKeys[subTab]}
+      section_key={sectionKey}
+      chart_key={chartKey ?? null}
+      scope_filter={scope}
+      ticket_type_filter={ticketType}
+      functional_track_ams_owner={commentaryFunctional}
+    />
+  );
 
   return (
     <section className="volumetrics-dashboard-layout" aria-labelledby="volumetrics-tab-heading">
@@ -1512,6 +1545,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                 <p className="muted-text">Loading summary...</p>
               ) : null}
               {summary.status === "error" ? <p className="error-text">{summary.error}</p> : null}
+              {volumetricsCommentary("overall_volume", "overall_volume_summary")}
             </section>
 
             <CreatedResolvedCanceledChart
@@ -1520,6 +1554,11 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
               error={volumeTrend.error}
               ticketType={ticketType}
               timeGrain={timeGrain}
+              commentary={volumetricsCommentary(
+                "overall_volume",
+                "overall_volume_trends",
+                "created_resolved_canceled"
+              )}
             />
 
             <BacklogChart
@@ -1527,6 +1566,11 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
               status={backlog.status}
               error={backlog.error}
               timeGrain={timeGrain}
+              commentary={volumetricsCommentary(
+                "overall_volume",
+                "overall_volume_trends",
+                "backlog"
+              )}
             />
 
             <CreatedPatternChart
@@ -1535,6 +1579,11 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
               error={createdPattern.error}
               patternType={createdPatternType}
               onPatternTypeChange={setCreatedPatternType}
+              commentary={volumetricsCommentary(
+                "overall_volume",
+                "overall_volume_trends",
+                "created_pattern"
+              )}
             />
 
             <HourlyCreatedResolvedChart
@@ -1544,6 +1593,11 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
               dayType={hourlyDayType}
               onDayTypeChange={setHourlyDayType}
               ticketType={ticketType}
+              commentary={volumetricsCommentary(
+                "overall_volume",
+                "overall_volume_trends",
+                "hourly_created_resolved"
+              )}
             />
 
             <PriorityDistributionChart
@@ -1553,6 +1607,11 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
               view={priorityView}
               onViewChange={setPriorityView}
               timeGrain={timeGrain}
+              commentary={volumetricsCommentary(
+                "overall_volume",
+                "overall_volume_trends",
+                "priority_distribution"
+              )}
             />
           </>
         ) : null}
@@ -1564,6 +1623,9 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
             error={slaTrends.error}
             ticketType={ticketType}
             timeGrain={timeGrain}
+            commentaryForChart={(chartKey) =>
+              volumetricsCommentary("overall_sla", "overall_sla_trends", chartKey)
+            }
           />
         ) : null}
 
@@ -1594,6 +1656,9 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
             topIncidentBatchApplicationsError={topIncidentBatchApplications.error}
             topIncidentBatchApplicationsStatus={topIncidentBatchApplications.status}
             topBatchApplicationsN={topBatchApplicationsN}
+            commentaryForChart={(chartKey) =>
+              volumetricsCommentary("detailed_volume", "detailed_volume_trends", chartKey)
+            }
           />
         ) : null}
         {activeSubTab === "kpi" ? (
@@ -1606,10 +1671,16 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
             mttrStatus={kpiMttrTrends.status}
             ticketType={ticketType}
             timeGrain={timeGrain}
+            commentaryForChart={(chartKey) =>
+              volumetricsCommentary("kpi", "kpi_trends", chartKey)
+            }
           />
         ) : null}
         {activeSubTab === "category" ? (
-          <VolumetricsPlaceholder title="Category-wise Trends" />
+          <VolumetricsPlaceholder
+            title="Category-wise Trends"
+            commentary={volumetricsCommentary("category", "category_wise_trends")}
+          />
         ) : null}
       </div>
     </section>
@@ -1689,11 +1760,18 @@ function VolumetricsSubTabs({
   );
 }
 
-function VolumetricsPlaceholder({ title }: { title: string }) {
+function VolumetricsPlaceholder({
+  commentary,
+  title,
+}: {
+  commentary?: ReactNode;
+  title: string;
+}) {
   return (
     <section className="panel volumetrics-placeholder-panel">
       <p className="label">{title}</p>
       <h3>Detailed requirements for this section will be added in the next prompts.</h3>
+      {commentary}
     </section>
   );
 }
@@ -1731,6 +1809,7 @@ function rankingWindowText(
 }
 
 function DetailedVolumeTrends({
+  commentaryForChart,
   detailedSplits,
   detailedSplitsError,
   detailedSplitsStatus,
@@ -1757,6 +1836,7 @@ function DetailedVolumeTrends({
   topIncidentBatchApplicationsError,
   topIncidentBatchApplicationsStatus,
 }: {
+  commentaryForChart: (chartKey: string) => ReactNode;
   detailedSplits: DashboardVolumetricsDetailedArchitectureInstallSplits;
   detailedSplitsError: string | null;
   detailedSplitsStatus: LoadStatus;
@@ -1793,12 +1873,14 @@ function DetailedVolumeTrends({
         status={topApplicationsStatus}
         title="Top High-Volume Applications"
         topN={topApplicationsN}
+        commentary={commentaryForChart("top_high_volume_applications")}
       />
 
       <IncidentBatchTrendChart
         data={incidentBatchTrend}
         error={incidentBatchTrendError}
         status={incidentBatchTrendStatus}
+        commentary={commentaryForChart("batch_related_incidents_created")}
       />
 
       <TopApplicationsParetoChart
@@ -1822,6 +1904,7 @@ function DetailedVolumeTrends({
         status={topIncidentBatchApplicationsStatus}
         title="Top Applications with Incident Batch-Related Tickets"
         topN={topBatchApplicationsN}
+        commentary={commentaryForChart("top_incident_batch_applications")}
       />
 
       <TicketsPerUserChart
@@ -1830,6 +1913,7 @@ function DetailedVolumeTrends({
         onTopNChange={onTicketsPerUserNChange}
         status={ticketsPerUserStatus}
         topN={ticketsPerUserN}
+        commentary={commentaryForChart("tickets_per_user")}
       />
 
       <DistributionPieRow
@@ -1844,6 +1928,7 @@ function DetailedVolumeTrends({
           sc_tasks: "Average Monthly SC Tasks by SAP / Non-SAP",
         }}
         window={distributionSplits.ranking_window}
+        commentaryForChart={commentaryForChart}
       />
       <DistributionPieRow
         data={distributionSplits.architecture_type}
@@ -1857,6 +1942,7 @@ function DetailedVolumeTrends({
           sc_tasks: "Average Monthly SC Tasks by Architecture Type",
         }}
         window={distributionSplits.ranking_window}
+        commentaryForChart={commentaryForChart}
       />
       <DistributionPieRow
         data={distributionSplits.install_type}
@@ -1870,6 +1956,7 @@ function DetailedVolumeTrends({
           sc_tasks: "Average Monthly SC Tasks by Install Type",
         }}
         window={distributionSplits.ranking_window}
+        commentaryForChart={commentaryForChart}
       />
     </>
   );
@@ -1890,6 +1977,7 @@ function splitWindowText(window: DashboardVolumetricsRankingWindow): string {
 }
 
 function SplitPieChart({
+  commentary,
   data,
   error,
   status,
@@ -1898,6 +1986,7 @@ function SplitPieChart({
   valueTicketType,
   window,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsDetailedArchitectureInstallSplits["architecture_type"]["incidents"];
   error: string | null;
   status: LoadStatus;
@@ -1974,11 +2063,13 @@ function SplitPieChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
 
 function TopApplicationsHorizontalChart({
+  commentary,
   data,
   description,
   error,
@@ -1987,6 +2078,7 @@ function TopApplicationsHorizontalChart({
   title,
   topN,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsTopApplications;
   description: string;
   error: string | null;
@@ -2068,17 +2160,20 @@ function TopApplicationsHorizontalChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
 
 function TicketsPerUserChart({
+  commentary,
   data,
   error,
   onTopNChange,
   status,
   topN,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsTicketsPerUser;
   error: string | null;
   onTopNChange: (value: TopNSelection) => void;
@@ -2164,6 +2259,7 @@ function TicketsPerUserChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
@@ -2184,6 +2280,7 @@ function distributionChartNotApplicable(
 }
 
 function DistributionPieRow({
+  commentaryForChart,
   data,
   error,
   status,
@@ -2191,6 +2288,7 @@ function DistributionPieRow({
   titles,
   window,
 }: {
+  commentaryForChart: (chartKey: string) => ReactNode;
   data: DashboardVolumetricsDistributionSplits["sap_non_sap"];
   error: string | null;
   status: LoadStatus;
@@ -2208,6 +2306,9 @@ function DistributionPieRow({
     <section className="volumetrics-three-column-grid">
       {entries.map((entry) => (
         <DistributionPieChart
+          commentary={commentaryForChart(
+            `${titles[entry.key].toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}`
+          )}
           data={entry.points}
           error={error}
           key={entry.key}
@@ -2223,6 +2324,7 @@ function DistributionPieRow({
 }
 
 function DistributionPieChart({
+  commentary,
   data,
   error,
   status,
@@ -2231,6 +2333,7 @@ function DistributionPieChart({
   valueTicketType,
   window,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsSplitDatum[];
   error: string | null;
   status: LoadStatus;
@@ -2306,6 +2409,7 @@ function DistributionPieChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
@@ -2321,6 +2425,7 @@ type ParetoChartPoint = {
 
 function TopApplicationsParetoChart({
   canceledLabel,
+  commentary,
   createdLabel,
   data,
   description,
@@ -2333,6 +2438,7 @@ function TopApplicationsParetoChart({
   topN,
 }: {
   canceledLabel: string;
+  commentary?: ReactNode;
   createdLabel: string;
   data: ParetoChartPoint[];
   description: string;
@@ -2455,15 +2561,18 @@ function TopApplicationsParetoChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
 
 function IncidentBatchTrendChart({
+  commentary,
   data,
   error,
   status,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsIncidentBatchTrend;
   error: string | null;
   status: LoadStatus;
@@ -2535,6 +2644,7 @@ function IncidentBatchTrendChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
@@ -2553,6 +2663,7 @@ const mttrPriorityPairs: Array<Array<keyof DashboardVolumetricsKpiMttrPrioritySe
 const durationBucketLabels = ["0-1 day", "1-3 days", "3-10 days", ">10 days"];
 
 function KpiTrends({
+  commentaryForChart,
   durationBuckets,
   durationBucketsError,
   durationBucketsStatus,
@@ -2562,6 +2673,7 @@ function KpiTrends({
   ticketType,
   timeGrain,
 }: {
+  commentaryForChart: (chartKey: string) => ReactNode;
   durationBuckets: DashboardVolumetricsKpiDurationBuckets;
   durationBucketsError: string | null;
   durationBucketsStatus: LoadStatus;
@@ -2581,6 +2693,7 @@ function KpiTrends({
         title="Incident MTTR by Priority"
         valueTicketType="incident"
         timeGrain={timeGrain}
+        commentaryForChart={commentaryForChart}
       />
       <MttrPriorityGroup
         data={mttr.sc_task}
@@ -2590,6 +2703,7 @@ function KpiTrends({
         title="SC Task MTTR by Priority"
         valueTicketType="sc_task"
         timeGrain={timeGrain}
+        commentaryForChart={commentaryForChart}
       />
       <DurationBucketGroup
         data={durationBuckets.incident}
@@ -2598,6 +2712,7 @@ function KpiTrends({
         status={durationBucketsStatus}
         title="Incident Resolved Volume by Resolution Duration"
         valueTicketType="incident"
+        commentaryForChart={commentaryForChart}
       />
       <DurationBucketGroup
         data={durationBuckets.sc_task}
@@ -2606,12 +2721,14 @@ function KpiTrends({
         status={durationBucketsStatus}
         title="SC Task Closed Volume by Closed Duration"
         valueTicketType="sc_task"
+        commentaryForChart={commentaryForChart}
       />
     </>
   );
 }
 
 function MttrPriorityGroup({
+  commentaryForChart,
   data,
   error,
   selectedTicketType,
@@ -2620,6 +2737,7 @@ function MttrPriorityGroup({
   title,
   valueTicketType,
 }: {
+  commentaryForChart: (chartKey: string) => ReactNode;
   data: DashboardVolumetricsKpiMttrPrioritySet;
   error: string | null;
   selectedTicketType: VolumetricsTicketType;
@@ -2654,6 +2772,9 @@ function MttrPriorityGroup({
               title={`${valueTicketType === "incident" ? "Incident" : "SC Task"} ${priorities.join(
                 " / "
               )} MTTR`}
+              commentary={commentaryForChart(
+                `${valueTicketType}_${priorities.join("_").toLowerCase()}_mttr`
+              )}
             />
           ))}
         </div>
@@ -2718,12 +2839,14 @@ function renderMttrPointLabel(props: {
 }
 
 function MttrCombinedLineChart({
+  commentary,
   data,
   priorities,
   status,
   timeGrain,
   title,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsKpiMttrPrioritySet;
   priorities: Array<keyof DashboardVolumetricsKpiMttrPrioritySet>;
   status: LoadStatus;
@@ -2820,11 +2943,13 @@ function MttrCombinedLineChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
 
 function DurationBucketGroup({
+  commentaryForChart,
   data,
   error,
   selectedTicketType,
@@ -2832,6 +2957,7 @@ function DurationBucketGroup({
   title,
   valueTicketType,
 }: {
+  commentaryForChart: (chartKey: string) => ReactNode;
   data: DashboardVolumetricsDurationBucketRow[];
   error: string | null;
   selectedTicketType: VolumetricsTicketType;
@@ -2856,7 +2982,12 @@ function DurationBucketGroup({
       ) : (
         <div className="duration-bucket-grid">
           {data.map((row) => (
-            <DurationBucketChart data={row} key={row.period_key} status={status} />
+            <DurationBucketChart
+              commentary={commentaryForChart(`${valueTicketType}_duration_${row.period_key}`)}
+              data={row}
+              key={row.period_key}
+              status={status}
+            />
           ))}
         </div>
       )}
@@ -2865,9 +2996,11 @@ function DurationBucketGroup({
 }
 
 function DurationBucketChart({
+  commentary,
   data,
   status,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsDurationBucketRow;
   status: LoadStatus;
 }) {
@@ -2919,6 +3052,7 @@ function DurationBucketChart({
         </div>
       ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
@@ -2944,12 +3078,14 @@ function createdResolvedCanceledTitle(ticketType: VolumetricsTicketType): string
 }
 
 function CreatedResolvedCanceledChart({
+  commentary,
   data,
   error,
   status,
   ticketType,
   timeGrain,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsCreatedResolvedCanceled;
   error: string | null;
   status: LoadStatus;
@@ -3063,16 +3199,19 @@ function CreatedResolvedCanceledChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
 
 function BacklogChart({
+  commentary,
   data,
   error,
   status,
   timeGrain,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsBacklogOnly;
   error: string | null;
   status: LoadStatus;
@@ -3169,6 +3308,7 @@ function BacklogChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
@@ -3181,12 +3321,14 @@ const createdPatternOptions: Array<{ value: CreatedPatternType; label: string }>
 ];
 
 function CreatedPatternChart({
+  commentary,
   data,
   error,
   onPatternTypeChange,
   patternType,
   status,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsCreatedPattern;
   error: string | null;
   onPatternTypeChange: (value: CreatedPatternType) => void;
@@ -3287,6 +3429,7 @@ function CreatedPatternChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
@@ -3297,6 +3440,7 @@ const hourlyDayTypeOptions: Array<{ value: VolumetricsDayType; label: string }> 
 ];
 
 function HourlyCreatedResolvedChart({
+  commentary,
   data,
   dayType,
   error,
@@ -3304,6 +3448,7 @@ function HourlyCreatedResolvedChart({
   status,
   ticketType,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsHourlyCreatedResolved;
   dayType: VolumetricsDayType;
   error: string | null;
@@ -3404,6 +3549,7 @@ function HourlyCreatedResolvedChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }
@@ -3428,6 +3574,7 @@ function priorityDataForChart(data: DashboardVolumetricsPriorityDistribution) {
 }
 
 function PriorityDistributionChart({
+  commentary,
   data,
   error,
   onViewChange,
@@ -3435,6 +3582,7 @@ function PriorityDistributionChart({
   timeGrain,
   view,
 }: {
+  commentary?: ReactNode;
   data: DashboardVolumetricsPriorityDistribution;
   error: string | null;
   onViewChange: (value: PriorityDistributionView) => void;
@@ -3566,12 +3714,14 @@ function PriorityDistributionTable({ data }: { data: DashboardVolumetricsPriorit
 }
 
 function OverallSlaTrends({
+  commentaryForChart,
   data,
   error,
   status,
   ticketType,
   timeGrain,
 }: {
+  commentaryForChart: (chartKey: string) => ReactNode;
   data: DashboardVolumetricsSlaTrends;
   error: string | null;
   status: LoadStatus;
@@ -3597,6 +3747,7 @@ function OverallSlaTrends({
         status={status}
         timeGrain={timeGrain}
         color={chartColors.created}
+        commentary={commentaryForChart("response_sla_adherence")}
       />
       <SlaTrendSection
         title="Resolution SLA adherence trend"
@@ -3605,12 +3756,14 @@ function OverallSlaTrends({
         status={status}
         timeGrain={timeGrain}
         color={chartColors.resolved}
+        commentary={commentaryForChart("resolution_sla_adherence")}
       />
     </>
   );
 }
 
 function SlaTrendSection({
+  commentary,
   color,
   data,
   status,
@@ -3618,6 +3771,7 @@ function SlaTrendSection({
   timeGrain,
   title,
 }: {
+  commentary?: ReactNode;
   color: string;
   data: DashboardVolumetricsSlaTrends["response"];
   status: LoadStatus;
@@ -3701,6 +3855,7 @@ function SlaTrendSection({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
     </section>
   );
 }

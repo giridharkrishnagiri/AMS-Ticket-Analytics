@@ -53,6 +53,7 @@ from app.services.dashboard import (
     volumetrics_period_start_expression,
     volumetrics_source_select,
 )
+from app.services.dashboard_commentary import export_project_commentaries
 
 OFFLINE_APPLICATION_FIELDS = tuple(
     dict.fromkeys((*APPLICATION_LIST_FIELDS, "lifecycle_stage_status")),
@@ -1333,6 +1334,7 @@ def build_offline_dashboard_payload(db: Session, project_id: UUID) -> dict[str, 
         "overview": overview,
         "applications": build_applications_payload(db, project_id),
         "volumetrics": volumetrics,
+        "commentaries": export_project_commentaries(db, project_id),
     }
 
 
@@ -1861,6 +1863,80 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     .legend span { display: inline-flex; align-items: center; gap: 5px; font-weight: 800; }
     .swatch { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
     #applications .swatch { width: 12px; height: 12px; }
+    .offline-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin: 0 0 10px;
+    }
+    .commentary-box {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #dbe3ef;
+    }
+    .commentary-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .commentary-preview {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border: 1px solid #dbeafe;
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #1e293b;
+      line-height: 1.45;
+    }
+    .commentary-preview p,
+    .commentary-editor p { margin: 0 0 8px; }
+    .commentary-preview ul,
+    .commentary-preview ol,
+    .commentary-editor ul,
+    .commentary-editor ol { margin: 6px 0 6px 22px; }
+    .commentary-editor-panel {
+      display: none;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .commentary-box.editing .commentary-editor-panel { display: grid; }
+    .commentary-box.editing .commentary-preview { display: none; }
+    .commentary-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .commentary-toolbar button {
+      min-height: 28px;
+      padding: 4px 8px;
+      font-size: 0.74rem;
+      font-weight: 800;
+    }
+    .commentary-editor {
+      min-height: 96px;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #fff;
+      color: #0f172a;
+      line-height: 1.45;
+      outline: none;
+    }
+    .commentary-editor:focus {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+    .commentary-footer {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .commentary-status {
+      font-size: 0.8rem;
+      color: #475569;
+    }
     .offline-dashboard,
     .dashboard-layout,
     .filter-pane,
@@ -1916,6 +1992,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       <button class="tab" data-tab="applications" type="button">Applications</button>
       <button class="tab" data-tab="volumetrics" type="button">Volumetrics &amp; SLA</button>
     </nav>
+    <div class="offline-actions">
+      <button class="secondary-button" id="download-edited-dashboard" type="button">
+        Download Updated Offline Dashboard
+      </button>
+    </div>
     <section class="view active" id="overview"></section>
     <section class="view" id="applications"></section>
     <section class="view" id="volumetrics"></section>
@@ -2000,6 +2081,236 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#39;");
+    }
+    const COMMENTARY_STORAGE_KEY = `ams-dashboard-commentary:${DASHBOARD?.metadata?.project_id || "project"}:${DASHBOARD?.metadata?.exported_at || "export"}`;
+    function normalizeCommentaryValue(value, fallback = "") {
+      const text = String(value ?? "").trim();
+      return text || fallback;
+    }
+    function normalizeCommentaryKeyPart(value, fallback = "") {
+      return normalizeCommentaryValue(value, fallback).toLowerCase();
+    }
+    function normalizeChartKey(value) {
+      return normalizeCommentaryKeyPart(value, "general")
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+    }
+    function commentaryKey(context) {
+      return [
+        DASHBOARD?.metadata?.project_id || "",
+        normalizeCommentaryKeyPart(context.dashboard_area),
+        normalizeCommentaryKeyPart(context.tab_name),
+        normalizeCommentaryKeyPart(context.sub_tab_name),
+        normalizeCommentaryKeyPart(context.section_key),
+        normalizeCommentaryKeyPart(context.chart_key),
+        normalizeCommentaryKeyPart(context.scope_filter, "all"),
+        normalizeCommentaryKeyPart(context.ticket_type_filter, "all"),
+        normalizeCommentaryValue(context.functional_track_ams_owner, "all")
+      ].join("|");
+    }
+    function loadCommentaryEdits() {
+      try {
+        return JSON.parse(localStorage.getItem(COMMENTARY_STORAGE_KEY) || "{}");
+      } catch (error) {
+        console.warn("Offline commentary edits could not be loaded.", error);
+        return {};
+      }
+    }
+    let commentaryEdits = loadCommentaryEdits();
+    function baseCommentaryMap() {
+      const rows = new Map();
+      (DASHBOARD.commentaries || []).forEach((row) => {
+        rows.set(commentaryKey(row), row);
+      });
+      Object.values(commentaryEdits || {}).forEach((row) => {
+        rows.set(commentaryKey(row), row);
+      });
+      return rows;
+    }
+    function getCommentary(context) {
+      return baseCommentaryMap().get(commentaryKey(context)) || null;
+    }
+    function saveLocalCommentary(context, htmlValue, textValue) {
+      const record = {
+        project_id: DASHBOARD.metadata.project_id,
+        dashboard_area: normalizeCommentaryKeyPart(context.dashboard_area),
+        tab_name: normalizeCommentaryKeyPart(context.tab_name),
+        sub_tab_name: normalizeCommentaryKeyPart(context.sub_tab_name) || null,
+        section_key: normalizeCommentaryKeyPart(context.section_key),
+        chart_key: normalizeCommentaryKeyPart(context.chart_key) || null,
+        scope_filter: normalizeCommentaryKeyPart(context.scope_filter, "all"),
+        ticket_type_filter: normalizeCommentaryKeyPart(context.ticket_type_filter, "all"),
+        functional_track_ams_owner: normalizeCommentaryValue(context.functional_track_ams_owner, "all"),
+        commentary_html: htmlValue || null,
+        commentary_text: textValue || null
+      };
+      commentaryEdits[commentaryKey(record)] = record;
+      localStorage.setItem(COMMENTARY_STORAGE_KEY, JSON.stringify(commentaryEdits));
+      return record;
+    }
+    function sanitizeOfflineCommentary(htmlValue) {
+      const template = document.createElement("template");
+      template.innerHTML = htmlValue || "";
+      const allowed = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "UL", "OL", "LI", "SPAN"]);
+      const drop = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED"]);
+      function clean(node) {
+        [...node.childNodes].forEach((child) => {
+          if (child.nodeType === Node.ELEMENT_NODE) {
+            const element = child;
+            if (drop.has(element.tagName)) {
+              element.remove();
+              return;
+            }
+            if (!allowed.has(element.tagName)) {
+              const fragment = document.createDocumentFragment();
+              while (element.firstChild) fragment.appendChild(element.firstChild);
+              element.replaceWith(fragment);
+              clean(node);
+              return;
+            }
+            [...element.attributes].forEach((attribute) => element.removeAttribute(attribute.name));
+            clean(element);
+          }
+        });
+      }
+      clean(template.content);
+      return template.innerHTML.trim();
+    }
+    function commentaryContextAttributes(context) {
+      return Object.entries(context)
+        .map(([key, value]) => `data-${key.replaceAll("_", "-")}="${esc(value || "")}"`)
+        .join(" ");
+    }
+    function commentaryMarkup(context) {
+      const row = getCommentary(context);
+      const htmlValue = row?.commentary_html || "";
+      const hasCommentary = Boolean(String(htmlValue).replace(/<[^>]*>/g, "").trim());
+      return `<section class="commentary-box" ${commentaryContextAttributes(context)}>
+        <div class="commentary-header">
+          <div><p class="label">Commentary / Inferences</p></div>
+          <button class="secondary-button commentary-edit-button" type="button">${hasCommentary ? "View / edit commentary" : "Add commentary / inferences"}</button>
+        </div>
+        <div class="commentary-preview">${hasCommentary ? htmlValue : `<p class="muted">No commentary saved for this filter context.</p>`}</div>
+        <div class="commentary-editor-panel">
+          <div class="commentary-toolbar">
+            <button type="button" data-command="bold">B</button>
+            <button type="button" data-command="italic">I</button>
+            <button type="button" data-command="underline">U</button>
+            <button type="button" data-command="insertUnorderedList">Bullets</button>
+            <button type="button" data-command="insertOrderedList">Numbered</button>
+            <button type="button" data-command="removeFormat">Clear</button>
+          </div>
+          <div class="commentary-editor" contenteditable="true" role="textbox">${htmlValue}</div>
+          <div class="commentary-footer">
+            <span class="commentary-status">Offline edits are saved in this browser until you download an updated HTML file.</span>
+            <button class="secondary-button commentary-cancel-button" type="button">Cancel</button>
+            <button class="primary-button commentary-save-button" type="button">Save locally</button>
+          </div>
+        </div>
+      </section>`;
+    }
+    function contextFromCommentaryElement(node) {
+      return {
+        dashboard_area: node.dataset.dashboardArea || "dashboard",
+        tab_name: node.dataset.tabName || "overview",
+        sub_tab_name: node.dataset.subTabName || "",
+        section_key: node.dataset.sectionKey || "section",
+        chart_key: node.dataset.chartKey || "",
+        scope_filter: node.dataset.scopeFilter || "all",
+        ticket_type_filter: node.dataset.ticketTypeFilter || "all",
+        functional_track_ams_owner: node.dataset.functionalTrackAmsOwner || "all"
+      };
+    }
+    function installCommentaryEditors(root) {
+      if (!root) return;
+      root.querySelectorAll(".commentary-box").forEach((box) => {
+        const editButton = box.querySelector(".commentary-edit-button");
+        const cancelButton = box.querySelector(".commentary-cancel-button");
+        const saveButton = box.querySelector(".commentary-save-button");
+        const editor = box.querySelector(".commentary-editor");
+        const preview = box.querySelector(".commentary-preview");
+        const status = box.querySelector(".commentary-status");
+        const originalHtml = editor?.innerHTML || "";
+        editButton?.addEventListener("click", () => {
+          box.classList.toggle("editing");
+          editor?.focus();
+        });
+        cancelButton?.addEventListener("click", () => {
+          if (editor) editor.innerHTML = originalHtml;
+          box.classList.remove("editing");
+        });
+        box.querySelectorAll("[data-command]").forEach((button) => {
+          button.addEventListener("mousedown", (event) => event.preventDefault());
+          button.addEventListener("click", () => {
+            editor?.focus();
+            document.execCommand(button.dataset.command, false);
+          });
+        });
+        saveButton?.addEventListener("click", () => {
+          const sanitized = sanitizeOfflineCommentary(editor?.innerHTML || "");
+          const text = (editor?.innerText || "").trim();
+          const context = contextFromCommentaryElement(box);
+          saveLocalCommentary(context, sanitized, text);
+          if (editor) editor.innerHTML = sanitized;
+          if (preview) preview.innerHTML = sanitized || `<p class="muted">No commentary saved for this filter context.</p>`;
+          if (status) status.textContent = "Saved locally.";
+          box.classList.remove("editing");
+        });
+      });
+    }
+    function attachDefaultCommentaries(root, context) {
+      if (!root) return;
+      root.querySelectorAll(".chart-card, .table-card").forEach((card) => {
+        if (card.querySelector(".commentary-box")) return;
+        const title = card.querySelector("h3")?.textContent || card.getAttribute("aria-label") || "section";
+        card.insertAdjacentHTML(
+          "beforeend",
+          commentaryMarkup({
+            ...context,
+            chart_key: normalizeChartKey(title)
+          })
+        );
+      });
+      installCommentaryEditors(root);
+    }
+    function currentVolumetricsCommentaryContext() {
+      return {
+        dashboard_area: "volumetrics",
+        tab_name: "volumetrics_sla",
+        sub_tab_name: state.volSubTab,
+        section_key: state.volSubTab,
+        scope_filter: state.volScope,
+        ticket_type_filter: state.volTicketType,
+        functional_track_ams_owner: state.volFunctional
+      };
+    }
+    function allMergedCommentaries() {
+      return [...baseCommentaryMap().values()];
+    }
+    function safeJsonForScript(payload) {
+      return JSON.stringify(payload).replace(/<\//g, "<\\/");
+    }
+    function editedDashboardFilename() {
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      return `AMS_Apps_Volumetrics_Dashboard_Edited_${stamp}.html`;
+    }
+    function downloadUpdatedOfflineDashboard() {
+      const updatedPayload = JSON.parse(JSON.stringify(DASHBOARD));
+      updatedPayload.commentaries = allMergedCommentaries();
+      const clonedDocument = document.documentElement.cloneNode(true);
+      const payloadElement = clonedDocument.querySelector("#dashboard-data");
+      if (payloadElement) {
+        payloadElement.textContent = safeJsonForScript(updatedPayload);
+      }
+      const blob = new Blob([`<!doctype html>\n${clonedDocument.outerHTML}`], { type: "text/html;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = editedDashboardFilename();
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 500);
     }
     function renderSectionError(sectionId, title, error) {
       const node = document.getElementById(sectionId);
@@ -2294,7 +2605,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ? Array.from(card.querySelectorAll(".muted, .muted-text"))
             .filter((element) => {
               const text = element.textContent?.trim();
-              return text && !element.classList.contains("copy-chart-status") && !frame.contains(element);
+              return text && !element.classList.contains("copy-chart-status") && !element.closest(".commentary-box") && !frame.contains(element);
             })
             .flatMap((element) => wrapExportText(element.textContent?.trim() || ""))
             .slice(0, 3)
@@ -2481,7 +2792,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${tile("Apps Driving 80% Volume", fmt(overview.tickets.applications_80pct_monthly_volume_count), "Based on avg monthly ticket volume", 7, 4)}
         </div>
         <p class="overview-date-note">Tickets data range: ${dateText(overview.tickets.completion_date_min)} to ${dateText(overview.tickets.completion_date_max)}</p>
+        ${commentaryMarkup({ dashboard_area: "dashboard", tab_name: "overview", sub_tab_name: "", section_key: "overview_summary", chart_key: "", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: "all" })}
       </section>`;
+      installCommentaryEditors(document.getElementById("overview"));
     }
     function filteredApplications() {
       return DASHBOARD.applications.rows.filter((row) =>
@@ -2535,6 +2848,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
             ${tile("Application Type", `Business: ${fmt(businessCount)}`, `Technical: ${fmt(technicalCount)}`, 4, 6)}
             ${tile("Criticality", `Very Critical: ${fmt(veryCriticalCount)}`, `Critical: ${fmt(criticalCount)}`, 5, 6)}
           </div>
+          ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_summary", chart_key: "", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}
           <div class="chart-grid">
             <section class="chart-card panel"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
             <section class="chart-card panel"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
@@ -2550,6 +2864,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll("[data-top-active-users]").forEach((button) => {
         button.addEventListener("click", () => { state.topActiveUsersN = button.dataset.topActiveUsers; safeRenderSection("applications", "Applications", renderApplications); });
       });
+      attachDefaultCommentaries(document.getElementById("applications"), { dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_charts", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional });
       installChartCopyButtons(document.getElementById("applications"));
     }
     function applicationTable(rows) {
@@ -2640,6 +2955,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll("[data-top-tickets-user]").forEach((button) => {
         button.addEventListener("click", () => { state.ticketsPerUserN = button.dataset.topTicketsUser; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
+      attachDefaultCommentaries(document.getElementById("volumetrics"), currentVolumetricsCommentaryContext());
       installChartCopyButtons(document.getElementById("volumetrics"));
     }
     function volSubTabs() {
@@ -3222,6 +3538,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.getElementById("export-meta").innerHTML = `Exported: ${dateTimeText(DASHBOARD.metadata.exported_at)}<br>Monthly offline dashboard`;
       renderCustomerLogo();
       document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
+      document.getElementById("download-edited-dashboard")?.addEventListener("click", downloadUpdatedOfflineDashboard);
       safeRenderSection("overview", "Overview", renderOverview);
       safeRenderSection("applications", "Applications", renderApplications);
       safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics);
