@@ -2,6 +2,7 @@ import { requestJson } from "./client";
 
 export type IncidentSlaUploadResponse = {
   project_id: string;
+  agreement_type: AgreementType;
   upload_id: string | null;
   uploaded_file_name: string;
   status: string;
@@ -30,6 +31,7 @@ export type IncidentSlaMultiUploadResponse = {
 export type IncidentSlaUploadHistoryRow = {
   upload_id: string;
   filename: string;
+  agreement_type: AgreementType;
   uploaded_at: string;
   total_rows_read: number;
   inserted_rows: number;
@@ -68,6 +70,7 @@ export type IncidentSlaUnmatchedStats = {
 
 export type IncidentSlaEnrichResponse = {
   project_id: string;
+  agreement_type: AgreementType;
   ticket_type: string;
   replace_existing: boolean;
   matched_ticket_count: number;
@@ -92,6 +95,7 @@ export type IncidentSlaEnrichResponse = {
 
 export type IncidentSlaSummaryResponse = {
   project_id: string;
+  agreement_type: AgreementType;
   total_sla_rows: number;
   unique_incident_numbers: number;
   matched_tickets_count: number;
@@ -120,17 +124,22 @@ export type IncidentSlaUnmatchedResponse = {
 
 export type IncidentSlaDeduplicateResponse = {
   project_id: string;
+  agreement_type: AgreementType;
   duplicate_groups_found: number;
   duplicate_rows_deleted: number;
   remaining_sla_rows: number;
 };
 
+export type AgreementType = "sla" | "ola";
+
 export function uploadIncidentSlaFile(
   projectId: string,
-  file: File
+  file: File,
+  agreementType: AgreementType = "ola"
 ): Promise<IncidentSlaUploadResponse> {
   const formData = new FormData();
   formData.append("project_id", projectId.trim());
+  formData.append("agreement_type", agreementType);
   formData.append("file", file);
 
   return requestJson<IncidentSlaUploadResponse>("/sla/incidents/upload", {
@@ -141,10 +150,12 @@ export function uploadIncidentSlaFile(
 
 export function uploadIncidentSlaFiles(
   projectId: string,
-  files: File[]
+  files: File[],
+  agreementType: AgreementType = "ola"
 ): Promise<IncidentSlaMultiUploadResponse> {
   const formData = new FormData();
   formData.append("project_id", projectId.trim());
+  formData.append("agreement_type", agreementType);
   files.forEach((file) => formData.append("files", file));
 
   return requestJson<IncidentSlaMultiUploadResponse>("/sla/incidents/upload-multiple", {
@@ -155,53 +166,69 @@ export function uploadIncidentSlaFiles(
 
 export function enrichIncidentSla(
   projectId: string,
-  replaceExisting = true
+  replaceExisting = true,
+  agreementType: AgreementType = "ola"
 ): Promise<IncidentSlaEnrichResponse> {
   return requestJson<IncidentSlaEnrichResponse>("/sla/incidents/enrich", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       project_id: projectId.trim(),
+      agreement_type: agreementType,
       ticket_type: "INCIDENT",
       replace_existing: replaceExisting,
     }),
   });
 }
 
-export function getIncidentSlaSummary(projectId: string): Promise<IncidentSlaSummaryResponse> {
-  const query = new URLSearchParams({ project_id: projectId.trim() });
+export function getIncidentSlaSummary(
+  projectId: string,
+  agreementType: AgreementType = "ola"
+): Promise<IncidentSlaSummaryResponse> {
+  const query = new URLSearchParams({
+    project_id: projectId.trim(),
+    agreement_type: agreementType,
+  });
   return requestJson<IncidentSlaSummaryResponse>(`/sla/incidents/summary?${query.toString()}`);
 }
 
 export function getUnmatchedIncidentSlaNumbers(
   projectId: string,
   limit = 100,
-  offset = 0
+  offset = 0,
+  agreementType: AgreementType = "ola"
 ): Promise<IncidentSlaUnmatchedResponse> {
   const query = new URLSearchParams({
     project_id: projectId.trim(),
     limit: String(limit),
     offset: String(offset),
+    agreement_type: agreementType,
   });
   return requestJson<IncidentSlaUnmatchedResponse>(`/sla/incidents/unmatched?${query.toString()}`);
 }
 
 export function getIncidentSlaUploadHistory(
-  projectId: string
+  projectId: string,
+  agreementType: AgreementType = "ola"
 ): Promise<IncidentSlaUploadHistoryRow[]> {
-  const query = new URLSearchParams({ project_id: projectId.trim() });
+  const query = new URLSearchParams({
+    project_id: projectId.trim(),
+    agreement_type: agreementType,
+  });
   return requestJson<IncidentSlaUploadHistoryRow[]>(`/sla/incidents/uploads?${query.toString()}`);
 }
 
 export function deduplicateIncidentSlaRows(
   projectId: string,
-  confirmation: string
+  confirmation: string,
+  agreementType: AgreementType = "ola"
 ): Promise<IncidentSlaDeduplicateResponse> {
   return requestJson<IncidentSlaDeduplicateResponse>("/sla/deduplicate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       project_id: projectId.trim(),
+      agreement_type: agreementType,
       confirmation,
     }),
   });

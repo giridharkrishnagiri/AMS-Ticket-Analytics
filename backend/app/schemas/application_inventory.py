@@ -18,6 +18,7 @@ class ApplicationInventoryItemUpdateRequest(BaseModel):
     functional_track: str | None = None
     ams_owner: str | None = None
     supported_by_vendor: str | None = None
+    hosting_env: str | None = None
     active: bool | None = None
     active_users: int | None = None
     avg_monthly_ticket_volume_6m: float | None = None
@@ -38,6 +39,7 @@ class ApplicationInventoryItemResponse(BaseModel):
     functional_track: str | None
     ams_owner: str | None
     supported_by_vendor: str | None
+    hosting_env: str | None
     active: bool | None
     active_users: int | None
     avg_monthly_ticket_volume_6m: float | None
@@ -131,6 +133,7 @@ class ApplicationInventoryFilterValuesResponse(BaseModel):
     functional_tracks: list[str]
     ams_owners: list[str]
     supported_by_vendors: list[str]
+    hosting_envs: list[str]
     parent_application_names: list[str]
     business_service_ci_names: list[str]
     assignment_groups: list[str]

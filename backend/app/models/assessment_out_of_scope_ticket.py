@@ -48,6 +48,7 @@ class AssessmentOutOfScopeTicket(Base):
         Index("ix_oos_tickets_project_sap_non_sap", "project_id", "sap_non_sap"),
         Index("ix_oos_tickets_project_architecture_type", "project_id", "architecture_type"),
         Index("ix_oos_tickets_project_install_type", "project_id", "install_type"),
+        Index("ix_oos_tickets_project_hosting_env", "project_id", "hosting_env"),
         Index("ix_oos_tickets_project_is_batch_related", "project_id", "is_batch_related"),
         Index("ix_oos_tickets_created_at", "created_at"),
         Index("ix_oos_tickets_resolved_at", "resolved_at"),
@@ -141,6 +142,7 @@ class AssessmentOutOfScopeTicket(Base):
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     architecture_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     install_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hosting_env: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_batch_related: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     response_sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -170,6 +172,85 @@ class AssessmentOutOfScopeTicket(Base):
         nullable=True,
     )
     sla_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ola_response_sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ola_resolution_sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ola_response_sla_business_elapsed_seconds: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+    ola_resolution_sla_business_elapsed_seconds: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+    ola_response_sla_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ola_resolution_sla_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ola_response_sla_definition_name_used: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    ola_resolution_sla_definition_name_used: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    ola_response_sla_selection_source: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+    )
+    ola_resolution_sla_selection_source: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+    )
+    ola_response_sla_vendor_used: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ola_resolution_sla_vendor_used: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ola_response_sla_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    ola_resolution_sla_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    ola_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sla_response_sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sla_resolution_sla_breached: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sla_response_sla_business_elapsed_seconds: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+    sla_resolution_sla_business_elapsed_seconds: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+    sla_response_sla_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sla_resolution_sla_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sla_response_sla_definition_name_used: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    sla_resolution_sla_definition_name_used: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    sla_response_sla_selection_source: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+    )
+    sla_resolution_sla_selection_source: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+    )
+    sla_response_sla_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    sla_resolution_sla_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    end_to_end_sla_enriched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     out_of_scope_reason: Mapped[str] = mapped_column(String(120), nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(

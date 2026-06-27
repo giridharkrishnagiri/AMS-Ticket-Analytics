@@ -31,6 +31,9 @@ MAX_MESSAGE_SAMPLES = 50
 INCIDENT_TICKET_TYPE = "INCIDENT"
 SLA_TARGET_RESPONSE = "response"
 SLA_TARGET_RESOLUTION = "resolution"
+AGREEMENT_TYPE_OLA = "ola"
+AGREEMENT_TYPE_SLA = "sla"
+AGREEMENT_TYPES = {AGREEMENT_TYPE_OLA, AGREEMENT_TYPE_SLA}
 
 
 class IncidentSlaError(Exception):
@@ -41,6 +44,7 @@ class IncidentSlaError(Exception):
 class IncidentSlaUploadResult:
     project_id: UUID
     uploaded_file_name: str
+    agreement_type: str = AGREEMENT_TYPE_OLA
     upload_id: UUID | None = None
     status: str = "UPLOADED"
     total_rows: int = 0
@@ -71,6 +75,7 @@ class IncidentSlaMultiUploadResult:
 class IncidentSlaUploadHistoryRow:
     upload_id: UUID
     filename: str
+    agreement_type: str
     uploaded_at: datetime
     total_rows_read: int
     inserted_rows: int
@@ -113,6 +118,7 @@ class IncidentSlaUnmatchedStats:
 @dataclass(frozen=True)
 class IncidentSlaEnrichResult:
     project_id: UUID
+    agreement_type: str
     ticket_type: str
     replace_existing: bool
     matched_ticket_count: int
@@ -146,6 +152,7 @@ class IncidentSlaDeduplicateResult:
 @dataclass(frozen=True)
 class IncidentSlaSummary:
     project_id: UUID
+    agreement_type: str
     total_sla_rows: int
     unique_incident_numbers: int
     matched_tickets_count: int
@@ -184,6 +191,17 @@ class SelectedIncidentSlaCandidate:
     candidate: IncidentSlaCandidate
     selection_source: str
     effective_vendor: str | None
+
+
+def normalize_agreement_type(value: str | None) -> str:
+    normalized = (value or AGREEMENT_TYPE_OLA).strip().lower()
+    if normalized not in AGREEMENT_TYPES:
+        raise IncidentSlaError("agreement_type must be either 'sla' or 'ola'.")
+    return normalized
+
+
+def agreement_display_name(agreement_type: str) -> str:
+    return "SLA" if agreement_type == AGREEMENT_TYPE_SLA else "OLA"
 
 
 def append_sample_message(messages: list[str], message: str) -> None:
@@ -237,12 +255,13 @@ def build_row_fingerprint(raw_data: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
-def existing_row_fingerprints(db: Session, project_id: UUID) -> set[str]:
+def existing_row_fingerprints(db: Session, project_id: UUID, agreement_type: str) -> set[str]:
     return {
         str(fingerprint)
         for fingerprint in db.scalars(
             select(IncidentSlaRow.row_fingerprint).where(
                 IncidentSlaRow.project_id == project_id,
+                IncidentSlaRow.agreement_type == agreement_type,
                 IncidentSlaRow.row_fingerprint.is_not(None),
             )
         )
@@ -256,6 +275,7 @@ def parse_optional_duration_seconds(value: Any) -> int | None:
 
 def build_incident_sla_row(
     project_id: UUID,
+    agreement_type: str,
     uploaded_file_name: str,
     source_row_number: int,
     raw_data: dict[str, Any],
@@ -298,6 +318,7 @@ def build_incident_sla_row(
 
     return IncidentSlaRow(
         project_id=project_id,
+        agreement_type=agreement_type,
         uploaded_file_name=uploaded_file_name,
         source_row_number=source_row_number,
         inc_number=inc_number,
@@ -328,6 +349,7 @@ def record_incident_sla_upload(
     upload = IncidentSlaUpload(
         project_id=project_id,
         filename=result.uploaded_file_name,
+        agreement_type=result.agreement_type,
         total_rows_read=result.total_rows,
         inserted_rows=result.inserted_rows,
         duplicate_rows_skipped=result.duplicate_rows_skipped,
@@ -344,15 +366,21 @@ def upload_incident_sla_file(
     project_id: UUID,
     file_path: Path,
     uploaded_file_name: str,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
 ) -> IncidentSlaUploadResult:
+    agreement_type = normalize_agreement_type(agreement_type)
     project = db.get(Project, project_id)
     if project is None:
         raise FileNotFoundError(f"Project {project_id} was not found.")
 
-    result = IncidentSlaUploadResult(project_id=project_id, uploaded_file_name=uploaded_file_name)
+    result = IncidentSlaUploadResult(
+        project_id=project_id,
+        uploaded_file_name=uploaded_file_name,
+        agreement_type=agreement_type,
+    )
     pending_rows: list[IncidentSlaRow] = []
     backfill_missing_sla_fingerprints(db, project_id)
-    known_fingerprints = existing_row_fingerprints(db, project_id)
+    known_fingerprints = existing_row_fingerprints(db, project_id, agreement_type)
     upload_fingerprints: set[str] = set()
 
     try:
@@ -365,6 +393,7 @@ def upload_incident_sla_file(
 
             sla_row = build_incident_sla_row(
                 project_id=project_id,
+                agreement_type=agreement_type,
                 uploaded_file_name=uploaded_file_name,
                 source_row_number=parsed_row.row_number,
                 raw_data=parsed_row.raw_data,
@@ -406,8 +435,15 @@ def upload_incident_sla_csv(
     project_id: UUID,
     csv_path: Path,
     uploaded_file_name: str,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
 ) -> IncidentSlaUploadResult:
-    return upload_incident_sla_file(db, project_id, csv_path, uploaded_file_name)
+    return upload_incident_sla_file(
+        db,
+        project_id,
+        csv_path,
+        uploaded_file_name,
+        agreement_type,
+    )
 
 
 def build_multi_upload_totals(
@@ -430,20 +466,26 @@ def build_multi_upload_totals(
 def list_incident_sla_uploads(
     db: Session,
     project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
 ) -> list[IncidentSlaUploadHistoryRow]:
+    agreement_type = normalize_agreement_type(agreement_type)
     project = db.get(Project, project_id)
     if project is None:
         raise FileNotFoundError(f"Project {project_id} was not found.")
 
     statement = (
         select(IncidentSlaUpload)
-        .where(IncidentSlaUpload.project_id == project_id)
+        .where(
+            IncidentSlaUpload.project_id == project_id,
+            IncidentSlaUpload.agreement_type == agreement_type,
+        )
         .order_by(IncidentSlaUpload.uploaded_at.desc(), IncidentSlaUpload.id.desc())
     )
     return [
         IncidentSlaUploadHistoryRow(
             upload_id=upload.id,
             filename=upload.filename,
+            agreement_type=upload.agreement_type,
             uploaded_at=upload.uploaded_at,
             total_rows_read=upload.total_rows_read,
             inserted_rows=upload.inserted_rows,
@@ -480,7 +522,9 @@ def backfill_missing_sla_fingerprints(db: Session, project_id: UUID) -> int:
 def deduplicate_incident_sla_rows(
     db: Session,
     project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
 ) -> IncidentSlaDeduplicateResult:
+    agreement_type = normalize_agreement_type(agreement_type)
     project = db.get(Project, project_id)
     if project is None:
         raise FileNotFoundError(f"Project {project_id} was not found.")
@@ -496,13 +540,14 @@ def deduplicate_incident_sla_rows(
                         SELECT row_fingerprint
                         FROM incident_sla_rows
                         WHERE project_id = CAST(:project_id AS uuid)
+                          AND agreement_type = :agreement_type
                           AND row_fingerprint IS NOT NULL
                         GROUP BY row_fingerprint
                         HAVING count(*) > 1
                     ) AS duplicate_groups
                     """
                 ),
-                {"project_id": str(project_id)},
+                {"project_id": str(project_id), "agreement_type": agreement_type},
             ).scalar_one()
             or 0
         )
@@ -514,11 +559,12 @@ def deduplicate_incident_sla_rows(
                         SELECT
                             id,
                             row_number() OVER (
-                                PARTITION BY project_id, row_fingerprint
+                                PARTITION BY project_id, agreement_type, row_fingerprint
                                 ORDER BY ingested_at ASC, source_row_number ASC, id ASC
                             ) AS row_rank
                         FROM incident_sla_rows
                         WHERE project_id = CAST(:project_id AS uuid)
+                          AND agreement_type = :agreement_type
                           AND row_fingerprint IS NOT NULL
                     ),
                     deleted AS (
@@ -531,14 +577,15 @@ def deduplicate_incident_sla_rows(
                     SELECT count(*) FROM deleted
                     """
                 ),
-                {"project_id": str(project_id)},
+                {"project_id": str(project_id), "agreement_type": agreement_type},
             ).scalar_one()
             or 0
         )
         remaining_sla_rows = int(
             db.scalar(
                 select(func.count(IncidentSlaRow.id)).where(
-                    IncidentSlaRow.project_id == project_id
+                    IncidentSlaRow.project_id == project_id,
+                    IncidentSlaRow.agreement_type == agreement_type,
                 )
             )
             or 0
@@ -556,24 +603,61 @@ def deduplicate_incident_sla_rows(
     )
 
 
-def reset_incident_sla_columns(db: Session, project_id: UUID) -> None:
-    reset_values = {
-        "response_sla_breached": None,
-        "resolution_sla_breached": None,
-        "response_sla_business_elapsed_seconds": None,
-        "resolution_sla_business_elapsed_seconds": None,
-        "response_sla_name": None,
-        "resolution_sla_name": None,
-        "response_sla_definition_name_used": None,
-        "resolution_sla_definition_name_used": None,
-        "response_sla_selection_source": None,
-        "resolution_sla_selection_source": None,
-        "response_sla_vendor_used": None,
-        "resolution_sla_vendor_used": None,
-        "response_sla_updated_at": None,
-        "resolution_sla_updated_at": None,
-        "sla_enriched_at": None,
-    }
+def reset_incident_sla_columns(
+    db: Session,
+    project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> None:
+    agreement_type = normalize_agreement_type(agreement_type)
+    if agreement_type == AGREEMENT_TYPE_SLA:
+        reset_values = {
+            "sla_response_sla_breached": None,
+            "sla_resolution_sla_breached": None,
+            "sla_response_sla_business_elapsed_seconds": None,
+            "sla_resolution_sla_business_elapsed_seconds": None,
+            "sla_response_sla_name": None,
+            "sla_resolution_sla_name": None,
+            "sla_response_sla_definition_name_used": None,
+            "sla_resolution_sla_definition_name_used": None,
+            "sla_response_sla_selection_source": None,
+            "sla_resolution_sla_selection_source": None,
+            "sla_response_sla_updated_at": None,
+            "sla_resolution_sla_updated_at": None,
+            "end_to_end_sla_enriched_at": None,
+        }
+    else:
+        reset_values = {
+            "response_sla_breached": None,
+            "resolution_sla_breached": None,
+            "response_sla_business_elapsed_seconds": None,
+            "resolution_sla_business_elapsed_seconds": None,
+            "response_sla_name": None,
+            "resolution_sla_name": None,
+            "response_sla_definition_name_used": None,
+            "resolution_sla_definition_name_used": None,
+            "response_sla_selection_source": None,
+            "resolution_sla_selection_source": None,
+            "response_sla_vendor_used": None,
+            "resolution_sla_vendor_used": None,
+            "response_sla_updated_at": None,
+            "resolution_sla_updated_at": None,
+            "sla_enriched_at": None,
+            "ola_response_sla_breached": None,
+            "ola_resolution_sla_breached": None,
+            "ola_response_sla_business_elapsed_seconds": None,
+            "ola_resolution_sla_business_elapsed_seconds": None,
+            "ola_response_sla_name": None,
+            "ola_resolution_sla_name": None,
+            "ola_response_sla_definition_name_used": None,
+            "ola_resolution_sla_definition_name_used": None,
+            "ola_response_sla_selection_source": None,
+            "ola_resolution_sla_selection_source": None,
+            "ola_response_sla_vendor_used": None,
+            "ola_resolution_sla_vendor_used": None,
+            "ola_response_sla_updated_at": None,
+            "ola_resolution_sla_updated_at": None,
+            "ola_enriched_at": None,
+        }
     for model in (Ticket, AssessmentOutOfScopeTicket):
         db.execute(
             update(model)
@@ -603,7 +687,9 @@ def sla_candidate_matches_target(candidate: IncidentSlaCandidate, sla_target: st
 def load_incident_sla_candidates(
     db: Session,
     project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
 ) -> dict[str, dict[str, list[IncidentSlaCandidate]]]:
+    agreement_type = normalize_agreement_type(agreement_type)
     candidates_by_target: dict[str, dict[str, list[IncidentSlaCandidate]]] = {
         SLA_TARGET_RESPONSE: defaultdict(list),
         SLA_TARGET_RESOLUTION: defaultdict(list),
@@ -620,7 +706,10 @@ def load_incident_sla_candidates(
             IncidentSlaRow.taskslatable_sla_target,
             IncidentSlaRow.source_row_number,
         )
-        .where(IncidentSlaRow.project_id == project_id)
+        .where(
+            IncidentSlaRow.project_id == project_id,
+            IncidentSlaRow.agreement_type == agreement_type,
+        )
         .order_by(IncidentSlaRow.inc_number.asc(), IncidentSlaRow.source_row_number.asc())
     )
     for row in db.execute(statement).yield_per(INGESTION_BATCH_SIZE):
@@ -693,6 +782,68 @@ def select_incident_sla_candidate(
     )
 
 
+def select_incident_end_to_end_sla_candidate(
+    candidates: list[IncidentSlaCandidate],
+) -> SelectedIncidentSlaCandidate | None:
+    if not candidates:
+        return None
+
+    def preference(candidate: IncidentSlaCandidate) -> tuple[int, int, str]:
+        stage_rank = 0 if normalized_text(candidate.stage) == "completed" else 1
+        return (stage_rank, candidate.source_row_number, str(candidate.row_id))
+
+    selected = sorted(candidates, key=preference)[0]
+    return SelectedIncidentSlaCandidate(
+        candidate=selected,
+        selection_source="ticket_number",
+        effective_vendor=None,
+    )
+
+
+def agreement_columns(agreement_type: str, target: str) -> dict[str, Any]:
+    agreement_type = normalize_agreement_type(agreement_type)
+    if target not in {SLA_TARGET_RESPONSE, SLA_TARGET_RESOLUTION}:
+        raise IncidentSlaError(f"Unsupported SLA target: {target}")
+
+    if agreement_type == AGREEMENT_TYPE_SLA:
+        prefix = f"sla_{target}_sla"
+        enriched_at_column = "end_to_end_sla_enriched_at"
+        return {
+            "breached": f"{prefix}_breached",
+            "business_elapsed": f"{prefix}_business_elapsed_seconds",
+            "name": f"{prefix}_name",
+            "definition": f"{prefix}_definition_name_used",
+            "selection_source": f"{prefix}_selection_source",
+            "vendor_used": None,
+            "updated_at": f"{prefix}_updated_at",
+            "enriched_at": enriched_at_column,
+            "legacy_aliases": {},
+        }
+
+    prefix = f"ola_{target}_sla"
+    legacy_prefix = f"{target}_sla"
+    return {
+        "breached": f"{prefix}_breached",
+        "business_elapsed": f"{prefix}_business_elapsed_seconds",
+        "name": f"{prefix}_name",
+        "definition": f"{prefix}_definition_name_used",
+        "selection_source": f"{prefix}_selection_source",
+        "vendor_used": f"{prefix}_vendor_used",
+        "updated_at": f"{prefix}_updated_at",
+        "enriched_at": "ola_enriched_at",
+        "legacy_aliases": {
+            f"{legacy_prefix}_breached": f"{prefix}_breached",
+            f"{legacy_prefix}_business_elapsed_seconds": f"{prefix}_business_elapsed_seconds",
+            f"{legacy_prefix}_name": f"{prefix}_name",
+            f"{legacy_prefix}_definition_name_used": f"{prefix}_definition_name_used",
+            f"{legacy_prefix}_selection_source": f"{prefix}_selection_source",
+            f"{legacy_prefix}_vendor_used": f"{prefix}_vendor_used",
+            f"{legacy_prefix}_updated_at": f"{prefix}_updated_at",
+            "sla_enriched_at": "ola_enriched_at",
+        },
+    }
+
+
 def bulk_update_incident_sla_target(
     db: Session,
     project_id: UUID,
@@ -704,9 +855,12 @@ def bulk_update_incident_sla_target(
     name_column: str,
     definition_column: str,
     selection_source_column: str,
-    vendor_used_column: str,
+    vendor_used_column: str | None,
     updated_at_column: str,
+    enriched_at_column: str,
     replace_existing: bool,
+    legacy_aliases: dict[str, str] | None = None,
+    vendor_aware: bool = True,
 ) -> int:
     statement = select(
         model.id,
@@ -724,28 +878,35 @@ def bulk_update_incident_sla_target(
     updated_count = 0
     pending_updates: list[dict[str, object]] = []
     for row in db.execute(statement).yield_per(INGESTION_BATCH_SIZE):
-        selected = select_incident_sla_candidate(
-            candidates_by_incident.get(row.ticket_number, []),
-            ticket_vendor=row.vendor,
-            derived_vendor=row.derived_vendor,
-        )
+        if vendor_aware:
+            selected = select_incident_sla_candidate(
+                candidates_by_incident.get(row.ticket_number, []),
+                ticket_vendor=row.vendor,
+                derived_vendor=row.derived_vendor,
+            )
+        else:
+            selected = select_incident_end_to_end_sla_candidate(
+                candidates_by_incident.get(row.ticket_number, []),
+            )
         if selected is None:
             continue
 
         candidate = selected.candidate
-        pending_updates.append(
-            {
-                "id": row.id,
-                breached_column: candidate.has_breached,
-                business_elapsed_column: candidate.business_duration_seconds,
-                name_column: candidate.sla_name,
-                definition_column: candidate.sla_name,
-                selection_source_column: selected.selection_source,
-                vendor_used_column: selected.effective_vendor,
-                updated_at_column: now,
-                "sla_enriched_at": now,
-            }
-        )
+        update_values: dict[str, object] = {
+            "id": row.id,
+            breached_column: candidate.has_breached,
+            business_elapsed_column: candidate.business_duration_seconds,
+            name_column: candidate.sla_name,
+            definition_column: candidate.sla_name,
+            selection_source_column: selected.selection_source,
+            updated_at_column: now,
+            enriched_at_column: now,
+        }
+        if vendor_used_column:
+            update_values[vendor_used_column] = selected.effective_vendor
+        for legacy_column, source_column in (legacy_aliases or {}).items():
+            update_values[legacy_column] = update_values[source_column]
+        pending_updates.append(update_values)
         if len(pending_updates) >= INGESTION_BATCH_SIZE:
             db.bulk_update_mappings(model, pending_updates)
             updated_count += len(pending_updates)
@@ -882,6 +1043,8 @@ def mark_missing_incident_sla_target(
     name_column: str,
     selection_source_column: str,
     updated_at_column: str,
+    enriched_at_column: str,
+    legacy_aliases: dict[str, str] | None = None,
     replace_existing: bool,
     table_name: str = "tickets",
 ) -> int:
@@ -889,13 +1052,25 @@ def mark_missing_incident_sla_target(
         raise IncidentSlaError(f"Unsupported SLA enrichment table: {table_name}")
 
     replace_filter = "" if replace_existing else f"AND {selection_source_column} IS NULL"
+    set_lines = [
+        f"{selection_source_column} = 'not_found'",
+        f"{updated_at_column} = now()",
+        f"{enriched_at_column} = now()",
+    ]
+    if legacy_aliases:
+        for legacy_column, source_column in legacy_aliases.items():
+            if source_column == selection_source_column:
+                set_lines.append(f"{legacy_column} = 'not_found'")
+            elif source_column == updated_at_column:
+                set_lines.append(f"{legacy_column} = now()")
+            elif source_column == enriched_at_column:
+                set_lines.append(f"{legacy_column} = now()")
+    set_clause = ",\n            ".join(set_lines)
     statement = text(
         f"""
         UPDATE {table_name}
         SET
-            {selection_source_column} = 'not_found',
-            {updated_at_column} = now(),
-            sla_enriched_at = now()
+            {set_clause}
         WHERE project_id = CAST(:project_id AS uuid)
           AND ticket_type = 'INCIDENT'
           AND {name_column} IS NULL
@@ -906,19 +1081,32 @@ def mark_missing_incident_sla_target(
     return int(result.rowcount or 0)
 
 
-def count_matched_incident_tickets(db: Session, project_id: UUID) -> int:
+def count_matched_incident_tickets(
+    db: Session,
+    project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> int:
+    agreement_type = normalize_agreement_type(agreement_type)
     return count_matched_incident_tickets_for_model(
         db,
         project_id,
         Ticket,
+        agreement_type,
     ) + count_matched_incident_tickets_for_model(
         db,
         project_id,
         AssessmentOutOfScopeTicket,
+        agreement_type,
     )
 
 
-def count_matched_incident_tickets_for_model(db: Session, project_id: UUID, model) -> int:
+def count_matched_incident_tickets_for_model(
+    db: Session,
+    project_id: UUID,
+    model,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> int:
+    agreement_type = normalize_agreement_type(agreement_type)
     statement = (
         select(func.count(func.distinct(model.id)))
         .join(
@@ -926,7 +1114,11 @@ def count_matched_incident_tickets_for_model(db: Session, project_id: UUID, mode
             (IncidentSlaRow.project_id == model.project_id)
             & (IncidentSlaRow.inc_number == model.ticket_number),
         )
-        .where(model.project_id == project_id, model.ticket_type == INCIDENT_TICKET_TYPE)
+        .where(
+            model.project_id == project_id,
+            model.ticket_type == INCIDENT_TICKET_TYPE,
+            IncidentSlaRow.agreement_type == agreement_type,
+        )
     )
     return int(db.scalar(statement) or 0)
 
@@ -943,14 +1135,19 @@ def count_incidents(db: Session, project_id: UUID, model) -> int:
     )
 
 
-def count_enriched_incidents(db: Session, project_id: UUID, model) -> int:
+def count_enriched_incidents(
+    db: Session,
+    project_id: UUID,
+    model,
+    response_name_column,
+    resolution_name_column,
+) -> int:
     return int(
         db.scalar(
             select(func.count(model.id)).where(
                 model.project_id == project_id,
                 model.ticket_type == INCIDENT_TICKET_TYPE,
-                (model.response_sla_name.is_not(None))
-                | (model.resolution_sla_name.is_not(None)),
+                (response_name_column.is_not(None)) | (resolution_name_column.is_not(None)),
             )
         )
         or 0
@@ -989,97 +1186,125 @@ def count_sla_selection_source(
     )
 
 
-def build_scope_stats(db: Session, project_id: UUID, model) -> IncidentSlaScopeStats:
+def build_scope_stats(
+    db: Session,
+    project_id: UUID,
+    model,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> IncidentSlaScopeStats:
+    agreement_type = normalize_agreement_type(agreement_type)
+    response_columns = agreement_columns(agreement_type, SLA_TARGET_RESPONSE)
+    resolution_columns = agreement_columns(agreement_type, SLA_TARGET_RESOLUTION)
+    response_name_column = getattr(model, response_columns["name"])
+    resolution_name_column = getattr(model, resolution_columns["name"])
+    response_selection_column = getattr(model, response_columns["selection_source"])
+    resolution_selection_column = getattr(model, resolution_columns["selection_source"])
     return IncidentSlaScopeStats(
         incident_tickets_considered=count_incidents(db, project_id, model),
         incident_tickets_matched_to_sla_rows=count_matched_incident_tickets_for_model(
             db,
             project_id,
             model,
+            agreement_type,
         ),
-        incident_tickets_enriched=count_enriched_incidents(db, project_id, model),
+        incident_tickets_enriched=count_enriched_incidents(
+            db,
+            project_id,
+            model,
+            response_name_column,
+            resolution_name_column,
+        ),
         response_sla_enriched=count_named_sla(
             db,
             project_id,
             model,
-            model.response_sla_name,
+            response_name_column,
         ),
         resolution_sla_enriched=count_named_sla(
             db,
             project_id,
             model,
-            model.resolution_sla_name,
+            resolution_name_column,
         ),
         response_vendor_specific=count_sla_selection_source(
             db,
             project_id,
             model,
-            model.response_sla_selection_source,
+            response_selection_column,
             ("ticket_vendor", "derived_vendor"),
         ),
         response_default=count_sla_selection_source(
             db,
             project_id,
             model,
-            model.response_sla_selection_source,
+            response_selection_column,
             ("default",),
         ),
         response_fallback_default=count_sla_selection_source(
             db,
             project_id,
             model,
-            model.response_sla_selection_source,
+            response_selection_column,
             ("fallback_default",),
         ),
         response_not_found=count_sla_selection_source(
             db,
             project_id,
             model,
-            model.response_sla_selection_source,
+            response_selection_column,
             ("not_found",),
         ),
         resolution_vendor_specific=count_sla_selection_source(
             db,
             project_id,
             model,
-            model.resolution_sla_selection_source,
+            resolution_selection_column,
             ("ticket_vendor", "derived_vendor"),
         ),
         resolution_default=count_sla_selection_source(
             db,
             project_id,
             model,
-            model.resolution_sla_selection_source,
+            resolution_selection_column,
             ("default",),
         ),
         resolution_fallback_default=count_sla_selection_source(
             db,
             project_id,
             model,
-            model.resolution_sla_selection_source,
+            resolution_selection_column,
             ("fallback_default",),
         ),
         resolution_not_found=count_sla_selection_source(
             db,
             project_id,
             model,
-            model.resolution_sla_selection_source,
+            resolution_selection_column,
             ("not_found",),
         ),
     )
 
 
-def build_sla_rows_stats(db: Session, project_id: UUID) -> IncidentSlaRowsStats:
+def build_sla_rows_stats(
+    db: Session,
+    project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> IncidentSlaRowsStats:
+    agreement_type = normalize_agreement_type(agreement_type)
     total_rows = int(
         db.scalar(
-            select(func.count(IncidentSlaRow.id)).where(IncidentSlaRow.project_id == project_id)
+            select(func.count(IncidentSlaRow.id)).where(
+                IncidentSlaRow.project_id == project_id,
+                IncidentSlaRow.agreement_type == agreement_type,
+            )
         )
         or 0
     )
     distinct_numbers = int(
         db.scalar(
             select(func.count(func.distinct(IncidentSlaRow.inc_number))).where(
-                IncidentSlaRow.project_id == project_id
+                IncidentSlaRow.project_id == project_id,
+                IncidentSlaRow.agreement_type == agreement_type,
             )
         )
         or 0
@@ -1087,7 +1312,8 @@ def build_sla_rows_stats(db: Session, project_id: UUID) -> IncidentSlaRowsStats:
     duplicate_skipped = int(
         db.scalar(
             select(func.coalesce(func.sum(IncidentSlaUpload.duplicate_rows_skipped), 0)).where(
-                IncidentSlaUpload.project_id == project_id
+                IncidentSlaUpload.project_id == project_id,
+                IncidentSlaUpload.agreement_type == agreement_type,
             )
         )
         or 0
@@ -1099,7 +1325,13 @@ def build_sla_rows_stats(db: Session, project_id: UUID) -> IncidentSlaRowsStats:
     )
 
 
-def count_incidents_without_sla_rows(db: Session, project_id: UUID, table_name: str) -> int:
+def count_incidents_without_sla_rows(
+    db: Session,
+    project_id: UUID,
+    table_name: str,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> int:
+    agreement_type = normalize_agreement_type(agreement_type)
     statement = text(
         f"""
         SELECT count(*)
@@ -1110,14 +1342,26 @@ def count_incidents_without_sla_rows(db: Session, project_id: UUID, table_name: 
               SELECT 1
               FROM incident_sla_rows AS s
               WHERE s.project_id = CAST(:project_id AS uuid)
+                AND s.agreement_type = :agreement_type
                 AND s.inc_number = t.ticket_number
           )
         """
     )
-    return int(db.execute(statement, {"project_id": str(project_id)}).scalar_one() or 0)
+    return int(
+        db.execute(
+            statement,
+            {"project_id": str(project_id), "agreement_type": agreement_type},
+        ).scalar_one()
+        or 0
+    )
 
 
-def count_unmatched_sla_ticket_numbers(db: Session, project_id: UUID) -> int:
+def count_unmatched_sla_ticket_numbers(
+    db: Session,
+    project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> int:
+    agreement_type = normalize_agreement_type(agreement_type)
     statement = text(
         """
         SELECT count(*)
@@ -1125,6 +1369,7 @@ def count_unmatched_sla_ticket_numbers(db: Session, project_id: UUID) -> int:
             SELECT s.inc_number
             FROM incident_sla_rows AS s
             WHERE s.project_id = CAST(:project_id AS uuid)
+              AND s.agreement_type = :agreement_type
             GROUP BY s.inc_number
             HAVING NOT EXISTS (
                 SELECT 1
@@ -1143,24 +1388,38 @@ def count_unmatched_sla_ticket_numbers(db: Session, project_id: UUID) -> int:
         ) AS unmatched
         """
     )
-    return int(db.execute(statement, {"project_id": str(project_id)}).scalar_one() or 0)
+    return int(
+        db.execute(
+            statement,
+            {"project_id": str(project_id), "agreement_type": agreement_type},
+        ).scalar_one()
+        or 0
+    )
 
 
-def build_unmatched_stats(db: Session, project_id: UUID) -> IncidentSlaUnmatchedStats:
+def build_unmatched_stats(
+    db: Session,
+    project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> IncidentSlaUnmatchedStats:
+    agreement_type = normalize_agreement_type(agreement_type)
     return IncidentSlaUnmatchedStats(
         sla_ticket_numbers_not_found_in_scope_or_out_of_scope=count_unmatched_sla_ticket_numbers(
             db,
             project_id,
+            agreement_type,
         ),
         in_scope_incidents_without_sla_rows=count_incidents_without_sla_rows(
             db,
             project_id,
             "tickets",
+            agreement_type,
         ),
         out_of_scope_incidents_without_sla_rows=count_incidents_without_sla_rows(
             db,
             project_id,
             "assessment_out_of_scope_tickets",
+            agreement_type,
         ),
     )
 
@@ -1191,7 +1450,9 @@ def enrich_incident_sla(
     project_id: UUID,
     ticket_type: str,
     replace_existing: bool,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
 ) -> IncidentSlaEnrichResult:
+    agreement_type = normalize_agreement_type(agreement_type)
     if ticket_type.strip().upper() != INCIDENT_TICKET_TYPE:
         raise IncidentSlaError("Only INCIDENT tickets can be enriched with Incident SLA rows.")
 
@@ -1200,9 +1461,12 @@ def enrich_incident_sla(
         raise FileNotFoundError(f"Project {project_id} was not found.")
 
     if replace_existing:
-        reset_incident_sla_columns(db, project_id)
+        reset_incident_sla_columns(db, project_id, agreement_type)
 
-    sla_candidates = load_incident_sla_candidates(db, project_id)
+    sla_candidates = load_incident_sla_candidates(db, project_id, agreement_type)
+    response_columns = agreement_columns(agreement_type, SLA_TARGET_RESPONSE)
+    resolution_columns = agreement_columns(agreement_type, SLA_TARGET_RESOLUTION)
+    vendor_aware = agreement_type == AGREEMENT_TYPE_OLA
     response_count = 0
     resolution_count = 0
     for model, table_name in (
@@ -1214,13 +1478,16 @@ def enrich_incident_sla(
             project_id,
             model,
             candidates_by_incident=sla_candidates[SLA_TARGET_RESPONSE],
-            breached_column="response_sla_breached",
-            business_elapsed_column="response_sla_business_elapsed_seconds",
-            name_column="response_sla_name",
-            definition_column="response_sla_definition_name_used",
-            selection_source_column="response_sla_selection_source",
-            vendor_used_column="response_sla_vendor_used",
-            updated_at_column="response_sla_updated_at",
+            breached_column=response_columns["breached"],
+            business_elapsed_column=response_columns["business_elapsed"],
+            name_column=response_columns["name"],
+            definition_column=response_columns["definition"],
+            selection_source_column=response_columns["selection_source"],
+            vendor_used_column=response_columns["vendor_used"],
+            updated_at_column=response_columns["updated_at"],
+            enriched_at_column=response_columns["enriched_at"],
+            legacy_aliases=response_columns["legacy_aliases"],
+            vendor_aware=vendor_aware,
             replace_existing=replace_existing,
         )
         resolution_count += bulk_update_incident_sla_target(
@@ -1228,45 +1495,63 @@ def enrich_incident_sla(
             project_id,
             model,
             candidates_by_incident=sla_candidates[SLA_TARGET_RESOLUTION],
-            breached_column="resolution_sla_breached",
-            business_elapsed_column="resolution_sla_business_elapsed_seconds",
-            name_column="resolution_sla_name",
-            definition_column="resolution_sla_definition_name_used",
-            selection_source_column="resolution_sla_selection_source",
-            vendor_used_column="resolution_sla_vendor_used",
-            updated_at_column="resolution_sla_updated_at",
+            breached_column=resolution_columns["breached"],
+            business_elapsed_column=resolution_columns["business_elapsed"],
+            name_column=resolution_columns["name"],
+            definition_column=resolution_columns["definition"],
+            selection_source_column=resolution_columns["selection_source"],
+            vendor_used_column=resolution_columns["vendor_used"],
+            updated_at_column=resolution_columns["updated_at"],
+            enriched_at_column=resolution_columns["enriched_at"],
+            legacy_aliases=resolution_columns["legacy_aliases"],
+            vendor_aware=vendor_aware,
             replace_existing=replace_existing,
         )
         mark_missing_incident_sla_target(
             db,
             project_id,
-            name_column="response_sla_name",
-            selection_source_column="response_sla_selection_source",
-            updated_at_column="response_sla_updated_at",
+            name_column=response_columns["name"],
+            selection_source_column=response_columns["selection_source"],
+            updated_at_column=response_columns["updated_at"],
+            enriched_at_column=response_columns["enriched_at"],
+            legacy_aliases=response_columns["legacy_aliases"],
             replace_existing=replace_existing,
             table_name=table_name,
         )
         mark_missing_incident_sla_target(
             db,
             project_id,
-            name_column="resolution_sla_name",
-            selection_source_column="resolution_sla_selection_source",
-            updated_at_column="resolution_sla_updated_at",
+            name_column=resolution_columns["name"],
+            selection_source_column=resolution_columns["selection_source"],
+            updated_at_column=resolution_columns["updated_at"],
+            enriched_at_column=resolution_columns["enriched_at"],
+            legacy_aliases=resolution_columns["legacy_aliases"],
             replace_existing=replace_existing,
             table_name=table_name,
         )
 
-    matched_ticket_count = count_matched_incident_tickets(db, project_id)
+    matched_ticket_count = count_matched_incident_tickets(db, project_id, agreement_type)
     db.commit()
 
-    warnings = [
-        "Selection uses ticket vendor first, then derived vendor, then Default. "
-        "Response and Resolution SLA selection are independent."
-    ]
-    in_scope_stats = build_scope_stats(db, project_id, Ticket)
-    out_of_scope_stats = build_scope_stats(db, project_id, AssessmentOutOfScopeTicket)
+    if agreement_type == AGREEMENT_TYPE_OLA:
+        warnings = [
+            "OLA selection uses ticket vendor first, then derived vendor, then Default. "
+            "Response and Resolution OLA selection are independent."
+        ]
+    else:
+        warnings = [
+            "SLA selection is end-to-end and vendor-agnostic; it matches by Incident number only."
+        ]
+    in_scope_stats = build_scope_stats(db, project_id, Ticket, agreement_type)
+    out_of_scope_stats = build_scope_stats(
+        db,
+        project_id,
+        AssessmentOutOfScopeTicket,
+        agreement_type,
+    )
     return IncidentSlaEnrichResult(
         project_id=project_id,
+        agreement_type=agreement_type,
         ticket_type=INCIDENT_TICKET_TYPE,
         replace_existing=replace_existing,
         matched_ticket_count=matched_ticket_count,
@@ -1279,43 +1564,43 @@ def enrich_incident_sla(
         response_vendor_specific_count=count_combined_sla_selection_source(
             db,
             project_id,
-            "response_sla_selection_source",
+            response_columns["selection_source"],
             ("ticket_vendor", "derived_vendor"),
         ),
         response_default_count=count_combined_sla_selection_source(
             db,
             project_id,
-            "response_sla_selection_source",
+            response_columns["selection_source"],
             ("default", "fallback_default"),
         ),
         resolution_vendor_specific_count=count_combined_sla_selection_source(
             db,
             project_id,
-            "resolution_sla_selection_source",
+            resolution_columns["selection_source"],
             ("ticket_vendor", "derived_vendor"),
         ),
         resolution_default_count=count_combined_sla_selection_source(
             db,
             project_id,
-            "resolution_sla_selection_source",
+            resolution_columns["selection_source"],
             ("default", "fallback_default"),
         ),
         missing_response_sla_count=count_combined_sla_selection_source(
             db,
             project_id,
-            "response_sla_selection_source",
+            response_columns["selection_source"],
             ("not_found",),
         ),
         missing_resolution_sla_count=count_combined_sla_selection_source(
             db,
             project_id,
-            "resolution_sla_selection_source",
+            resolution_columns["selection_source"],
             ("not_found",),
         ),
-        sla_rows=build_sla_rows_stats(db, project_id),
+        sla_rows=build_sla_rows_stats(db, project_id, agreement_type),
         in_scope=in_scope_stats,
         out_of_scope=out_of_scope_stats,
-        unmatched=build_unmatched_stats(db, project_id),
+        unmatched=build_unmatched_stats(db, project_id, agreement_type),
         warnings=warnings,
     )
 
@@ -1329,30 +1614,46 @@ def count_ticket_condition(db: Session, project_id: UUID, condition) -> int:
     return int(db.scalar(statement) or 0)
 
 
-def incident_sla_summary(db: Session, project_id: UUID) -> IncidentSlaSummary:
+def incident_sla_summary(
+    db: Session,
+    project_id: UUID,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
+) -> IncidentSlaSummary:
+    agreement_type = normalize_agreement_type(agreement_type)
     project = db.get(Project, project_id)
     if project is None:
         raise FileNotFoundError(f"Project {project_id} was not found.")
 
     total_sla_rows = int(
         db.scalar(
-            select(func.count(IncidentSlaRow.id)).where(IncidentSlaRow.project_id == project_id)
+            select(func.count(IncidentSlaRow.id)).where(
+                IncidentSlaRow.project_id == project_id,
+                IncidentSlaRow.agreement_type == agreement_type,
+            )
         )
         or 0
     )
     unique_incident_numbers = int(
         db.scalar(
             select(func.count(func.distinct(IncidentSlaRow.inc_number))).where(
-                IncidentSlaRow.project_id == project_id
+                IncidentSlaRow.project_id == project_id,
+                IncidentSlaRow.agreement_type == agreement_type,
             )
         )
         or 0
     )
-    matched_tickets_count = count_matched_incident_tickets(db, project_id)
-    unmatched_count = count_unmatched_sla_ticket_numbers(db, project_id)
+    matched_tickets_count = count_matched_incident_tickets(db, project_id, agreement_type)
+    unmatched_count = count_unmatched_sla_ticket_numbers(db, project_id, agreement_type)
+    response_columns = agreement_columns(agreement_type, SLA_TARGET_RESPONSE)
+    resolution_columns = agreement_columns(agreement_type, SLA_TARGET_RESOLUTION)
+    response_name_column = getattr(Ticket, response_columns["name"])
+    resolution_name_column = getattr(Ticket, resolution_columns["name"])
+    response_breached_column = getattr(Ticket, response_columns["breached"])
+    resolution_breached_column = getattr(Ticket, resolution_columns["breached"])
 
     return IncidentSlaSummary(
         project_id=project_id,
+        agreement_type=agreement_type,
         total_sla_rows=total_sla_rows,
         unique_incident_numbers=unique_incident_numbers,
         matched_tickets_count=matched_tickets_count,
@@ -1360,42 +1661,42 @@ def incident_sla_summary(db: Session, project_id: UUID) -> IncidentSlaSummary:
         tickets_with_response_sla_selected=count_ticket_condition(
             db,
             project_id,
-            Ticket.response_sla_name.is_not(None),
+            response_name_column.is_not(None),
         ),
         tickets_with_resolution_sla_selected=count_ticket_condition(
             db,
             project_id,
-            Ticket.resolution_sla_name.is_not(None),
+            resolution_name_column.is_not(None),
         ),
         response_accenture_selected_count=count_ticket_condition(
             db,
             project_id,
-            func.lower(func.coalesce(Ticket.response_sla_name, "")).like("%accenture%"),
+            func.lower(func.coalesce(response_name_column, "")).like("%accenture%"),
         ),
         response_default_selected_count=count_ticket_condition(
             db,
             project_id,
-            func.lower(func.coalesce(Ticket.response_sla_name, "")).like("%default%"),
+            func.lower(func.coalesce(response_name_column, "")).like("%default%"),
         ),
         resolution_accenture_selected_count=count_ticket_condition(
             db,
             project_id,
-            func.lower(func.coalesce(Ticket.resolution_sla_name, "")).like("%accenture%"),
+            func.lower(func.coalesce(resolution_name_column, "")).like("%accenture%"),
         ),
         resolution_default_selected_count=count_ticket_condition(
             db,
             project_id,
-            func.lower(func.coalesce(Ticket.resolution_sla_name, "")).like("%default%"),
+            func.lower(func.coalesce(resolution_name_column, "")).like("%default%"),
         ),
         response_breached_count=count_ticket_condition(
             db,
             project_id,
-            Ticket.response_sla_breached.is_(True),
+            response_breached_column.is_(True),
         ),
         resolution_breached_count=count_ticket_condition(
             db,
             project_id,
-            Ticket.resolution_sla_breached.is_(True),
+            resolution_breached_column.is_(True),
         ),
     )
 
@@ -1405,7 +1706,9 @@ def unmatched_incident_sla_numbers(
     project_id: UUID,
     limit: int,
     offset: int,
+    agreement_type: str = AGREEMENT_TYPE_OLA,
 ) -> list[UnmatchedIncidentSlaRow]:
+    agreement_type = normalize_agreement_type(agreement_type)
     project = db.get(Project, project_id)
     if project is None:
         raise FileNotFoundError(f"Project {project_id} was not found.")
@@ -1416,6 +1719,7 @@ def unmatched_incident_sla_numbers(
             SELECT s.inc_number, count(*) AS row_count
             FROM incident_sla_rows AS s
             WHERE s.project_id = CAST(:project_id AS uuid)
+              AND s.agreement_type = :agreement_type
             GROUP BY s.inc_number
             HAVING NOT EXISTS (
                 SELECT 1
@@ -1436,7 +1740,12 @@ def unmatched_incident_sla_numbers(
             OFFSET :offset
             """
         ),
-        {"project_id": str(project_id), "limit": limit, "offset": offset},
+        {
+            "project_id": str(project_id),
+            "agreement_type": agreement_type,
+            "limit": limit,
+            "offset": offset,
+        },
     )
     return [
         UnmatchedIncidentSlaRow(inc_number=str(inc_number), row_count=int(row_count))

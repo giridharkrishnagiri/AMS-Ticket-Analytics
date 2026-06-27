@@ -21,6 +21,7 @@ class IncidentSlaRow(UuidPrimaryKeyMixin, Base):
     __table_args__ = (
         Index("ix_incident_sla_rows_project_inc_number", "project_id", "inc_number"),
         Index("ix_incident_sla_rows_project_fingerprint", "project_id", "row_fingerprint"),
+        Index("ix_incident_sla_rows_project_agreement", "project_id", "agreement_type"),
         Index(
             "ix_incident_sla_rows_project_inc_target",
             "project_id",
@@ -41,6 +42,7 @@ class IncidentSlaRow(UuidPrimaryKeyMixin, Base):
         index=True,
     )
     uploaded_file_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agreement_type: Mapped[str] = mapped_column(Text, nullable=False, default="ola")
     source_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
     inc_number: Mapped[str] = mapped_column(Text, nullable=False)
     inc_priority: Mapped[str | None] = mapped_column(Text, nullable=True)

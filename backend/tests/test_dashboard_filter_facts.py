@@ -95,6 +95,7 @@ def add_ticket(
     sap_non_sap: str = "SAP",
     architecture_type: str = "COTS",
     install_type: str = "Cloud",
+    hosting_env: str = "Production",
     priority: str = "P3",
 ) -> None:
     common_values = {
@@ -117,6 +118,7 @@ def add_ticket(
         "sap_non_sap": sap_non_sap,
         "architecture_type": architecture_type,
         "install_type": install_type,
+        "hosting_env": hosting_env,
     }
     if scope == "out_of_scope":
         db.add(
@@ -196,6 +198,7 @@ def seed_filter_fact_records(db, project_id: UUID, batch_id: UUID, file_id: UUID
         parent_application_name="Parent App B",
         supported_by_vendor="Vendor B",
         sap_non_sap="Non-SAP",
+        hosting_env="Non-Production",
     )
     add_ticket(
         db,
@@ -208,6 +211,7 @@ def seed_filter_fact_records(db, project_id: UUID, batch_id: UUID, file_id: UUID
         resolved_at=dt("2026-01-08T00:00:00"),
         scope="out_of_scope",
         sap_non_sap="SAP",
+        hosting_env="Production",
     )
     add_ticket(
         db,
@@ -226,6 +230,7 @@ def seed_filter_fact_records(db, project_id: UUID, batch_id: UUID, file_id: UUID
         parent_application_name="Parent App C",
         supported_by_vendor="Vendor C",
         sap_non_sap="Non-SAP",
+        hosting_env="Non-Production",
     )
     add_problem_and_change_records(db, project_id, batch_id)
     db.commit()
@@ -250,6 +255,7 @@ def test_dashboard_filter_fact_refresh_excludes_problem_and_change_records() -> 
                     DashboardFilterFact.scope,
                     DashboardFilterFact.functional_track_ams_owner,
                     DashboardFilterFact.assignment_group_support_owner,
+                    DashboardFilterFact.hosting_env,
                 ).where(DashboardFilterFact.project_id == project_id)
             ).all()
         )
@@ -264,6 +270,7 @@ def test_dashboard_filter_fact_refresh_excludes_problem_and_change_records() -> 
         assert all("Change" not in row.functional_track_ams_owner for row in facts)
         assert "Track A - Owner A" in {row.functional_track_ams_owner for row in facts}
         assert "AMS-A - Lead A" in {row.assignment_group_support_owner for row in facts}
+        assert {row.hosting_env for row in facts} == {"Production", "Non-Production"}
     finally:
         cleanup_client(db, client_id)
 

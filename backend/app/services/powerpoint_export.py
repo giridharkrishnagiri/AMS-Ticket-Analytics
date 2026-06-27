@@ -760,14 +760,15 @@ def add_applications_summary_slide(
     add_header(slide, "Applications Summary", "Application Inventory charts.")
     app_rows = payload["applications"]["rows"]
     chart_specs = [
-        ("Strategic", "strategic", 0.55, 1.25),
-        ("Lifecycle Stage", "lifecycle_stage_status", 4.55, 1.25),
-        ("Architecture Type", "architecture_type", 0.55, 4.0),
-        ("Install Type", "install_type", 4.55, 4.0),
+        ("Strategic", "strategic", 0.55, 1.15),
+        ("Lifecycle Stage", "lifecycle_stage_status", 4.55, 1.15),
+        ("Hosting Env", "hosting_env", 8.55, 1.15),
+        ("Architecture Type", "architecture_type", 0.55, 3.85),
+        ("Install Type", "install_type", 4.55, 3.85),
     ]
     for title, field, x, y in chart_specs:
         add_pie_chart(
-            slide, title, count_by(app_rows, field, functional=functional)[:8], x, y, 3.65, 2.35
+            slide, title, count_by(app_rows, field, functional=functional)[:8], x, y, 3.65, 2.15
         )
         text = get_commentary(
             lookup,
@@ -778,7 +779,7 @@ def add_applications_summary_slide(
             functional=functional,
         )
         if text:
-            add_commentary(slide, text, x, y + 2.35, 3.65, 0.65)
+            add_commentary(slide, text, x, y + 2.15, 3.65, 0.45)
     summary_text = get_commentary(
         lookup,
         dashboard_area="applications",
@@ -786,7 +787,7 @@ def add_applications_summary_slide(
         section_key="applications_summary",
         functional=functional,
     )
-    add_commentary(slide, summary_text, 8.55, 1.25, 3.9, 4.7)
+    add_commentary(slide, summary_text, 8.55, 4.0, 3.9, 1.9)
     add_footer(slide, payload)
 
 
@@ -1183,6 +1184,59 @@ def add_detailed_volume_slides(
         )
         if note and y == 5.0:
             add_commentary(slide, note, 0.55, 6.55, 12.1, 0.45)
+    add_footer(slide, payload)
+
+    slide = add_blank_slide(presentation)
+    add_header(
+        slide,
+        "Detailed Volume Trends - Hosting Env",
+        "Average monthly created ticket volume by Hosting Env.",
+    )
+    add_pie_chart(
+        slide,
+        "Tickets",
+        distribution_points(payload, "hosting_env", "all", scope=scope, functional=functional),
+        0.55,
+        1.55,
+        3.6,
+        2.8,
+    )
+    add_pie_chart(
+        slide,
+        "Incidents",
+        distribution_points(payload, "hosting_env", "incident", scope=scope, functional=functional),
+        4.55,
+        1.55,
+        3.6,
+        2.8,
+    )
+    add_pie_chart(
+        slide,
+        "SC Tasks",
+        distribution_points(payload, "hosting_env", "sc_task", scope=scope, functional=functional),
+        8.55,
+        1.55,
+        3.6,
+        2.8,
+    )
+    add_commentary(
+        slide,
+        get_commentary(
+            lookup,
+            dashboard_area="volumetrics",
+            tab_name="volumetrics_sla",
+            sub_tab_name="detailed_volume_trends",
+            section_key="detailed_volume_trends",
+            chart_key="hosting_env_distribution_row",
+            scope=scope,
+            ticket_type=ticket_type,
+            functional=functional,
+        ),
+        0.55,
+        5.25,
+        12.1,
+        0.9,
+    )
     add_footer(slide, payload)
 
 

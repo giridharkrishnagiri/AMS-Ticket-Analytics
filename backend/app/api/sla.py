@@ -57,6 +57,7 @@ async def copy_upload_to_temp_file(upload_file: UploadFile) -> Path:
 def upload_response(result) -> IncidentSlaUploadResponse:
     return IncidentSlaUploadResponse(
         project_id=result.project_id,
+        agreement_type=result.agreement_type,
         upload_id=result.upload_id,
         uploaded_file_name=result.uploaded_file_name,
         status=result.status,
@@ -73,10 +74,12 @@ def failed_upload_result(
     project_id: UUID,
     uploaded_file_name: str,
     error_message: str,
+    agreement_type: str = "ola",
 ) -> IncidentSlaUploadResult:
     return IncidentSlaUploadResult(
         project_id=project_id,
         uploaded_file_name=uploaded_file_name,
+        agreement_type=agreement_type,
         status="FAILED",
         failed_rows=1,
         errors=[error_message],
@@ -110,12 +113,13 @@ async def upload_single_incident_sla_file(
     project_id: Annotated[UUID, Form(...)],
     file: Annotated[UploadFile, File(...)],
     db: DbSession,
+    agreement_type: Annotated[str, Form()] = "ola",
 ) -> IncidentSlaUploadResponse:
     original_filename = file.filename or "incident_sla.csv"
     if Path(original_filename).suffix.lower() not in SUPPORTED_SLA_UPLOAD_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only Incident SLA CSV or XLSX files are supported.",
+            detail="Only Incident SLA/OLA CSV or XLSX files are supported.",
         )
 
     temp_path = await copy_upload_to_temp_file(file)
@@ -125,6 +129,7 @@ async def upload_single_incident_sla_file(
             project_id=project_id,
             file_path=temp_path,
             uploaded_file_name=original_filename,
+            agreement_type=agreement_type,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -149,6 +154,7 @@ async def upload_multiple_incident_sla_files(
     project_id: Annotated[UUID, Form(...)],
     files: Annotated[list[UploadFile], File(...)],
     db: DbSession,
+    agreement_type: Annotated[str, Form()] = "ola",
 ) -> IncidentSlaMultiUploadResponse:
     results = []
     for file in files:
@@ -159,7 +165,8 @@ async def upload_multiple_incident_sla_files(
                 failed_upload_result(
                     project_id,
                     original_filename,
-                    "Only Incident SLA CSV or XLSX files are supported.",
+                    "Only Incident SLA/OLA CSV or XLSX files are supported.",
+                    agreement_type,
                 )
             )
             await file.close()
@@ -172,12 +179,15 @@ async def upload_multiple_incident_sla_files(
                 project_id=project_id,
                 file_path=temp_path,
                 uploaded_file_name=original_filename,
+                agreement_type=agreement_type,
             )
             results.append(result)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         except IncidentSlaError as exc:
-            results.append(failed_upload_result(project_id, original_filename, str(exc)))
+            results.append(
+                failed_upload_result(project_id, original_filename, str(exc), agreement_type)
+            )
         finally:
             temp_path.unlink(missing_ok=True)
             await file.close()
@@ -206,9 +216,10 @@ async def upload_multiple_incident_sla_files(
 def get_incident_sla_upload_history(
     project_id: UUID,
     db: DbSession,
+    agreement_type: str = Query("ola"),
 ) -> list[IncidentSlaUploadHistoryRowResponse]:
     try:
-        rows = list_incident_sla_uploads(db, project_id)
+        rows = list_incident_sla_uploads(db, project_id, agreement_type)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -216,6 +227,7 @@ def get_incident_sla_upload_history(
         IncidentSlaUploadHistoryRowResponse(
             upload_id=row.upload_id,
             filename=row.filename,
+            agreement_type=row.agreement_type,
             uploaded_at=row.uploaded_at,
             total_rows_read=row.total_rows_read,
             inserted_rows=row.inserted_rows,
@@ -238,6 +250,7 @@ def enrich_incident_sla_tickets(
             project_id=request.project_id,
             ticket_type=request.ticket_type,
             replace_existing=request.replace_existing,
+            agreement_type=request.agreement_type,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -249,6 +262,7 @@ def enrich_incident_sla_tickets(
 
     return IncidentSlaEnrichResponse(
         project_id=result.project_id,
+        agreement_type=result.agreement_type,
         ticket_type=result.ticket_type,
         replace_existing=result.replace_existing,
         matched_ticket_count=result.matched_ticket_count,
@@ -301,7 +315,11 @@ def deduplicate_incident_sla_upload_rows(
             detail="Confirmation text must exactly match DEDUPLICATE SLA ROWS.",
         )
     try:
-        result = deduplicate_incident_sla_rows(db, request.project_id)
+        result = deduplicate_incident_sla_rows(
+            db,
+            request.project_id,
+            request.agreement_type,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except IncidentSlaError as exc:
@@ -309,6 +327,7 @@ def deduplicate_incident_sla_upload_rows(
 
     return IncidentSlaDeduplicateResponse(
         project_id=result.project_id,
+        agreement_type=request.agreement_type,
         duplicate_groups_found=result.duplicate_groups_found,
         duplicate_rows_deleted=result.duplicate_rows_deleted,
         remaining_sla_rows=result.remaining_sla_rows,
@@ -319,14 +338,16 @@ def deduplicate_incident_sla_upload_rows(
 def get_incident_sla_summary(
     project_id: UUID,
     db: DbSession,
+    agreement_type: str = Query("ola"),
 ) -> IncidentSlaSummaryResponse:
     try:
-        summary = incident_sla_summary(db, project_id)
+        summary = incident_sla_summary(db, project_id, agreement_type)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return IncidentSlaSummaryResponse(
         project_id=summary.project_id,
+        agreement_type=summary.agreement_type,
         total_sla_rows=summary.total_sla_rows,
         unique_incident_numbers=summary.unique_incident_numbers,
         matched_tickets_count=summary.matched_tickets_count,
@@ -348,6 +369,7 @@ def get_unmatched_incident_sla_numbers(
     db: DbSession,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    agreement_type: str = Query("ola"),
 ) -> IncidentSlaUnmatchedResponse:
     try:
         rows = unmatched_incident_sla_numbers(
@@ -355,12 +377,14 @@ def get_unmatched_incident_sla_numbers(
             project_id=project_id,
             limit=limit,
             offset=offset,
+            agreement_type=agreement_type,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return IncidentSlaUnmatchedResponse(
         project_id=project_id,
+        agreement_type=agreement_type,
         limit=limit,
         offset=offset,
         rows=[

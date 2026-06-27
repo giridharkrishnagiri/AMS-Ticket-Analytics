@@ -125,6 +125,7 @@ def add_ticket(
     business_service_ci_name: str | None = None,
     architecture_type: str | None = None,
     install_type: str | None = None,
+    hosting_env: str | None = None,
 ) -> Ticket:
     resolved_sap_non_sap = (
         sap_non_sap if sap_non_sap is not None else derive_sap_non_sap(assignment_group)
@@ -153,6 +154,7 @@ def add_ticket(
         sap_non_sap=resolved_sap_non_sap,
         architecture_type=architecture_type,
         install_type=install_type,
+        hosting_env=hosting_env,
         application=application,
         business_service_ci_name=business_service_ci_name,
         sla_breached=sla_breached,
@@ -184,6 +186,7 @@ def add_inventory_item(
     parent_application_name: str,
     active: bool | None = True,
     active_users: int | None = None,
+    hosting_env: str | None = None,
     cmdb_payload: dict[str, object] | None = None,
 ) -> ApplicationInventoryItem:
     item = ApplicationInventoryItem(
@@ -198,6 +201,7 @@ def add_inventory_item(
         parent_application_name=parent_application_name,
         active=active,
         active_users=active_users,
+        hosting_env=hosting_env,
         cmdb_payload=cmdb_payload,
         source_filename="overview-inventory.csv",
     )
@@ -397,6 +401,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             application_owner="App Owner A",
             parent_application_name="Parent A",
             active_users=1200,
+            hosting_env="Production",
             cmdb_payload={
                 "Application family": "Family A",
                 "Business process": "Process A",
@@ -433,6 +438,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             application_owner="App Owner B",
             parent_application_name="Parent A",
             active_users=0,
+            hosting_env="Non-Production",
             cmdb_payload={
                 "Application type": "Technical",
                 "Architecture type": "On Premise",
@@ -457,6 +463,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             application_owner="App Owner C",
             parent_application_name="Parent B",
             active_users=600,
+            hosting_env="Production",
             cmdb_payload={
                 "Application type": "Business",
                 "Architecture type": "Cloud",
@@ -570,6 +577,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             "IT-SAP-Group A - (blank)",
         ]
         assert filter_payload["sap_non_sap"] == ["(blank)", "Non-SAP", "SAP"]
+        assert filter_payload["hosting_env"] == ["Non-Production", "Production"]
         assert "(blank)" in filter_payload["supported_by_vendor"]
         assert filter_payload["lifecycle_status_stage"] == [
             {
@@ -608,6 +616,10 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
             {"label": "(blank)", "value": "(blank)", "count": 1},
             {"label": "Non-SAP", "value": "Non-SAP", "count": 1},
             {"label": "SAP", "value": "SAP", "count": 1},
+        ]
+        assert filter_count_payload["hosting_env"] == [
+            {"label": "Non-Production", "value": "Non-Production", "count": 1},
+            {"label": "Production", "value": "Production", "count": 2},
         ]
         assert filtered_filter_count_response.status_code == 200
         filtered_filter_counts = filtered_filter_count_response.json()
@@ -656,6 +668,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         assert "cmdb_payload" not in list_payload["rows"][0]
         assert list_payload["rows"][0]["app_type"] == "Business"
         assert "active_users" in list_payload["rows"][0]
+        assert list_payload["rows"][0]["hosting_env"] == "Production"
 
         assert blank_vendor_response.status_code == 200
         blank_vendor_rows = blank_vendor_response.json()["rows"]
@@ -677,6 +690,10 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         assert chart_payload["install_type"] == [
             {"label": "Production", "count": 2},
             {"label": "Non Production", "count": 1},
+        ]
+        assert chart_payload["hosting_env"] == [
+            {"label": "Production", "count": 2},
+            {"label": "Non-Production", "count": 1},
         ]
         assert chart_payload["strategic"] == [
             {"label": "Yes", "count": 2},
@@ -1132,8 +1149,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         incident.parent_application_name = "Parent A"
         incident.application_owner = "App Owner A"
         incident.supported_by_vendor = "Vendor A"
-        incident.response_sla_breached = False
-        incident.resolution_sla_breached = True
+        incident.response_sla_breached = True
+        incident.resolution_sla_breached = False
+        incident.sla_response_sla_breached = False
+        incident.sla_resolution_sla_breached = True
 
         sc_task = add_ticket(
             db,
@@ -1203,8 +1222,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                 parent_application_name="Parent OOS",
                 application_owner="App Owner OOS",
                 supported_by_vendor="Vendor OOS",
-                response_sla_breached=False,
-                resolution_sla_breached=False,
+                    response_sla_breached=True,
+                    resolution_sla_breached=False,
+                    sla_response_sla_breached=False,
+                    sla_resolution_sla_breached=False,
                 out_of_scope_reason="assignment_group_not_in_application_inventory",
             ),
         )
@@ -1310,6 +1331,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             sla_trends_response = client.post(
                 "/api/dashboard/volumetrics/sla-trends",
                 json=request_body,
+            )
+            ola_trends_response = client.post(
+                "/api/dashboard/volumetrics/sla-trends",
+                json={**request_body, "agreement_mode": "ola"},
             )
             sc_task_sla_trends_response = client.post(
                 "/api/dashboard/volumetrics/sla-trends",
@@ -1469,8 +1494,9 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
 
         assert sla_trends_response.status_code == 200
         sla_trends = sla_trends_response.json()
+        assert sla_trends["agreement_mode"] == "sla"
         assert sla_trends["not_applicable"] is False
-        assert sla_trends["logic"]["captured_definition"] == "sla_breached IS NOT NULL"
+        assert sla_trends["logic"]["captured_definition"] == "SLA breached flag IS NOT NULL"
         assert sla_trends["response"][1]["total_closed_ticket_count"] == 1
         assert sla_trends["response"][1]["sla_captured_count"] == 1
         assert sla_trends["response"][1]["sla_adhered_count"] == 1
@@ -1478,6 +1504,17 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         assert sla_trends["resolution"][1]["sla_captured_count"] == 1
         assert sla_trends["resolution"][1]["sla_adhered_count"] == 0
         assert sla_trends["resolution"][1]["sla_adherence_pct"] == 0
+
+        assert ola_trends_response.status_code == 200
+        ola_trends = ola_trends_response.json()
+        assert ola_trends["agreement_mode"] == "ola"
+        assert ola_trends["logic"]["captured_definition"] == "OLA breached flag IS NOT NULL"
+        assert ola_trends["response"][1]["sla_captured_count"] == 1
+        assert ola_trends["response"][1]["sla_adhered_count"] == 0
+        assert ola_trends["response"][1]["sla_adherence_pct"] == 0
+        assert ola_trends["resolution"][1]["sla_captured_count"] == 1
+        assert ola_trends["resolution"][1]["sla_adhered_count"] == 1
+        assert ola_trends["resolution"][1]["sla_adherence_pct"] == 100
 
         assert sc_task_sla_trends_response.status_code == 200
         sc_task_sla_trends = sc_task_sla_trends_response.json()
@@ -1502,6 +1539,7 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
             application_owner="App Owner A",
             parent_application_name="Parent A",
             active_users=60,
+            hosting_env="Production",
         )
         app_b = add_inventory_item(
             db,
@@ -1514,6 +1552,7 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
             application_owner="App Owner B",
             parent_application_name="Parent B",
             active_users=30,
+            hosting_env="Non-Production",
         )
         app_c = add_inventory_item(
             db,
@@ -1526,6 +1565,7 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
             application_owner="App Owner C",
             parent_application_name="Parent C",
             active_users=10,
+            hosting_env="Production",
         )
         db.flush()
         window_start, window_end = dashboard_service.rolling_six_complete_month_window()
@@ -1553,6 +1593,7 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
                     sap_non_sap="SAP",
                     architecture_type="Cloud",
                     install_type="Production",
+                    hosting_env="Production",
                 )
                 ticket.application_inventory_id = app_a.id
             for ticket_index in range(2):
@@ -1575,6 +1616,7 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
                     sap_non_sap="Non-SAP",
                     architecture_type="On Premise",
                     install_type="SaaS",
+                    hosting_env="Non-Production",
                 )
                 ticket.application_inventory_id = app_b.id
             ticket = add_ticket(
@@ -1591,6 +1633,7 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
                 sap_non_sap="SAP",
                 architecture_type="Vendor Managed",
                 install_type="Cloud",
+                hosting_env="Production",
             )
             ticket.application_inventory_id = app_c.id
             current_month = dashboard_service.add_month(current_month)
@@ -1713,6 +1756,11 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
             for point in distribution["install_type"]["all"]
         }
         assert install_all == {"Production": 3, "SaaS": 2, "Cloud": 1}
+        hosting_all = {
+            point["label"]: point["average_monthly_count"]
+            for point in distribution["hosting_env"]["all"]
+        }
+        assert hosting_all == {"Production": 4, "Non-Production": 2}
         assert distribution["sap_non_sap"]["incidents"][0]["average_monthly_count"] == 3
         assert distribution["sap_non_sap"]["sc_tasks"][0]["average_monthly_count"] == 1
 
@@ -1995,6 +2043,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             application_owner="Application Owner A",
             parent_application_name="Parent Payroll",
             active_users=500,
+            hosting_env="Production",
             cmdb_payload={
                 "Application type": "Business",
                 "Architecture type": "Cloud",
@@ -2022,6 +2071,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             business_duration_seconds=86400,
             architecture_type="Cloud",
             install_type="Production",
+            hosting_env="Production",
             raw_payload={"secret": "raw ticket payload should not be exported"},
         )
         incident.functional_track = "Data"
@@ -2033,6 +2083,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         incident.supported_by_vendor = "Vendor A"
         incident.response_sla_breached = False
         incident.resolution_sla_breached = False
+        incident.sla_response_sla_breached = False
+        incident.sla_resolution_sla_breached = False
 
         sc_task = add_ticket(
             db,
@@ -2048,6 +2100,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             business_duration_seconds=172800,
             architecture_type="On Premise",
             install_type="Production",
+            hosting_env="Non-Production",
             raw_payload={"secret": "raw sc task payload should not be exported"},
         )
         sc_task.functional_track = "Run"
@@ -2097,11 +2150,14 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
                 business_duration_seconds=86400,
                 architecture_type="Cloud",
                 install_type="Production",
-                response_sla_breached=False,
-                resolution_sla_breached=False,
-                out_of_scope_reason="assignment_group_not_in_application_inventory",
-            ),
-        )
+                hosting_env="Production",
+                    response_sla_breached=False,
+                    resolution_sla_breached=False,
+                    sla_response_sla_breached=False,
+                    sla_resolution_sla_breached=False,
+                    out_of_scope_reason="assignment_group_not_in_application_inventory",
+                ),
+            )
         db.add(
             DashboardCommentary(
                 client_id=client_id,
@@ -2142,8 +2198,11 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Category-wise Trends" in document
         assert "Created vs Resolved by hour of the day" in document
         assert "Priority-wise ticket distribution" in document
-        assert "Response SLA adherence trend" in document
-        assert "Resolution SLA adherence trend" in document
+        assert 'slaMode: "sla"' in document
+        assert '["sla", "ola"]' in document
+        assert "[data-sla-mode]" in document
+        assert "Response ${modeLabel} adherence trend" in document
+        assert "Resolution ${modeLabel} adherence trend" in document
         assert "Top High-Volume Applications" in document
         assert "Batch-related Incidents Created" in document
         assert "Incident Batch-Related Tickets Created Trend" not in document
@@ -2152,6 +2211,9 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Average Monthly SC Tasks by Architecture Type" in document
         assert "Average Monthly Incidents by Install Type" in document
         assert "Average Monthly SC Tasks by Install Type" in document
+        assert "Average Monthly Tickets by Hosting Env" in document
+        assert "Average Monthly Incidents by Hosting Env" in document
+        assert "Average Monthly SC Tasks by Hosting Env" in document
         assert "Incident MTTR by Priority" in document
         assert "SC Task MTTR by Priority" in document
         assert "P1 / P2 MTTR" in document
@@ -2178,6 +2240,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Average Monthly SC Tasks by SAP / Non-SAP" in document
         assert "Average Monthly Tickets by Architecture Type" in document
         assert "Average Monthly Tickets by Install Type" in document
+        assert "Average Monthly Tickets by Hosting Env" in document
         assert (
             '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
             in document
@@ -2243,6 +2306,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "sap_non_sap_distribution_row" in document
         assert "architecture_type_distribution_row" in document
         assert "install_type_distribution_row" in document
+        assert "hosting_env_distribution_row" in document
         assert "incident_duration_buckets_row" in document
         assert "sc_task_duration_buckets_row" in document
         assert "sap_non_sap_tickets_individual" not in document
@@ -2251,7 +2315,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "incident_duration_mar_individual" not in document
         assert "function priorityLabelRequired" in document
         assert "function priorityCellText" in document
+        assert "function priorityChartLabelParts" in document
         assert '(${Number(percentage || 0).toFixed(1)}%)' in document
+        assert "Math.round(Number(percentage || 0))" in document
+        assert 'font-size="9"' in document
+        assert '<tspan x="${x + barWidth / 2}" dy="0">' in document
+        assert '<tspan x="${x + barWidth / 2}" dy="10">' in document
         assert "chart-stage" in document
         assert "chart-copy-toolbar" in document
         assert "copy-chart-button" in document
@@ -2349,6 +2418,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["overview"]["tickets"]["applications_80pct_monthly_volume_count"] == 1
         assert payload["applications"]["rows"][0]["business_service_ci_name"] == "Payroll Portal"
         assert payload["applications"]["rows"][0]["active_users"] == 500
+        assert payload["applications"]["rows"][0]["hosting_env"] == "Production"
         assert payload["commentaries"] == [
             {
                 "project_id": str(project_id),
@@ -2367,6 +2437,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "cmdb_payload" not in payload["applications"]["rows"][0]
         assert "architecture_type" in payload["applications"]["charts"]
         assert "install_type" in payload["applications"]["charts"]
+        assert "hosting_env" in payload["applications"]["charts"]
         assert "operating_system" not in payload["applications"]["charts"]
         assert "sox_scope" not in payload["applications"]["charts"]
         assert payload["volumetrics"]["monthly_rows"]
@@ -2403,6 +2474,11 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "normalized_payload" not in detailed_row
         assert "architecture_type" in detailed_row
         assert "install_type" in detailed_row
+        assert "hosting_env" in detailed_row
+        assert {
+            row["split_type"]
+            for row in payload["volumetrics"]["detailed_volume_trends"]["split_rows"]
+        } >= {"architecture_type", "install_type", "hosting_env"}
         kpi_row = payload["volumetrics"]["kpi_trends"]["mttr"]["rows"][0]
         assert "ticket_count" in kpi_row
         assert "ticket_number" not in kpi_row
@@ -2429,6 +2505,7 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
             application_owner="Application Owner A",
             parent_application_name="Parent Payroll",
             active_users=500,
+            hosting_env="Production",
             cmdb_payload={"secret": "raw cmdb payload should not be exported"},
         )
         incident = add_ticket(
@@ -2446,6 +2523,7 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
             business_duration_seconds=172800,
             architecture_type="Cloud",
             install_type="Production",
+            hosting_env="Production",
             business_service_ci_name="Payroll Portal",
             raw_payload={"secret": "raw ticket payload should not be exported"},
         )
@@ -2470,6 +2548,7 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
             business_duration_seconds=259200,
             architecture_type="Cloud",
             install_type="Production",
+            hosting_env="Production",
             business_service_ci_name="Payroll Portal",
             raw_payload={"secret": "raw sc task payload should not be exported"},
         )
@@ -2533,6 +2612,8 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
         assert "Overall Volume Trends - Created / Completed / Backlog" in slide_xml
         assert "Overall SLA Trends - Response SLA" in slide_xml
         assert "Detailed Volume Trends - Top Applications" in slide_xml
+        assert "Detailed Volume Trends - Hosting Env" in slide_xml
+        assert "Hosting Env" in slide_xml
         assert "KPI Trends - Incident MTTR" in slide_xml
         assert "KPI Trends - SC Task MTTR" in slide_xml
         assert "Performance Trends" in slide_xml

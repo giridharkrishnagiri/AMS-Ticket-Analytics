@@ -64,6 +64,7 @@ import type {
   DashboardVolumetricsTicketsPerUser,
   DashboardVolumetricsTopApplications,
   DashboardVolumetricsTopIncidentBatchApplications,
+  VolumetricsAgreementMode,
   VolumetricsDayType,
   VolumetricsScope,
   VolumetricsTicketType,
@@ -178,6 +179,7 @@ const emptyPriorityDistribution: DashboardVolumetricsPriorityDistribution = {
 
 const emptySlaTrends: DashboardVolumetricsSlaTrends = {
   time_grain: "monthly",
+  agreement_mode: "sla",
   not_applicable: false,
   response: [],
   resolution: [],
@@ -255,6 +257,7 @@ const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
   sap_non_sap: emptyDistributionGroup,
   architecture_type: emptyDistributionGroup,
   install_type: emptyDistributionGroup,
+  hosting_env: emptyDistributionGroup,
 };
 
 const emptyMttrPrioritySet: DashboardVolumetricsKpiMttrPrioritySet = {
@@ -774,6 +777,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   const [scope, setScope] = useState<VolumetricsScope>("in_scope");
   const [ticketType, setTicketType] = useState<VolumetricsTicketType>("all");
   const [timeGrain, setTimeGrain] = useState<VolumetricsTimeGrain>("monthly");
+  const [agreementMode, setAgreementMode] = useState<VolumetricsAgreementMode>("sla");
   const [startMonth, setStartMonth] = useState(defaultStartMonth);
   const [endMonth, setEndMonth] = useState(defaultEndMonth);
   const [startWeek, setStartWeek] = useState(() => defaultWeeklyRange().start);
@@ -900,11 +904,21 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
       scope,
       ticket_type: ticketType,
       time_grain: timeGrain,
+      agreement_mode: agreementMode,
       start_datetime: effectiveRange.startApi,
       end_datetime: effectiveRange.endApi,
       filters,
     };
-  }, [effectiveRange.endApi, effectiveRange.startApi, filters, projectId, scope, ticketType, timeGrain]);
+  }, [
+    agreementMode,
+    effectiveRange.endApi,
+    effectiveRange.startApi,
+    filters,
+    projectId,
+    scope,
+    ticketType,
+    timeGrain,
+  ]);
 
   const requestSignature = useMemo(
     () => (requestBody ? JSON.stringify(requestBody) : ""),
@@ -1339,6 +1353,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
 
   const averageLabel = timeGrain === "monthly" ? "Avg monthly" : "Avg weekly";
   const canceledMetricLabel = cancellationMetricLabel(ticketType);
+  const agreementModeLabel = agreementMode === "ola" ? "OLA" : "SLA";
   const commentaryFunctional = commentaryFunctionalContext(filters.functional_track_ams_owner);
   const volumetricsCommentary = (
     subTab: VolumetricsSubTab,
@@ -1559,7 +1574,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   index={2}
                 />
                 <MetricCard
-                  label="Response SLA"
+                  label={`Response ${agreementModeLabel}`}
                   primary={`${averageLabel} adherence: ${formatPercent(
                     summary.data.response_sla.average_adherence_pct
                   )}`}
@@ -1569,7 +1584,7 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
                   index={3}
                 />
                 <MetricCard
-                  label="Resolution SLA"
+                  label={`Resolution ${agreementModeLabel}`}
                   primary={`${averageLabel} adherence: ${formatPercent(
                     summary.data.resolution_sla.average_adherence_pct
                   )}`}
@@ -1662,6 +1677,8 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
             data={slaTrends.data}
             status={slaTrends.status}
             error={slaTrends.error}
+            agreementMode={agreementMode}
+            onAgreementModeChange={setAgreementMode}
             ticketType={ticketType}
             timeGrain={timeGrain}
             commentaryForChart={(chartKey) =>
@@ -1993,6 +2010,19 @@ function DetailedVolumeTrends({
           all: "Average Monthly Tickets by Install Type",
           incidents: "Average Monthly Incidents by Install Type",
           sc_tasks: "Average Monthly SC Tasks by Install Type",
+        }}
+        window={distributionSplits.ranking_window}
+      />
+      <DistributionPieRow
+        commentary={commentaryForChart("hosting_env_distribution_row")}
+        data={distributionSplits.hosting_env}
+        error={distributionSplitsError}
+        status={distributionSplitsStatus}
+        ticketType={ticketType}
+        titles={{
+          all: "Average Monthly Tickets by Hosting Env",
+          incidents: "Average Monthly Incidents by Hosting Env",
+          sc_tasks: "Average Monthly SC Tasks by Hosting Env",
         }}
         window={distributionSplits.ranking_window}
       />
@@ -3614,7 +3644,7 @@ function priorityDataForChart(data: DashboardVolumetricsPriorityDistribution) {
         point.percentages[item.label] ?? (point.total > 0 ? (count / point.total) * 100 : 0);
       row[item.key] = count;
       row[`${item.key}_pct`] = percentage;
-      row[`${item.key}_label`] = priorityCountPercentageLabel(count, percentage);
+      row[`${item.key}_label`] = priorityChartLabel(count, percentage);
     });
     return row;
   });
@@ -3656,6 +3686,11 @@ function priorityCountPercentageLabel(count: number, percentage: number | null |
   return `${formatNumber(count)} (${pctValue.toFixed(1)}%)`;
 }
 
+function priorityChartLabel(count: number, percentage: number | null | undefined): string {
+  const pctValue = Number.isFinite(Number(percentage)) ? Number(percentage) : 0;
+  return `${formatNumber(count)}\n${Math.round(pctValue)}%`;
+}
+
 function renderPriorityStackLabel(props: {
   height?: number | string;
   value?: unknown;
@@ -3673,20 +3708,30 @@ function renderPriorityStackLabel(props: {
   if (width <= 0 || height <= 0) {
     return null;
   }
-  const inside = height >= 22 && width >= 42;
+  const lines = props.value.split("\n").filter(Boolean).slice(0, 2);
+  const labelFontSize = 9;
+  const lineHeight = 10;
+  const inside = height >= 28 && width >= 20;
+  const labelY = inside
+    ? y + height / 2 - (lines.length - 1) * (lineHeight / 2)
+    : Math.max(24, y - 16);
   return (
     <text
       x={x + width / 2}
-      y={inside ? y + height / 2 + 4 : Math.max(14, y - 6)}
+      y={labelY}
       textAnchor="middle"
-      fontSize={10}
+      fontSize={labelFontSize}
       fontWeight={800}
       fill={inside ? "#ffffff" : "#334155"}
       stroke={inside ? "none" : "#ffffff"}
       strokeWidth={inside ? 0 : 3}
       paintOrder="stroke"
     >
-      {props.value}
+      {lines.map((line, index) => (
+        <tspan key={`${line}-${index}`} x={x + width / 2} dy={index === 0 ? 0 : lineHeight}>
+          {line}
+        </tspan>
+      ))}
     </text>
   );
 }
@@ -3850,25 +3895,30 @@ function PriorityDistributionTable({ data }: { data: DashboardVolumetricsPriorit
 }
 
 function OverallSlaTrends({
+  agreementMode,
   commentaryForChart,
   data,
   error,
+  onAgreementModeChange,
   status,
   ticketType,
   timeGrain,
 }: {
+  agreementMode: VolumetricsAgreementMode;
   commentaryForChart: (chartKey: string) => ReactNode;
   data: DashboardVolumetricsSlaTrends;
   error: string | null;
+  onAgreementModeChange: (value: VolumetricsAgreementMode) => void;
   status: LoadStatus;
   ticketType: VolumetricsTicketType;
   timeGrain: VolumetricsTimeGrain;
 }) {
+  const agreementLabel = agreementMode === "ola" ? "OLA" : "SLA";
   if (ticketType === "sc_task" || data.not_applicable) {
     return (
       <section className="panel volumetrics-placeholder-panel">
         <p className="label">Overall SLA Trends</p>
-        <h3>SLA trends are not applicable for SC Tasks.</h3>
+        <h3>{agreementLabel} trends are not applicable for SC Tasks.</h3>
       </section>
     );
   }
@@ -3876,9 +3926,29 @@ function OverallSlaTrends({
   return (
     <>
       {status === "error" ? <p className="error-text">{error}</p> : null}
+      <section className="panel compact-panel">
+        <div className="applications-chart-header">
+          <div>
+            <p className="label">Overall SLA Trends</p>
+            <h3>Agreement Mode</h3>
+          </div>
+          <div className="segmented-control" role="group" aria-label="Agreement mode">
+            {(["sla", "ola"] as VolumetricsAgreementMode[]).map((mode) => (
+              <button
+                className={agreementMode === mode ? "active" : ""}
+                key={mode}
+                type="button"
+                onClick={() => onAgreementModeChange(mode)}
+              >
+                {mode.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
       <SlaTrendSection
-        title="Response SLA adherence trend"
-        tableMetricLabel="Response SLA"
+        title={`Response ${agreementLabel} adherence trend`}
+        tableMetricLabel={`Response ${agreementLabel}`}
         data={data.response}
         status={status}
         timeGrain={timeGrain}
@@ -3886,8 +3956,8 @@ function OverallSlaTrends({
         commentary={commentaryForChart("response_sla_adherence")}
       />
       <SlaTrendSection
-        title="Resolution SLA adherence trend"
-        tableMetricLabel="Resolution SLA"
+        title={`Resolution ${agreementLabel} adherence trend`}
+        tableMetricLabel={`Resolution ${agreementLabel}`}
         data={data.resolution}
         status={status}
         timeGrain={timeGrain}
@@ -3926,7 +3996,8 @@ function SlaTrendSection({
         <div>
           <h3>{title}</h3>
           <p className="muted-text">
-            Adherence is calculated as SLA adhered count divided by SLA captured count.
+            Adherence is calculated as {tableMetricLabel} adhered count divided by{" "}
+            {tableMetricLabel} captured count.
           </p>
         </div>
         <button

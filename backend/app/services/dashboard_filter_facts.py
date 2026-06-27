@@ -142,6 +142,7 @@ def insert_in_scope_filter_facts(db: Session, project_id: UUID) -> int:
                 business_critical,
                 install_status,
                 install_type,
+                hosting_env,
                 priority,
                 state,
                 status_group
@@ -206,6 +207,7 @@ def insert_in_scope_filter_facts(db: Session, project_id: UUID) -> int:
                 NULL,
                 NULL,
                 left(NULLIF(btrim(t.install_type), ''), 255),
+                left(NULLIF(btrim(t.hosting_env), ''), 255),
                 left(NULLIF(btrim(t.priority), ''), 50),
                 left(NULLIF(btrim(t.state), ''), 100),
                 left(
@@ -262,6 +264,7 @@ def insert_out_of_scope_filter_facts(db: Session, project_id: UUID) -> int:
                 business_critical,
                 install_status,
                 install_type,
+                hosting_env,
                 priority,
                 state,
                 status_group
@@ -326,6 +329,7 @@ def insert_out_of_scope_filter_facts(db: Session, project_id: UUID) -> int:
                 NULL,
                 NULL,
                 left(NULLIF(btrim(t.install_type), ''), 255),
+                left(NULLIF(btrim(t.hosting_env), ''), 255),
                 left(NULLIF(btrim(t.priority), ''), 50),
                 left(NULLIF(btrim(t.state), ''), 100),
                 left(

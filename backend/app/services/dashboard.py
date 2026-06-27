@@ -48,6 +48,7 @@ DIRECT_APPLICATION_FIELDS = {
     "ams_owner": ApplicationInventoryItem.ams_owner,
     "supported_by_vendor": ApplicationInventoryItem.supported_by_vendor,
     "sap_non_sap": ApplicationInventoryItem.sap_non_sap,
+    "hosting_env": ApplicationInventoryItem.hosting_env,
     "active_users": ApplicationInventoryItem.active_users,
     "avg_monthly_ticket_volume_6m": ApplicationInventoryItem.avg_monthly_ticket_volume_6m,
     "tickets_per_user_per_month": ApplicationInventoryItem.tickets_per_user_per_month,
@@ -96,6 +97,7 @@ APPLICATION_LIST_FIELDS = (
     "functional_track",
     "ams_owner",
     "supported_by_vendor",
+    "hosting_env",
     "active_users",
     "avg_monthly_ticket_volume_6m",
     "tickets_per_user_per_month",
@@ -132,6 +134,7 @@ SINGLE_APPLICATION_FILTER_FIELDS = {
     "business_critical": "biz_criticality",
     "install_status": "install_status",
     "install_type": "install_type",
+    "hosting_env": "hosting_env",
 }
 
 COMBINED_APPLICATION_FILTER_FIELDS = {
@@ -155,6 +158,7 @@ APPLICATION_FILTER_CUSTOM_SORTS = {
 VOLUMETRICS_SCOPES = {"in_scope", "out_of_scope", "all"}
 VOLUMETRICS_TICKET_TYPES = {"all", "incident", "sc_task"}
 VOLUMETRICS_TIME_GRAINS = {"monthly", "weekly"}
+VOLUMETRICS_AGREEMENT_MODES = {"sla", "ola"}
 VOLUMETRICS_MAX_WEEKLY_PERIODS = 15
 VOLUMETRICS_CREATED_PATTERN_TYPES = {
     "day_of_month",
@@ -866,6 +870,7 @@ def applications_filter_values(db: Session, project_id: UUID) -> dict[str, Any]:
             filter_name="install_status",
         ),
         "install_type": distinct_application_filter_values(db, project_id, "install_type"),
+        "hosting_env": distinct_application_filter_values(db, project_id, "hosting_env"),
         "lifecycle_status_stage": distinct_combined_application_filter_values(
             db,
             project_id,
@@ -1104,6 +1109,12 @@ def applications_filter_value_counts(db: Session, request: Any) -> dict[str, Any
             "install_type",
             "install_type",
         ),
+        "hosting_env": application_filter_value_count_rows(
+            db,
+            request,
+            "hosting_env",
+            "hosting_env",
+        ),
         "lifecycle_status_stage": combined_application_filter_value_count_rows(
             db,
             request,
@@ -1236,6 +1247,7 @@ def applications_charts(db: Session, request: Any) -> dict[str, list[dict[str, A
         else applications_chart_counts(db, request, "lifecycle_stage_status"),
         "architecture_type": applications_chart_counts(db, request, "architecture_type"),
         "install_type": applications_chart_counts(db, request, "install_type"),
+        "hosting_env": applications_chart_counts(db, request, "hosting_env"),
         "strategic": applications_chart_counts(db, request, "strategic"),
     }
 
@@ -1309,6 +1321,20 @@ def normalize_volumetrics_time_grain(value: str | None) -> str:
     return normalized
 
 
+def normalize_volumetrics_agreement_mode(value: str | None) -> str:
+    normalized = (value or "sla").strip().lower()
+    if normalized not in VOLUMETRICS_AGREEMENT_MODES:
+        raise ValueError("Agreement mode must be sla or ola")
+    return normalized
+
+
+def volumetrics_agreement_breach_columns(source: Any, request: Any) -> tuple[Any, Any]:
+    mode = normalize_volumetrics_agreement_mode(getattr(request, "agreement_mode", "sla"))
+    if mode == "ola":
+        return source.c.ola_response_sla_breached, source.c.ola_resolution_sla_breached
+    return source.c.sla_response_sla_breached, source.c.sla_resolution_sla_breached
+
+
 def normalize_dashboard_datetime(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
@@ -1380,10 +1406,19 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         model.sap_non_sap.label("sap_non_sap"),
         model.architecture_type.label("architecture_type"),
         model.install_type.label("install_type"),
+        model.hosting_env.label("hosting_env"),
         model.is_batch_related.label("is_batch_related"),
         model.business_duration_seconds.label("business_duration_seconds"),
         model.response_sla_breached.label("response_sla_breached"),
         model.resolution_sla_breached.label("resolution_sla_breached"),
+        model.sla_response_sla_breached.label("sla_response_sla_breached"),
+        model.sla_resolution_sla_breached.label("sla_resolution_sla_breached"),
+        func.coalesce(model.ola_response_sla_breached, model.response_sla_breached).label(
+            "ola_response_sla_breached",
+        ),
+        func.coalesce(model.ola_resolution_sla_breached, model.resolution_sla_breached).label(
+            "ola_resolution_sla_breached",
+        ),
     ).where(model.project_id == project_id)
 
 
@@ -2135,6 +2170,10 @@ def volumetrics_period_metrics(
         else {}
     )
     incident_request = replace_request_value(request, "ticket_type", "incident")
+    response_breached_column, resolution_breached_column = volumetrics_agreement_breach_columns(
+        source,
+        request,
+    )
     sla_rows = (
         volumetrics_aggregate_by_period(
             db,
@@ -2143,16 +2182,16 @@ def volumetrics_period_metrics(
             source.c.created_at,
             [
                 func.count(source.c.id)
-                .filter(source.c.response_sla_breached.is_not(None))
+                .filter(response_breached_column.is_not(None))
                 .label("response_applicable_count"),
                 func.count(source.c.id)
-                .filter(source.c.response_sla_breached.is_(False))
+                .filter(response_breached_column.is_(False))
                 .label("response_met_count"),
                 func.count(source.c.id)
-                .filter(source.c.resolution_sla_breached.is_not(None))
+                .filter(resolution_breached_column.is_not(None))
                 .label("resolution_applicable_count"),
                 func.count(source.c.id)
-                .filter(source.c.resolution_sla_breached.is_(False))
+                .filter(resolution_breached_column.is_(False))
                 .label("resolution_met_count"),
             ],
             override_request=incident_request,
@@ -2692,19 +2731,26 @@ def volumetrics_priority_distribution(db: Session, request: Any) -> dict[str, An
 
 
 def empty_sla_trend_response(request: Any, *, not_applicable: bool) -> dict[str, Any]:
+    agreement_mode = normalize_volumetrics_agreement_mode(
+        getattr(request, "agreement_mode", "sla"),
+    )
+    agreement_label = agreement_mode.upper()
     return {
         "time_grain": normalize_volumetrics_time_grain(request.time_grain),
+        "agreement_mode": agreement_mode,
         "not_applicable": not_applicable,
         "response": [],
         "resolution": [],
         "logic": {
             "response_adherence_formula": (
-                "response_sla_adhered_count / response_sla_captured_count * 100"
+                f"response_{agreement_mode}_adhered_count / "
+                f"response_{agreement_mode}_captured_count * 100"
             ),
             "resolution_adherence_formula": (
-                "resolution_sla_adhered_count / resolution_sla_captured_count * 100"
+                f"resolution_{agreement_mode}_adhered_count / "
+                f"resolution_{agreement_mode}_captured_count * 100"
             ),
-            "captured_definition": "sla_breached IS NOT NULL",
+            "captured_definition": f"{agreement_label} breached flag IS NOT NULL",
         },
     }
 
@@ -2717,21 +2763,25 @@ def volumetrics_sla_trend_rows(
     grain = normalize_volumetrics_time_grain(request.time_grain)
     period_expression = volumetrics_period_start_expression(source.c.resolved_at, grain)
     incident_request = replace_request_value(request, "ticket_type", "incident")
+    response_breached_column, resolution_breached_column = volumetrics_agreement_breach_columns(
+        source,
+        request,
+    )
     statement = (
         select(
             period_expression.label("period_start"),
             func.count(source.c.id).label("total_closed_ticket_count"),
             func.count(source.c.id)
-            .filter(source.c.response_sla_breached.is_not(None))
+            .filter(response_breached_column.is_not(None))
             .label("response_sla_captured_count"),
             func.count(source.c.id)
-            .filter(source.c.response_sla_breached.is_(False))
+            .filter(response_breached_column.is_(False))
             .label("response_sla_adhered_count"),
             func.count(source.c.id)
-            .filter(source.c.resolution_sla_breached.is_not(None))
+            .filter(resolution_breached_column.is_not(None))
             .label("resolution_sla_captured_count"),
             func.count(source.c.id)
-            .filter(source.c.resolution_sla_breached.is_(False))
+            .filter(resolution_breached_column.is_(False))
             .label("resolution_sla_adhered_count"),
         )
         .select_from(source)
@@ -3427,6 +3477,7 @@ def volumetrics_distribution_splits(db: Session, request: Any) -> dict[str, Any]
         "sap_non_sap": group("sap_non_sap"),
         "architecture_type": group("architecture_type"),
         "install_type": group("install_type"),
+        "hosting_env": group("hosting_env"),
     }
 
 

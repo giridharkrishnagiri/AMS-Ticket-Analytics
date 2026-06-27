@@ -56,6 +56,7 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "functional_track": ("Functional Track",),
     "ams_owner": ("AMS Owner",),
     "supported_by_vendor": ("Supported By Vendor", "Support vendor", "Vendor"),
+    "hosting_env": ("Hosting Env", "Hosting Environment", "hosting_env"),
     "active": ("Active",),
     "active_users": ("Active Users", "Active User", "Active Users Count"),
 }
@@ -103,6 +104,7 @@ class InventoryUploadResult:
     distinct_functional_tracks: set[str] = field(default_factory=set)
     distinct_ams_owners: set[str] = field(default_factory=set)
     distinct_supported_vendors: set[str] = field(default_factory=set)
+    distinct_hosting_envs: set[str] = field(default_factory=set)
 
     @property
     def error_count(self) -> int:
@@ -123,6 +125,27 @@ class InventoryActiveUsersUpdateResult:
     unmatched_count: int = 0
     skipped_count: int = 0
     invalid_count: int = 0
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def error_count(self) -> int:
+        return len(self.errors)
+
+    @property
+    def warning_count(self) -> int:
+        return len(self.warnings)
+
+
+@dataclass
+class InventoryHostingEnvUpdateResult:
+    project_id: UUID
+    total_rows: int = 0
+    matched_count: int = 0
+    updated_count: int = 0
+    unchanged_count: int = 0
+    unmatched_count: int = 0
+    skipped_count: int = 0
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -325,6 +348,7 @@ def clean_inventory_values(
         "supported_by_vendor": text_or_none(
             get_raw_value(parsed_row.raw_data, "supported_by_vendor")
         ),
+        "hosting_env": text_or_none(get_raw_value(parsed_row.raw_data, "hosting_env")),
         "sap_non_sap": derive_sap_non_sap(assignment_group),
         "active": parse_active(
             get_raw_value(parsed_row.raw_data, "active"),
@@ -363,6 +387,7 @@ def track_upload_distincts(result: InventoryUploadResult, values: dict[str, Any]
         ("functional_track", result.distinct_functional_tracks),
         ("ams_owner", result.distinct_ams_owners),
         ("supported_by_vendor", result.distinct_supported_vendors),
+        ("hosting_env", result.distinct_hosting_envs),
     )
     for field_name, target_set in distinct_fields:
         value = normalize_match_key(values.get(field_name))
@@ -512,6 +537,119 @@ def update_application_inventory_active_users_from_file(
         db.rollback()
         raise ApplicationInventoryError(
             f"Application inventory active users could not be updated: {exc}"
+        ) from exc
+    except UnicodeDecodeError as exc:
+        db.rollback()
+        raise ApplicationInventoryError(
+            "Application inventory CSV could not be decoded using supported encodings: "
+            + ", ".join(CSV_ENCODING_CANDIDATES)
+        ) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    return result
+
+
+def update_application_inventory_hosting_env_from_file(
+    db: Session,
+    project_id: UUID,
+    path: Path,
+) -> InventoryHostingEnvUpdateResult:
+    """Update only hosting_env from an inventory workbook; never insert or upsert rows."""
+    ensure_project_exists(db, project_id)
+    result = InventoryHostingEnvUpdateResult(project_id=project_id)
+
+    try:
+        for parsed_row in iter_inventory_file_rows(path, result):
+            result.total_rows += 1
+            if not raw_data_has_core_field(parsed_row.raw_data, "hosting_env"):
+                raise ApplicationInventoryError("Hosting Env column was not found.")
+
+            business_service_ci_name = text_or_none(
+                get_raw_value(parsed_row.raw_data, "business_service_ci_name")
+            )
+            if business_service_ci_name is None:
+                result.skipped_count += 1
+                append_sample_message(
+                    result.errors,
+                    f"Row {parsed_row.row_number}: Business Service CI Name is required.",
+                )
+                continue
+
+            parent_application_name = text_or_none(
+                get_raw_value(parsed_row.raw_data, "parent_application_name")
+            )
+            assignment_group = text_or_none(get_raw_value(parsed_row.raw_data, "assignment_group"))
+            item = db.scalar(
+                select(ApplicationInventoryItem)
+                .where(
+                    inventory_match_condition(
+                        project_id,
+                        business_service_ci_name=business_service_ci_name,
+                        parent_application_name=parent_application_name,
+                        assignment_group=assignment_group,
+                    )
+                )
+                .limit(1)
+            )
+            if item is None:
+                fallback_candidates = db.scalars(
+                    select(ApplicationInventoryItem)
+                    .where(
+                        ApplicationInventoryItem.project_id == project_id,
+                        func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name))
+                        == normalize_match_key(business_service_ci_name),
+                        func.coalesce(
+                            func.lower(
+                                func.btrim(ApplicationInventoryItem.parent_application_name)
+                            ),
+                            "",
+                        )
+                        == (normalize_match_key(parent_application_name) or ""),
+                    )
+                    .limit(2)
+                ).all()
+                if len(fallback_candidates) == 1:
+                    item = fallback_candidates[0]
+                elif len(fallback_candidates) > 1:
+                    result.unmatched_count += 1
+                    append_sample_message(
+                        result.warnings,
+                        "Row "
+                        f"{parsed_row.row_number}: multiple existing inventory rows matched "
+                        f"Business Service CI Name '{business_service_ci_name}' and parent "
+                        "application, so Hosting Env was not updated.",
+                    )
+                    continue
+            if item is None:
+                result.unmatched_count += 1
+                append_sample_message(
+                    result.warnings,
+                    "Row "
+                    f"{parsed_row.row_number}: no existing inventory row matched "
+                    f"Business Service CI Name '{business_service_ci_name}'.",
+                )
+                continue
+
+            hosting_env = text_or_none(get_raw_value(parsed_row.raw_data, "hosting_env"))
+            result.matched_count += 1
+            if item.hosting_env == hosting_env:
+                result.unchanged_count += 1
+            else:
+                item.hosting_env = hosting_env
+                result.updated_count += 1
+
+            if result.updated_count and result.updated_count % INGESTION_BATCH_SIZE == 0:
+                db.commit()
+
+        db.flush()
+        backfill_ticket_hosting_env_from_inventory(db, project_id)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise ApplicationInventoryError(
+            f"Application inventory Hosting Env values could not be updated: {exc}"
         ) from exc
     except UnicodeDecodeError as exc:
         db.rollback()
@@ -702,6 +840,7 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             supported_by_vendor=None,
             assignment_group_owner=None,
             sap_non_sap=None,
+            hosting_env=None,
             derived_vendor=None,
         )
     )
@@ -719,9 +858,33 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             ams_owner=None,
             supported_by_vendor=None,
             assignment_group_owner=None,
+            sap_non_sap=None,
+            hosting_env=None,
             derived_vendor=None,
         )
     )
+
+
+def backfill_ticket_hosting_env_from_inventory(db: Session, project_id: UUID) -> int:
+    updated_count = 0
+    for table_name in ("tickets", "assessment_out_of_scope_tickets"):
+        result = db.execute(
+            text(
+                f"""
+                UPDATE {table_name} AS t
+                SET hosting_env = NULLIF(btrim(i.hosting_env), '')
+                FROM application_inventory_items AS i
+                WHERE t.project_id = CAST(:project_id AS uuid)
+                  AND t.application_inventory_id = i.id
+                  AND (
+                    t.hosting_env IS DISTINCT FROM NULLIF(btrim(i.hosting_env), '')
+                  )
+                """,
+            ),
+            {"project_id": str(project_id)},
+        )
+        updated_count += int(result.rowcount or 0)
+    return updated_count
 
 
 def update_tickets_from_inventory(
@@ -749,6 +912,7 @@ def update_tickets_from_inventory(
                 i.ams_owner,
                 i.supported_by_vendor,
                 i.assignment_group_owner,
+                i.hosting_env,
                 row_number() OVER (
                     PARTITION BY t.id
                     ORDER BY
@@ -789,6 +953,7 @@ def update_tickets_from_inventory(
             ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
             assignment_group_owner = candidates.assignment_group_owner,
+            hosting_env = candidates.hosting_env,
             sap_non_sap = CASE
                 WHEN upper(btrim(coalesce(t.assignment_group, ''))) LIKE 'IT-SAP%' THEN 'SAP'
                 WHEN upper(btrim(coalesce(t.assignment_group, ''))) LIKE 'IT-NSA%' THEN 'Non-SAP'
@@ -1019,6 +1184,7 @@ def inventory_filter_values(db: Session, project_id: UUID) -> dict[str, list[str
         "functional_tracks": ApplicationInventoryItem.functional_track,
         "ams_owners": ApplicationInventoryItem.ams_owner,
         "supported_by_vendors": ApplicationInventoryItem.supported_by_vendor,
+        "hosting_envs": ApplicationInventoryItem.hosting_env,
         "parent_application_names": ApplicationInventoryItem.parent_application_name,
         "business_service_ci_names": ApplicationInventoryItem.business_service_ci_name,
         "assignment_groups": ApplicationInventoryItem.assignment_group,

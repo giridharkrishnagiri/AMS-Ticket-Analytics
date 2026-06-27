@@ -215,6 +215,7 @@ export type DashboardApplicationsFilterValues = {
   business_critical: ApplicationFilterValue[];
   install_status: ApplicationFilterValue[];
   install_type: ApplicationFilterValue[];
+  hosting_env: ApplicationFilterValue[];
   lifecycle_status_stage: ApplicationCombinedFilterValue[];
 };
 
@@ -230,6 +231,7 @@ export type DashboardApplicationsFilters = {
   business_critical: string[];
   install_status: string[];
   install_type: string[];
+  hosting_env: string[];
   lifecycle_status_stage: string[];
 };
 
@@ -276,6 +278,7 @@ export type DashboardApplicationRow = {
   functional_track: string;
   ams_owner: string;
   supported_by_vendor: string;
+  hosting_env: string;
   active_users: number | null;
   avg_monthly_ticket_volume_6m: number | null;
   tickets_per_user_per_month: number | null;
@@ -381,12 +384,14 @@ export type DashboardApplicationsCharts = {
   lifecycle_stage: DashboardApplicationsChartDatum[];
   architecture_type: DashboardApplicationsChartDatum[];
   install_type: DashboardApplicationsChartDatum[];
+  hosting_env: DashboardApplicationsChartDatum[];
   strategic: DashboardApplicationsChartDatum[];
 };
 
 export type VolumetricsScope = "in_scope" | "out_of_scope" | "all";
 export type VolumetricsTicketType = "all" | "incident" | "sc_task";
 export type VolumetricsTimeGrain = "monthly" | "weekly";
+export type VolumetricsAgreementMode = "sla" | "ola";
 
 export type DashboardVolumetricsFilters = {
   functional_track_ams_owner: string[];
@@ -402,6 +407,7 @@ export type DashboardVolumetricsRequest = {
   scope: VolumetricsScope;
   ticket_type: VolumetricsTicketType;
   time_grain: VolumetricsTimeGrain;
+  agreement_mode?: VolumetricsAgreementMode;
   start_datetime: string;
   end_datetime: string;
   filters: DashboardVolumetricsFilters;
@@ -541,6 +547,7 @@ export type DashboardVolumetricsSlaTrendRow = {
 
 export type DashboardVolumetricsSlaTrends = {
   time_grain: VolumetricsTimeGrain;
+  agreement_mode: VolumetricsAgreementMode;
   not_applicable: boolean;
   response: DashboardVolumetricsSlaTrendRow[];
   resolution: DashboardVolumetricsSlaTrendRow[];
@@ -650,6 +657,7 @@ export type DashboardVolumetricsDistributionSplits = {
   sap_non_sap: DashboardVolumetricsTripleTicketTypeSplit;
   architecture_type: DashboardVolumetricsTripleTicketTypeSplit;
   install_type: DashboardVolumetricsTripleTicketTypeSplit;
+  hosting_env: DashboardVolumetricsTripleTicketTypeSplit;
 };
 
 export type DashboardVolumetricsKpiMttrPoint = {

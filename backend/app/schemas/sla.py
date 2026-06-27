@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 class IncidentSlaUploadResponse(BaseModel):
     project_id: UUID
+    agreement_type: str = "ola"
     upload_id: UUID | None = None
     uploaded_file_name: str
     status: str = "UPLOADED"
@@ -40,6 +41,7 @@ class IncidentSlaMultiUploadResponse(BaseModel):
 class IncidentSlaUploadHistoryRowResponse(BaseModel):
     upload_id: UUID
     filename: str
+    agreement_type: str = "ola"
     uploaded_at: datetime
     total_rows_read: int
     inserted_rows: int
@@ -50,6 +52,7 @@ class IncidentSlaUploadHistoryRowResponse(BaseModel):
 
 class IncidentSlaEnrichRequest(BaseModel):
     project_id: UUID
+    agreement_type: str = "ola"
     ticket_type: str = "INCIDENT"
     replace_existing: bool = True
 
@@ -84,6 +87,7 @@ class IncidentSlaUnmatchedStatsResponse(BaseModel):
 
 class IncidentSlaEnrichResponse(BaseModel):
     project_id: UUID
+    agreement_type: str = "ola"
     ticket_type: str
     replace_existing: bool
     matched_ticket_count: int
@@ -108,6 +112,7 @@ class IncidentSlaEnrichResponse(BaseModel):
 
 class IncidentSlaSummaryResponse(BaseModel):
     project_id: UUID
+    agreement_type: str = "ola"
     total_sla_rows: int
     unique_incident_numbers: int
     matched_tickets_count: int
@@ -129,6 +134,7 @@ class IncidentSlaUnmatchedRow(BaseModel):
 
 class IncidentSlaUnmatchedResponse(BaseModel):
     project_id: UUID
+    agreement_type: str = "ola"
     limit: int
     offset: int
     rows: list[IncidentSlaUnmatchedRow]
@@ -136,11 +142,13 @@ class IncidentSlaUnmatchedResponse(BaseModel):
 
 class IncidentSlaDeduplicateRequest(BaseModel):
     project_id: UUID
+    agreement_type: str = "ola"
     confirmation: str
 
 
 class IncidentSlaDeduplicateResponse(BaseModel):
     project_id: UUID
+    agreement_type: str = "ola"
     duplicate_groups_found: int
     duplicate_rows_deleted: int
     remaining_sla_rows: int

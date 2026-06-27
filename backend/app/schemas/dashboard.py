@@ -199,6 +199,7 @@ class ApplicationsFilterValuesResponse(BaseModel):
     business_critical: list[str]
     install_status: list[str]
     install_type: list[str]
+    hosting_env: list[str]
     lifecycle_status_stage: list[ApplicationCombinedFilterValue]
 
 
@@ -214,6 +215,7 @@ class ApplicationsFilters(BaseModel):
     business_critical: list[str] = Field(default_factory=list)
     install_status: list[str] = Field(default_factory=list)
     install_type: list[str] = Field(default_factory=list)
+    hosting_env: list[str] = Field(default_factory=list)
     lifecycle_status_stage: list[str] = Field(default_factory=list)
 
 
@@ -234,6 +236,7 @@ class ApplicationsFilterValueCountsResponse(BaseModel):
     business_critical: list[ApplicationFilterCountValue]
     install_status: list[ApplicationFilterCountValue]
     install_type: list[ApplicationFilterCountValue]
+    hosting_env: list[ApplicationFilterCountValue]
     lifecycle_status_stage: list[ApplicationCombinedFilterCountValue]
 
 
@@ -279,6 +282,7 @@ class ApplicationsListRow(BaseModel):
     functional_track: str
     ams_owner: str
     supported_by_vendor: str
+    hosting_env: str
     active_users: int | None
     avg_monthly_ticket_volume_6m: float | None
     tickets_per_user_per_month: float | None
@@ -331,6 +335,7 @@ class ApplicationsChartsResponse(BaseModel):
     lifecycle_stage: list[ApplicationsChartDatum]
     architecture_type: list[ApplicationsChartDatum]
     install_type: list[ApplicationsChartDatum]
+    hosting_env: list[ApplicationsChartDatum]
     strategic: list[ApplicationsChartDatum]
 
 
@@ -348,6 +353,7 @@ class VolumetricsRequest(BaseModel):
     scope: str = "in_scope"
     ticket_type: str = "all"
     time_grain: str = "monthly"
+    agreement_mode: str = "sla"
     start_datetime: datetime
     end_datetime: datetime
     filters: VolumetricsFilters = Field(default_factory=VolumetricsFilters)
@@ -553,6 +559,7 @@ class VolumetricsSlaTrendLogic(BaseModel):
 
 class VolumetricsSlaTrendsResponse(BaseModel):
     time_grain: str
+    agreement_mode: str = "sla"
     not_applicable: bool
     response: list[VolumetricsSlaTrendRow]
     resolution: list[VolumetricsSlaTrendRow]
@@ -664,6 +671,7 @@ class VolumetricsDistributionSplitsResponse(BaseModel):
     sap_non_sap: VolumetricsTripleTicketTypeSplit
     architecture_type: VolumetricsTripleTicketTypeSplit
     install_type: VolumetricsTripleTicketTypeSplit
+    hosting_env: VolumetricsTripleTicketTypeSplit
 
 
 class VolumetricsKpiMttrPoint(BaseModel):

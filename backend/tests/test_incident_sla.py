@@ -145,9 +145,11 @@ def add_sla_row(
     business_seconds: int = 3600,
     row_number: int,
     stage: str = "Completed",
+    agreement_type: str = "ola",
 ) -> IncidentSlaRow:
     sla_row = IncidentSlaRow(
         project_id=project_id,
+        agreement_type=agreement_type,
         uploaded_file_name="incident_sla.csv",
         source_row_number=row_number,
         inc_number=inc_number,
@@ -750,6 +752,169 @@ def test_incident_sla_enrichment_prefers_accenture_and_preserves_legacy_sla() ->
         assert unmatched_response.status_code == 200
         unmatched_rows = unmatched_response.json()["rows"]
         assert unmatched_rows == [{"inc_number": "SCTASK1", "row_count": 1}]
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_incident_sla_and_ola_enrichment_remain_separate() -> None:
+    db, client_id, project_id, batch_id, file_id = create_sla_project()
+    try:
+        ticket = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-SLA-OLA-SPLIT",
+            vendor="Accenture",
+        )
+        out_of_scope_ticket = add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-SLA-OLA-OOS",
+            vendor="Accenture",
+        )
+
+        for ticket_number in ("INC-SLA-OLA-SPLIT", "INC-SLA-OLA-OOS"):
+            add_sla_row(
+                db,
+                project_id,
+                ticket_number,
+                "Response",
+                "Default Response OLA",
+                breached=False,
+                business_seconds=100,
+                row_number=1,
+                agreement_type="ola",
+            )
+            add_sla_row(
+                db,
+                project_id,
+                ticket_number,
+                "Response",
+                "Accenture Response OLA",
+                breached=True,
+                business_seconds=200,
+                row_number=2,
+                agreement_type="ola",
+            )
+            add_sla_row(
+                db,
+                project_id,
+                ticket_number,
+                "Resolution",
+                "Default Resolution OLA",
+                breached=False,
+                business_seconds=300,
+                row_number=3,
+                agreement_type="ola",
+            )
+            add_sla_row(
+                db,
+                project_id,
+                ticket_number,
+                "Response",
+                "Enterprise Response SLA",
+                breached=False,
+                business_seconds=400,
+                row_number=4,
+                agreement_type="sla",
+            )
+            add_sla_row(
+                db,
+                project_id,
+                ticket_number,
+                "Resolution",
+                "Enterprise Resolution SLA",
+                breached=True,
+                business_seconds=500,
+                row_number=5,
+                agreement_type="sla",
+            )
+        db.commit()
+
+        with TestClient(app) as client:
+            ola_response = client.post(
+                "/api/sla/incidents/enrich",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "replace_existing": True,
+                    "agreement_type": "ola",
+                },
+            )
+
+        assert ola_response.status_code == 200
+        ola_payload = ola_response.json()
+        assert ola_payload["agreement_type"] == "ola"
+        assert ola_payload["response_sla_updated_count"] == 2
+        assert ola_payload["resolution_sla_updated_count"] == 2
+
+        db.refresh(ticket)
+        db.refresh(out_of_scope_ticket)
+        assert ticket.response_sla_name == "Accenture Response OLA"
+        assert ticket.ola_response_sla_name == "Accenture Response OLA"
+        assert ticket.response_sla_breached is True
+        assert ticket.ola_response_sla_breached is True
+        assert ticket.sla_response_sla_name is None
+        assert out_of_scope_ticket.ola_response_sla_name == "Accenture Response OLA"
+        assert out_of_scope_ticket.sla_response_sla_name is None
+
+        with TestClient(app) as client:
+            sla_response = client.post(
+                "/api/sla/incidents/enrich",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "replace_existing": True,
+                    "agreement_type": "sla",
+                },
+            )
+            sla_summary_response = client.get(
+                "/api/sla/incidents/summary",
+                params={"project_id": str(project_id), "agreement_type": "sla"},
+            )
+            ola_summary_response = client.get(
+                "/api/sla/incidents/summary",
+                params={"project_id": str(project_id), "agreement_type": "ola"},
+            )
+
+        assert sla_response.status_code == 200
+        sla_payload = sla_response.json()
+        assert sla_payload["agreement_type"] == "sla"
+        assert sla_payload["response_sla_updated_count"] == 2
+        assert sla_payload["resolution_sla_updated_count"] == 2
+
+        db.refresh(ticket)
+        db.refresh(out_of_scope_ticket)
+        assert ticket.response_sla_name == "Accenture Response OLA"
+        assert ticket.ola_response_sla_name == "Accenture Response OLA"
+        assert ticket.sla_response_sla_name == "Enterprise Response SLA"
+        assert ticket.sla_response_sla_breached is False
+        assert ticket.sla_resolution_sla_name == "Enterprise Resolution SLA"
+        assert ticket.sla_resolution_sla_breached is True
+        assert ticket.sla_response_sla_selection_source == "ticket_number"
+        assert ticket.ola_response_sla_selection_source == "ticket_vendor"
+        assert out_of_scope_ticket.ola_response_sla_name == "Accenture Response OLA"
+        assert out_of_scope_ticket.sla_response_sla_name == "Enterprise Response SLA"
+
+        assert sla_summary_response.status_code == 200
+        sla_summary = sla_summary_response.json()
+        assert sla_summary["agreement_type"] == "sla"
+        assert sla_summary["total_sla_rows"] == 4
+        assert sla_summary["tickets_with_response_sla_selected"] == 1
+        assert sla_summary["tickets_with_resolution_sla_selected"] == 1
+        assert sla_summary["response_breached_count"] == 0
+        assert sla_summary["resolution_breached_count"] == 1
+
+        assert ola_summary_response.status_code == 200
+        ola_summary = ola_summary_response.json()
+        assert ola_summary["agreement_type"] == "ola"
+        assert ola_summary["total_sla_rows"] == 6
+        assert ola_summary["tickets_with_response_sla_selected"] == 1
+        assert ola_summary["tickets_with_resolution_sla_selected"] == 1
+        assert ola_summary["response_accenture_selected_count"] == 1
+        assert ola_summary["response_default_selected_count"] == 0
     finally:
         cleanup_client(db, client_id)
 

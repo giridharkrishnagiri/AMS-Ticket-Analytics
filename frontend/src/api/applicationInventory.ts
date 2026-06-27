@@ -13,6 +13,7 @@ export type ApplicationInventoryItem = {
   functional_track: string | null;
   ams_owner: string | null;
   supported_by_vendor: string | null;
+  hosting_env: string | null;
   active: boolean | null;
   active_users: number | null;
   cmdb_payload: Record<string, unknown> | null;
@@ -88,6 +89,7 @@ export type ApplicationInventoryFilterValues = {
   functional_tracks: string[];
   ams_owners: string[];
   supported_by_vendors: string[];
+  hosting_envs: string[];
   parent_application_names: string[];
   business_service_ci_names: string[];
   assignment_groups: string[];

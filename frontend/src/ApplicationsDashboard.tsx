@@ -66,6 +66,7 @@ const emptyFilters: DashboardApplicationsFilters = {
   business_critical: [],
   install_status: [],
   install_type: [],
+  hosting_env: [],
   lifecycle_status_stage: [],
 };
 
@@ -81,6 +82,7 @@ const emptyFilterValues: DashboardApplicationsFilterValues = {
   business_critical: [],
   install_status: [],
   install_type: [],
+  hosting_env: [],
   lifecycle_status_stage: [],
 };
 
@@ -107,6 +109,7 @@ const emptyCharts: DashboardApplicationsCharts = {
   lifecycle_stage: [],
   architecture_type: [],
   install_type: [],
+  hosting_env: [],
   strategic: [],
 };
 
@@ -132,6 +135,7 @@ const tableColumns: Array<{ key: TableColumnKey; label: string }> = [
   { key: "functional_track", label: "Functional Track" },
   { key: "ams_owner", label: "AMS Owner" },
   { key: "supported_by_vendor", label: "Supported By Vendor" },
+  { key: "hosting_env", label: "Hosting Env" },
   { key: "active_users", label: "Active Users" },
   { key: "app_family", label: "App Family" },
   { key: "biz_process", label: "Biz Process" },
@@ -551,6 +555,7 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
       business_critical: singleFilterOptions(filterValues.data.business_critical),
       install_status: singleFilterOptions(filterValues.data.install_status),
       install_type: singleFilterOptions(filterValues.data.install_type),
+      hosting_env: singleFilterOptions(filterValues.data.hosting_env),
       lifecycle_status_stage: combinedFilterOptions(filterValues.data.lifecycle_status_stage),
     }),
     [filterValues.data]
@@ -867,6 +872,12 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
             onChange={(values) => updateFilter("install_type", values)}
           />
           <ExcelMultiSelectFilter
+            label="Hosting Env"
+            options={filterOptions.hosting_env}
+            selectedValues={filters.hosting_env}
+            onChange={(values) => updateFilter("hosting_env", values)}
+          />
+          <ExcelMultiSelectFilter
             label="Lifecycle Status - Lifecycle Stage Status"
             options={filterOptions.lifecycle_status_stage}
             selectedValues={filters.lifecycle_status_stage}
@@ -981,6 +992,12 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
             data={charts.data.install_type}
             status={charts.status}
             commentary={applicationCommentary("applications_charts", "install_type")}
+          />
+          <BarApplicationChart
+            title="Hosting Env"
+            data={charts.data.hosting_env}
+            status={charts.status}
+            commentary={applicationCommentary("applications_charts", "hosting_env")}
           />
         </section>
         {charts.status === "error" ? <p className="error-text">{charts.error}</p> : null}

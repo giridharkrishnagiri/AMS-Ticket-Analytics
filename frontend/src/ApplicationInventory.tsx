@@ -152,6 +152,10 @@ function ApplicationInventory({
     () => topValueCounts(inventoryItems, (item) => item.supported_by_vendor),
     [inventoryItems]
   );
+  const topHostingEnvs = useMemo(
+    () => topValueCounts(inventoryItems, (item) => item.hosting_env),
+    [inventoryItems]
+  );
   const topSupportLeads = useMemo(
     () => topValueCounts(inventoryItems, (item) => item.support_lead),
     [inventoryItems]
@@ -517,11 +521,16 @@ function ApplicationInventory({
             <p className="label">Supported Vendors</p>
             <strong>{formatNumber(filterValues?.supported_by_vendors.length ?? 0)}</strong>
           </div>
+          <div>
+            <p className="label">Hosting Env</p>
+            <strong>{formatNumber(filterValues?.hosting_envs.length ?? 0)}</strong>
+          </div>
         </div>
         <div className="top-list-grid">
           <TopValues title="Top 10 Functional Tracks" values={topFunctionalTracks} countLabel="Rows" />
           <TopValues title="Top 10 AMS Owners" values={topAmsOwners} countLabel="Rows" />
           <TopValues title="Top 10 Supported Vendors" values={topSupportedVendors} countLabel="Rows" />
+          <TopValues title="Top 10 Hosting Env" values={topHostingEnvs} countLabel="Rows" />
           <TopValues title="Top 10 Support Leads" values={topSupportLeads} countLabel="Rows" />
           <TopValues
             title="Top 10 Application Owners"

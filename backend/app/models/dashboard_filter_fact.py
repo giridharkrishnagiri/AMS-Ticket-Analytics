@@ -47,6 +47,7 @@ class DashboardFilterFact(UuidPrimaryKeyMixin, TimestampMixin, Base):
         ),
         Index("ix_dashboard_filter_facts_project_install_status", "project_id", "install_status"),
         Index("ix_dashboard_filter_facts_project_install_type", "project_id", "install_type"),
+        Index("ix_dashboard_filter_facts_project_hosting_env", "project_id", "hosting_env"),
         Index("ix_dashboard_filter_facts_project_created_month", "project_id", "created_month"),
         Index("ix_dashboard_filter_facts_project_completed_month", "project_id", "completed_month"),
     )
@@ -94,6 +95,7 @@ class DashboardFilterFact(UuidPrimaryKeyMixin, TimestampMixin, Base):
     business_critical: Mapped[str | None] = mapped_column(String(255), nullable=True)
     install_status: Mapped[str | None] = mapped_column(String(255), nullable=True)
     install_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hosting_env: Mapped[str | None] = mapped_column(String(255), nullable=True)
     priority: Mapped[str | None] = mapped_column(String(50), nullable=True)
     state: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status_group: Mapped[str | None] = mapped_column(String(100), nullable=True)

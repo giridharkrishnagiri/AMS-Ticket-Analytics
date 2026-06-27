@@ -18,6 +18,7 @@ import {
 } from "./api/sla";
 import type {
   IncidentSlaEnrichResponse,
+  AgreementType,
   IncidentSlaMultiUploadResponse,
   IncidentSlaSummaryResponse,
   IncidentSlaUploadHistoryRow,
@@ -49,6 +50,7 @@ type TicketUploadType =
   | "SERVICE_CATALOG_TASK"
   | "PROBLEM"
   | "CHANGE"
+  | "INCIDENT_OLA"
   | "INCIDENT_SLA";
 type WorkflowStepId = "upload" | "ingest" | "normalize" | "mapping" | "apply" | "summary";
 
@@ -84,9 +86,14 @@ const ticketUploadTypes: Array<{
     description: "Change Register extracts",
   },
   {
-    label: "Incident SLAs",
+    label: "Incident OLA",
+    value: "INCIDENT_OLA",
+    description: "Vendor-specific Incident OLA files",
+  },
+  {
+    label: "Incident SLA",
     value: "INCIDENT_SLA",
-    description: "Incident SLA dump files",
+    description: "End-to-end IT / business Incident SLA files",
   },
 ];
 
@@ -387,7 +394,9 @@ function TicketDetailsWorkflow({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const isSlaUpload = ticketType === "INCIDENT_SLA";
+  const isSlaUpload = ticketType === "INCIDENT_SLA" || ticketType === "INCIDENT_OLA";
+  const agreementType: AgreementType = ticketType === "INCIDENT_SLA" ? "sla" : "ola";
+  const agreementLabel = agreementType.toUpperCase();
   const normalizedFields = useMemo(
     () => normalizedFieldsForUploadType(ticketType),
     [ticketType]
@@ -408,7 +417,7 @@ function TicketDetailsWorkflow({
       : ticketType === "CHANGE"
         ? "Change Register Files"
         : isSlaUpload
-          ? "Incident SLA Files"
+          ? `Incident ${agreementLabel} Files`
           : "Ticket Files";
   const usesProblemChangeWorkflow = ticketType === "PROBLEM" || ticketType === "CHANGE";
 
@@ -658,25 +667,25 @@ function TicketDetailsWorkflow({
       setError(null);
       try {
         const [nextSummary, nextHistory] = await Promise.all([
-          getIncidentSlaSummary(projectId.trim()),
-          getIncidentSlaUploadHistory(projectId.trim()),
+          getIncidentSlaSummary(projectId.trim(), agreementType),
+          getIncidentSlaUploadHistory(projectId.trim(), agreementType),
         ]);
         setSlaSummary(nextSummary);
         setSlaUploadHistory(nextHistory);
         if (showMessage) {
-          setMessage("Incident SLA history and summary refreshed.");
+          setMessage(`Incident ${agreementLabel} history and summary refreshed.`);
         }
       } catch (requestError) {
         setError(
           requestError instanceof Error
             ? requestError.message
-            : "Unable to load Incident SLA context"
+            : `Unable to load Incident ${agreementLabel} context`
         );
       } finally {
         setIsLoadingSlaContext(false);
       }
     },
-    [isSlaUpload, projectId]
+    [agreementLabel, agreementType, isSlaUpload, projectId]
   );
 
   useEffect(() => {
@@ -759,13 +768,17 @@ function TicketDetailsWorkflow({
     setIsUploading(true);
     try {
       if (isSlaUpload) {
-        const result = await uploadIncidentSlaFiles(projectId.trim(), files);
+        const result = await uploadIncidentSlaFiles(projectId.trim(), files, agreementType);
         setSlaUploadResult(result);
         setSlaEnrichResult(null);
         setMessage(
-          `Processed ${formatNumber(result.totals.total_files)} SLA file(s), inserted ${formatNumber(
+          `Processed ${formatNumber(
+            result.totals.total_files
+          )} ${agreementLabel} file(s), inserted ${formatNumber(
             result.totals.inserted_rows
-          )} row(s), skipped ${formatNumber(result.totals.duplicate_rows_skipped)} duplicate row(s).`
+          )} row(s), skipped ${formatNumber(
+            result.totals.duplicate_rows_skipped
+          )} duplicate row(s).`
         );
         setFiles([]);
         if (fileInputRef.current) {
@@ -1049,12 +1062,14 @@ function TicketDetailsWorkflow({
 
   async function handleEnrichSla() {
     if (!projectId.trim()) {
-      setError("Select a customer before enriching Incident SLAs.");
+      setError(`Select a customer before enriching Incident ${agreementLabel}s.`);
       return;
     }
 
     const confirmed = window.confirm(
-      "This will enrich in-scope and out-of-scope Incident tickets with vendor-aware SLA selections. SC Tasks are excluded."
+      agreementType === "ola"
+        ? "This will enrich in-scope and out-of-scope Incident tickets with vendor-specific OLA selections. SC Tasks are excluded."
+        : "This will enrich in-scope and out-of-scope Incident tickets with end-to-end SLA selections matched by Incident number. SC Tasks are excluded."
     );
     if (!confirmed) {
       return;
@@ -1064,14 +1079,16 @@ function TicketDetailsWorkflow({
     setError(null);
     setMessage(null);
     try {
-      const result = await enrichIncidentSla(projectId.trim(), true);
+      const result = await enrichIncidentSla(projectId.trim(), true, agreementType);
       setSlaEnrichResult(result);
-      setMessage("Incident SLA enrichment completed.");
+      setMessage(`Incident ${agreementLabel} enrichment completed.`);
       await refreshSlaContext(false);
       setActiveStep("summary");
     } catch (requestError) {
       setError(
-        requestError instanceof Error ? requestError.message : "Incident SLA enrichment failed"
+        requestError instanceof Error
+          ? requestError.message
+          : `Incident ${agreementLabel} enrichment failed`
       );
     } finally {
       setIsSlaEnriching(false);
@@ -1235,7 +1252,11 @@ function TicketDetailsWorkflow({
             disabled={isUploading || !projectId.trim() || files.length === 0}
             type="submit"
           >
-            {isUploading ? "Uploading..." : isSlaUpload ? "Upload SLA Files" : "Upload Files"}
+            {isUploading
+              ? "Uploading..."
+              : isSlaUpload
+                ? `Upload ${agreementLabel} Files`
+                : "Upload Files"}
           </button>
           <button
             className="secondary-button"
@@ -1266,7 +1287,10 @@ function TicketDetailsWorkflow({
         {slaUploadResult ? (
           <div className="summary-block">
             <div className="summary-grid">
-              <MetricCard label="SLA Files" value={formatNumber(slaUploadResult.totals.total_files)} />
+              <MetricCard
+                label={`${agreementLabel} Files`}
+                value={formatNumber(slaUploadResult.totals.total_files)}
+              />
               <MetricCard
                 label="Rows Read"
                 value={formatNumber(slaUploadResult.totals.total_rows_read)}
@@ -1288,8 +1312,8 @@ function TicketDetailsWorkflow({
       return (
         <InfoPanel title="Ingest">
           <p className="muted-text">
-            Not required for Incident SLA files. SLA upload parses and loads staging rows during
-            upload, then enrichment runs in the Apply / Enrich step.
+            Not required for Incident {agreementLabel} files. The upload parses and loads staging
+            rows during upload, then enrichment runs in the Apply / Enrich step.
           </p>
         </InfoPanel>
       );
@@ -1331,8 +1355,8 @@ function TicketDetailsWorkflow({
       return (
         <InfoPanel title="Normalize">
           <p className="muted-text">
-            Not required for Incident SLA files. SLA enrichment uses uploaded SLA staging rows and
-            does not create SC Task SLA records.
+            Not required for Incident {agreementLabel} files. Enrichment uses uploaded{" "}
+            {agreementLabel} staging rows and does not create SC Task agreement records.
           </p>
         </InfoPanel>
       );
@@ -1407,8 +1431,9 @@ function TicketDetailsWorkflow({
       return (
         <InfoPanel title="Column Mapping">
           <p className="muted-text">
-            Column mapping is not required for Incident SLA files. SLA files use fixed SLA parsing
-            and vendor-aware enrichment rules.
+            Column mapping is not required for Incident {agreementLabel} files. Agreement files use
+            fixed parsing and {agreementType === "ola" ? "vendor-specific OLA" : "end-to-end SLA"}{" "}
+            enrichment rules.
           </p>
         </InfoPanel>
       );
@@ -1531,8 +1556,12 @@ function TicketDetailsWorkflow({
         <div className="workflow-step-panel">
           <div className="panel-heading compact-heading">
             <div>
-              <p className="label">Enrich SLAs</p>
-              <h2>Vendor-Aware Incident SLA Enrichment</h2>
+              <p className="label">Enrich {agreementLabel}s</p>
+              <h2>
+                {agreementType === "ola"
+                  ? "Vendor-Specific Incident OLA Enrichment"
+                  : "End-to-End Incident SLA Enrichment"}
+              </h2>
             </div>
             <button
               className="primary-button"
@@ -1540,12 +1569,12 @@ function TicketDetailsWorkflow({
               type="button"
               onClick={() => void handleEnrichSla()}
             >
-              {isSlaEnriching ? "Enriching..." : "Enrich Incident SLAs"}
+              {isSlaEnriching ? "Enriching..." : `Enrich Incident ${agreementLabel}s`}
             </button>
           </div>
           <p className="muted-text">
-            Uses all uploaded SLA rows for the selected customer. In-scope and out-of-scope
-            Incident tickets are enriched; SC Tasks are excluded.
+            Uses all uploaded {agreementLabel} rows for the selected customer. In-scope and
+            out-of-scope Incident tickets are enriched; SC Tasks are excluded.
           </p>
           {slaEnrichResult ? (
             <div className="summary-grid summary-block">
@@ -1641,7 +1670,7 @@ function TicketDetailsWorkflow({
         <div className="workflow-step-panel">
           <div className="summary-grid">
             <MetricCard
-              label="SLA Files Uploaded"
+              label={`${agreementLabel} Files Uploaded`}
               value={formatNumber(slaUploadResult?.totals.total_files ?? slaUploadHistory.length)}
             />
             <MetricCard

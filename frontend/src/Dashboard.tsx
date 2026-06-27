@@ -723,19 +723,19 @@ function Dashboard() {
               getIncidentSlaTrend(chartQuery),
               setIncidentSlaTrend,
               [],
-              "Unable to load Incident SLA trend"
+              "Unable to load Incident OLA trend"
             ),
             loadResource(
               getIncidentSlaSummary(chartQuery),
               setIncidentSlaSummary,
               emptyIncidentSlaSummary,
-              "Unable to load Incident SLA summary"
+              "Unable to load Incident OLA summary"
             ),
             loadResource(
               getIncidentSlaNameBreakdown(chartQuery),
               setIncidentSlaNameBreakdown,
               emptyIncidentSlaNameBreakdown,
-              "Unable to load Incident SLA name breakdown"
+              "Unable to load Incident OLA name breakdown"
             ),
           ]
         : []),
@@ -1097,18 +1097,18 @@ function Dashboard() {
             emptyMessage="No application dimension values available yet."
           />
           <MultiSelectFilter
-            label="Response SLA Name"
+            label="Response OLA Name"
             options={filterValues.data.response_sla_names}
             selectedValues={selectedResponseSlaNames}
             onChange={setSelectedResponseSlaNames}
-            emptyMessage="No enriched Incident response SLA names available yet."
+            emptyMessage="No enriched Incident response OLA names available yet."
           />
           <MultiSelectFilter
-            label="Resolution SLA Name"
+            label="Resolution OLA Name"
             options={filterValues.data.resolution_sla_names}
             selectedValues={selectedResolutionSlaNames}
             onChange={setSelectedResolutionSlaNames}
-            emptyMessage="No enriched Incident resolution SLA names available yet."
+            emptyMessage="No enriched Incident resolution OLA names available yet."
           />
         </div>
       </section>
@@ -1149,22 +1149,21 @@ function Dashboard() {
       <section className="incident-sla-section panel" aria-labelledby="incident-sla-heading">
         <div className="panel-heading">
           <div>
-            <p className="label">Incident SLA</p>
-            <h2 id="incident-sla-heading">Response and Resolution SLA Adherence</h2>
+            <p className="label">Incident OLA</p>
+            <h2 id="incident-sla-heading">Response and Resolution OLA Adherence</h2>
           </div>
         </div>
 
         {ticketType === "SERVICE_CATALOG_TASK" ? (
           <p className="muted-text">
-            SLA metrics are not applicable for Service Catalog Tasks because SC Tasks do not have
-            contractual SLAs.
+            OLA metrics are not applicable for Service Catalog Tasks in this legacy vendor view.
           </p>
         ) : (
           <>
             <p className="muted-text sla-section-note">{incidentSlaNotice}</p>
-            <section className="kpi-grid" aria-label="Incident SLA KPI summary">
+            <section className="kpi-grid" aria-label="Incident OLA KPI summary">
               <KpiCard
-                label="Response SLA Adherence"
+                label="Response OLA Adherence"
                 value={formatPercent(incidentSlaSummary.data.response_sla_adherence_pct)}
                 helper={`${formatNumber(
                   incidentSlaSummary.data.response_sla_met_count
@@ -1173,7 +1172,7 @@ function Dashboard() {
                 )} applicable`}
               />
               <KpiCard
-                label="Resolution SLA Adherence"
+                label="Resolution OLA Adherence"
                 value={formatPercent(incidentSlaSummary.data.resolution_sla_adherence_pct)}
                 helper={`${formatNumber(
                   incidentSlaSummary.data.resolution_sla_met_count
@@ -1214,7 +1213,7 @@ function Dashboard() {
             </section>
 
             {incidentSlaSummary.status === "loading" ? (
-              <p className="muted-text">Loading Incident SLA summary...</p>
+              <p className="muted-text">Loading Incident OLA summary...</p>
             ) : null}
             {incidentSlaSummary.status === "error" ? (
               <p className="error-text">{incidentSlaSummary.error}</p>
@@ -1222,7 +1221,7 @@ function Dashboard() {
 
             <div className="dashboard-chart-grid incident-sla-chart-grid">
               <ChartCard
-                title="Response vs Resolution SLA Adherence Trend"
+                title="Response vs Resolution OLA Adherence Trend"
                 subtitle="Incident-only adherence percentage by created period."
                 status={incidentSlaTrend.status}
                 error={incidentSlaTrend.error}
@@ -1249,7 +1248,7 @@ function Dashboard() {
                     <Line
                       connectNulls
                       dataKey="response_sla_adherence_pct"
-                      name="Response SLA adherence %"
+                      name="Response OLA adherence %"
                       stroke={chartColors.met}
                       strokeWidth={2.5}
                       type="monotone"
@@ -1257,7 +1256,7 @@ function Dashboard() {
                     <Line
                       connectNulls
                       dataKey="resolution_sla_adherence_pct"
-                      name="Resolution SLA adherence %"
+                      name="Resolution OLA adherence %"
                       stroke={chartColors.business}
                       strokeWidth={2.5}
                       type="monotone"
@@ -1267,8 +1266,8 @@ function Dashboard() {
               </ChartCard>
 
               <ChartCard
-                title="Response SLA - Met vs Breached"
-                subtitle="Incident response SLA met and breached counts."
+                title="Response OLA - Met vs Breached"
+                subtitle="Incident response OLA met and breached counts."
                 status={incidentSlaTrend.status}
                 error={incidentSlaTrend.error}
                 isEmpty={!trendHasData(incidentSlaTrend.data, (row) => row.response_sla_applicable_count)}
@@ -1288,20 +1287,20 @@ function Dashboard() {
                     <Bar
                       dataKey="response_sla_met_count"
                       fill={chartColors.met}
-                      name="Response SLA met"
+                      name="Response OLA met"
                     />
                     <Bar
                       dataKey="response_sla_breached_count"
                       fill={chartColors.breached}
-                      name="Response SLA breached"
+                      name="Response OLA breached"
                     />
                   </BarChart>
                 </ChartBox>
               </ChartCard>
 
               <ChartCard
-                title="Resolution SLA - Met vs Breached"
-                subtitle="Incident resolution SLA met and breached counts."
+                title="Resolution OLA - Met vs Breached"
+                subtitle="Incident resolution OLA met and breached counts."
                 status={incidentSlaTrend.status}
                 error={incidentSlaTrend.error}
                 isEmpty={
@@ -1323,12 +1322,12 @@ function Dashboard() {
                     <Bar
                       dataKey="resolution_sla_met_count"
                       fill={chartColors.met}
-                      name="Resolution SLA met"
+                      name="Resolution OLA met"
                     />
                     <Bar
                       dataKey="resolution_sla_breached_count"
                       fill={chartColors.breached}
-                      name="Resolution SLA breached"
+                      name="Resolution OLA breached"
                     />
                   </BarChart>
                 </ChartBox>
@@ -1336,7 +1335,7 @@ function Dashboard() {
 
               <ChartCard
                 title="Avg Business Elapsed Hours"
-                subtitle="Average business elapsed hours for selected Incident SLA records."
+                subtitle="Average business elapsed hours for selected Incident OLA records."
                 status={incidentSlaTrend.status}
                 error={incidentSlaTrend.error}
                 isEmpty={
@@ -1381,8 +1380,8 @@ function Dashboard() {
               </ChartCard>
 
               <ChartCard
-                title="SLA Name Distribution"
-                subtitle="Response and resolution SLA definition performance."
+                title="OLA Name Distribution"
+                subtitle="Response and resolution OLA definition performance."
                 status={incidentSlaNameBreakdown.status}
                 error={incidentSlaNameBreakdown.error}
                 isEmpty={
@@ -1392,11 +1391,11 @@ function Dashboard() {
               >
                 <div className="sla-name-distribution">
                   <SlaNameDistributionTable
-                    title="Response SLA Names"
+                    title="Response OLA Names"
                     rows={incidentSlaNameBreakdown.data.response_sla_names}
                   />
                   <SlaNameDistributionTable
-                    title="Resolution SLA Names"
+                    title="Resolution OLA Names"
                     rows={incidentSlaNameBreakdown.data.resolution_sla_names}
                   />
                 </div>

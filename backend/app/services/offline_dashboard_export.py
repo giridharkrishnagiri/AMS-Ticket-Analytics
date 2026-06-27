@@ -204,6 +204,7 @@ def empty_application_request(project_id: UUID, *, limit: int = 10000) -> Any:
             business_critical=[],
             install_status=[],
             install_type=[],
+            hosting_env=[],
             lifecycle_status_stage=[],
         ),
         sort=SimpleNamespace(column="business_service_ci_name", direction="asc"),
@@ -379,17 +380,29 @@ def offline_sla_rows(
             *[expression.label(name) for name, expression in dimensions.items()],
             period_expression.label("period_start"),
             func.count(source.c.id)
-            .filter(source.c.response_sla_breached.is_not(None))
-            .label("response_total"),
+            .filter(source.c.sla_response_sla_breached.is_not(None))
+            .label("sla_response_total"),
             func.count(source.c.id)
-            .filter(source.c.response_sla_breached.is_(False))
-            .label("response_met"),
+            .filter(source.c.sla_response_sla_breached.is_(False))
+            .label("sla_response_met"),
             func.count(source.c.id)
-            .filter(source.c.resolution_sla_breached.is_not(None))
-            .label("resolution_total"),
+            .filter(source.c.sla_resolution_sla_breached.is_not(None))
+            .label("sla_resolution_total"),
             func.count(source.c.id)
-            .filter(source.c.resolution_sla_breached.is_(False))
-            .label("resolution_met"),
+            .filter(source.c.sla_resolution_sla_breached.is_(False))
+            .label("sla_resolution_met"),
+            func.count(source.c.id)
+            .filter(source.c.ola_response_sla_breached.is_not(None))
+            .label("ola_response_total"),
+            func.count(source.c.id)
+            .filter(source.c.ola_response_sla_breached.is_(False))
+            .label("ola_response_met"),
+            func.count(source.c.id)
+            .filter(source.c.ola_resolution_sla_breached.is_not(None))
+            .label("ola_resolution_total"),
+            func.count(source.c.id)
+            .filter(source.c.ola_resolution_sla_breached.is_(False))
+            .label("ola_resolution_met"),
         )
         .select_from(source)
         .where(
@@ -406,11 +419,23 @@ def offline_sla_rows(
         period_start = row["period_start"]
         if period_start is None:
             continue
+        sla_response_total = int(row["sla_response_total"] or 0)
+        sla_response_met = int(row["sla_response_met"] or 0)
+        sla_resolution_total = int(row["sla_resolution_total"] or 0)
+        sla_resolution_met = int(row["sla_resolution_met"] or 0)
         results[(dimension_key(row), month_key(period_start))] = {
-            "response_sla_total_count": int(row["response_total"] or 0),
-            "response_sla_met_count": int(row["response_met"] or 0),
-            "resolution_sla_total_count": int(row["resolution_total"] or 0),
-            "resolution_sla_met_count": int(row["resolution_met"] or 0),
+            "response_sla_total_count": sla_response_total,
+            "response_sla_met_count": sla_response_met,
+            "resolution_sla_total_count": sla_resolution_total,
+            "resolution_sla_met_count": sla_resolution_met,
+            "sla_response_sla_total_count": sla_response_total,
+            "sla_response_sla_met_count": sla_response_met,
+            "sla_resolution_sla_total_count": sla_resolution_total,
+            "sla_resolution_sla_met_count": sla_resolution_met,
+            "ola_response_sla_total_count": int(row["ola_response_total"] or 0),
+            "ola_response_sla_met_count": int(row["ola_response_met"] or 0),
+            "ola_resolution_sla_total_count": int(row["ola_resolution_total"] or 0),
+            "ola_resolution_sla_met_count": int(row["ola_resolution_met"] or 0),
         }
     return results
 
@@ -492,6 +517,32 @@ def build_monthly_volumetrics_rows(
                     "response_sla_total_count": sla_values.get("response_sla_total_count", 0),
                     "resolution_sla_met_count": sla_values.get("resolution_sla_met_count", 0),
                     "resolution_sla_total_count": sla_values.get("resolution_sla_total_count", 0),
+                    "sla_response_sla_met_count": sla_values.get("sla_response_sla_met_count", 0),
+                    "sla_response_sla_total_count": sla_values.get(
+                        "sla_response_sla_total_count",
+                        0,
+                    ),
+                    "sla_resolution_sla_met_count": sla_values.get(
+                        "sla_resolution_sla_met_count",
+                        0,
+                    ),
+                    "sla_resolution_sla_total_count": sla_values.get(
+                        "sla_resolution_sla_total_count",
+                        0,
+                    ),
+                    "ola_response_sla_met_count": sla_values.get("ola_response_sla_met_count", 0),
+                    "ola_response_sla_total_count": sla_values.get(
+                        "ola_response_sla_total_count",
+                        0,
+                    ),
+                    "ola_resolution_sla_met_count": sla_values.get(
+                        "ola_resolution_sla_met_count",
+                        0,
+                    ),
+                    "ola_resolution_sla_total_count": sla_values.get(
+                        "ola_resolution_sla_total_count",
+                        0,
+                    ),
                 },
             )
     return rows
@@ -831,17 +882,29 @@ def build_sla_trends_payload(
             period_expression.label("period_start"),
             func.count(source.c.id).label("total_closed_ticket_count"),
             func.count(source.c.id)
-            .filter(source.c.response_sla_breached.is_not(None))
+            .filter(source.c.sla_response_sla_breached.is_not(None))
             .label("response_sla_captured_count"),
             func.count(source.c.id)
-            .filter(source.c.response_sla_breached.is_(False))
+            .filter(source.c.sla_response_sla_breached.is_(False))
             .label("response_sla_adhered_count"),
             func.count(source.c.id)
-            .filter(source.c.resolution_sla_breached.is_not(None))
+            .filter(source.c.sla_resolution_sla_breached.is_not(None))
             .label("resolution_sla_captured_count"),
             func.count(source.c.id)
-            .filter(source.c.resolution_sla_breached.is_(False))
+            .filter(source.c.sla_resolution_sla_breached.is_(False))
             .label("resolution_sla_adhered_count"),
+            func.count(source.c.id)
+            .filter(source.c.ola_response_sla_breached.is_not(None))
+            .label("response_ola_captured_count"),
+            func.count(source.c.id)
+            .filter(source.c.ola_response_sla_breached.is_(False))
+            .label("response_ola_adhered_count"),
+            func.count(source.c.id)
+            .filter(source.c.ola_resolution_sla_breached.is_not(None))
+            .label("resolution_ola_captured_count"),
+            func.count(source.c.id)
+            .filter(source.c.ola_resolution_sla_breached.is_(False))
+            .label("resolution_ola_adhered_count"),
         )
         .select_from(source)
         .where(
@@ -867,6 +930,10 @@ def build_sla_trends_payload(
                 "response_sla_adhered_count": int(row["response_sla_adhered_count"] or 0),
                 "resolution_sla_captured_count": int(row["resolution_sla_captured_count"] or 0),
                 "resolution_sla_adhered_count": int(row["resolution_sla_adhered_count"] or 0),
+                "response_ola_captured_count": int(row["response_ola_captured_count"] or 0),
+                "response_ola_adhered_count": int(row["response_ola_adhered_count"] or 0),
+                "resolution_ola_captured_count": int(row["resolution_ola_captured_count"] or 0),
+                "resolution_ola_adhered_count": int(row["resolution_ola_adhered_count"] or 0),
             },
         )
     return {
@@ -879,6 +946,7 @@ def build_sla_trends_payload(
                 "resolution_sla_adhered_count / resolution_sla_captured_count * 100"
             ),
             "captured_definition": "sla_breached IS NOT NULL",
+            "supported_modes": ["sla", "ola"],
         },
     }
 
@@ -896,6 +964,7 @@ def build_detailed_volume_payload(
     application_expression = volumetrics_display_expression(source.c.business_service_ci_name)
     architecture_expression = volumetrics_display_expression(source.c.architecture_type)
     install_expression = volumetrics_display_expression(source.c.install_type)
+    hosting_env_expression = volumetrics_display_expression(source.c.hosting_env)
     cancelled_condition = volumetrics_cancelled_expression(source)
     incident_batch_condition = (
         (source.c.ticket_type == "INCIDENT") & source.c.is_batch_related.is_(True)
@@ -906,6 +975,7 @@ def build_detailed_volume_payload(
             application_expression.label("application_name"),
             architecture_expression.label("architecture_type"),
             install_expression.label("install_type"),
+            hosting_env_expression.label("hosting_env"),
             period_expression.label("period_start"),
             func.count(source.c.id).label("created_count"),
             func.count(source.c.id)
@@ -925,6 +995,7 @@ def build_detailed_volume_payload(
             application_expression,
             architecture_expression,
             install_expression,
+            hosting_env_expression,
             period_expression,
         )
     )
@@ -939,6 +1010,7 @@ def build_detailed_volume_payload(
                 "application_name": str(row["application_name"]),
                 "architecture_type": str(row["architecture_type"]),
                 "install_type": str(row["install_type"]),
+                "hosting_env": str(row["hosting_env"]),
                 "period_key": month_key(period_start),
                 "period_label": f"{period_start:%b-%y}",
                 "created_count": int(row["created_count"] or 0),
@@ -974,7 +1046,7 @@ def build_detailed_split_rows(db: Session, project_id: UUID) -> list[dict[str, A
     dimensions = volumetrics_dimension_expressions(source)
     rows: list[dict[str, Any]] = []
 
-    for split_type in ("architecture_type", "install_type"):
+    for split_type in ("architecture_type", "install_type", "hosting_env"):
         split_expression = volumetrics_display_expression(getattr(source.c, split_type))
         statement = (
             select(
@@ -1822,6 +1894,18 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     th { position: sticky; top: 0; background: #f8fafc; z-index: 1; }
     .pattern-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+    .segmented-control { display: inline-flex; flex-wrap: wrap; gap: 6px; padding: 4px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; }
+    .segmented-control button {
+      min-height: 32px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+      font-weight: 900;
+      color: #475569;
+    }
+    .segmented-control button.active { color: #fff; background: var(--teal); }
     .pattern-buttons button {
       min-height: 34px;
       padding: 0 14px;
@@ -2037,6 +2121,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       volSubTab: "overall_volume_trends",
       hourlyDayType: "weekdays",
       priorityView: "graph",
+      slaMode: "sla",
       topVolumeN: "10",
       topBatchN: "10",
       topActiveUsersN: "10",
@@ -2768,6 +2853,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
     }
     function aggregateByPeriod(rows) {
+      const agreementMode = state.slaMode === "ola" ? "ola" : "sla";
       return DASHBOARD.volumetrics.periods.map((period) => {
         const matching = rows.filter((row) => row.period_key === period.period_key);
         return {
@@ -2776,10 +2862,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           resolved: sum(matching, "resolved_closed_count"),
           canceled: sum(matching, "canceled_closed_incomplete_count"),
           backlog: sum(matching, "backlog_open"),
-          responseMet: sum(matching, "response_sla_met_count"),
-          responseTotal: sum(matching, "response_sla_total_count"),
-          resolutionMet: sum(matching, "resolution_sla_met_count"),
-          resolutionTotal: sum(matching, "resolution_sla_total_count")
+          responseMet: sum(matching, `${agreementMode}_response_sla_met_count`),
+          responseTotal: sum(matching, `${agreementMode}_response_sla_total_count`),
+          resolutionMet: sum(matching, `${agreementMode}_resolution_sla_met_count`),
+          resolutionTotal: sum(matching, `${agreementMode}_resolution_sla_total_count`)
         };
       });
     }
@@ -2863,6 +2949,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
             <section class="chart-card panel" data-commentary-key="lifecycle_stage"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
             <section class="chart-card panel" data-commentary-key="architecture_type"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
             <section class="chart-card panel" data-commentary-key="install_type"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel" data-commentary-key="hosting_env"><h3>Hosting Env</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "hosting_env").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.orange }], { width: 820, applicationChart: true })}</div></section>
           </div>
           <section class="chart-card panel full" data-commentary-key="top_active_users"><div class="chart-title-row"><div><h3>Top Parent Business Applications by Active Users</h3><p class="muted">Application Inventory only. One row per Parent Business Application, using the highest Active Users value when duplicates exist.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Parent Business Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
           <section class="panel table-card" data-commentary-key="application_list" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
@@ -2877,7 +2964,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       installChartCopyButtons(document.getElementById("applications"));
     }
     function applicationTable(rows) {
-      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
+      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
       return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(column === "active_users" && row[column] !== null && row[column] !== undefined ? fmt(row[column]) : (row[column] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function filteredVolumetricsRows() {
@@ -2954,6 +3041,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
       document.querySelectorAll("[data-priority-view]").forEach((button) => {
         button.addEventListener("click", () => { state.priorityView = button.dataset.priorityView; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
+      });
+      document.querySelectorAll("[data-sla-mode]").forEach((button) => {
+        button.addEventListener("click", () => { state.slaMode = button.dataset.slaMode; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       document.querySelectorAll("[data-top-volume]").forEach((button) => {
         button.addEventListener("click", () => { state.topVolumeN = button.dataset.topVolume; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
@@ -3167,6 +3257,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${distributionPieSection("Average Monthly SC Tasks by Install Type", "install_type", "sc_task")}
         </div>
         ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "install_type_distribution_row" })}
+        <div class="chart-grid-three">
+          ${distributionPieSection("Average Monthly Tickets by Hosting Env", "hosting_env", "all")}
+          ${distributionPieSection("Average Monthly Incidents by Hosting Env", "hosting_env", "incident")}
+          ${distributionPieSection("Average Monthly SC Tasks by Hosting Env", "hosting_env", "sc_task")}
+        </div>
+        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "hosting_env_distribution_row" })}
       `;
     }
     function truncateLabel(value, maxLength = 28) {
@@ -3442,6 +3538,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const percentage = point.percentages?.[priority] ?? (point.total > 0 ? (count / point.total) * 100 : 0);
       return `${fmt(count)} (${Number(percentage || 0).toFixed(1)}%)`;
     }
+    function priorityChartLabelParts(count, percentage) {
+      return {
+        count: fmt(count),
+        percentage: `${Math.round(Number(percentage || 0))}%`
+      };
+    }
     function priorityDistributionContent() {
       const priorities = DASHBOARD.volumetrics.overall_volume_trends?.priority_distribution?.priorities || [];
       const rows = filteredPriorityRows();
@@ -3493,10 +3595,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           if (value > 0) {
             bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${item.color}"><title>${esc(item.name)}: ${fmt(value)} (${segmentPct.toFixed(1)}%)</title></rect>`);
             if (priorityLabelRequired(item.name)) {
-              const label = `${fmt(value)} (${segmentPct.toFixed(1)}%)`;
-              const inside = barHeight >= 24 && barWidth >= 42;
-              const labelY = inside ? y + barHeight / 2 + 4 : Math.max(margin.top + 12, y - 6);
-              bars.push(`<text x="${x + barWidth / 2}" y="${labelY}" text-anchor="middle" font-size="10" font-weight="900" fill="${inside ? "#ffffff" : "#334155"}" stroke="${inside ? "none" : "#ffffff"}" stroke-width="${inside ? 0 : 3}" paint-order="stroke">${esc(label)}</text>`);
+              const label = priorityChartLabelParts(value, segmentPct);
+              const inside = barHeight >= 28 && barWidth >= 20;
+              const labelY = inside ? y + barHeight / 2 - 5 : Math.max(margin.top + 14, y - 16);
+              bars.push(`<text x="${x + barWidth / 2}" y="${labelY}" text-anchor="middle" font-size="9" font-weight="900" fill="${inside ? "#ffffff" : "#334155"}" stroke="${inside ? "none" : "#ffffff"}" stroke-width="${inside ? 0 : 3}" paint-order="stroke"><tspan x="${x + barWidth / 2}" dy="0">${esc(label.count)}</tspan><tspan x="${x + barWidth / 2}" dy="10">${esc(label.percentage)}</tspan></text>`);
             }
           }
           stackTop = y;
@@ -3518,17 +3620,22 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const rows = filteredSlaRows();
       const response = slaTrendPoints(rows, "response");
       const resolution = slaTrendPoints(rows, "resolution");
+      const modeLabel = state.slaMode === "ola" ? "OLA" : "SLA";
       return `
-        <section class="chart-card panel full" data-commentary-key="response_sla_adherence"><h3>Response SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame chart-stage">${slaLineChart(response, COLORS.teal, "Response SLA adherence %")}</div>${slaTrendTable(response, "Response SLA")}</section>
-        <section class="chart-card panel full" data-commentary-key="resolution_sla_adherence"><h3>Resolution SLA adherence trend</h3><p class="muted">Adherence = captured SLA adhered count / captured SLA count.</p><div class="chart-frame chart-stage">${slaLineChart(resolution, COLORS.blue, "Resolution SLA adherence %")}</div>${slaTrendTable(resolution, "Resolution SLA")}</section>
+        <section class="panel" style="padding:12px"><div class="segmented-control" role="group" aria-label="SLA mode">
+          ${["sla", "ola"].map((mode) => `<button type="button" data-sla-mode="${mode}" class="${state.slaMode === mode ? "active" : ""}">${mode.toUpperCase()}</button>`).join("")}
+        </div></section>
+        <section class="chart-card panel full" data-commentary-key="response_sla_adherence"><h3>Response ${modeLabel} adherence trend</h3><p class="muted">Adherence = captured ${modeLabel} adhered count / captured ${modeLabel} count.</p><div class="chart-frame chart-stage">${slaLineChart(response, COLORS.teal, `Response ${modeLabel} adherence %`)}</div>${slaTrendTable(response, `Response ${modeLabel}`)}</section>
+        <section class="chart-card panel full" data-commentary-key="resolution_sla_adherence"><h3>Resolution ${modeLabel} adherence trend</h3><p class="muted">Adherence = captured ${modeLabel} adhered count / captured ${modeLabel} count.</p><div class="chart-frame chart-stage">${slaLineChart(resolution, COLORS.blue, `Resolution ${modeLabel} adherence %`)}</div>${slaTrendTable(resolution, `Resolution ${modeLabel}`)}</section>
       `;
     }
     function slaTrendPoints(rows, kind) {
       return DASHBOARD.volumetrics.periods.map((period) => {
         const matching = rows.filter((row) => row.period_key === period.period_key);
         const totalClosed = sum(matching, "total_closed_ticket_count");
-        const captured = sum(matching, `${kind}_sla_captured_count`);
-        const adhered = sum(matching, `${kind}_sla_adhered_count`);
+        const mode = state.slaMode === "ola" ? "ola" : "sla";
+        const captured = sum(matching, `${kind}_${mode}_captured_count`);
+        const adhered = sum(matching, `${kind}_${mode}_adhered_count`);
         return {
           label: period.period_label,
           totalClosed,

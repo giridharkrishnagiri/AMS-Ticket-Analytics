@@ -18,7 +18,10 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
-from app.services.application_inventory import update_application_inventory_active_users_from_file
+from app.services.application_inventory import (
+    update_application_inventory_active_users_from_file,
+    update_application_inventory_hosting_env_from_file,
+)
 
 
 def create_project():
@@ -82,6 +85,7 @@ def add_inventory_item(
     functional_track: str = "Claims",
     ams_owner: str = "AMS Owner",
     vendor: str = "Vendor A",
+    hosting_env: str | None = None,
     row_number: int = 10,
     active: bool | None = True,
     active_users: int | None = None,
@@ -98,6 +102,7 @@ def add_inventory_item(
         functional_track=functional_track,
         ams_owner=ams_owner,
         supported_by_vendor=vendor,
+        hosting_env=hosting_env,
         active=active,
         active_users=active_users,
         cmdb_payload={"Application family": "Claims"},
@@ -352,6 +357,102 @@ def test_focused_active_users_update_only_changes_active_users(tmp_path) -> None
         item_count = db.scalar(
             select(func.count(ApplicationInventoryItem.id))
             .where(ApplicationInventoryItem.project_id == project_id)
+        )
+        assert item_count == 2
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_focused_hosting_env_update_only_changes_hosting_env(tmp_path) -> None:
+    db, client_id, project_id, batch_id, file_id = create_project()
+    try:
+        item = add_inventory_item(
+            db,
+            project_id,
+            "Claims Service",
+            parent_application="Claims Parent",
+            assignment_group="AMS Claims",
+            application_owner="Original Owner",
+            hosting_env=None,
+            row_number=88,
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Untouched Service",
+            parent_application="Other Parent",
+            assignment_group="Other Group",
+            hosting_env="Production",
+            row_number=89,
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-HOSTING-1",
+            business_service="Claims Service",
+            application_inventory_id=item.id,
+        )
+        db.flush()
+        ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "INC-HOSTING-1"))
+        assert ticket is not None
+        ticket.hosting_env = None
+        db.commit()
+
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Group-App-BizService"
+        worksheet.append(["helper"])
+        worksheet.append(
+            [
+                "Parent Business Application",
+                "Support group name",
+                "Business Service CI Name",
+                "Hosting Env",
+                "Application Owner",
+            ]
+        )
+        worksheet.append(
+            [
+                "Claims Parent",
+                "Changed Claims Group",
+                "Claims Service",
+                "Non-Production",
+                "Should Not Be Used",
+            ]
+        )
+        worksheet.append(
+            ["Missing Parent", "Missing Group", "Missing Service", "Production", "Ignored"]
+        )
+
+        workbook_path = tmp_path / "inventory-hosting-env.xlsx"
+        workbook.save(workbook_path)
+
+        result = update_application_inventory_hosting_env_from_file(
+            db,
+            project_id,
+            workbook_path,
+        )
+
+        assert result.total_rows == 2
+        assert result.matched_count == 1
+        assert result.updated_count == 1
+        assert result.unmatched_count == 1
+        assert result.skipped_count == 0
+
+        db.refresh(item)
+        db.refresh(ticket)
+        assert item.hosting_env == "Non-Production"
+        assert item.application_owner == "Original Owner"
+        assert item.cmdb_payload == {"Application family": "Claims"}
+        assert item.source_row_number == 88
+        assert ticket.hosting_env == "Non-Production"
+
+        item_count = db.scalar(
+            select(func.count(ApplicationInventoryItem.id)).where(
+                ApplicationInventoryItem.project_id == project_id
+            )
         )
         assert item_count == 2
     finally:
