@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.services.offline_dashboard_export import build_offline_dashboard_payload
 
+FunctionalFilter = str | frozenset[str]
+
 TEAL = RGBColor(15, 118, 110)
 BLUE = RGBColor(37, 99, 235)
 ORANGE = RGBColor(234, 88, 12)
@@ -172,6 +174,40 @@ def commentary_lookup(payload: dict[str, Any]) -> dict[tuple[str, ...], str]:
     return lookup
 
 
+def normalize_functional_filter(value: str | list[str] | None) -> FunctionalFilter:
+    if isinstance(value, list):
+        values = sorted({safe_text(item).strip() for item in value if safe_text(item).strip()})
+        values = [item for item in values if item.casefold() != "all"]
+        if not values:
+            return "all"
+        if len(values) == 1:
+            return values[0]
+        return frozenset(values)
+    cleaned = safe_text(value).strip()
+    return cleaned if cleaned and cleaned.casefold() != "all" else "all"
+
+
+def functional_filter_values(functional: FunctionalFilter) -> frozenset[str] | None:
+    if functional == "all":
+        return None
+    if isinstance(functional, frozenset):
+        return functional
+    return frozenset({functional})
+
+
+def functional_filter_label(functional: FunctionalFilter) -> str:
+    values = functional_filter_values(functional)
+    if values is None:
+        return "all"
+    return "; ".join(sorted(values))
+
+
+def commentary_functional_value(functional: FunctionalFilter) -> str:
+    if isinstance(functional, frozenset):
+        return "all"
+    return functional
+
+
 def get_commentary(
     lookup: dict[tuple[str, ...], str],
     *,
@@ -182,8 +218,9 @@ def get_commentary(
     sub_tab_name: str = "",
     scope: str = "all",
     ticket_type: str = "all",
-    functional: str = "all",
+    functional: FunctionalFilter = "all",
 ) -> str:
+    functional_key = commentary_functional_value(functional)
     candidates = [
         (
             dashboard_area,
@@ -193,9 +230,18 @@ def get_commentary(
             chart_key,
             scope,
             ticket_type,
-            functional,
+            functional_key,
         ),
-        (dashboard_area, tab_name, sub_tab_name, section_key, chart_key, scope, "all", functional),
+        (
+            dashboard_area,
+            tab_name,
+            sub_tab_name,
+            section_key,
+            chart_key,
+            scope,
+            "all",
+            functional_key,
+        ),
         (
             dashboard_area,
             tab_name,
@@ -204,9 +250,18 @@ def get_commentary(
             chart_key,
             "all",
             ticket_type,
-            functional,
+            functional_key,
         ),
-        (dashboard_area, tab_name, sub_tab_name, section_key, chart_key, "all", "all", functional),
+        (
+            dashboard_area,
+            tab_name,
+            sub_tab_name,
+            section_key,
+            chart_key,
+            "all",
+            "all",
+            functional_key,
+        ),
         (dashboard_area, tab_name, sub_tab_name, section_key, chart_key, "all", "all", "all"),
     ]
     for key in candidates:
@@ -415,18 +470,29 @@ def normalize_scope(value: str) -> str:
     return "all"
 
 
-def row_matches(row: dict[str, Any], *, scope: str, ticket_type: str, functional: str) -> bool:
+def row_matches(
+    row: dict[str, Any],
+    *,
+    scope: str,
+    ticket_type: str,
+    functional: FunctionalFilter,
+) -> bool:
+    functional_values = functional_filter_values(functional)
     return (
         (scope == "all" or row.get("scope") == scope)
         and (ticket_type == "all" or row.get("ticket_type") == ticket_type)
-        and (functional == "all" or row.get("functional_track_ams_owner") == functional)
+        and (
+            functional_values is None
+            or safe_text(row.get("functional_track_ams_owner")) in functional_values
+        )
     )
 
 
-def app_matches(row: dict[str, Any], *, functional: str) -> bool:
-    if functional == "all":
+def app_matches(row: dict[str, Any], *, functional: FunctionalFilter) -> bool:
+    functional_values = functional_filter_values(functional)
+    if functional_values is None:
         return True
-    return row.get("functional_track_ams_owner") == functional
+    return safe_text(row.get("functional_track_ams_owner")) in functional_values
 
 
 def aggregate_periods(
@@ -660,7 +726,7 @@ def add_title_slide(
     *,
     scope: str,
     ticket_type: str,
-    functional: str,
+    functional: FunctionalFilter,
 ) -> None:
     slide = add_blank_slide(presentation)
     add_panel(slide, 0, 0, 13.33, 7.5, fill=RGBColor(236, 253, 245))
@@ -698,7 +764,9 @@ def add_title_slide(
     )
     add_textbox(
         slide,
-        f"Scope: {scope} | Ticket Type: {ticket_type} | Functional Track / AMS Owner: {functional}",
+        "Scope: "
+        f"{scope} | Ticket Type: {ticket_type} | Functional Track / AMS Owner: "
+        f"{functional_filter_label(functional)}",
         1.0,
         3.45,
         11.3,
@@ -1372,14 +1440,14 @@ def build_powerpoint_export(
     *,
     scope_filter: str = "in_scope",
     ticket_type_filter: str = "all",
-    functional_track_ams_owner: str = "all",
+    functional_track_ams_owner: str | list[str] = "all",
     include_commentary: bool = True,
 ) -> tuple[bytes, str]:
     payload = build_offline_dashboard_payload(db, project_id)
     metadata = payload["metadata"]
     scope = normalize_scope(scope_filter)
     ticket_type = normalize_ticket_type(ticket_type_filter)
-    functional = functional_track_ams_owner.strip() or "all"
+    functional = normalize_functional_filter(functional_track_ams_owner)
     lookup = commentary_lookup(payload) if include_commentary else {}
 
     presentation = Presentation()

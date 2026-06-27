@@ -48,6 +48,7 @@ type LoadState<T> = {
 type ApplicationsDashboardProps = {
   projectId: string;
   isActive: boolean;
+  onExportContextChange?: (context: { functionalTrackAmsOwners: string[] }) => void;
 };
 
 type TopNSelection = 10 | 20;
@@ -519,7 +520,11 @@ function useChartCopy(title: string) {
   return { chartRef, copyMessage, handleCopy, plotWidth };
 }
 
-function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardProps) {
+function ApplicationsDashboard({
+  projectId,
+  isActive,
+  onExportContextChange,
+}: ApplicationsDashboardProps) {
   const [filters, setFilters] = useState<DashboardApplicationsFilters>(emptyFilters);
   const [sort, setSort] = useState<DashboardApplicationsSort>(defaultSort);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardApplicationsFilterValues>>(
@@ -594,6 +599,12 @@ function ApplicationsDashboard({ projectId, isActive }: ApplicationsDashboardPro
     [filterValuesRequest]
   );
   const hasActiveProjectContext = Boolean(projectId.trim()) && projectId === loadedProjectId;
+
+  useEffect(() => {
+    onExportContextChange?.({
+      functionalTrackAmsOwners: filters.functional_track_ams_owner,
+    });
+  }, [filters.functional_track_ams_owner, onExportContextChange]);
 
   const loadFilterValues = useCallback(async () => {
     if (!filterValuesRequest) {

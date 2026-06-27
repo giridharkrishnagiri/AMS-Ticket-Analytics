@@ -794,7 +794,7 @@ export async function downloadOfflineDashboard(
 }
 
 export async function exportDashboardPowerPoint(input: {
-  functionalTrackAmsOwner?: string;
+  functionalTrackAmsOwner?: string | string[];
   includeCommentary?: boolean;
   projectId: string;
   scope?: string;

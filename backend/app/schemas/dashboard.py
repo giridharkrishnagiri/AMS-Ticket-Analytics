@@ -450,7 +450,7 @@ class PowerPointDashboardExportRequest(BaseModel):
     project_id: UUID
     scope: str = "in_scope"
     ticket_type: str = "all"
-    functional_track_ams_owner: str = "all"
+    functional_track_ams_owner: str | list[str] = "all"
     include_commentary: bool = True
 
 

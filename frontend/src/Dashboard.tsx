@@ -57,6 +57,15 @@ import { formatDisplayDateRange, formatDisplayDateTime } from "./utils/dateForma
 type TicketTypeSelection = "ALL" | TicketTypeFilter;
 type DashboardTab = "overview" | "applications" | "volumetrics";
 type LoadStatus = "idle" | "loading" | "success" | "error";
+type PowerPointScope = "all" | "in_scope" | "out_of_scope";
+type PowerPointTicketType = "all" | "incident" | "sc_task";
+
+type PowerPointExportContext = {
+  functionalTrackAmsOwners: string[];
+  scope: PowerPointScope;
+  sourceLabel: string;
+  ticketType: PowerPointTicketType;
+};
 
 type LoadState<T> = {
   status: LoadStatus;
@@ -147,6 +156,13 @@ const chartWidth = 640;
 const chartHeight = 320;
 const chartMargin = { top: 16, right: 28, bottom: 18, left: 8 };
 
+const defaultPowerPointExportContext: PowerPointExportContext = {
+  functionalTrackAmsOwners: [],
+  scope: "in_scope",
+  sourceLabel: "Overview",
+  ticketType: "all",
+};
+
 function createLoadState<T>(data: T, status: LoadStatus = "idle"): LoadState<T> {
   return { status, data, error: null };
 }
@@ -167,6 +183,41 @@ function formatPercent(value: number | null | undefined): string {
     return "Not available";
   }
   return `${value.toFixed(1)}%`;
+}
+
+function uniqueNonBlank(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort();
+}
+
+function functionalExportLabel(values: string[]): string {
+  const selectedValues = uniqueNonBlank(values);
+  if (selectedValues.length === 0) {
+    return "All";
+  }
+  if (selectedValues.length <= 3) {
+    return selectedValues.join("; ");
+  }
+  return `${selectedValues.slice(0, 3).join("; ")} and ${selectedValues.length - 3} more`;
+}
+
+function scopeExportLabel(scope: PowerPointScope): string {
+  if (scope === "in_scope") {
+    return "In-scope";
+  }
+  if (scope === "out_of_scope") {
+    return "Out-of-scope";
+  }
+  return "All";
+}
+
+function ticketTypeExportLabel(ticketType: PowerPointTicketType): string {
+  if (ticketType === "incident") {
+    return "Incidents";
+  }
+  if (ticketType === "sc_task") {
+    return "SC Tasks";
+  }
+  return "All";
 }
 
 function sumValues<T>(rows: T[], value: (row: T) => number | null | undefined): number {
@@ -435,6 +486,16 @@ function Dashboard() {
   const [downloadStatus, setDownloadStatus] = useState<LoadStatus>("idle");
   const [powerPointStatus, setPowerPointStatus] = useState<LoadStatus>("idle");
   const [overviewShapeRefreshAttempted, setOverviewShapeRefreshAttempted] = useState(false);
+  const [applicationsPowerPointContext, setApplicationsPowerPointContext] =
+    useState<PowerPointExportContext>({
+      ...defaultPowerPointExportContext,
+      sourceLabel: "Applications",
+    });
+  const [volumetricsPowerPointContext, setVolumetricsPowerPointContext] =
+    useState<PowerPointExportContext>({
+      ...defaultPowerPointExportContext,
+      sourceLabel: "Volumetrics & SLA",
+    });
 
   function clearDashboardData() {
     setOverview(createLoadState<DashboardOverview | null>(null));
@@ -452,6 +513,14 @@ function Dashboard() {
     setPageMessage(null);
     setPowerPointStatus("idle");
     setOverviewShapeRefreshAttempted(false);
+    setApplicationsPowerPointContext({
+      ...defaultPowerPointExportContext,
+      sourceLabel: "Applications",
+    });
+    setVolumetricsPowerPointContext({
+      ...defaultPowerPointExportContext,
+      sourceLabel: "Volumetrics & SLA",
+    });
   }
 
   const handleProjectIdChange = useCallback(
@@ -498,21 +567,40 @@ function Dashboard() {
       return;
     }
 
-    const exportTicketType =
-      ticketType === "INCIDENT"
-        ? "incident"
-        : ticketType === "SERVICE_CATALOG_TASK"
-          ? "sc_task"
-          : "all";
+    const exportContext =
+      activeDashboardTab === "volumetrics"
+        ? volumetricsPowerPointContext
+        : activeDashboardTab === "applications"
+          ? applicationsPowerPointContext
+          : defaultPowerPointExportContext;
+    const functionalValues = uniqueNonBlank(exportContext.functionalTrackAmsOwners);
+    const functionalLabel = functionalExportLabel(functionalValues);
+    const projectLabel = selectedProject?.label ?? selectedProject?.name ?? "selected project";
+    const confirmationMessage = [
+      `Export PowerPoint for ${projectLabel}?`,
+      "",
+      `Export context: ${exportContext.sourceLabel}`,
+      `Scope: ${scopeExportLabel(exportContext.scope)}`,
+      `Ticket Type: ${ticketTypeExportLabel(exportContext.ticketType)}`,
+      `Functional Track / AMS Owner: ${functionalLabel}`,
+      "",
+      "The PowerPoint deck is static and will use this filter context.",
+      "Download Dashboard remains a full offline HTML export with built-in filters.",
+    ].join("\n");
+
+    if (!window.confirm(confirmationMessage)) {
+      setPageMessage("PowerPoint export canceled.");
+      return;
+    }
 
     setPowerPointStatus("loading");
     setPageMessage(null);
     try {
       const { blob, filename } = await exportDashboardPowerPoint({
         projectId: cleanedProjectId,
-        scope: "in_scope",
-        ticketType: exportTicketType,
-        functionalTrackAmsOwner: "all",
+        scope: exportContext.scope,
+        ticketType: exportContext.ticketType,
+        functionalTrackAmsOwner: functionalValues.length > 0 ? functionalValues : "all",
         includeCommentary: true,
       });
       const url = URL.createObjectURL(blob);
@@ -523,13 +611,53 @@ function Dashboard() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setPageMessage("PowerPoint export is ready.");
+      setPageMessage(
+        `PowerPoint export is ready. Scope: ${scopeExportLabel(
+          exportContext.scope
+        )}; Ticket Type: ${ticketTypeExportLabel(
+          exportContext.ticketType
+        )}; Functional Track / AMS Owner: ${functionalLabel}.`
+      );
       setPowerPointStatus("success");
     } catch (error) {
       setPageMessage(errorMessage(error, "Unable to export PowerPoint"));
       setPowerPointStatus("error");
     }
-  }, [projectId, ticketType]);
+  }, [
+    activeDashboardTab,
+    applicationsPowerPointContext,
+    projectId,
+    selectedProject,
+    volumetricsPowerPointContext,
+  ]);
+
+  const handleApplicationsPowerPointContextChange = useCallback(
+    (context: { functionalTrackAmsOwners: string[] }) => {
+      setApplicationsPowerPointContext({
+        functionalTrackAmsOwners: context.functionalTrackAmsOwners,
+        scope: "in_scope",
+        sourceLabel: "Applications",
+        ticketType: "all",
+      });
+    },
+    []
+  );
+
+  const handleVolumetricsPowerPointContextChange = useCallback(
+    (context: {
+      functionalTrackAmsOwners: string[];
+      scope: PowerPointScope;
+      ticketType: PowerPointTicketType;
+    }) => {
+      setVolumetricsPowerPointContext({
+        functionalTrackAmsOwners: context.functionalTrackAmsOwners,
+        scope: context.scope,
+        sourceLabel: "Volumetrics & SLA",
+        ticketType: context.ticketType,
+      });
+    },
+    []
+  );
 
   const chartQuery = useMemo<DashboardQuery | null>(() => {
     const cleanedProjectId = projectId.trim();
@@ -964,6 +1092,7 @@ function Dashboard() {
       <div hidden={activeDashboardTab !== "applications"}>
         <ApplicationsDashboard
           isActive={activeDashboardTab === "applications"}
+          onExportContextChange={handleApplicationsPowerPointContextChange}
           projectId={projectId}
         />
       </div>
@@ -971,6 +1100,7 @@ function Dashboard() {
       <div hidden={activeDashboardTab !== "volumetrics"}>
         <VolumetricsDashboard
           isActive={activeDashboardTab === "volumetrics"}
+          onExportContextChange={handleVolumetricsPowerPointContextChange}
           projectId={projectId}
         />
         {false ? (

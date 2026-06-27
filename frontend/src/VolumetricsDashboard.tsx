@@ -85,6 +85,11 @@ type LoadState<T> = {
 type VolumetricsDashboardProps = {
   projectId: string;
   isActive: boolean;
+  onExportContextChange?: (context: {
+    functionalTrackAmsOwners: string[];
+    scope: VolumetricsScope;
+    ticketType: VolumetricsTicketType;
+  }) => void;
 };
 
 type FilterKey = keyof DashboardVolumetricsFilters;
@@ -773,7 +778,11 @@ function useChartFrame(title: string) {
   return { chartRef, copyMessage, handleCopy, plotWidth };
 }
 
-function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps) {
+function VolumetricsDashboard({
+  projectId,
+  isActive,
+  onExportContextChange,
+}: VolumetricsDashboardProps) {
   const [scope, setScope] = useState<VolumetricsScope>("in_scope");
   const [ticketType, setTicketType] = useState<VolumetricsTicketType>("all");
   const [timeGrain, setTimeGrain] = useState<VolumetricsTimeGrain>("monthly");
@@ -926,6 +935,14 @@ function VolumetricsDashboard({ projectId, isActive }: VolumetricsDashboardProps
   );
   const hasActiveProjectContext = Boolean(projectId.trim()) && projectId === loadedProjectId;
   const isDateRangeReady = dataRange.status === "error" || rangeInitializedProjectId === projectId;
+
+  useEffect(() => {
+    onExportContextChange?.({
+      functionalTrackAmsOwners: filters.functional_track_ams_owner,
+      scope,
+      ticketType,
+    });
+  }, [filters.functional_track_ams_owner, onExportContextChange, scope, ticketType]);
 
   const loadDataRange = useCallback(async () => {
     const cleanedProjectId = projectId.trim();
