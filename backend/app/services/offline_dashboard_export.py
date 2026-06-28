@@ -1886,11 +1886,17 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       min-width: 1800px;
       border-collapse: collapse;
     }
+    .lifecycle-detail-table {
+      min-width: 2500px;
+    }
     .applications-pivot-table {
       width: 100%;
       min-width: 760px;
       border-collapse: collapse;
       font-size: 0.82rem;
+    }
+    .lifecycle-matrix-table {
+      min-width: 700px;
     }
     .applications-pivot-table .numeric-cell {
       text-align: right;
@@ -1901,15 +1907,38 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       background: #f8fafc;
       font-weight: 900;
     }
+    .applications-pivot-table th:last-child,
+    .applications-pivot-table td:last-child {
+      position: sticky;
+      right: 0;
+      z-index: 1;
+      box-shadow: -1px 0 0 #e2e8f0;
+    }
+    .applications-pivot-table thead th:last-child {
+      z-index: 3;
+    }
     .applications-pivot-table .pivot-total-row th,
     .applications-pivot-table .pivot-total-row td {
       background: #eef6ff;
       font-weight: 900;
     }
     .applications-pivot-table .grand-total-cell {
-      color: #fff;
-      background: #1d4ed8;
+      color: #0f172a;
+      background: #eef6ff;
       font-weight: 900;
+    }
+    .applications-pivot-table .grand-total-label {
+      display: block;
+      color: #475569;
+      font-size: 0.68rem;
+      line-height: 1.1;
+      text-transform: uppercase;
+    }
+    .applications-pivot-table .grand-total-cell strong {
+      display: block;
+      color: #0f172a;
+      font-size: 0.98rem;
+      line-height: 1.2;
     }
     th, td {
       padding: 8px 10px;
@@ -1919,6 +1948,14 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     th { position: sticky; top: 0; background: #f8fafc; z-index: 1; }
     .pattern-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+    .application-subtabs {
+      width: fit-content;
+      max-width: 100%;
+      padding: 4px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #fff;
+    }
     .segmented-control { display: inline-flex; flex-wrap: wrap; gap: 6px; padding: 4px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; }
     .segmented-control button {
       min-height: 32px;
@@ -2136,8 +2173,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     };
     const state = {
       tab: "overview",
+      appSubTab: "overview",
       appFunctional: "all",
       appSap: "all",
+      lifecyclePlan: "Invest",
       volScope: "in_scope",
       volTicketType: "all",
       volFunctional: "all",
@@ -2951,13 +2990,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return ["10", "20"].map((value) => `<button type="button" data-top-active-users="${value}" class="${state.topActiveUsersN === value ? "active" : ""}">Top ${value}</button>`).join("");
     }
     const APPLICATION_CRITICALITY_ORDER = ["Very Critical", "Critical", "High", "Medium", "Low"];
-    const APPLICATION_HOSTING_ENV_ORDER = ["Production", "Non-Prod", "Dev", "Test", "Historical & DR"];
     function normalizeApplicationDimension(value) {
       return String(value ?? "").trim().replace(/\s+/g, " ");
-    }
-    function fixedApplicationLabel(value, labels) {
-      const normalized = normalizeApplicationDimension(value).toLowerCase();
-      return labels.find((label) => label.toLowerCase() === normalized) || "";
     }
     function applicationServiceKey(row) {
       return normalizeApplicationDimension(row.business_service_ci_name).toLowerCase();
@@ -2981,39 +3015,61 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function criticalityHostingPivot(rows) {
       const cellSets = new Map();
-      APPLICATION_CRITICALITY_ORDER.forEach((criticality) => {
-        APPLICATION_HOSTING_ENV_ORDER.forEach((hostingEnv) => {
-          cellSets.set(`${criticality}|${hostingEnv}`, new Set());
-        });
-      });
+      const criticalityLabels = new Map();
+      const hostingLabels = new Map();
       rows.forEach((row) => {
         const serviceKey = applicationServiceKey(row);
         if (!serviceKey) return;
-        const lifecycleStage = normalizeApplicationDimension(row.lifecycle_status).toLowerCase();
         const lifecycleStageStatus = normalizeApplicationDimension(row.lifecycle_stage_status).toLowerCase();
-        if (lifecycleStage !== "in use" && lifecycleStageStatus !== "in use") return;
-        const criticality = fixedApplicationLabel(row.biz_criticality, APPLICATION_CRITICALITY_ORDER);
-        const hostingEnv = fixedApplicationLabel(row.hosting_env, APPLICATION_HOSTING_ENV_ORDER);
+        if (lifecycleStageStatus !== "in use") return;
+        const criticality = normalizeApplicationDimension(row.biz_criticality);
+        const hostingEnv = normalizeApplicationDimension(row.hosting_env);
         if (!criticality || !hostingEnv) return;
-        cellSets.get(`${criticality}|${hostingEnv}`)?.add(serviceKey);
+        const criticalityKey = criticality.toLowerCase();
+        const hostingKey = hostingEnv.toLowerCase();
+        criticalityLabels.set(criticalityKey, criticality);
+        hostingLabels.set(hostingKey, hostingEnv);
+        const cellKey = `${criticalityKey}|${hostingKey}`;
+        if (!cellSets.has(cellKey)) cellSets.set(cellKey, new Set());
+        cellSets.get(cellKey).add(serviceKey);
       });
-      const values = APPLICATION_CRITICALITY_ORDER.map((criticality) => {
+      const rowTotals = new Map();
+      const columnTotalsByKey = new Map();
+      cellSets.forEach((services, cellKey) => {
+        const [criticalityKey, hostingKey] = cellKey.split("|");
+        const count = services.size;
+        rowTotals.set(criticalityKey, (rowTotals.get(criticalityKey) || 0) + count);
+        columnTotalsByKey.set(hostingKey, (columnTotalsByKey.get(hostingKey) || 0) + count);
+      });
+      const criticalityRank = new Map(APPLICATION_CRITICALITY_ORDER.map((label, index) => [label.toLowerCase(), index]));
+      const criticalityKeys = [...criticalityLabels.keys()].sort((left, right) => {
+        const leftRank = criticalityRank.has(left) ? criticalityRank.get(left) : APPLICATION_CRITICALITY_ORDER.length;
+        const rightRank = criticalityRank.has(right) ? criticalityRank.get(right) : APPLICATION_CRITICALITY_ORDER.length;
+        return leftRank - rightRank || (rowTotals.get(right) || 0) - (rowTotals.get(left) || 0) || criticalityLabels.get(left).localeCompare(criticalityLabels.get(right));
+      });
+      const hostingKeys = [...hostingLabels.keys()].sort((left, right) =>
+        (columnTotalsByKey.get(right) || 0) - (columnTotalsByKey.get(left) || 0) || hostingLabels.get(left).localeCompare(hostingLabels.get(right))
+      );
+      const values = criticalityKeys.map((criticalityKey) => {
+        const criticality = criticalityLabels.get(criticalityKey);
         const counts = {};
         let total = 0;
-        APPLICATION_HOSTING_ENV_ORDER.forEach((hostingEnv) => {
-          const count = cellSets.get(`${criticality}|${hostingEnv}`)?.size || 0;
+        hostingKeys.forEach((hostingKey) => {
+          const hostingEnv = hostingLabels.get(hostingKey);
+          const count = cellSets.get(`${criticalityKey}|${hostingKey}`)?.size || 0;
           counts[hostingEnv] = count;
           total += count;
         });
         return { business_criticality: criticality, counts, total };
       });
       const columnTotals = {};
-      APPLICATION_HOSTING_ENV_ORDER.forEach((hostingEnv) => {
-        columnTotals[hostingEnv] = values.reduce((sumValue, row) => sumValue + Number(row.counts[hostingEnv] || 0), 0);
+      hostingKeys.forEach((hostingKey) => {
+        const hostingEnv = hostingLabels.get(hostingKey);
+        columnTotals[hostingEnv] = columnTotalsByKey.get(hostingKey) || 0;
       });
       return {
-        rows: APPLICATION_CRITICALITY_ORDER,
-        columns: APPLICATION_HOSTING_ENV_ORDER,
+        rows: criticalityKeys.map((criticalityKey) => criticalityLabels.get(criticalityKey)),
+        columns: hostingKeys.map((hostingKey) => hostingLabels.get(hostingKey)),
         values,
         column_totals: columnTotals,
         grand_total: values.reduce((sumValue, row) => sumValue + row.total, 0)
@@ -3028,21 +3084,176 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
             const row = pivot.values.find((item) => item.business_criticality === criticality) || { counts: {}, total: 0 };
             return `<tr><th>${esc(criticality)}</th>${pivot.columns.map((column) => `<td class="numeric-cell">${fmt(row.counts[column] || 0)}</td>`).join("")}<td class="numeric-cell total-cell">${fmt(row.total || 0)}</td></tr>`;
           }).join("")}
-          <tr class="pivot-total-row"><th>Total</th>${pivot.columns.map((column) => `<td class="numeric-cell total-cell">${fmt(pivot.column_totals[column] || 0)}</td>`).join("")}<td class="numeric-cell grand-total-cell">${fmt(pivot.grand_total)}</td></tr>
+          <tr class="pivot-total-row"><th>Total</th>${pivot.columns.map((column) => `<td class="numeric-cell total-cell">${fmt(pivot.column_totals[column] || 0)}</td>`).join("")}<td class="numeric-cell total-cell grand-total-cell" aria-label="Grand total ${fmt(pivot.grand_total)}" title="Grand total"><span class="grand-total-label">Grand Total</span><strong>${fmt(pivot.grand_total)}</strong></td></tr>
         </tbody>
       </table>`;
+    }
+    const LIFECYCLE_PLANS = ["Invest", "Disinvest", "Maintain", "Retired"];
+    const LIFECYCLE_HORIZONS = [
+      { label: "Current", field: "lifecycle_current" },
+      { label: "1 to 3 years", field: "lifecycle_1_to_3_years" },
+      { label: "3 to 5 years", field: "lifecycle_3_to_5_years" }
+    ];
+    function canonicalLifecyclePlan(value) {
+      const normalized = normalizeApplicationDimension(value).toLowerCase();
+      return LIFECYCLE_PLANS.find((plan) => plan.toLowerCase() === normalized) || null;
+    }
+    function lifecyclePlanTitle(plan) {
+      return plan === "Retired" ? "Applications Planned to Retire" : `Applications Planned to ${plan}`;
+    }
+    function lifecyclePlanCommentaryKey(plan) {
+      return `applications_lifecycle_plan_${String(plan || "Invest").toLowerCase()}`;
+    }
+    function inUseLifecycleApplication(row) {
+      return normalizeApplicationDimension(row.lifecycle_stage_status).toLowerCase() === "in use" && !!applicationServiceKey(row);
+    }
+    function lifecyclePlanningData(rows, selectedPlan) {
+      const cellSets = new Map();
+      const selectedRows = new Map();
+      rows.filter(inUseLifecycleApplication).forEach((row) => {
+        const serviceKey = applicationServiceKey(row);
+        LIFECYCLE_HORIZONS.forEach((horizon) => {
+          const plan = canonicalLifecyclePlan(row[horizon.field]);
+          if (!plan) return;
+          const cellKey = `${plan}|${horizon.label}`;
+          if (!cellSets.has(cellKey)) cellSets.set(cellKey, new Set());
+          cellSets.get(cellKey).add(serviceKey);
+        });
+        const selectedHorizons = LIFECYCLE_HORIZONS
+          .filter((horizon) => canonicalLifecyclePlan(row[horizon.field]) === selectedPlan)
+          .map((horizon) => horizon.label);
+        if (!selectedHorizons.length) return;
+        if (!selectedRows.has(serviceKey)) {
+          selectedRows.set(serviceKey, { ...row, selected_plan_horizons: selectedHorizons });
+          return;
+        }
+        const existing = selectedRows.get(serviceKey);
+        selectedHorizons.forEach((horizon) => {
+          if (!existing.selected_plan_horizons.includes(horizon)) existing.selected_plan_horizons.push(horizon);
+        });
+      });
+      const horizonLabels = LIFECYCLE_HORIZONS.map((horizon) => horizon.label);
+      const horizonTotals = Object.fromEntries(horizonLabels.map((horizon) => [horizon, 0]));
+      const matrixRows = LIFECYCLE_PLANS.map((plan) => {
+        const counts = {};
+        let total = 0;
+        horizonLabels.forEach((horizon) => {
+          const count = cellSets.get(`${plan}|${horizon}`)?.size || 0;
+          counts[horizon] = count;
+          horizonTotals[horizon] += count;
+          total += count;
+        });
+        return { plan, counts, total_across_horizons: total };
+      });
+      const criticalityRank = new Map(APPLICATION_CRITICALITY_ORDER.map((label, index) => [label.toLowerCase(), index]));
+      const criticalitySort = (value) => criticalityRank.has(normalizeApplicationDimension(value).toLowerCase())
+        ? criticalityRank.get(normalizeApplicationDimension(value).toLowerCase())
+        : APPLICATION_CRITICALITY_ORDER.length;
+      const applications = [...selectedRows.values()].sort((left, right) =>
+        criticalitySort(left.biz_criticality) - criticalitySort(right.biz_criticality) ||
+        normalizeApplicationDimension(left.functional_track).localeCompare(normalizeApplicationDimension(right.functional_track)) ||
+        normalizeApplicationDimension(left.parent_application_name).localeCompare(normalizeApplicationDimension(right.parent_application_name)) ||
+        normalizeApplicationDimension(left.business_service_ci_name).localeCompare(normalizeApplicationDimension(right.business_service_ci_name))
+      );
+      return {
+        matrix: {
+          plans: LIFECYCLE_PLANS,
+          horizons: horizonLabels,
+          rows: matrixRows,
+          horizon_totals: horizonTotals,
+          grand_total_across_horizons: matrixRows.reduce((total, row) => total + row.total_across_horizons, 0)
+        },
+        selected_plan: {
+          plan: selectedPlan,
+          chart: horizonLabels.map((horizon) => ({ label: horizon, count: cellSets.get(`${selectedPlan}|${horizon}`)?.size || 0 })),
+          applications,
+          application_count: applications.length
+        }
+      };
+    }
+    function lifecyclePlanningMatrixTable(data) {
+      const matrix = data.matrix;
+      if (!matrix.grand_total_across_horizons) return `<p class="muted">No In Use applications match the current filters for lifecycle planning.</p>`;
+      return `<table class="applications-pivot-table lifecycle-matrix-table">
+        <thead><tr><th>Lifecycle Plan</th>${matrix.horizons.map((horizon) => `<th class="numeric-cell">${esc(horizon)}</th>`).join("")}<th class="numeric-cell total-cell">Total Across Horizons</th></tr></thead>
+        <tbody>
+          ${matrix.rows.map((row) => `<tr><th>${esc(row.plan)}</th>${matrix.horizons.map((horizon) => `<td class="numeric-cell">${fmt(row.counts[horizon] || 0)}</td>`).join("")}<td class="numeric-cell total-cell">${fmt(row.total_across_horizons || 0)}</td></tr>`).join("")}
+          <tr class="pivot-total-row"><th>Total</th>${matrix.horizons.map((horizon) => `<td class="numeric-cell total-cell">${fmt(matrix.horizon_totals[horizon] || 0)}</td>`).join("")}<td class="numeric-cell total-cell grand-total-cell"><span class="grand-total-label">Grand Total</span><strong>${fmt(matrix.grand_total_across_horizons)}</strong></td></tr>
+        </tbody>
+      </table>`;
+    }
+    function lifecyclePlanToggle() {
+      return LIFECYCLE_PLANS.map((plan) => `<button type="button" data-lifecycle-plan="${plan}" class="${state.lifecyclePlan === plan ? "active" : ""}">${plan}</button>`).join("");
+    }
+    function lifecycleDetailTable(rows) {
+      if (!rows.length) return `<p class="muted">No applications found for the selected lifecycle plan.</p>`;
+      const columns = [
+        ["Business Service CI Name", "business_service_ci_name"],
+        ["Parent Business Application", "parent_application_name"],
+        ["Functional Track", "functional_track"],
+        ["AMS Owner", "ams_owner"],
+        ["Application Owner", "application_owner"],
+        ["Supported By Vendor", "supported_by_vendor"],
+        ["Install Type", "install_type"],
+        ["Business Criticality", "biz_criticality"],
+        ["Architecture Type", "architecture_type"],
+        ["Application Type", "app_type"],
+        ["Hosting Env", "hosting_env"],
+        ["Global", "global_application"],
+        ["Active Users", "active_users"],
+        ["Lifecycle - Current", "lifecycle_current"],
+        ["Lifecycle - 1 to 3 years", "lifecycle_1_to_3_years"],
+        ["Lifecycle - 3 to 5 years", "lifecycle_3_to_5_years"],
+        ["Selected Plan Horizons", "selected_plan_horizons"]
+      ];
+      return `<table class="applications-table lifecycle-detail-table"><thead><tr>${columns.map(([label]) => `<th>${esc(label)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map(([, field]) => {
+        const value = Array.isArray(row[field]) ? row[field].join(", ") : row[field];
+        return `<td>${esc(field === "active_users" && value !== null && value !== undefined ? fmt(value) : (value ?? ""))}</td>`;
+      }).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function renderApplications() {
       const rows = filteredApplications();
       const topActiveUsers = topActiveUsersPoints(rows);
       const globalLocalData = globalLocalApplications(rows);
       const criticalityPivot = criticalityHostingPivot(rows);
+      const lifecycleData = lifecyclePlanningData(rows, state.lifecyclePlan);
       const functionalValues = uniqueSorted(DASHBOARD.applications.rows, "functional_track_ams_owner");
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
       const businessCount = rows.filter((row) => ["business", "business application"].includes(String(row.app_type).toLowerCase())).length;
       const technicalCount = rows.filter((row) => ["technical", "technical application"].includes(String(row.app_type).toLowerCase())).length;
       const criticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "critical").length;
       const veryCriticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "very critical").length;
+      const applicationsSubtabs = ["overview", "lifecycle_planning"].map((tab) => {
+        const label = tab === "overview" ? "Overview" : "Lifecycle Planning";
+        return `<button type="button" data-app-subtab="${tab}" class="${state.appSubTab === tab ? "active" : ""}">${label}</button>`;
+      }).join("");
+      const overviewMarkup = `
+        <div class="summary-grid cards-grid">
+          ${tile("Applications", fmt(new Set(rows.map((row) => row.business_service_ci_name)).size), "", 0, 6)}
+          ${tile("Functional Groups", fmt(new Set(rows.map((row) => row.functional_track)).size), "", 1, 6)}
+          ${tile("Assignment Groups", fmt(new Set(rows.map((row) => row.assignment_group)).size), "", 2, 6)}
+          ${tile("Parent Business Apps", fmt(new Set(rows.map((row) => row.parent_application_name)).size), "", 3, 6)}
+          ${tile("Application Type", `Business: ${fmt(businessCount)}`, `Technical: ${fmt(technicalCount)}`, 4, 6)}
+          ${tile("Criticality", `Very Critical: ${fmt(veryCriticalCount)}`, `Critical: ${fmt(criticalCount)}`, 5, 6)}
+        </div>
+        ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_summary", chart_key: "", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}
+        <div class="chart-grid">
+          <section class="chart-card panel" data-commentary-key="strategic"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
+          <section class="chart-card panel" data-commentary-key="lifecycle_stage"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
+          <section class="chart-card panel" data-commentary-key="architecture_type"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
+          <section class="chart-card panel" data-commentary-key="install_type"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
+          <section class="chart-card panel" data-commentary-key="hosting_env"><h3>Hosting Env</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "hosting_env").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.orange }], { width: 820, applicationChart: true })}</div></section>
+          <section class="chart-card panel" data-commentary-key="applications_global_local"><h3>Global vs Local Applications</h3><div class="chart-frame chart-stage">${pieChart(globalLocalData)}</div></section>
+        </div>
+        <section class="chart-card panel full" data-commentary-key="applications_criticality_hosting_pivot"><h3>Application Criticality by Hosting Environment</h3><p class="muted">Count of unique Business Service CI Names with Life Cycle Stage Status = In Use.</p><div class="table-frame table-scroll">${criticalityHostingPivotTable(criticalityPivot)}</div></section>
+        <section class="chart-card panel full" data-commentary-key="top_active_users"><div class="chart-title-row"><div><h3>Top Parent Business Applications by Active Users</h3><p class="muted">Application Inventory only. One row per Parent Business Application, using the highest Active Users value when duplicates exist.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Parent Business Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
+        <section class="panel table-card" data-commentary-key="application_list" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>`;
+      const lifecycleMarkup = `
+        <section class="panel lifecycle-planning-intro"><p class="label">Applications</p><h2>Lifecycle Planning</h2><p class="muted">Lifecycle planning shows In Use applications across Current, 1 to 3 years, and 3 to 5 years planning horizons.</p></section>
+        <section class="panel lifecycle-matrix-panel"><p class="label">Lifecycle Planning Matrix</p><h2>Application Lifecycle Planning Matrix</h2><p class="muted">Counts represent distinct Business Service CI Names per planning horizon. The same application can appear in multiple horizons.</p><div class="table-frame table-scroll">${lifecyclePlanningMatrixTable(lifecycleData)}</div></section>
+        <section class="panel lifecycle-plan-panel"><div class="chart-title-row"><div><p class="label">Plan Focus</p><h2>${esc(lifecyclePlanTitle(state.lifecyclePlan))}</h2></div><div class="pattern-buttons">${lifecyclePlanToggle()}</div></div>${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "lifecycle_planning", section_key: "lifecycle_planning_selected_plan", chart_key: lifecyclePlanCommentaryKey(state.lifecyclePlan), scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}</section>
+        <section class="chart-card panel full"><h3>${esc(lifecyclePlanTitle(state.lifecyclePlan))}</h3><p class="muted">Count of unique Business Service CI Names by planning horizon.</p><div class="chart-frame chart-stage">${barChart(lifecycleData.selected_plan.chart, [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 760, applicationChart: true })}</div></section>
+        <section class="panel table-card" style="padding:14px"><h3>${esc(lifecyclePlanTitle(state.lifecyclePlan))} - Details</h3><p class="muted">Showing ${fmt(lifecycleData.selected_plan.application_count)} applications with ${esc(state.lifecyclePlan)} plan across one or more lifecycle horizons.</p><div class="table-frame table-scroll">${lifecycleDetailTable(lifecycleData.selected_plan.applications)}</div></section>`;
       document.getElementById("applications").innerHTML = `<div class="layout dashboard-layout">
         <aside class="filters filter-pane panel">
           <p class="label">Filters</p><h2>Applications</h2>
@@ -3050,38 +3261,27 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${renderSelect("app-sap", "SAP / Non-SAP", [{ value: "all", label: "All" }, ...sapValues.map((value) => ({ value, label: value }))], state.appSap)}
         </aside>
         <section class="main main-content">
-          <div class="summary-grid cards-grid">
-            ${tile("Applications", fmt(new Set(rows.map((row) => row.business_service_ci_name)).size), "", 0, 6)}
-            ${tile("Functional Groups", fmt(new Set(rows.map((row) => row.functional_track)).size), "", 1, 6)}
-            ${tile("Assignment Groups", fmt(new Set(rows.map((row) => row.assignment_group)).size), "", 2, 6)}
-            ${tile("Parent Business Apps", fmt(new Set(rows.map((row) => row.parent_application_name)).size), "", 3, 6)}
-            ${tile("Application Type", `Business: ${fmt(businessCount)}`, `Technical: ${fmt(technicalCount)}`, 4, 6)}
-            ${tile("Criticality", `Very Critical: ${fmt(veryCriticalCount)}`, `Critical: ${fmt(criticalCount)}`, 5, 6)}
-          </div>
-          ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_summary", chart_key: "", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}
-          <div class="chart-grid">
-            <section class="chart-card panel" data-commentary-key="strategic"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
-            <section class="chart-card panel" data-commentary-key="lifecycle_stage"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
-            <section class="chart-card panel" data-commentary-key="architecture_type"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
-            <section class="chart-card panel" data-commentary-key="install_type"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
-            <section class="chart-card panel" data-commentary-key="hosting_env"><h3>Hosting Env</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "hosting_env").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.orange }], { width: 820, applicationChart: true })}</div></section>
-            <section class="chart-card panel" data-commentary-key="applications_global_local"><h3>Global vs Local Applications</h3><div class="chart-frame chart-stage">${pieChart(globalLocalData)}</div></section>
-          </div>
-          <section class="chart-card panel full" data-commentary-key="applications_criticality_hosting_pivot"><h3>Application Criticality by Hosting Environment</h3><p class="muted">Count of unique Business Service CI Names with Lifecycle Stage/Status = In use.</p><div class="table-frame table-scroll">${criticalityHostingPivotTable(criticalityPivot)}</div></section>
-          <section class="chart-card panel full" data-commentary-key="top_active_users"><div class="chart-title-row"><div><h3>Top Parent Business Applications by Active Users</h3><p class="muted">Application Inventory only. One row per Parent Business Application, using the highest Active Users value when duplicates exist.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Parent Business Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
-          <section class="panel table-card" data-commentary-key="application_list" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
+          <div class="pattern-buttons application-subtabs">${applicationsSubtabs}</div>
+          ${state.appSubTab === "overview" ? overviewMarkup : lifecycleMarkup}
         </section>
       </div>`;
       document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.getElementById("app-sap").addEventListener("change", (event) => { state.appSap = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
+      document.querySelectorAll("[data-app-subtab]").forEach((button) => {
+        button.addEventListener("click", () => { state.appSubTab = button.dataset.appSubtab; safeRenderSection("applications", "Applications", renderApplications); });
+      });
       document.querySelectorAll("[data-top-active-users]").forEach((button) => {
         button.addEventListener("click", () => { state.topActiveUsersN = button.dataset.topActiveUsers; safeRenderSection("applications", "Applications", renderApplications); });
       });
+      document.querySelectorAll("[data-lifecycle-plan]").forEach((button) => {
+        button.addEventListener("click", () => { state.lifecyclePlan = button.dataset.lifecyclePlan; safeRenderSection("applications", "Applications", renderApplications); });
+      });
       attachDefaultCommentaries(document.getElementById("applications"), { dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_charts", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional });
+      installCommentaryEditors(document.getElementById("applications"));
       installChartCopyButtons(document.getElementById("applications"));
     }
     function applicationTable(rows) {
-      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
+      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "lifecycle_stage_status", "lifecycle_current", "lifecycle_1_to_3_years", "lifecycle_3_to_5_years", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
       return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(column === "active_users" && row[column] !== null && row[column] !== undefined ? fmt(row[column]) : (row[column] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function filteredVolumetricsRows() {

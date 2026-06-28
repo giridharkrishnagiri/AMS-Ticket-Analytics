@@ -20,6 +20,10 @@ class ApplicationInventoryItemUpdateRequest(BaseModel):
     supported_by_vendor: str | None = None
     hosting_env: str | None = None
     global_application: str | None = None
+    lifecycle_stage_status: str | None = None
+    lifecycle_current: str | None = None
+    lifecycle_1_to_3_years: str | None = None
+    lifecycle_3_to_5_years: str | None = None
     active: bool | None = None
     active_users: int | None = None
     avg_monthly_ticket_volume_6m: float | None = None
@@ -42,6 +46,10 @@ class ApplicationInventoryItemResponse(BaseModel):
     supported_by_vendor: str | None
     hosting_env: str | None
     global_application: str | None
+    lifecycle_stage_status: str | None
+    lifecycle_current: str | None
+    lifecycle_1_to_3_years: str | None
+    lifecycle_3_to_5_years: str | None
     active: bool | None
     active_users: int | None
     avg_monthly_ticket_volume_6m: float | None

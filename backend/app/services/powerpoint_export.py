@@ -39,6 +39,13 @@ CHART_COLORS = [TEAL, BLUE, ORANGE, PURPLE, GREEN, RED, SLATE]
 PRIORITY_COLORS = [BLUE, ORANGE, TEAL, PURPLE]
 DURATION_BUCKETS = ("0-1 day", "1-3 days", "3-10 days", ">10 days")
 MTTR_PRIORITIES = ("P1", "P2", "P3", "P4")
+APPLICATION_CRITICALITY_ORDER = ("Very Critical", "Critical", "High", "Medium", "Low")
+APPLICATION_LIFECYCLE_PLAN_ORDER = ("Invest", "Disinvest", "Maintain", "Retired")
+APPLICATION_LIFECYCLE_HORIZONS = (
+    ("Current", "lifecycle_current"),
+    ("1 to 3 years", "lifecycle_1_to_3_years"),
+    ("3 to 5 years", "lifecycle_3_to_5_years"),
+)
 
 
 def powerpoint_filename(exported_at: datetime) -> str:
@@ -553,6 +560,132 @@ def count_by(
     ]
 
 
+def normalize_dimension(value: Any) -> str:
+    return " ".join(safe_text(value).strip().split())
+
+
+def canonical_lifecycle_plan_value(value: Any) -> str | None:
+    normalized = normalize_dimension(value).casefold()
+    for plan in APPLICATION_LIFECYCLE_PLAN_ORDER:
+        if normalized == plan.casefold():
+            return plan
+    return None
+
+
+def lifecycle_plan_title(plan: str) -> str:
+    if plan == "Retired":
+        return "Applications Planned to Retire"
+    return f"Applications Planned to {plan}"
+
+
+def lifecycle_plan_commentary_key(plan: str) -> str:
+    return f"applications_lifecycle_plan_{plan.lower()}"
+
+
+def app_service_key(row: dict[str, Any]) -> str:
+    return normalize_dimension(row.get("business_service_ci_name")).casefold()
+
+
+def app_in_use_for_lifecycle(row: dict[str, Any], *, functional: FunctionalFilter) -> bool:
+    return (
+        app_matches(row, functional=functional)
+        and app_service_key(row) != ""
+        and normalize_dimension(row.get("lifecycle_stage_status")).casefold() == "in use"
+    )
+
+
+def lifecycle_planning_payload(
+    payload: dict[str, Any],
+    *,
+    functional: FunctionalFilter,
+    selected_plan: str = "Invest",
+) -> dict[str, Any]:
+    cell_sets: dict[tuple[str, str], set[str]] = {}
+    selected_rows: dict[str, dict[str, Any]] = {}
+    for row in payload["applications"]["rows"]:
+        if not app_in_use_for_lifecycle(row, functional=functional):
+            continue
+        service_key = app_service_key(row)
+        for horizon_label, field_name in APPLICATION_LIFECYCLE_HORIZONS:
+            plan = canonical_lifecycle_plan_value(row.get(field_name))
+            if plan is None:
+                continue
+            cell_sets.setdefault((plan, horizon_label), set()).add(service_key)
+        selected_horizons = [
+            horizon_label
+            for horizon_label, field_name in APPLICATION_LIFECYCLE_HORIZONS
+            if canonical_lifecycle_plan_value(row.get(field_name)) == selected_plan
+        ]
+        if not selected_horizons:
+            continue
+        if service_key not in selected_rows:
+            selected_rows[service_key] = {**row, "selected_plan_horizons": selected_horizons}
+            continue
+        existing_horizons = selected_rows[service_key]["selected_plan_horizons"]
+        for horizon in selected_horizons:
+            if horizon not in existing_horizons:
+                existing_horizons.append(horizon)
+
+    horizon_labels = [label for label, _field_name in APPLICATION_LIFECYCLE_HORIZONS]
+    horizon_totals = {horizon: 0 for horizon in horizon_labels}
+    matrix_rows = []
+    for plan in APPLICATION_LIFECYCLE_PLAN_ORDER:
+        counts = {
+            horizon: len(cell_sets.get((plan, horizon), set()))
+            for horizon in horizon_labels
+        }
+        row_total = sum(counts.values())
+        for horizon, count in counts.items():
+            horizon_totals[horizon] += count
+        matrix_rows.append(
+            {
+                "plan": plan,
+                "counts": counts,
+                "total_across_horizons": row_total,
+            },
+        )
+
+    criticality_rank = {
+        label.casefold(): index for index, label in enumerate(APPLICATION_CRITICALITY_ORDER)
+    }
+    applications = sorted(
+        selected_rows.values(),
+        key=lambda row: (
+            criticality_rank.get(
+                normalize_dimension(row.get("biz_criticality")).casefold(),
+                len(APPLICATION_CRITICALITY_ORDER),
+            ),
+            normalize_dimension(row.get("functional_track")).casefold(),
+            normalize_dimension(row.get("parent_application_name")).casefold(),
+            normalize_dimension(row.get("business_service_ci_name")).casefold(),
+        ),
+    )
+    return {
+        "matrix": {
+            "plans": list(APPLICATION_LIFECYCLE_PLAN_ORDER),
+            "horizons": horizon_labels,
+            "rows": matrix_rows,
+            "horizon_totals": horizon_totals,
+            "grand_total_across_horizons": sum(
+                row["total_across_horizons"] for row in matrix_rows
+            ),
+        },
+        "selected_plan": {
+            "plan": selected_plan,
+            "chart": [
+                (
+                    horizon,
+                    float(len(cell_sets.get((selected_plan, horizon), set()))),
+                    fmt_number(len(cell_sets.get((selected_plan, horizon), set()))),
+                )
+                for horizon in horizon_labels
+            ],
+            "applications": applications,
+            "application_count": len(applications),
+        },
+    }
+
+
 def top_volume_points(
     payload: dict[str, Any],
     *,
@@ -922,6 +1055,171 @@ def add_application_table_slides(
         if index == 1:
             add_commentary(slide, commentary, 0.45, 5.9, 12.35, 0.9)
         add_footer(slide, payload)
+
+
+def add_lifecycle_planning_matrix_slide(
+    presentation: PresentationType,
+    payload: dict[str, Any],
+    *,
+    functional: FunctionalFilter,
+) -> None:
+    data = lifecycle_planning_payload(payload, functional=functional)
+    slide = add_blank_slide(presentation)
+    add_header(
+        slide,
+        "Application Lifecycle Planning Matrix",
+        (
+            "Distinct Business Service CI Names per planning horizon. "
+            "The same application can appear in multiple horizons."
+        ),
+    )
+    matrix = data["matrix"]
+    columns = ["Lifecycle Plan", *matrix["horizons"], "Total Across Horizons"]
+    rows = [
+        [
+            row["plan"],
+            *[fmt_number(row["counts"].get(horizon, 0)) for horizon in matrix["horizons"]],
+            fmt_number(row["total_across_horizons"]),
+        ]
+        for row in matrix["rows"]
+    ]
+    rows.append(
+        [
+            "Total",
+            *[
+                fmt_number(matrix["horizon_totals"].get(horizon, 0))
+                for horizon in matrix["horizons"]
+            ],
+            fmt_number(matrix["grand_total_across_horizons"]),
+        ],
+    )
+    add_table(slide, columns, rows, 0.7, 1.35, 11.9, 2.7, font_size=9)
+    add_textbox(
+        slide,
+        (
+            "Total Across Horizons is a horizon-cell total, not a distinct application "
+            "total across all horizons."
+        ),
+        0.75,
+        4.35,
+        11.6,
+        0.35,
+        size=9,
+        color=MUTED,
+    )
+    add_footer(slide, payload)
+
+
+def lifecycle_plan_table_rows(
+    applications: list[dict[str, Any]],
+    limit: int | None = None,
+) -> list[list[Any]]:
+    rows = applications if limit is None else applications[:limit]
+    return [
+        [
+            row.get("business_service_ci_name", ""),
+            row.get("parent_application_name", ""),
+            row.get("functional_track", ""),
+            row.get("install_type", ""),
+            row.get("biz_criticality", ""),
+            ", ".join(row.get("selected_plan_horizons", [])),
+        ]
+        for row in rows
+    ]
+
+
+def add_lifecycle_plan_slides(
+    presentation: PresentationType,
+    payload: dict[str, Any],
+    lookup: dict[tuple[str, ...], str],
+    plan: str,
+    *,
+    functional: FunctionalFilter,
+) -> None:
+    data = lifecycle_planning_payload(payload, functional=functional, selected_plan=plan)
+    applications = data["selected_plan"]["applications"]
+    title = lifecycle_plan_title(plan)
+    slide = add_blank_slide(presentation)
+    add_header(slide, title, f"{len(applications)} In Use applications in selected context.")
+    add_category_chart(
+        slide,
+        title,
+        [row[0] for row in data["selected_plan"]["chart"]],
+        [
+            (
+                "Applications",
+                [row[1] for row in data["selected_plan"]["chart"]],
+                TEAL,
+            ),
+        ],
+        0.55,
+        1.2,
+        5.75,
+        3.0,
+        chart_type=XL_CHART_TYPE.COLUMN_CLUSTERED,
+        legend=False,
+    )
+    commentary = get_commentary(
+        lookup,
+        dashboard_area="applications",
+        tab_name="applications",
+        sub_tab_name="lifecycle_planning",
+        section_key="lifecycle_planning_selected_plan",
+        chart_key=lifecycle_plan_commentary_key(plan),
+        functional=functional,
+    )
+    add_commentary(slide, commentary, 0.55, 4.35, 5.75, 1.45)
+    add_table(
+        slide,
+        [
+            "Application",
+            "Parent App",
+            "Functional Track",
+            "Install Type",
+            "Criticality",
+            "Horizons",
+        ],
+        lifecycle_plan_table_rows(applications, limit=8),
+        6.55,
+        1.2,
+        6.2,
+        4.9,
+        font_size=6,
+    )
+    add_footer(slide, payload)
+
+    detail_rows = lifecycle_plan_table_rows(applications[8:])
+    if not detail_rows:
+        return
+    chunk_size = 12
+    chunks = [
+        detail_rows[index : index + chunk_size] for index in range(0, len(detail_rows), chunk_size)
+    ]
+    for index, chunk in enumerate(chunks, start=1):
+        detail_slide = add_blank_slide(presentation)
+        add_header(
+            detail_slide,
+            f"{title} - Details {index} of {len(chunks)}",
+            "Continuation of selected lifecycle plan applications.",
+        )
+        add_table(
+            detail_slide,
+            [
+                "Application",
+                "Parent App",
+                "Functional Track",
+                "Install Type",
+                "Criticality",
+                "Horizons",
+            ],
+            chunk,
+            0.45,
+            1.25,
+            12.35,
+            5.55,
+            font_size=6,
+        )
+        add_footer(detail_slide, payload)
 
 
 def add_overall_volume_slides(
@@ -1494,6 +1792,15 @@ def build_powerpoint_export(
         ),
         functional=functional,
     )
+    add_lifecycle_planning_matrix_slide(presentation, payload, functional=functional)
+    for plan in APPLICATION_LIFECYCLE_PLAN_ORDER:
+        add_lifecycle_plan_slides(
+            presentation,
+            payload,
+            lookup,
+            plan,
+            functional=functional,
+        )
     add_overall_volume_slides(
         presentation,
         payload,

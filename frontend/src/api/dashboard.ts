@@ -280,6 +280,10 @@ export type DashboardApplicationRow = {
   supported_by_vendor: string;
   hosting_env: string;
   global_application: string;
+  lifecycle_stage_status: string;
+  lifecycle_current: string;
+  lifecycle_1_to_3_years: string;
+  lifecycle_3_to_5_years: string;
   active_users: number | null;
   avg_monthly_ticket_volume_6m: number | null;
   tickets_per_user_per_month: number | null;
@@ -403,6 +407,57 @@ export type DashboardApplicationsCharts = {
   strategic: DashboardApplicationsChartDatum[];
   criticality_hosting_pivot: DashboardApplicationsCriticalityHostingPivot;
   global_local_applications: DashboardApplicationsChartDatum[];
+};
+
+export type DashboardApplicationsLifecyclePlan = "Invest" | "Disinvest" | "Maintain" | "Retired";
+
+export type DashboardApplicationsLifecycleMatrixRow = {
+  plan: DashboardApplicationsLifecyclePlan;
+  counts: Record<string, number>;
+  total_across_horizons: number;
+};
+
+export type DashboardApplicationsLifecycleMatrix = {
+  plans: DashboardApplicationsLifecyclePlan[];
+  horizons: string[];
+  rows: DashboardApplicationsLifecycleMatrixRow[];
+  horizon_totals: Record<string, number>;
+  grand_total_across_horizons: number;
+};
+
+export type DashboardApplicationsLifecycleChartDatum = {
+  horizon: string;
+  count: number;
+};
+
+export type DashboardApplicationsLifecycleApplication = {
+  business_service_ci_name: string;
+  parent_business_application: string;
+  functional_track: string;
+  ams_owner: string;
+  application_owner: string;
+  supported_by_vendor: string;
+  install_type: string;
+  business_criticality: string;
+  architecture_type: string;
+  application_type: string;
+  hosting_env: string;
+  global_application: string;
+  active_users: number | null;
+  lifecycle_current: string;
+  lifecycle_1_to_3_years: string;
+  lifecycle_3_to_5_years: string;
+  selected_plan_horizons: string[];
+};
+
+export type DashboardApplicationsLifecyclePlanning = {
+  matrix: DashboardApplicationsLifecycleMatrix;
+  selected_plan: {
+    plan: DashboardApplicationsLifecyclePlan;
+    chart: DashboardApplicationsLifecycleChartDatum[];
+    applications: DashboardApplicationsLifecycleApplication[];
+    application_count: number;
+  };
 };
 
 export type VolumetricsScope = "in_scope" | "out_of_scope" | "all";
@@ -907,6 +962,19 @@ export function getDashboardApplicationsTopActiveUsers(
   return postApplicationsRequest<DashboardApplicationsTopActiveUsers>(
     "/dashboard/applications/top-active-users",
     { ...input, top_n: topN } as DashboardApplicationsRequest & { top_n: 10 | 20 }
+  );
+}
+
+export function getDashboardApplicationsLifecyclePlanning(
+  input: DashboardApplicationsRequest,
+  selectedPlan: DashboardApplicationsLifecyclePlan
+): Promise<DashboardApplicationsLifecyclePlanning> {
+  return postApplicationsRequest<DashboardApplicationsLifecyclePlanning>(
+    "/dashboard/applications/lifecycle-planning",
+    {
+      ...input,
+      selected_plan: selectedPlan,
+    } as DashboardApplicationsRequest & { selected_plan: DashboardApplicationsLifecyclePlan }
   );
 }
 

@@ -1464,6 +1464,59 @@ h2 {
   max-width: 100%;
 }
 
+.applications-subtabs {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  gap: 4px;
+}
+
+.applications-subtabs button {
+  width: auto;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  color: #475569;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.applications-subtabs button.active {
+  color: #ffffff;
+  background: #0f766e;
+}
+
+.lifecycle-planning-stack {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  gap: 16px;
+}
+
+.lifecycle-planning-intro,
+.lifecycle-plan-panel,
+.lifecycle-matrix-panel,
+.lifecycle-detail-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.lifecycle-matrix-table {
+  min-width: 700px;
+}
+
+.lifecycle-detail-table {
+  min-width: 2500px;
+}
+
 .applications-summary-grid {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
@@ -1711,6 +1764,18 @@ h2 {
   font-weight: 900;
 }
 
+.applications-pivot-table th:last-child,
+.applications-pivot-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow: -1px 0 0 #e2e8f0;
+}
+
+.applications-pivot-table thead th:last-child {
+  z-index: 3;
+}
+
 .applications-pivot-table .pivot-total-row th,
 .applications-pivot-table .pivot-total-row td {
   border-bottom: 0;
@@ -1719,9 +1784,24 @@ h2 {
 }
 
 .applications-pivot-table .grand-total-cell {
-  color: #ffffff;
-  background: #1d4ed8;
+  color: #0f172a;
+  background: #eef6ff;
   font-weight: 900;
+}
+
+.applications-pivot-table .grand-total-label {
+  display: block;
+  color: #475569;
+  font-size: 0.68rem;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.applications-pivot-table .grand-total-cell strong {
+  display: block;
+  color: #0f172a;
+  font-size: 0.98rem;
+  line-height: 1.2;
 }
 
 .chart-copy-status {

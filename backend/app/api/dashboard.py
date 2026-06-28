@@ -14,6 +14,8 @@ from app.schemas.dashboard import (
     ApplicationsFilterValueCountsResponse,
     ApplicationsFilterValuesRequest,
     ApplicationsFilterValuesResponse,
+    ApplicationsLifecyclePlanningRequest,
+    ApplicationsLifecyclePlanningResponse,
     ApplicationsListResponse,
     ApplicationsSummaryResponse,
     ApplicationsTopActiveUsersRequest,
@@ -67,6 +69,7 @@ from app.services.dashboard import (
     applications_charts,
     applications_filter_value_counts,
     applications_filter_values,
+    applications_lifecycle_planning,
     applications_list,
     applications_summary,
     applications_top_active_users,
@@ -240,6 +243,17 @@ def get_dashboard_applications_charts(
     db: DbSession,
 ) -> dict[str, object]:
     return applications_charts(db, request)
+
+
+@router.post(
+    "/applications/lifecycle-planning",
+    response_model=ApplicationsLifecyclePlanningResponse,
+)
+def get_dashboard_applications_lifecycle_planning(
+    request: ApplicationsLifecyclePlanningRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    return applications_lifecycle_planning(db, request)
 
 
 @router.post("/applications/top-active-users", response_model=ApplicationsTopActiveUsersResponse)

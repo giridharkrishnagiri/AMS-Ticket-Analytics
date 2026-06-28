@@ -188,8 +188,31 @@ def add_inventory_item(
     active_users: int | None = None,
     hosting_env: str | None = None,
     global_application: str | None = None,
+    lifecycle_stage_status: str | None = None,
+    lifecycle_current: str | None = None,
+    lifecycle_1_to_3_years: str | None = None,
+    lifecycle_3_to_5_years: str | None = None,
     cmdb_payload: dict[str, object] | None = None,
 ) -> ApplicationInventoryItem:
+    payload = cmdb_payload or {}
+    if lifecycle_stage_status is None:
+        lifecycle_stage_status = (
+            payload.get("Life Cycle Stage Status") or payload.get("Lifecycle Stage Status")
+        )
+    if lifecycle_current is None:
+        lifecycle_current = payload.get("Lifecycle - Current") or payload.get("Lifecycle Current")
+    if lifecycle_1_to_3_years is None:
+        lifecycle_1_to_3_years = (
+            payload.get("Lifecycle - 1 to 3 years")
+            or payload.get("Lifecycle 1 to 3 years")
+            or payload.get("Lifecycle - 1-3 years")
+        )
+    if lifecycle_3_to_5_years is None:
+        lifecycle_3_to_5_years = (
+            payload.get("Lifecycle - 3 to 5 years")
+            or payload.get("Lifecycle 3 to 5 years")
+            or payload.get("Lifecycle - 3-5 years")
+        )
     item = ApplicationInventoryItem(
         project_id=project_id,
         business_service_ci_name=business_service_ci_name,
@@ -204,6 +227,10 @@ def add_inventory_item(
         active_users=active_users,
         hosting_env=hosting_env,
         global_application=global_application,
+        lifecycle_stage_status=lifecycle_stage_status,
+        lifecycle_current=lifecycle_current,
+        lifecycle_1_to_3_years=lifecycle_1_to_3_years,
+        lifecycle_3_to_5_years=lifecycle_3_to_5_years,
         cmdb_payload=cmdb_payload,
         source_filename="overview-inventory.csv",
     )
@@ -767,7 +794,7 @@ def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_glo
                 "Data & Analytics",
                 "Seshu Avala",
                 "IT-NSA-Group B",
-                "Non-Prod",
+                "Non-Production",
                 "No",
                 {
                     "Business criticality": "Critical",
@@ -806,7 +833,7 @@ def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_glo
                 "Run",
                 "Another Owner",
                 "Group E",
-                "Historical & DR",
+                "Historical",
                 "",
                 {
                     "Business criticality": "Low",
@@ -836,6 +863,97 @@ def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_glo
                 "Maybe",
                 {
                     "Business criticality": "",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service H",
+                "Run",
+                "Another Owner",
+                "Group H",
+                "Production",
+                "No",
+                {
+                    "Business criticality": "Critical",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service I",
+                "Run",
+                "Another Owner",
+                "Group I",
+                "Production",
+                "No",
+                {
+                    "Business criticality": "Medium",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service J",
+                "Run",
+                "Another Owner",
+                "Group J",
+                "Non-Production",
+                "No",
+                {
+                    "Business criticality": "Critical",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service K",
+                "Run",
+                "Another Owner",
+                "Group K",
+                "DR",
+                "",
+                {
+                    "Business criticality": "Low",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service L",
+                "Run",
+                "Another Owner",
+                "Group L",
+                "QA",
+                "Yes",
+                {
+                    "Business criticality": "Medium",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service M",
+                "Run",
+                "Another Owner",
+                "Group M",
+                "Regression",
+                "Maybe",
+                {
+                    "Business criticality": "High",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service N",
+                "Run",
+                "Another Owner",
+                "Group N",
+                "PreProd",
+                "No",
+                {
+                    "Business criticality": "Low",
                     "Life Cycle Stage": "Operational",
                     "Life Cycle Stage Status": "In Use",
                 },
@@ -890,33 +1008,51 @@ def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_glo
             "Medium",
             "Low",
         ]
-        assert payload["criticality_hosting_pivot"]["columns"] == [
+        assert payload["criticality_hosting_pivot"]["columns"][:2] == [
             "Production",
-            "Non-Prod",
+            "Non-Production",
+        ]
+        assert set(payload["criticality_hosting_pivot"]["columns"]) == {
+            "Production",
+            "Non-Production",
             "Dev",
             "Test",
-            "Historical & DR",
-        ]
+            "Historical",
+            "DR",
+            "QA",
+            "Regression",
+            "PreProd",
+        }
         pivot_values = {
             row["business_criticality"]: row
             for row in payload["criticality_hosting_pivot"]["values"]
         }
         assert pivot_values["Very Critical"]["counts"]["Production"] == 1
-        assert pivot_values["Critical"]["counts"]["Non-Prod"] == 1
+        assert pivot_values["Critical"]["counts"]["Non-Production"] == 2
+        assert pivot_values["Critical"]["counts"]["Production"] == 1
         assert pivot_values["High"]["counts"]["Dev"] == 1
+        assert pivot_values["High"]["counts"]["Regression"] == 1
         assert pivot_values["Medium"]["counts"]["Test"] == 1
-        assert pivot_values["Low"]["counts"]["Historical & DR"] == 1
+        assert pivot_values["Medium"]["counts"]["Production"] == 1
+        assert pivot_values["Medium"]["counts"]["QA"] == 1
+        assert pivot_values["Low"]["counts"]["Historical"] == 1
+        assert pivot_values["Low"]["counts"]["DR"] == 1
+        assert pivot_values["Low"]["counts"]["PreProd"] == 1
         assert payload["criticality_hosting_pivot"]["column_totals"] == {
-            "Production": 1,
-            "Non-Prod": 1,
+            "Production": 3,
+            "Non-Production": 2,
             "Dev": 1,
+            "DR": 1,
+            "Historical": 1,
+            "PreProd": 1,
+            "QA": 1,
+            "Regression": 1,
             "Test": 1,
-            "Historical & DR": 1,
         }
-        assert payload["criticality_hosting_pivot"]["grand_total"] == 5
+        assert payload["criticality_hosting_pivot"]["grand_total"] == 12
         assert payload["global_local_applications"] == [
-            {"label": "Global", "count": 3},
-            {"label": "Local", "count": 2},
+            {"label": "Global", "count": 4},
+            {"label": "Local", "count": 6},
         ]
 
         assert filtered_response.status_code == 200
@@ -926,6 +1062,223 @@ def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_glo
             {"label": "Global", "count": 1},
             {"label": "Local", "count": 1},
         ]
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_dashboard_applications_lifecycle_planning_matrix_and_selected_plan() -> None:
+    db, client_id, project_id, _, _, _ = create_dashboard_project()
+    try:
+        lifecycle_rows = [
+            (
+                "Service A",
+                "Data",
+                "Owner A",
+                "IT-SAP-A",
+                "Critical",
+                "Invest",
+                "Maintain",
+                "Retired",
+                "In Use",
+            ),
+            (
+                "Service A",
+                "Data",
+                "Owner A",
+                "IT-SAP-A",
+                "Critical",
+                "Invest",
+                "Maintain",
+                "Retired",
+                "In Use",
+            ),
+            (
+                "Service B",
+                "Data",
+                "Owner A",
+                "IT-SAP-B",
+                "Very Critical",
+                "Maintain",
+                "Disinvest",
+                "Retired",
+                "In Use",
+            ),
+            (
+                "Service C",
+                "Run",
+                "Owner B",
+                "IT-NSA-C",
+                "High",
+                "Disinvest",
+                "Retired",
+                "Retired",
+                "In Use",
+            ),
+            (
+                "Service D",
+                "Data",
+                "Owner A",
+                "IT-SAP-D",
+                "Medium",
+                "Invest",
+                "Invest",
+                "Maintain",
+                "Obsolete",
+            ),
+            (
+                "Service E",
+                "Data",
+                "Owner A",
+                "IT-SAP-E",
+                "Low",
+                "Invest",
+                "Maintain",
+                "Retired",
+                "Pilot",
+            ),
+            (
+                "Service F",
+                "Run",
+                "Owner B",
+                "IT-NSA-F",
+                "Low",
+                "Explore",
+                " invest ",
+                "",
+                " in use ",
+            ),
+            (
+                "",
+                "Run",
+                "Owner B",
+                "IT-NSA-BLANK",
+                "Low",
+                "Invest",
+                "Invest",
+                "Invest",
+                "In Use",
+            ),
+        ]
+        for (
+            service_name,
+            functional_track,
+            ams_owner,
+            assignment_group,
+            criticality,
+            lifecycle_current,
+            lifecycle_1_to_3_years,
+            lifecycle_3_to_5_years,
+            lifecycle_stage_status,
+        ) in lifecycle_rows:
+            add_inventory_item(
+                db,
+                project_id,
+                service_name,
+                supported_by_vendor="Vendor A",
+                functional_track=functional_track,
+                ams_owner=ams_owner,
+                assignment_group=assignment_group,
+                application_owner="App Owner",
+                parent_application_name=f"Parent {service_name or 'Blank'}",
+                lifecycle_stage_status=lifecycle_stage_status,
+                lifecycle_current=lifecycle_current,
+                lifecycle_1_to_3_years=lifecycle_1_to_3_years,
+                lifecycle_3_to_5_years=lifecycle_3_to_5_years,
+                cmdb_payload={
+                    "Business criticality": criticality,
+                    "Architecture type": "SaaS",
+                    "Application type": "Business",
+                    "Install type": "Cloud",
+                },
+            )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/applications/lifecycle-planning",
+                json={"project_id": str(project_id), "filters": {}, "selected_plan": "Invest"},
+            )
+            retired_response = client.post(
+                "/api/dashboard/applications/lifecycle-planning",
+                json={"project_id": str(project_id), "filters": {}, "selected_plan": "Retired"},
+            )
+            filtered_response = client.post(
+                "/api/dashboard/applications/lifecycle-planning",
+                json={
+                    "project_id": str(project_id),
+                    "selected_plan": "Disinvest",
+                    "filters": {
+                        "functional_track_ams_owner": ["Data - Owner A"],
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["matrix"]["plans"] == ["Invest", "Disinvest", "Maintain", "Retired"]
+        assert payload["matrix"]["horizons"] == ["Current", "1 to 3 years", "3 to 5 years"]
+        rows = {row["plan"]: row for row in payload["matrix"]["rows"]}
+        assert rows["Invest"]["counts"] == {
+            "Current": 1,
+            "1 to 3 years": 1,
+            "3 to 5 years": 0,
+        }
+        assert rows["Disinvest"]["counts"] == {
+            "Current": 1,
+            "1 to 3 years": 1,
+            "3 to 5 years": 0,
+        }
+        assert rows["Maintain"]["counts"] == {
+            "Current": 1,
+            "1 to 3 years": 1,
+            "3 to 5 years": 0,
+        }
+        assert rows["Retired"]["counts"] == {
+            "Current": 0,
+            "1 to 3 years": 1,
+            "3 to 5 years": 3,
+        }
+        assert payload["matrix"]["horizon_totals"] == {
+            "Current": 3,
+            "1 to 3 years": 4,
+            "3 to 5 years": 3,
+        }
+        assert payload["matrix"]["grand_total_across_horizons"] == 10
+        assert payload["selected_plan"]["plan"] == "Invest"
+        assert payload["selected_plan"]["chart"] == [
+            {"horizon": "Current", "count": 1},
+            {"horizon": "1 to 3 years", "count": 1},
+            {"horizon": "3 to 5 years", "count": 0},
+        ]
+        assert payload["selected_plan"]["application_count"] == 2
+        selected_by_service = {
+            row["business_service_ci_name"]: row
+            for row in payload["selected_plan"]["applications"]
+        }
+        assert selected_by_service["Service A"]["selected_plan_horizons"] == ["Current"]
+        assert selected_by_service["Service F"]["selected_plan_horizons"] == ["1 to 3 years"]
+        assert "Service D" not in selected_by_service
+        assert "" not in selected_by_service
+
+        assert retired_response.status_code == 200
+        retired_payload = retired_response.json()
+        assert retired_payload["selected_plan"]["plan"] == "Retired"
+        retired_by_service = {
+            row["business_service_ci_name"]: row
+            for row in retired_payload["selected_plan"]["applications"]
+        }
+        assert retired_by_service["Service C"]["selected_plan_horizons"] == [
+            "1 to 3 years",
+            "3 to 5 years",
+        ]
+
+        assert filtered_response.status_code == 200
+        filtered_payload = filtered_response.json()
+        assert filtered_payload["matrix"]["grand_total_across_horizons"] == 6
+        assert filtered_payload["selected_plan"]["application_count"] == 1
+        assert filtered_payload["selected_plan"]["applications"][0][
+            "business_service_ci_name"
+        ] == "Service B"
     finally:
         cleanup_client(db, client_id)
 
@@ -2245,6 +2598,10 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             active_users=500,
             hosting_env="Production",
             global_application="Yes",
+            lifecycle_stage_status="In Use",
+            lifecycle_current="Invest",
+            lifecycle_1_to_3_years="Maintain",
+            lifecycle_3_to_5_years="Retired",
             cmdb_payload={
                 "Application type": "Business",
                 "Architecture type": "Cloud",
@@ -2253,6 +2610,9 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
                 "Install type": "Production",
                 "Life Cycle Stage": "Operational",
                 "Life Cycle Stage Status": "In Use",
+                "Lifecycle - Current": "Invest",
+                "Lifecycle - 1 to 3 years": "Maintain",
+                "Lifecycle - 3 to 5 years": "Retired",
                 "Operating System": "Windows",
                 "SOX Scope": "In-Scope",
                 "Strategic": "Yes",
@@ -2375,6 +2735,22 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
                 commentary_text="Inventory note",
             ),
         )
+        db.add(
+            DashboardCommentary(
+                client_id=client_id,
+                project_id=project_id,
+                dashboard_area="applications",
+                tab_name="applications",
+                sub_tab_name="lifecycle_planning",
+                section_key="lifecycle_planning_selected_plan",
+                chart_key="applications_lifecycle_plan_invest",
+                scope_filter="all",
+                ticket_type_filter="all",
+                functional_track_ams_owner="all",
+                commentary_html="<p>Invest plan note</p>",
+                commentary_text="Invest plan note",
+            ),
+        )
         db.commit()
 
         with TestClient(app) as client:
@@ -2391,8 +2767,14 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         document = response.text
         assert "Overview" in document
         assert "Applications" in document
+        assert "Lifecycle Planning" in document
+        assert "Application Lifecycle Planning Matrix" in document
+        assert "function lifecyclePlanTitle" in document
+        assert "Applications Planned to Retire" in document
+        assert "applications_lifecycle_plan_invest" in document
         assert "Global vs Local Applications" in document
         assert "Application Criticality by Hosting Environment" in document
+        assert "Grand Total" in document
         assert "Volumetrics &amp; SLA" in document
         assert "Overall Volume Trends" in document
         assert "Overall SLA Trends" in document
@@ -2623,21 +3005,28 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["applications"]["rows"][0]["active_users"] == 500
         assert payload["applications"]["rows"][0]["hosting_env"] == "Production"
         assert payload["applications"]["rows"][0]["global_application"] == "Yes"
-        assert payload["commentaries"] == [
-            {
-                "project_id": str(project_id),
-                "dashboard_area": "applications",
-                "tab_name": "applications",
-                "sub_tab_name": None,
-                "section_key": "applications_charts",
-                "chart_key": "strategic",
-                "scope_filter": "all",
-                "ticket_type_filter": "all",
-                "functional_track_ams_owner": "all",
-                "commentary_html": "<p><strong>Inventory note</strong></p>",
-                "commentary_text": "Inventory note",
-            },
-        ]
+        assert payload["applications"]["rows"][0]["lifecycle_stage_status"] == "In Use"
+        assert payload["applications"]["rows"][0]["lifecycle_current"] == "Invest"
+        assert payload["applications"]["rows"][0]["lifecycle_1_to_3_years"] == "Maintain"
+        assert payload["applications"]["rows"][0]["lifecycle_3_to_5_years"] == "Retired"
+        commentaries_by_key = {
+            (
+                row["sub_tab_name"],
+                row["section_key"],
+                row["chart_key"],
+            ): row
+            for row in payload["commentaries"]
+        }
+        assert commentaries_by_key[
+            (None, "applications_charts", "strategic")
+        ]["commentary_text"] == "Inventory note"
+        assert commentaries_by_key[
+            (
+                "lifecycle_planning",
+                "lifecycle_planning_selected_plan",
+                "applications_lifecycle_plan_invest",
+            )
+        ]["commentary_text"] == "Invest plan note"
         assert "cmdb_payload" not in payload["applications"]["rows"][0]
         assert "architecture_type" in payload["applications"]["charts"]
         assert "install_type" in payload["applications"]["charts"]
@@ -2717,7 +3106,15 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
             parent_application_name="Parent Payroll",
             active_users=500,
             hosting_env="Production",
-            cmdb_payload={"secret": "raw cmdb payload should not be exported"},
+            lifecycle_stage_status="In Use",
+            lifecycle_current="Invest",
+            lifecycle_1_to_3_years="Maintain",
+            lifecycle_3_to_5_years="Retired",
+            cmdb_payload={
+                "Business criticality": "Critical",
+                "Install type": "Production",
+                "secret": "raw cmdb payload should not be exported",
+            },
         )
         incident = add_ticket(
             db,
@@ -2783,6 +3180,22 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
                 commentary_text="Executive note",
             ),
         )
+        db.add(
+            DashboardCommentary(
+                client_id=client_id,
+                project_id=project_id,
+                dashboard_area="applications",
+                tab_name="applications",
+                sub_tab_name="lifecycle_planning",
+                section_key="lifecycle_planning_selected_plan",
+                chart_key="applications_lifecycle_plan_invest",
+                scope_filter="all",
+                ticket_type_filter="all",
+                functional_track_ams_owner="all",
+                commentary_html="<p>Invest PPT note</p>",
+                commentary_text="Invest PPT note",
+            ),
+        )
         db.commit()
 
         with TestClient(app) as client:
@@ -2811,7 +3224,7 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
                 for name in package.namelist()
                 if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
             ]
-            assert len(slide_names) >= 16
+            assert len(slide_names) >= 21
             slide_xml = "\n".join(
                 package.read(name).decode("utf-8", errors="ignore") for name in slide_names
             )
@@ -2820,6 +3233,12 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
         assert "Applications Summary" in slide_xml
         assert "Top Parent Business Applications by Active Users" in slide_xml
         assert "Application List" in slide_xml
+        assert "Application Lifecycle Planning Matrix" in slide_xml
+        assert "Applications Planned to Invest" in slide_xml
+        assert "Applications Planned to Disinvest" in slide_xml
+        assert "Applications Planned to Maintain" in slide_xml
+        assert "Applications Planned to Retire" in slide_xml
+        assert "Invest PPT note" in slide_xml
         assert "Overall Volume Trends - Created / Completed / Backlog" in slide_xml
         assert "Overall SLA Trends - Response SLA" in slide_xml
         assert "Detailed Volume Trends - Top Applications" in slide_xml

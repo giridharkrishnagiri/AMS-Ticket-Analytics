@@ -57,6 +57,26 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_application_inventory_project_sap_non_sap", "project_id", "sap_non_sap"),
         Index("ix_application_inventory_project_hosting_env", "project_id", "hosting_env"),
         Index("ix_application_inventory_project_global", "project_id", "global_application"),
+        Index(
+            "ix_application_inventory_project_lifecycle_stage_status",
+            "project_id",
+            "lifecycle_stage_status",
+        ),
+        Index(
+            "ix_application_inventory_project_lifecycle_current",
+            "project_id",
+            "lifecycle_current",
+        ),
+        Index(
+            "ix_application_inventory_project_lifecycle_1_to_3_years",
+            "project_id",
+            "lifecycle_1_to_3_years",
+        ),
+        Index(
+            "ix_application_inventory_project_lifecycle_3_to_5_years",
+            "project_id",
+            "lifecycle_3_to_5_years",
+        ),
     )
 
     project_id: Mapped[UUID] = mapped_column(
@@ -77,6 +97,10 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     hosting_env: Mapped[str | None] = mapped_column(Text, nullable=True)
     global_application: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lifecycle_stage_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lifecycle_current: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lifecycle_1_to_3_years: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lifecycle_3_to_5_years: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
     avg_monthly_ticket_volume_6m: Mapped[float | None] = mapped_column(Float, nullable=True)

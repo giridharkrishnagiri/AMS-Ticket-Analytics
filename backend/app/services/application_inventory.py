@@ -58,6 +58,28 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "supported_by_vendor": ("Supported By Vendor", "Support vendor", "Vendor"),
     "hosting_env": ("Hosting Env", "Hosting Environment", "hosting_env"),
     "global_application": ("Global", "Global Application", "global_application"),
+    "lifecycle_stage_status": (
+        "Life Cycle Stage Status",
+        "Lifecycle Stage Status",
+        "lifecycle_stage_status",
+    ),
+    "lifecycle_current": (
+        "Lifecycle - Current",
+        "Lifecycle Current",
+        "lifecycle_current",
+    ),
+    "lifecycle_1_to_3_years": (
+        "Lifecycle - 1 to 3 years",
+        "Lifecycle 1 to 3 years",
+        "Lifecycle - 1-3 years",
+        "lifecycle_1_to_3_years",
+    ),
+    "lifecycle_3_to_5_years": (
+        "Lifecycle - 3 to 5 years",
+        "Lifecycle 3 to 5 years",
+        "Lifecycle - 3-5 years",
+        "lifecycle_3_to_5_years",
+    ),
     "active": ("Active",),
     "active_users": ("Active Users", "Active User", "Active Users Count"),
 }
@@ -352,6 +374,18 @@ def clean_inventory_values(
         "hosting_env": text_or_none(get_raw_value(parsed_row.raw_data, "hosting_env")),
         "global_application": text_or_none(
             get_raw_value(parsed_row.raw_data, "global_application")
+        ),
+        "lifecycle_stage_status": text_or_none(
+            get_raw_value(parsed_row.raw_data, "lifecycle_stage_status")
+        ),
+        "lifecycle_current": text_or_none(
+            get_raw_value(parsed_row.raw_data, "lifecycle_current")
+        ),
+        "lifecycle_1_to_3_years": text_or_none(
+            get_raw_value(parsed_row.raw_data, "lifecycle_1_to_3_years")
+        ),
+        "lifecycle_3_to_5_years": text_or_none(
+            get_raw_value(parsed_row.raw_data, "lifecycle_3_to_5_years")
         ),
         "sap_non_sap": derive_sap_non_sap(assignment_group),
         "active": parse_active(

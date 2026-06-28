@@ -50,6 +50,10 @@ DIRECT_APPLICATION_FIELDS = {
     "sap_non_sap": ApplicationInventoryItem.sap_non_sap,
     "hosting_env": ApplicationInventoryItem.hosting_env,
     "global_application": ApplicationInventoryItem.global_application,
+    "lifecycle_stage_status": ApplicationInventoryItem.lifecycle_stage_status,
+    "lifecycle_current": ApplicationInventoryItem.lifecycle_current,
+    "lifecycle_1_to_3_years": ApplicationInventoryItem.lifecycle_1_to_3_years,
+    "lifecycle_3_to_5_years": ApplicationInventoryItem.lifecycle_3_to_5_years,
     "active_users": ApplicationInventoryItem.active_users,
     "avg_monthly_ticket_volume_6m": ApplicationInventoryItem.avg_monthly_ticket_volume_6m,
     "tickets_per_user_per_month": ApplicationInventoryItem.tickets_per_user_per_month,
@@ -100,6 +104,10 @@ APPLICATION_LIST_FIELDS = (
     "supported_by_vendor",
     "hosting_env",
     "global_application",
+    "lifecycle_stage_status",
+    "lifecycle_current",
+    "lifecycle_1_to_3_years",
+    "lifecycle_3_to_5_years",
     "active_users",
     "avg_monthly_ticket_volume_6m",
     "tickets_per_user_per_month",
@@ -140,8 +148,13 @@ SINGLE_APPLICATION_FILTER_FIELDS = {
 }
 
 APPLICATION_CRITICALITY_ORDER = ("Very Critical", "Critical", "High", "Medium", "Low")
-APPLICATION_HOSTING_ENV_ORDER = ("Production", "Non-Prod", "Dev", "Test", "Historical & DR")
 APPLICATION_GLOBAL_LOCAL_ORDER = ("Global", "Local")
+APPLICATION_LIFECYCLE_PLAN_ORDER = ("Invest", "Disinvest", "Maintain", "Retired")
+APPLICATION_LIFECYCLE_HORIZONS = (
+    ("Current", "lifecycle_current"),
+    ("1 to 3 years", "lifecycle_1_to_3_years"),
+    ("3 to 5 years", "lifecycle_3_to_5_years"),
+)
 
 COMBINED_APPLICATION_FILTER_FIELDS = {
     "functional_track_ams_owner": ("functional_track", "ams_owner"),
@@ -743,6 +756,42 @@ def combined_application_display_expression(left_field: str, right_field: str) -
     )
 
 
+def normalized_text_expression(expression: Any) -> Any:
+    return func.lower(func.trim(func.coalesce(expression, literal(""))))
+
+
+def application_lifecycle_stage_status_in_use_condition() -> Any:
+    lifecycle_stage_status = application_field_expression("lifecycle_stage_status")
+    return normalized_text_expression(lifecycle_stage_status) == "in use"
+
+
+def canonical_lifecycle_plan_expression(expression: Any) -> Any:
+    normalized_expression = normalized_text_expression(expression)
+    return case(
+        (normalized_expression == "invest", literal("Invest")),
+        (normalized_expression == "disinvest", literal("Disinvest")),
+        (normalized_expression == "maintain", literal("Maintain")),
+        (normalized_expression == "retired", literal("Retired")),
+        else_=None,
+    )
+
+
+def normalize_lifecycle_plan(value: Any) -> str:
+    normalized_value = normalize_custom_sort_text(value)
+    for plan in APPLICATION_LIFECYCLE_PLAN_ORDER:
+        if normalized_value == normalize_custom_sort_text(plan):
+            return plan
+    return APPLICATION_LIFECYCLE_PLAN_ORDER[0]
+
+
+def canonical_lifecycle_plan_value(value: Any) -> str | None:
+    normalized_value = normalize_custom_sort_text(value)
+    for plan in APPLICATION_LIFECYCLE_PLAN_ORDER:
+        if normalized_value == normalize_custom_sort_text(plan):
+            return plan
+    return None
+
+
 def applications_base_conditions(project_id: UUID) -> list[Any]:
     return [
         ApplicationInventoryItem.project_id == project_id,
@@ -1243,35 +1292,10 @@ def applications_chart_counts(
     ]
 
 
-def fixed_value_label_expression(expression: Any, labels: tuple[str, ...]) -> Any:
-    normalized_expression = func.lower(func.trim(func.coalesce(expression, literal(""))))
-    return case(
-        *[
-            (normalized_expression == label.casefold(), literal(label))
-            for label in labels
-        ],
-        else_=None,
-    )
-
-
 def applications_criticality_hosting_pivot(db: Session, request: Any) -> dict[str, Any]:
     service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
-    criticality_label = fixed_value_label_expression(
-        application_field_expression("biz_criticality"),
-        APPLICATION_CRITICALITY_ORDER,
-    )
-    hosting_label = fixed_value_label_expression(
-        application_field_expression("hosting_env"),
-        APPLICATION_HOSTING_ENV_ORDER,
-    )
-    lifecycle_stage_normalized = func.lower(
-        func.trim(func.coalesce(application_field_expression("lifecycle_status"), literal(""))),
-    )
-    lifecycle_stage_status_normalized = func.lower(
-        func.trim(
-            func.coalesce(application_field_expression("lifecycle_stage_status"), literal("")),
-        ),
-    )
+    criticality_label = nonblank_text_expression(application_field_expression("biz_criticality"))
+    hosting_label = nonblank_text_expression(application_field_expression("hosting_env"))
     statement = (
         select(
             criticality_label.label("business_criticality"),
@@ -1280,33 +1304,47 @@ def applications_criticality_hosting_pivot(db: Session, request: Any) -> dict[st
         )
         .where(
             *applications_filter_conditions(request.project_id, request.filters),
-            or_(
-                lifecycle_stage_normalized == "in use",
-                lifecycle_stage_status_normalized == "in use",
-            ),
+            application_lifecycle_stage_status_in_use_condition(),
             criticality_label.is_not(None),
             hosting_label.is_not(None),
             service_expression.is_not(None),
         )
         .group_by(criticality_label, hosting_label)
     )
-    values_by_key = {
-        (str(row["business_criticality"]), str(row["hosting_env"])): int(
-            row["application_count"] or 0,
-        )
-        for row in db.execute(statement).mappings().all()
-    }
+    result_rows = db.execute(statement).mappings().all()
+    values_by_key: dict[tuple[str, str], int] = {}
+    row_totals: dict[str, int] = {}
+    column_totals: dict[str, int] = {}
+    for row in result_rows:
+        criticality = str(row["business_criticality"])
+        hosting_env = str(row["hosting_env"])
+        count = int(row["application_count"] or 0)
+        values_by_key[(criticality, hosting_env)] = count
+        row_totals[criticality] = row_totals.get(criticality, 0) + count
+        column_totals[hosting_env] = column_totals.get(hosting_env, 0) + count
 
-    column_totals = {column: 0 for column in APPLICATION_HOSTING_ENV_ORDER}
+    criticality_rank = {
+        label.casefold(): index for index, label in enumerate(APPLICATION_CRITICALITY_ORDER)
+    }
+    criticality_rows = sorted(
+        row_totals,
+        key=lambda label: (
+            criticality_rank.get(label.casefold(), len(APPLICATION_CRITICALITY_ORDER)),
+            -row_totals[label],
+            label.casefold(),
+        ),
+    )
+    hosting_columns = sorted(
+        column_totals,
+        key=lambda label: (-column_totals[label], label.casefold()),
+    )
     rows: list[dict[str, Any]] = []
-    for criticality in APPLICATION_CRITICALITY_ORDER:
+    for criticality in criticality_rows:
         counts = {
             hosting_env: values_by_key.get((criticality, hosting_env), 0)
-            for hosting_env in APPLICATION_HOSTING_ENV_ORDER
+            for hosting_env in hosting_columns
         }
         row_total = sum(counts.values())
-        for hosting_env, count in counts.items():
-            column_totals[hosting_env] += count
         rows.append(
             {
                 "business_criticality": criticality,
@@ -1316,10 +1354,12 @@ def applications_criticality_hosting_pivot(db: Session, request: Any) -> dict[st
         )
 
     return {
-        "rows": list(APPLICATION_CRITICALITY_ORDER),
-        "columns": list(APPLICATION_HOSTING_ENV_ORDER),
+        "rows": criticality_rows,
+        "columns": hosting_columns,
         "values": rows,
-        "column_totals": column_totals,
+        "column_totals": {
+            hosting_env: column_totals[hosting_env] for hosting_env in hosting_columns
+        },
         "grand_total": sum(column_totals.values()),
     }
 
@@ -1417,6 +1457,180 @@ def applications_top_active_users(db: Session, request: Any) -> dict[str, Any]:
         "top_n": top_n,
         "duplicate_parent_active_user_count": duplicate_parent_count,
         "points": points,
+    }
+
+
+def applications_lifecycle_matrix_counts(db: Session, request: Any) -> dict[tuple[str, str], int]:
+    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
+    selects = []
+    for horizon_label, field_name in APPLICATION_LIFECYCLE_HORIZONS:
+        field_expression = application_field_expression(field_name)
+        plan_expression = canonical_lifecycle_plan_expression(field_expression)
+        selects.append(
+            select(
+                service_expression.label("business_service_ci_name"),
+                literal(horizon_label).label("horizon"),
+                plan_expression.label("plan"),
+            ).where(
+                *applications_filter_conditions(request.project_id, request.filters),
+                application_lifecycle_stage_status_in_use_condition(),
+                service_expression.is_not(None),
+                plan_expression.is_not(None),
+            ),
+        )
+    lifecycle_rows = union_all(*selects).subquery("application_lifecycle_planning_rows")
+    statement = (
+        select(
+            lifecycle_rows.c.plan.label("plan"),
+            lifecycle_rows.c.horizon.label("horizon"),
+            func.count(func.distinct(lifecycle_rows.c.business_service_ci_name)).label(
+                "application_count",
+            ),
+        )
+        .group_by(lifecycle_rows.c.plan, lifecycle_rows.c.horizon)
+        .order_by(lifecycle_rows.c.plan, lifecycle_rows.c.horizon)
+    )
+    return {
+        (str(row["plan"]), str(row["horizon"])): int(row["application_count"] or 0)
+        for row in db.execute(statement).mappings().all()
+    }
+
+
+def lifecycle_planning_matrix_from_counts(
+    counts_by_plan_horizon: dict[tuple[str, str], int],
+) -> dict[str, Any]:
+    horizon_labels = [label for label, _field_name in APPLICATION_LIFECYCLE_HORIZONS]
+    rows: list[dict[str, Any]] = []
+    horizon_totals = {horizon: 0 for horizon in horizon_labels}
+    grand_total = 0
+    for plan in APPLICATION_LIFECYCLE_PLAN_ORDER:
+        counts = {
+            horizon: counts_by_plan_horizon.get((plan, horizon), 0)
+            for horizon in horizon_labels
+        }
+        row_total = sum(counts.values())
+        for horizon, count in counts.items():
+            horizon_totals[horizon] += count
+        grand_total += row_total
+        rows.append(
+            {
+                "plan": plan,
+                "counts": counts,
+                "total_across_horizons": row_total,
+            },
+        )
+    return {
+        "plans": list(APPLICATION_LIFECYCLE_PLAN_ORDER),
+        "horizons": horizon_labels,
+        "rows": rows,
+        "horizon_totals": horizon_totals,
+        "grand_total_across_horizons": grand_total,
+    }
+
+
+def lifecycle_selected_plan_conditions(selected_plan: str) -> list[Any]:
+    return [
+        canonical_lifecycle_plan_expression(application_field_expression(field_name))
+        == selected_plan
+        for _horizon_label, field_name in APPLICATION_LIFECYCLE_HORIZONS
+    ]
+
+
+def lifecycle_planning_selected_applications(
+    db: Session,
+    request: Any,
+    selected_plan: str,
+) -> list[dict[str, Any]]:
+    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
+    columns = [
+        application_display_expression("business_service_ci_name").label("business_service_ci_name"),
+        application_display_expression("parent_application_name").label(
+            "parent_business_application",
+        ),
+        application_display_expression("functional_track").label("functional_track"),
+        application_display_expression("ams_owner").label("ams_owner"),
+        application_display_expression("application_owner").label("application_owner"),
+        application_display_expression("supported_by_vendor").label("supported_by_vendor"),
+        application_display_expression("install_type").label("install_type"),
+        application_display_expression("biz_criticality").label("business_criticality"),
+        application_display_expression("architecture_type").label("architecture_type"),
+        application_display_expression("app_type").label("application_type"),
+        application_display_expression("hosting_env").label("hosting_env"),
+        application_display_expression("global_application").label("global_application"),
+        application_display_expression("active_users").label("active_users"),
+        application_display_expression("lifecycle_current").label("lifecycle_current"),
+        application_display_expression("lifecycle_1_to_3_years").label("lifecycle_1_to_3_years"),
+        application_display_expression("lifecycle_3_to_5_years").label("lifecycle_3_to_5_years"),
+    ]
+    statement = (
+        select(*columns)
+        .where(
+            *applications_filter_conditions(request.project_id, request.filters),
+            application_lifecycle_stage_status_in_use_condition(),
+            service_expression.is_not(None),
+            or_(*lifecycle_selected_plan_conditions(selected_plan)),
+        )
+        .order_by(
+            application_display_expression("business_service_ci_name").asc(),
+            application_display_expression("parent_application_name").asc(),
+        )
+    )
+    unique_rows: dict[str, dict[str, Any]] = {}
+    for row in db.execute(statement).mappings().all():
+        row_dict = dict(row)
+        service_name = str(row_dict["business_service_ci_name"])
+        service_key = normalize_custom_sort_text(service_name)
+        selected_horizons = [
+            horizon_label
+            for horizon_label, field_name in APPLICATION_LIFECYCLE_HORIZONS
+            if canonical_lifecycle_plan_value(row_dict.get(field_name)) == selected_plan
+        ]
+        if service_key not in unique_rows:
+            row_dict["selected_plan_horizons"] = selected_horizons
+            unique_rows[service_key] = row_dict
+            continue
+        existing_horizons = unique_rows[service_key]["selected_plan_horizons"]
+        for horizon in selected_horizons:
+            if horizon not in existing_horizons:
+                existing_horizons.append(horizon)
+
+    criticality_rank = {
+        label.casefold(): index for index, label in enumerate(APPLICATION_CRITICALITY_ORDER)
+    }
+    return sorted(
+        unique_rows.values(),
+        key=lambda row: (
+            criticality_rank.get(
+                str(row.get("business_criticality", "")).casefold(),
+                len(APPLICATION_CRITICALITY_ORDER),
+            ),
+            normalize_custom_sort_text(row.get("functional_track")),
+            normalize_custom_sort_text(row.get("parent_business_application")),
+            normalize_custom_sort_text(row.get("business_service_ci_name")),
+        ),
+    )
+
+
+def applications_lifecycle_planning(db: Session, request: Any) -> dict[str, Any]:
+    selected_plan = normalize_lifecycle_plan(getattr(request, "selected_plan", "Invest"))
+    counts_by_plan_horizon = applications_lifecycle_matrix_counts(db, request)
+    matrix = lifecycle_planning_matrix_from_counts(counts_by_plan_horizon)
+    chart = [
+        {
+            "horizon": horizon,
+            "count": counts_by_plan_horizon.get((selected_plan, horizon), 0),
+        }
+        for horizon, _field_name in APPLICATION_LIFECYCLE_HORIZONS
+    ]
+    applications = lifecycle_planning_selected_applications(db, request, selected_plan)
+    return {
+        "matrix": matrix,
+        "selected_plan": {
+            "plan": selected_plan,
+            "chart": chart,
+            "applications": applications,
+            "application_count": len(applications),
+        },
     }
 
 

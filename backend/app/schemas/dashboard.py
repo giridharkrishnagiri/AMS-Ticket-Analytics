@@ -257,6 +257,10 @@ class ApplicationsTopActiveUsersRequest(ApplicationsDataRequest):
     top_n: int = Field(default=10, ge=10, le=20)
 
 
+class ApplicationsLifecyclePlanningRequest(ApplicationsDataRequest):
+    selected_plan: str = "Invest"
+
+
 class ApplicationsSummaryResponse(BaseModel):
     applications: int
     functional_groups: int
@@ -284,6 +288,10 @@ class ApplicationsListRow(BaseModel):
     supported_by_vendor: str
     hosting_env: str
     global_application: str
+    lifecycle_stage_status: str
+    lifecycle_current: str
+    lifecycle_1_to_3_years: str
+    lifecycle_3_to_5_years: str
     active_users: int | None
     avg_monthly_ticket_volume_6m: float | None
     tickets_per_user_per_month: float | None
@@ -354,6 +362,57 @@ class ApplicationsChartsResponse(BaseModel):
     strategic: list[ApplicationsChartDatum]
     criticality_hosting_pivot: ApplicationsCriticalityHostingPivot
     global_local_applications: list[ApplicationsChartDatum]
+
+
+class ApplicationsLifecyclePlanningMatrixRow(BaseModel):
+    plan: str
+    counts: dict[str, int]
+    total_across_horizons: int
+
+
+class ApplicationsLifecyclePlanningMatrix(BaseModel):
+    plans: list[str]
+    horizons: list[str]
+    rows: list[ApplicationsLifecyclePlanningMatrixRow]
+    horizon_totals: dict[str, int]
+    grand_total_across_horizons: int
+
+
+class ApplicationsLifecyclePlanningChartDatum(BaseModel):
+    horizon: str
+    count: int
+
+
+class ApplicationsLifecyclePlanningApplication(BaseModel):
+    business_service_ci_name: str
+    parent_business_application: str
+    functional_track: str
+    ams_owner: str
+    application_owner: str
+    supported_by_vendor: str
+    install_type: str
+    business_criticality: str
+    architecture_type: str
+    application_type: str
+    hosting_env: str
+    global_application: str
+    active_users: int | None
+    lifecycle_current: str
+    lifecycle_1_to_3_years: str
+    lifecycle_3_to_5_years: str
+    selected_plan_horizons: list[str]
+
+
+class ApplicationsLifecyclePlanningSelectedPlan(BaseModel):
+    plan: str
+    chart: list[ApplicationsLifecyclePlanningChartDatum]
+    applications: list[ApplicationsLifecyclePlanningApplication]
+    application_count: int
+
+
+class ApplicationsLifecyclePlanningResponse(BaseModel):
+    matrix: ApplicationsLifecyclePlanningMatrix
+    selected_plan: ApplicationsLifecyclePlanningSelectedPlan
 
 
 class VolumetricsFilters(BaseModel):

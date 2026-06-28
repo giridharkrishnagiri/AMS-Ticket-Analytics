@@ -15,6 +15,10 @@ export type ApplicationInventoryItem = {
   supported_by_vendor: string | null;
   hosting_env: string | null;
   global_application: string | null;
+  lifecycle_stage_status: string | null;
+  lifecycle_current: string | null;
+  lifecycle_1_to_3_years: string | null;
+  lifecycle_3_to_5_years: string | null;
   active: boolean | null;
   active_users: number | null;
   cmdb_payload: Record<string, unknown> | null;

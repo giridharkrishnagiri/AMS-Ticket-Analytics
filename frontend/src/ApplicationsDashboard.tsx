@@ -17,6 +17,7 @@ import {
 import {
   getDashboardApplicationsCharts,
   getDashboardApplicationsFilterValues,
+  getDashboardApplicationsLifecyclePlanning,
   getDashboardApplicationsList,
   getDashboardApplicationsSummary,
   getDashboardApplicationsTopActiveUsers,
@@ -27,6 +28,9 @@ import type {
   DashboardApplicationsFilters,
   DashboardApplicationsFilterValues,
   DashboardApplicationsFilterValuesRequest,
+  DashboardApplicationsLifecycleApplication,
+  DashboardApplicationsLifecyclePlan,
+  DashboardApplicationsLifecyclePlanning,
   DashboardApplicationsList,
   DashboardApplicationsRequest,
   DashboardApplicationsSort,
@@ -54,6 +58,7 @@ type ApplicationsDashboardProps = {
 type TopNSelection = 10 | 20;
 type FilterKey = keyof DashboardApplicationsFilters;
 type TableColumnKey = keyof DashboardApplicationRow;
+type ApplicationsSubTab = "overview" | "lifecycle_planning";
 
 const emptyFilters: DashboardApplicationsFilters = {
   functional_track_ams_owner: [],
@@ -114,8 +119,8 @@ const emptyCharts: DashboardApplicationsCharts = {
   strategic: [],
   global_local_applications: [],
   criticality_hosting_pivot: {
-    rows: ["Very Critical", "Critical", "High", "Medium", "Low"],
-    columns: ["Production", "Non-Prod", "Dev", "Test", "Historical & DR"],
+    rows: [],
+    columns: [],
     values: [],
     column_totals: {},
     grand_total: 0,
@@ -126,6 +131,45 @@ const emptyTopActiveUsers: DashboardApplicationsTopActiveUsers = {
   top_n: 10,
   duplicate_parent_active_user_count: 0,
   points: [],
+};
+
+const lifecyclePlans: DashboardApplicationsLifecyclePlan[] = [
+  "Invest",
+  "Disinvest",
+  "Maintain",
+  "Retired",
+];
+
+const emptyLifecyclePlanning: DashboardApplicationsLifecyclePlanning = {
+  matrix: {
+    plans: lifecyclePlans,
+    horizons: ["Current", "1 to 3 years", "3 to 5 years"],
+    rows: lifecyclePlans.map((plan) => ({
+      plan,
+      counts: {
+        Current: 0,
+        "1 to 3 years": 0,
+        "3 to 5 years": 0,
+      },
+      total_across_horizons: 0,
+    })),
+    horizon_totals: {
+      Current: 0,
+      "1 to 3 years": 0,
+      "3 to 5 years": 0,
+    },
+    grand_total_across_horizons: 0,
+  },
+  selected_plan: {
+    plan: "Invest",
+    chart: [
+      { horizon: "Current", count: 0 },
+      { horizon: "1 to 3 years", count: 0 },
+      { horizon: "3 to 5 years", count: 0 },
+    ],
+    applications: [],
+    application_count: 0,
+  },
 };
 
 const defaultSort: DashboardApplicationsSort = {
@@ -146,6 +190,10 @@ const tableColumns: Array<{ key: TableColumnKey; label: string }> = [
   { key: "supported_by_vendor", label: "Supported By Vendor" },
   { key: "hosting_env", label: "Hosting Env" },
   { key: "global_application", label: "Global" },
+  { key: "lifecycle_stage_status", label: "Lifecycle Stage Status" },
+  { key: "lifecycle_current", label: "Lifecycle - Current" },
+  { key: "lifecycle_1_to_3_years", label: "Lifecycle - 1 to 3 years" },
+  { key: "lifecycle_3_to_5_years", label: "Lifecycle - 3 to 5 years" },
   { key: "active_users", label: "Active Users" },
   { key: "app_family", label: "App Family" },
   { key: "biz_process", label: "Biz Process" },
@@ -227,6 +275,23 @@ function filtersEqual(left: DashboardApplicationsFilters, right: DashboardApplic
 
 function commentaryFunctionalContext(values: string[]): string {
   return values.length === 1 ? values[0] : "all";
+}
+
+function lifecyclePlanCommentaryKey(plan: DashboardApplicationsLifecyclePlan): string {
+  return `applications_lifecycle_plan_${plan.toLowerCase()}`;
+}
+
+function lifecyclePlanTitle(plan: DashboardApplicationsLifecyclePlan): string {
+  return plan === "Retired"
+    ? "Applications Planned to Retire"
+    : `Applications Planned to ${plan}`;
+}
+
+function formatCellValue(value: string | number | null | undefined): string {
+  if (typeof value === "number") {
+    return value.toLocaleString();
+  }
+  return value === null || value === undefined ? "" : String(value);
 }
 
 function combinedFilterOptions(
@@ -552,6 +617,12 @@ function ApplicationsDashboard({
   const [topActiveUsers, setTopActiveUsers] = useState<
     LoadState<DashboardApplicationsTopActiveUsers>
   >(createLoadState(emptyTopActiveUsers));
+  const [activeSubTab, setActiveSubTab] = useState<ApplicationsSubTab>("overview");
+  const [selectedLifecyclePlan, setSelectedLifecyclePlan] =
+    useState<DashboardApplicationsLifecyclePlan>("Invest");
+  const [lifecyclePlanning, setLifecyclePlanning] = useState<
+    LoadState<DashboardApplicationsLifecyclePlanning>
+  >(createLoadState(emptyLifecyclePlanning));
   const [loadedProjectId, setLoadedProjectId] = useState("");
 
   const filterOptions = useMemo(
@@ -660,6 +731,30 @@ function ApplicationsDashboard({
     }
   }, [requestBody, topActiveUsersN]);
 
+  const loadLifecyclePlanningData = useCallback(async () => {
+    if (!requestBody) {
+      return;
+    }
+    setLifecyclePlanning(createLoadState(emptyLifecyclePlanning, "loading"));
+    try {
+      const nextLifecyclePlanning = await getDashboardApplicationsLifecyclePlanning(
+        requestBody,
+        selectedLifecyclePlan
+      );
+      setLifecyclePlanning({
+        status: "success",
+        data: nextLifecyclePlanning,
+        error: null,
+      });
+    } catch (error) {
+      setLifecyclePlanning({
+        status: "error",
+        data: emptyLifecyclePlanning,
+        error: errorMessage(error, "Unable to load lifecycle planning data"),
+      });
+    }
+  }, [requestBody, selectedLifecyclePlan]);
+
   useEffect(() => {
     if (projectId !== loadedProjectId) {
       setLoadedProjectId(projectId);
@@ -671,6 +766,9 @@ function ApplicationsDashboard({
       setCharts(createLoadState(emptyCharts));
       setTopActiveUsersN(10);
       setTopActiveUsers(createLoadState(emptyTopActiveUsers));
+      setActiveSubTab("overview");
+      setSelectedLifecyclePlan("Invest");
+      setLifecyclePlanning(createLoadState(emptyLifecyclePlanning));
     }
   }, [loadedProjectId, projectId]);
 
@@ -691,6 +789,20 @@ function ApplicationsDashboard({
       void loadApplicationsData();
     }
   }, [hasActiveProjectContext, isActive, loadApplicationsData, requestBody, requestSignature]);
+
+  useEffect(() => {
+    if (isActive && activeSubTab === "lifecycle_planning" && hasActiveProjectContext && requestBody) {
+      void loadLifecyclePlanningData();
+    }
+  }, [
+    activeSubTab,
+    hasActiveProjectContext,
+    isActive,
+    loadLifecyclePlanningData,
+    requestBody,
+    requestSignature,
+    selectedLifecyclePlan,
+  ]);
 
   function updateFilter(filterName: FilterKey, values: string[]) {
     setFilters((currentFilters) => ({
@@ -791,17 +903,27 @@ function ApplicationsDashboard({
   ];
 
   const commentaryFunctional = commentaryFunctionalContext(filters.functional_track_ams_owner);
-  const applicationCommentary = (sectionKey: string, chartKey?: string): ReactNode => (
+  const applicationCommentary = (
+    sectionKey: string,
+    chartKey?: string,
+    subTabName?: string
+  ): ReactNode => (
     <CommentaryEditor
       project_id={projectId}
       dashboard_area="applications"
       tab_name="applications"
+      sub_tab_name={subTabName ?? null}
       section_key={sectionKey}
       chart_key={chartKey ?? null}
       scope_filter="all"
       ticket_type_filter="all"
       functional_track_ams_owner={commentaryFunctional}
     />
+  );
+  const lifecyclePlanCommentary = applicationCommentary(
+    "lifecycle_planning_selected_plan",
+    lifecyclePlanCommentaryKey(selectedLifecyclePlan),
+    "lifecycle_planning"
   );
 
   return (
@@ -907,6 +1029,29 @@ function ApplicationsDashboard({
       </aside>
 
       <div className="applications-main-pane">
+        <div className="applications-subtabs" role="tablist" aria-label="Applications sections">
+          <button
+            aria-selected={activeSubTab === "overview"}
+            className={activeSubTab === "overview" ? "active" : ""}
+            role="tab"
+            type="button"
+            onClick={() => setActiveSubTab("overview")}
+          >
+            Overview
+          </button>
+          <button
+            aria-selected={activeSubTab === "lifecycle_planning"}
+            className={activeSubTab === "lifecycle_planning" ? "active" : ""}
+            role="tab"
+            type="button"
+            onClick={() => setActiveSubTab("lifecycle_planning")}
+          >
+            Lifecycle Planning
+          </button>
+        </div>
+
+        {activeSubTab === "overview" ? (
+          <>
         <section className="panel" aria-labelledby="applications-tab-heading">
           <div className="panel-heading">
             <div>
@@ -1046,7 +1191,321 @@ function ApplicationsDashboard({
           topN={topActiveUsersN}
           commentary={applicationCommentary("applications_charts", "top_active_users")}
         />
+          </>
+        ) : (
+          <LifecyclePlanningPanel
+            commentary={lifecyclePlanCommentary}
+            data={lifecyclePlanning.data}
+            error={lifecyclePlanning.error}
+            onPlanChange={setSelectedLifecyclePlan}
+            selectedPlan={selectedLifecyclePlan}
+            status={lifecyclePlanning.status}
+          />
+        )}
       </div>
+    </section>
+  );
+}
+
+function LifecyclePlanningPanel({
+  commentary,
+  data,
+  error,
+  onPlanChange,
+  selectedPlan,
+  status,
+}: {
+  commentary?: ReactNode;
+  data: DashboardApplicationsLifecyclePlanning;
+  error: string | null;
+  onPlanChange: (plan: DashboardApplicationsLifecyclePlan) => void;
+  selectedPlan: DashboardApplicationsLifecyclePlan;
+  status: LoadStatus;
+}) {
+  const hasLifecycleData = data.matrix.grand_total_across_horizons > 0;
+
+  return (
+    <div className="lifecycle-planning-stack">
+      <section className="panel lifecycle-planning-intro">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Applications</p>
+            <h2>Lifecycle Planning</h2>
+          </div>
+        </div>
+        <p className="muted-text">
+          Lifecycle planning shows In Use applications across Current, 1 to 3 years, and 3 to 5
+          years planning horizons.
+        </p>
+      </section>
+
+      <LifecyclePlanningMatrixTable data={data} error={error} status={status} />
+
+      <section className="panel lifecycle-plan-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Plan Focus</p>
+            <h2>{lifecyclePlanTitle(selectedPlan)}</h2>
+          </div>
+          <div className="segmented-control" role="tablist" aria-label="Lifecycle plan selector">
+            {lifecyclePlans.map((plan) => (
+              <button
+                aria-selected={selectedPlan === plan}
+                className={selectedPlan === plan ? "active" : ""}
+                key={plan}
+                role="tab"
+                type="button"
+                onClick={() => onPlanChange(plan)}
+              >
+                {plan}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {status === "loading" ? (
+          <p className="muted-text chart-state-text">Loading lifecycle planning...</p>
+        ) : null}
+        {status === "error" ? <p className="error-text">{error}</p> : null}
+        {status !== "loading" && status !== "error" && !hasLifecycleData ? (
+          <p className="muted-text chart-state-text">
+            No In Use applications match the current filters for lifecycle planning.
+          </p>
+        ) : null}
+
+        {commentary}
+      </section>
+
+      <LifecyclePlanBarChart data={data} selectedPlan={selectedPlan} status={status} />
+      <LifecyclePlanDetailTable data={data} selectedPlan={selectedPlan} status={status} />
+    </div>
+  );
+}
+
+function LifecyclePlanningMatrixTable({
+  data,
+  error,
+  status,
+}: {
+  data: DashboardApplicationsLifecyclePlanning;
+  error: string | null;
+  status: LoadStatus;
+}) {
+  const matrix = data.matrix;
+  const hasRows = matrix.grand_total_across_horizons > 0;
+
+  return (
+    <section className="panel lifecycle-matrix-panel" aria-label="Lifecycle planning matrix">
+      <div className="panel-heading">
+        <div>
+          <p className="label">Lifecycle Planning Matrix</p>
+          <h2>Application Lifecycle Planning Matrix</h2>
+          <p className="muted-text">
+            Counts represent distinct Business Service CI Names per planning horizon. The same
+            application can appear in multiple horizons.
+          </p>
+        </div>
+      </div>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading matrix...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">
+          No In Use applications match the current filters for lifecycle planning.
+        </p>
+      ) : null}
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-pivot-table-frame">
+          <table className="applications-pivot-table lifecycle-matrix-table">
+            <thead>
+              <tr>
+                <th scope="col">Lifecycle Plan</th>
+                {matrix.horizons.map((horizon) => (
+                  <th className="numeric-cell" key={horizon} scope="col">
+                    {horizon}
+                  </th>
+                ))}
+                <th className="numeric-cell total-cell" scope="col" title="Horizon-cell total">
+                  Total Across Horizons
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.rows.map((row) => (
+                <tr key={row.plan}>
+                  <th scope="row">{row.plan}</th>
+                  {matrix.horizons.map((horizon) => (
+                    <td className="numeric-cell" key={horizon}>
+                      {formatNumber(row.counts[horizon] ?? 0)}
+                    </td>
+                  ))}
+                  <td className="numeric-cell total-cell">
+                    {formatNumber(row.total_across_horizons)}
+                  </td>
+                </tr>
+              ))}
+              <tr className="pivot-total-row">
+                <th scope="row">Total</th>
+                {matrix.horizons.map((horizon) => (
+                  <td className="numeric-cell total-cell" key={horizon}>
+                    {formatNumber(matrix.horizon_totals[horizon] ?? 0)}
+                  </td>
+                ))}
+                <td className="numeric-cell total-cell grand-total-cell">
+                  <span className="grand-total-label">Grand Total</span>
+                  <strong>{formatNumber(matrix.grand_total_across_horizons)}</strong>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function LifecyclePlanBarChart({
+  data,
+  selectedPlan,
+  status,
+}: {
+  data: DashboardApplicationsLifecyclePlanning;
+  selectedPlan: DashboardApplicationsLifecyclePlan;
+  status: LoadStatus;
+}) {
+  const title = lifecyclePlanTitle(selectedPlan);
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartCopy(title);
+  const chartData = data.selected_plan.chart;
+  const hasRows = chartData.some((entry) => entry.count > 0);
+  const chartWidth = Math.max(620, plotWidth - 24, chartData.length * 150);
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card applications-chart-card applications-wide-chart" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">Count of unique Business Service CI Names by planning horizon.</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status !== "loading" && !hasRows ? (
+        <p className="muted-text chart-state-text">
+          No applications found for the selected lifecycle plan.
+        </p>
+      ) : null}
+      {status !== "loading" && hasRows ? (
+        <div className="applications-chart-plot" ref={chartRef}>
+          <div className="applications-chart-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={chartData}
+                width={chartWidth}
+                height={320}
+                margin={{ top: 30, right: 52, bottom: 64, left: 48 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="horizon" interval={0} />
+                <YAxis allowDecimals={false} />
+                <Tooltip formatter={(value) => formatNumber(Number(value))} />
+                <Bar dataKey="count" fill="#0f766e" name="Applications" radius={[5, 5, 0, 0]}>
+                  <LabelList dataKey="count" formatter={(value) => formatNumber(Number(value))} position="top" />
+                </Bar>
+              </BarChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+const lifecycleDetailColumns: Array<{
+  key: keyof DashboardApplicationsLifecycleApplication;
+  label: string;
+}> = [
+  { key: "business_service_ci_name", label: "Business Service CI Name" },
+  { key: "parent_business_application", label: "Parent Business Application" },
+  { key: "functional_track", label: "Functional Track" },
+  { key: "ams_owner", label: "AMS Owner" },
+  { key: "application_owner", label: "Application Owner" },
+  { key: "supported_by_vendor", label: "Supported By Vendor" },
+  { key: "install_type", label: "Install Type" },
+  { key: "business_criticality", label: "Business Criticality" },
+  { key: "architecture_type", label: "Architecture Type" },
+  { key: "application_type", label: "Application Type" },
+  { key: "hosting_env", label: "Hosting Env" },
+  { key: "global_application", label: "Global" },
+  { key: "active_users", label: "Active Users" },
+  { key: "lifecycle_current", label: "Lifecycle - Current" },
+  { key: "lifecycle_1_to_3_years", label: "Lifecycle - 1 to 3 years" },
+  { key: "lifecycle_3_to_5_years", label: "Lifecycle - 3 to 5 years" },
+  { key: "selected_plan_horizons", label: "Selected Plan Horizons" },
+];
+
+function LifecyclePlanDetailTable({
+  data,
+  selectedPlan,
+  status,
+}: {
+  data: DashboardApplicationsLifecyclePlanning;
+  selectedPlan: DashboardApplicationsLifecyclePlan;
+  status: LoadStatus;
+}) {
+  const rows = data.selected_plan.applications;
+
+  return (
+    <section className="panel lifecycle-detail-panel" aria-label={`${selectedPlan} application details`}>
+      <div className="panel-heading">
+        <div>
+          <p className="label">Selected Plan Details</p>
+          <h2>{lifecyclePlanTitle(selectedPlan)} - Details</h2>
+          <p className="muted-text">
+            Showing {formatNumber(data.selected_plan.application_count)} applications with {selectedPlan}
+            {" "}plan across one or more lifecycle horizons.
+          </p>
+        </div>
+      </div>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading details...</p> : null}
+      {status !== "loading" && rows.length === 0 ? (
+        <p className="muted-text chart-state-text">
+          No applications found for the selected lifecycle plan.
+        </p>
+      ) : null}
+      {status !== "loading" && rows.length > 0 ? (
+        <div className="applications-table-frame">
+          <table className="applications-table lifecycle-detail-table">
+            <thead>
+              <tr>
+                {lifecycleDetailColumns.map((column) => (
+                  <th key={column.key}>{column.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.business_service_ci_name}>
+                  {lifecycleDetailColumns.map((column) => (
+                    <td key={column.key}>
+                      {Array.isArray(row[column.key])
+                        ? (row[column.key] as string[]).join(", ")
+                        : formatCellValue(row[column.key] as string | number | null)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1119,7 +1578,14 @@ function ApplicationsCriticalityHostingPivotTable({
                     {formatNumber(data.column_totals[column] ?? 0)}
                   </td>
                 ))}
-                <td className="numeric-cell grand-total-cell">{formatNumber(data.grand_total)}</td>
+                <td
+                  aria-label={`Grand total ${formatNumber(data.grand_total)}`}
+                  className="numeric-cell total-cell grand-total-cell"
+                  title="Grand total"
+                >
+                  <span className="grand-total-label">Grand Total</span>
+                  <strong>{formatNumber(data.grand_total)}</strong>
+                </td>
               </tr>
             </tbody>
           </table>
