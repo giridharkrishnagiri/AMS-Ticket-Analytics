@@ -1513,6 +1513,14 @@ h2 {
   min-width: 700px;
 }
 
+.lifecycle-matrix-note {
+  margin: 10px 12px 12px;
+  color: #0f172a;
+  font-size: 0.86rem;
+  font-weight: 900;
+  text-align: right;
+}
+
 .lifecycle-detail-table {
   min-width: 2500px;
 }

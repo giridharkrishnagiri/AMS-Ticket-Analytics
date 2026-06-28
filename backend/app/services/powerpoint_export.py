@@ -627,21 +627,21 @@ def lifecycle_planning_payload(
                 existing_horizons.append(horizon)
 
     horizon_labels = [label for label, _field_name in APPLICATION_LIFECYCLE_HORIZONS]
-    horizon_totals = {horizon: 0 for horizon in horizon_labels}
+    in_use_application_keys = {
+        app_service_key(row)
+        for row in payload["applications"]["rows"]
+        if app_in_use_for_lifecycle(row, functional=functional)
+    }
     matrix_rows = []
     for plan in APPLICATION_LIFECYCLE_PLAN_ORDER:
         counts = {
             horizon: len(cell_sets.get((plan, horizon), set()))
             for horizon in horizon_labels
         }
-        row_total = sum(counts.values())
-        for horizon, count in counts.items():
-            horizon_totals[horizon] += count
         matrix_rows.append(
             {
                 "plan": plan,
                 "counts": counts,
-                "total_across_horizons": row_total,
             },
         )
 
@@ -665,10 +665,7 @@ def lifecycle_planning_payload(
             "plans": list(APPLICATION_LIFECYCLE_PLAN_ORDER),
             "horizons": horizon_labels,
             "rows": matrix_rows,
-            "horizon_totals": horizon_totals,
-            "grand_total_across_horizons": sum(
-                row["total_across_horizons"] for row in matrix_rows
-            ),
+            "in_use_application_count": len(in_use_application_keys),
         },
         "selected_plan": {
             "plan": selected_plan,
@@ -1074,37 +1071,24 @@ def add_lifecycle_planning_matrix_slide(
         ),
     )
     matrix = data["matrix"]
-    columns = ["Lifecycle Plan", *matrix["horizons"], "Total Across Horizons"]
+    columns = ["Lifecycle Plan", *matrix["horizons"]]
     rows = [
         [
             row["plan"],
             *[fmt_number(row["counts"].get(horizon, 0)) for horizon in matrix["horizons"]],
-            fmt_number(row["total_across_horizons"]),
         ]
         for row in matrix["rows"]
     ]
-    rows.append(
-        [
-            "Total",
-            *[
-                fmt_number(matrix["horizon_totals"].get(horizon, 0))
-                for horizon in matrix["horizons"]
-            ],
-            fmt_number(matrix["grand_total_across_horizons"]),
-        ],
-    )
-    add_table(slide, columns, rows, 0.7, 1.35, 11.9, 2.7, font_size=9)
+    add_table(slide, columns, rows, 0.7, 1.35, 9.2, 2.35, font_size=9)
     add_textbox(
         slide,
-        (
-            "Total Across Horizons is a horizon-cell total, not a distinct application "
-            "total across all horizons."
-        ),
-        0.75,
-        4.35,
-        11.6,
+        f"Matrix is based on {fmt_number(matrix['in_use_application_count'])} In Use applications.",
+        10.05,
+        2.0,
+        2.55,
         0.35,
-        size=9,
+        size=10,
+        bold=True,
         color=MUTED,
     )
     add_footer(slide, payload)

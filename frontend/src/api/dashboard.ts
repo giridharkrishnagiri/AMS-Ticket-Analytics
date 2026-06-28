@@ -414,15 +414,13 @@ export type DashboardApplicationsLifecyclePlan = "Invest" | "Disinvest" | "Maint
 export type DashboardApplicationsLifecycleMatrixRow = {
   plan: DashboardApplicationsLifecyclePlan;
   counts: Record<string, number>;
-  total_across_horizons: number;
 };
 
 export type DashboardApplicationsLifecycleMatrix = {
   plans: DashboardApplicationsLifecyclePlan[];
   horizons: string[];
   rows: DashboardApplicationsLifecycleMatrixRow[];
-  horizon_totals: Record<string, number>;
-  grand_total_across_horizons: number;
+  in_use_application_count: number;
 };
 
 export type DashboardApplicationsLifecycleChartDatum = {

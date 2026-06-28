@@ -1898,6 +1898,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     .lifecycle-matrix-table {
       min-width: 700px;
     }
+    .lifecycle-matrix-note {
+      margin: 10px 12px 12px;
+      color: #0f172a;
+      font-size: 0.86rem;
+      font-weight: 900;
+      text-align: right;
+    }
     .applications-pivot-table .numeric-cell {
       text-align: right;
       font-variant-numeric: tabular-nums;
@@ -3133,17 +3140,14 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         });
       });
       const horizonLabels = LIFECYCLE_HORIZONS.map((horizon) => horizon.label);
-      const horizonTotals = Object.fromEntries(horizonLabels.map((horizon) => [horizon, 0]));
+      const inUseApplicationKeys = new Set(rows.filter(inUseLifecycleApplication).map(applicationServiceKey));
       const matrixRows = LIFECYCLE_PLANS.map((plan) => {
         const counts = {};
-        let total = 0;
         horizonLabels.forEach((horizon) => {
           const count = cellSets.get(`${plan}|${horizon}`)?.size || 0;
           counts[horizon] = count;
-          horizonTotals[horizon] += count;
-          total += count;
         });
-        return { plan, counts, total_across_horizons: total };
+        return { plan, counts };
       });
       const criticalityRank = new Map(APPLICATION_CRITICALITY_ORDER.map((label, index) => [label.toLowerCase(), index]));
       const criticalitySort = (value) => criticalityRank.has(normalizeApplicationDimension(value).toLowerCase())
@@ -3160,8 +3164,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           plans: LIFECYCLE_PLANS,
           horizons: horizonLabels,
           rows: matrixRows,
-          horizon_totals: horizonTotals,
-          grand_total_across_horizons: matrixRows.reduce((total, row) => total + row.total_across_horizons, 0)
+          in_use_application_count: inUseApplicationKeys.size
         },
         selected_plan: {
           plan: selectedPlan,
@@ -3173,14 +3176,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function lifecyclePlanningMatrixTable(data) {
       const matrix = data.matrix;
-      if (!matrix.grand_total_across_horizons) return `<p class="muted">No In Use applications match the current filters for lifecycle planning.</p>`;
+      if (!matrix.in_use_application_count) return `<p class="muted">No In Use applications match the current filters for lifecycle planning.</p>`;
       return `<table class="applications-pivot-table lifecycle-matrix-table">
-        <thead><tr><th>Lifecycle Plan</th>${matrix.horizons.map((horizon) => `<th class="numeric-cell">${esc(horizon)}</th>`).join("")}<th class="numeric-cell total-cell">Total Across Horizons</th></tr></thead>
+        <thead><tr><th>Lifecycle Plan</th>${matrix.horizons.map((horizon) => `<th class="numeric-cell">${esc(horizon)}</th>`).join("")}</tr></thead>
         <tbody>
-          ${matrix.rows.map((row) => `<tr><th>${esc(row.plan)}</th>${matrix.horizons.map((horizon) => `<td class="numeric-cell">${fmt(row.counts[horizon] || 0)}</td>`).join("")}<td class="numeric-cell total-cell">${fmt(row.total_across_horizons || 0)}</td></tr>`).join("")}
-          <tr class="pivot-total-row"><th>Total</th>${matrix.horizons.map((horizon) => `<td class="numeric-cell total-cell">${fmt(matrix.horizon_totals[horizon] || 0)}</td>`).join("")}<td class="numeric-cell total-cell grand-total-cell"><span class="grand-total-label">Grand Total</span><strong>${fmt(matrix.grand_total_across_horizons)}</strong></td></tr>
+          ${matrix.rows.map((row) => `<tr><th>${esc(row.plan)}</th>${matrix.horizons.map((horizon) => `<td class="numeric-cell">${fmt(row.counts[horizon] || 0)}</td>`).join("")}</tr>`).join("")}
         </tbody>
-      </table>`;
+      </table><p class="lifecycle-matrix-note">Matrix is based on ${fmt(matrix.in_use_application_count)} In Use applications.</p>`;
     }
     function lifecyclePlanToggle() {
       return LIFECYCLE_PLANS.map((plan) => `<button type="button" data-lifecycle-plan="${plan}" class="${state.lifecyclePlan === plan ? "active" : ""}">${plan}</button>`).join("");

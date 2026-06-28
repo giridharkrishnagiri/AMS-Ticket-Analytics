@@ -1238,12 +1238,10 @@ def test_dashboard_applications_lifecycle_planning_matrix_and_selected_plan() ->
             "1 to 3 years": 1,
             "3 to 5 years": 3,
         }
-        assert payload["matrix"]["horizon_totals"] == {
-            "Current": 3,
-            "1 to 3 years": 4,
-            "3 to 5 years": 3,
-        }
-        assert payload["matrix"]["grand_total_across_horizons"] == 10
+        assert payload["matrix"]["in_use_application_count"] == 4
+        assert "horizon_totals" not in payload["matrix"]
+        assert "grand_total_across_horizons" not in payload["matrix"]
+        assert "total_across_horizons" not in rows["Invest"]
         assert payload["selected_plan"]["plan"] == "Invest"
         assert payload["selected_plan"]["chart"] == [
             {"horizon": "Current", "count": 1},
@@ -1274,7 +1272,7 @@ def test_dashboard_applications_lifecycle_planning_matrix_and_selected_plan() ->
 
         assert filtered_response.status_code == 200
         filtered_payload = filtered_response.json()
-        assert filtered_payload["matrix"]["grand_total_across_horizons"] == 6
+        assert filtered_payload["matrix"]["in_use_application_count"] == 2
         assert filtered_payload["selected_plan"]["application_count"] == 1
         assert filtered_payload["selected_plan"]["applications"][0][
             "business_service_ci_name"
@@ -2772,6 +2770,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function lifecyclePlanTitle" in document
         assert "Applications Planned to Retire" in document
         assert "applications_lifecycle_plan_invest" in document
+        assert "lifecycle-matrix-note" in document
+        assert (
+            "Matrix is based on ${fmt(matrix.in_use_application_count)} In Use applications."
+            in document
+        )
+        assert "Total Across Horizons" not in document
         assert "Global vs Local Applications" in document
         assert "Application Criticality by Hosting Environment" in document
         assert "Grand Total" in document

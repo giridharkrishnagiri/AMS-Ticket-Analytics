@@ -1498,34 +1498,38 @@ def applications_lifecycle_matrix_counts(db: Session, request: Any) -> dict[tupl
 
 def lifecycle_planning_matrix_from_counts(
     counts_by_plan_horizon: dict[tuple[str, str], int],
+    *,
+    in_use_application_count: int,
 ) -> dict[str, Any]:
     horizon_labels = [label for label, _field_name in APPLICATION_LIFECYCLE_HORIZONS]
     rows: list[dict[str, Any]] = []
-    horizon_totals = {horizon: 0 for horizon in horizon_labels}
-    grand_total = 0
     for plan in APPLICATION_LIFECYCLE_PLAN_ORDER:
         counts = {
             horizon: counts_by_plan_horizon.get((plan, horizon), 0)
             for horizon in horizon_labels
         }
-        row_total = sum(counts.values())
-        for horizon, count in counts.items():
-            horizon_totals[horizon] += count
-        grand_total += row_total
         rows.append(
             {
                 "plan": plan,
                 "counts": counts,
-                "total_across_horizons": row_total,
             },
         )
     return {
         "plans": list(APPLICATION_LIFECYCLE_PLAN_ORDER),
         "horizons": horizon_labels,
         "rows": rows,
-        "horizon_totals": horizon_totals,
-        "grand_total_across_horizons": grand_total,
+        "in_use_application_count": in_use_application_count,
     }
+
+
+def applications_lifecycle_in_use_count(db: Session, request: Any) -> int:
+    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
+    statement = select(func.count(func.distinct(service_expression))).where(
+        *applications_filter_conditions(request.project_id, request.filters),
+        application_lifecycle_stage_status_in_use_condition(),
+        service_expression.is_not(None),
+    )
+    return int(db.scalar(statement) or 0)
 
 
 def lifecycle_selected_plan_conditions(selected_plan: str) -> list[Any]:
@@ -1614,7 +1618,10 @@ def lifecycle_planning_selected_applications(
 def applications_lifecycle_planning(db: Session, request: Any) -> dict[str, Any]:
     selected_plan = normalize_lifecycle_plan(getattr(request, "selected_plan", "Invest"))
     counts_by_plan_horizon = applications_lifecycle_matrix_counts(db, request)
-    matrix = lifecycle_planning_matrix_from_counts(counts_by_plan_horizon)
+    matrix = lifecycle_planning_matrix_from_counts(
+        counts_by_plan_horizon,
+        in_use_application_count=applications_lifecycle_in_use_count(db, request),
+    )
     chart = [
         {
             "horizon": horizon,

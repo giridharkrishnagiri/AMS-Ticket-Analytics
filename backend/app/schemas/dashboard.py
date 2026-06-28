@@ -367,15 +367,13 @@ class ApplicationsChartsResponse(BaseModel):
 class ApplicationsLifecyclePlanningMatrixRow(BaseModel):
     plan: str
     counts: dict[str, int]
-    total_across_horizons: int
 
 
 class ApplicationsLifecyclePlanningMatrix(BaseModel):
     plans: list[str]
     horizons: list[str]
     rows: list[ApplicationsLifecyclePlanningMatrixRow]
-    horizon_totals: dict[str, int]
-    grand_total_across_horizons: int
+    in_use_application_count: int
 
 
 class ApplicationsLifecyclePlanningChartDatum(BaseModel):

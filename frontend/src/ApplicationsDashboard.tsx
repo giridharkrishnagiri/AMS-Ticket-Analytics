@@ -151,14 +151,8 @@ const emptyLifecyclePlanning: DashboardApplicationsLifecyclePlanning = {
         "1 to 3 years": 0,
         "3 to 5 years": 0,
       },
-      total_across_horizons: 0,
     })),
-    horizon_totals: {
-      Current: 0,
-      "1 to 3 years": 0,
-      "3 to 5 years": 0,
-    },
-    grand_total_across_horizons: 0,
+    in_use_application_count: 0,
   },
   selected_plan: {
     plan: "Invest",
@@ -1222,7 +1216,7 @@ function LifecyclePlanningPanel({
   selectedPlan: DashboardApplicationsLifecyclePlan;
   status: LoadStatus;
 }) {
-  const hasLifecycleData = data.matrix.grand_total_across_horizons > 0;
+  const hasLifecycleData = data.matrix.in_use_application_count > 0;
 
   return (
     <div className="lifecycle-planning-stack">
@@ -1292,7 +1286,7 @@ function LifecyclePlanningMatrixTable({
   status: LoadStatus;
 }) {
   const matrix = data.matrix;
-  const hasRows = matrix.grand_total_across_horizons > 0;
+  const hasRows = matrix.in_use_application_count > 0;
 
   return (
     <section className="panel lifecycle-matrix-panel" aria-label="Lifecycle planning matrix">
@@ -1324,9 +1318,6 @@ function LifecyclePlanningMatrixTable({
                     {horizon}
                   </th>
                 ))}
-                <th className="numeric-cell total-cell" scope="col" title="Horizon-cell total">
-                  Total Across Horizons
-                </th>
               </tr>
             </thead>
             <tbody>
@@ -1338,25 +1329,13 @@ function LifecyclePlanningMatrixTable({
                       {formatNumber(row.counts[horizon] ?? 0)}
                     </td>
                   ))}
-                  <td className="numeric-cell total-cell">
-                    {formatNumber(row.total_across_horizons)}
-                  </td>
                 </tr>
               ))}
-              <tr className="pivot-total-row">
-                <th scope="row">Total</th>
-                {matrix.horizons.map((horizon) => (
-                  <td className="numeric-cell total-cell" key={horizon}>
-                    {formatNumber(matrix.horizon_totals[horizon] ?? 0)}
-                  </td>
-                ))}
-                <td className="numeric-cell total-cell grand-total-cell">
-                  <span className="grand-total-label">Grand Total</span>
-                  <strong>{formatNumber(matrix.grand_total_across_horizons)}</strong>
-                </td>
-              </tr>
             </tbody>
           </table>
+          <p className="lifecycle-matrix-note">
+            Matrix is based on {formatNumber(matrix.in_use_application_count)} In Use applications.
+          </p>
         </div>
       ) : null}
     </section>
