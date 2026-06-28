@@ -114,3 +114,61 @@ class GenAISafetySettings(UuidPrimaryKeyMixin, TimestampMixin, Base):
         default=True,
     )
     mask_sensitive_fields: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class GenAIChatSession(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_chat_sessions"
+    __table_args__ = (
+        Index("ix_genai_chat_sessions_last_message_at", "last_message_at"),
+        Index("ix_genai_chat_sessions_archived_last_message", "is_archived", "last_message_at"),
+    )
+
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="New chat")
+    last_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    customer: Mapped[Client | None] = relationship()
+    project: Mapped[Project | None] = relationship()
+    messages: Mapped[list[GenAIChatMessage]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="GenAIChatMessage.created_at",
+    )
+
+
+class GenAIChatMessage(UuidPrimaryKeyMixin, Base):
+    __tablename__ = "genai_chat_messages"
+    __table_args__ = (Index("ix_genai_chat_messages_session_created", "session_id", "created_at"),)
+
+    session_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("genai_chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    session: Mapped[GenAIChatSession] = relationship(back_populates="messages")

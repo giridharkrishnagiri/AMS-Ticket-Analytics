@@ -35,5 +35,12 @@ SSL_CERT_FILE=C:\path\to\corporate-ca-bundle.pem
 - Safety and data-access settings
 - LiteLLM connection test
 - Recent usage logs
+- Phase 1C chat UI with persisted chat sessions and messages
+- Chat responses through the configured LiteLLM model
 
-Future phases will add governed chat, governed analytics tools, AI chart generation, and recommendations.
+Phase 1C chat does not query live Applications, Tickets, SLA, OLA, Problem, or Change data. It can
+answer general questions about the workbench and future capabilities, and it will state when
+data-aware Q&A is not available yet.
+
+Future phases will add governed analytics tools, data-aware Q&A, AI chart generation, and
+recommendations.

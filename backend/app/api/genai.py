@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.genai import (
+    GenAIChatMessageCreateRequest,
+    GenAIChatMessageCreateResponse,
+    GenAIChatSessionCreateRequest,
+    GenAIChatSessionDetailResponse,
+    GenAIChatSessionListResponse,
+    GenAIChatSessionResponse,
+    GenAIChatSessionUpdateRequest,
     GenAIConfigResponse,
     GenAIConfigUpdateRequest,
+    GenAIContextOptionResponse,
     GenAIPromptReseedResponse,
     GenAIPromptTemplateResponse,
     GenAIPromptTemplateUpdateRequest,
@@ -18,6 +27,19 @@ from app.schemas.genai import (
     GenAITestResponse,
     GenAIUsageLogResponse,
     GenAIUsageSummary,
+)
+from app.services.genai.chat_service import (
+    ChatServiceError,
+    ChatSessionNotFoundError,
+    archive_session,
+    create_session,
+    get_session,
+    get_session_messages,
+    list_context_customers,
+    list_context_projects,
+    list_sessions,
+    send_chat_message,
+    update_session,
 )
 from app.services.genai.config_service import get_or_create_config, update_config
 from app.services.genai.llm_client import SAFE_DEFAULT_TEST_PROMPT, test_completion
@@ -110,6 +132,142 @@ def put_genai_safety_settings(
     db: DbSession,
 ) -> GenAISafetySettingsResponse:
     return update_safety_settings(db, request.model_dump(exclude_unset=True))
+
+
+@router.get("/context/customers", response_model=list[GenAIContextOptionResponse])
+def get_genai_context_customers(db: DbSession) -> list[GenAIContextOptionResponse]:
+    return [
+        GenAIContextOptionResponse(
+            id=customer.id,
+            name=customer.name,
+            code=customer.code,
+            label=customer.name,
+        )
+        for customer in list_context_customers(db)
+    ]
+
+
+@router.get("/context/projects", response_model=list[GenAIContextOptionResponse])
+def get_genai_context_projects(
+    db: DbSession,
+    customer_id: UUID | None = None,
+) -> list[GenAIContextOptionResponse]:
+    return [
+        GenAIContextOptionResponse(
+            id=project.id,
+            name=project.name,
+            code=project.code,
+            customer_id=customer.id,
+            customer_name=customer.name,
+            customer_code=customer.code,
+            label=f"{customer.name} - {project.name}",
+        )
+        for project, customer in list_context_projects(db, customer_id)
+    ]
+
+
+@router.post("/chat-sessions", response_model=GenAIChatSessionResponse)
+def post_genai_chat_session(
+    request: GenAIChatSessionCreateRequest,
+    db: DbSession,
+) -> GenAIChatSessionResponse:
+    return create_session(
+        db,
+        customer_id=request.customer_id,
+        project_id=request.project_id,
+        title=request.title,
+        metadata=request.metadata,
+    )
+
+
+@router.get("/chat-sessions", response_model=GenAIChatSessionListResponse)
+def get_genai_chat_sessions(
+    db: DbSession,
+    customer_id: UUID | None = None,
+    project_id: UUID | None = None,
+    include_archived: bool = False,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> GenAIChatSessionListResponse:
+    result = list_sessions(
+        db,
+        customer_id=customer_id,
+        project_id=project_id,
+        include_archived=include_archived,
+        limit=limit,
+        offset=offset,
+    )
+    return GenAIChatSessionListResponse(items=result.items, total=result.total)
+
+
+@router.get("/chat-sessions/{session_id}", response_model=GenAIChatSessionDetailResponse)
+def get_genai_chat_session(
+    session_id: UUID,
+    db: DbSession,
+) -> GenAIChatSessionDetailResponse:
+    try:
+        session = get_session(db, session_id)
+    except ChatSessionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return GenAIChatSessionDetailResponse(
+        session=session,
+        messages=get_session_messages(db, session_id),
+    )
+
+
+@router.put("/chat-sessions/{session_id}", response_model=GenAIChatSessionResponse)
+def put_genai_chat_session(
+    session_id: UUID,
+    request: GenAIChatSessionUpdateRequest,
+    db: DbSession,
+) -> GenAIChatSessionResponse:
+    try:
+        return update_session(
+            db,
+            session_id,
+            title=request.title,
+            metadata=request.metadata,
+        )
+    except ChatSessionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/chat-sessions/{session_id}/archive", response_model=GenAIChatSessionResponse)
+def post_archive_genai_chat_session(
+    session_id: UUID,
+    db: DbSession,
+) -> GenAIChatSessionResponse:
+    try:
+        return archive_session(db, session_id)
+    except ChatSessionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/chat-sessions/{session_id}/messages",
+    response_model=GenAIChatMessageCreateResponse,
+)
+def post_genai_chat_message(
+    session_id: UUID,
+    request: GenAIChatMessageCreateRequest,
+    db: DbSession,
+) -> GenAIChatMessageCreateResponse:
+    try:
+        result = send_chat_message(
+            db,
+            session_id=session_id,
+            content=request.content,
+            context=request.context,
+        )
+    except ChatSessionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ChatServiceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return GenAIChatMessageCreateResponse(
+        user_message=result.user_message,
+        assistant_message=result.assistant_message,
+        session=result.session,
+    )
 
 
 @router.post("/test", response_model=GenAITestResponse)

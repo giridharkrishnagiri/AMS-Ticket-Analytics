@@ -1,21 +1,39 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import GenAIConfig, GenAIPromptTemplate, GenAISafetySettings, GenAIUsageLog
+from app.models import (
+    Client,
+    GenAIChatMessage,
+    GenAIChatSession,
+    GenAIConfig,
+    GenAIPromptTemplate,
+    GenAISafetySettings,
+    GenAIUsageLog,
+    Project,
+)
 from app.services.genai.default_prompts import DEFAULT_PROMPTS_BY_KEY
+from app.services.genai.llm_client import LLMCompletionResult
 from app.services.genai.usage_log_service import create_usage_log
 
 
 def reset_genai_tables() -> None:
     db = SessionLocal()
     try:
-        for model in (GenAIUsageLog, GenAIPromptTemplate, GenAISafetySettings, GenAIConfig):
+        for model in (
+            GenAIUsageLog,
+            GenAIChatMessage,
+            GenAIChatSession,
+            GenAIPromptTemplate,
+            GenAISafetySettings,
+            GenAIConfig,
+        ):
             db.execute(delete(model))
         db.commit()
     finally:
@@ -48,6 +66,19 @@ def usage_log_count() -> int:
         return db.query(GenAIUsageLog).count()
     finally:
         db.close()
+
+
+def create_chat_session(client: TestClient, **overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "customer_id": None,
+        "project_id": None,
+        "title": "New chat",
+        "metadata": {"domain": "General"},
+    }
+    payload.update(overrides)
+    response = client.post("/api/genai/chat-sessions", json=payload)
+    assert response.status_code == 200
+    return response.json()
 
 
 def test_llm_client_applies_system_trust_store_once(monkeypatch) -> None:
@@ -356,3 +387,265 @@ def test_genai_usage_logs_limit_and_redaction() -> None:
     assert "normalized_payload" not in str(logs)
     assert "cmdb_payload" not in str(logs)
     assert "tools_used_json" in logs[0]
+
+
+def test_genai_chat_session_lifecycle() -> None:
+    reset_genai_tables()
+
+    with TestClient(app) as client:
+        created = create_chat_session(client, title="  ", metadata={"domain": "Applications"})
+        list_response = client.get("/api/genai/chat-sessions")
+        detail_response = client.get(f"/api/genai/chat-sessions/{created['id']}")
+        update_response = client.put(
+            f"/api/genai/chat-sessions/{created['id']}",
+            json={"title": "Renamed session", "metadata": {"domain": "Tickets"}},
+        )
+        archive_response = client.post(f"/api/genai/chat-sessions/{created['id']}/archive")
+        active_list_response = client.get("/api/genai/chat-sessions")
+        archived_list_response = client.get(
+            "/api/genai/chat-sessions",
+            params={"include_archived": True},
+        )
+
+    assert created["title"] == "New chat"
+    assert created["metadata"] == {"domain": "Applications"}
+    assert list_response.status_code == 200
+    assert list_response.json()["total"] == 1
+    assert detail_response.status_code == 200
+    assert detail_response.json()["messages"] == []
+    assert update_response.status_code == 200
+    assert update_response.json()["title"] == "Renamed session"
+    assert update_response.json()["metadata"] == {"domain": "Tickets"}
+    assert archive_response.status_code == 200
+    assert archive_response.json()["is_archived"] is True
+    assert active_list_response.json()["total"] == 0
+    assert archived_list_response.json()["total"] == 1
+
+
+def test_genai_chat_message_success_persists_messages_and_usage(monkeypatch) -> None:
+    reset_genai_tables()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    captured_messages: list[dict[str, str]] = []
+
+    def fake_chat_completion(_: Any, messages: list[dict[str, str]]) -> LLMCompletionResult:
+        captured_messages.extend(messages)
+        return LLMCompletionResult(
+            ok=True,
+            response_text="The workbench can help configure and test GenAI features.",
+            prompt_tokens=31,
+            completion_tokens=12,
+            estimated_cost=0.001,
+            duration_ms=456,
+        )
+
+    monkeypatch.setattr("app.services.genai.chat_service.chat_completion", fake_chat_completion)
+
+    with TestClient(app) as client:
+        configure_genai(client)
+        session = create_chat_session(client)
+        response = client.post(
+            f"/api/genai/chat-sessions/{session['id']}/messages",
+            json={
+                "content": "What can this GenAI workbench do?",
+                "context": {"domain": "General", "page": "Chat"},
+            },
+        )
+        detail_response = client.get(f"/api/genai/chat-sessions/{session['id']}")
+        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user_message"]["role"] == "user"
+    assert payload["assistant_message"]["role"] == "assistant"
+    assert payload["assistant_message"]["content"].startswith("The workbench can help")
+    assert payload["assistant_message"]["metadata"]["provider"] == "openai"
+    assert payload["assistant_message"]["metadata"]["model_name"] == "gpt-4.1-mini"
+    assert payload["assistant_message"]["metadata"]["duration_ms"] == 456
+    assert payload["assistant_message"]["metadata"]["usage"]["prompt_tokens"] == 31
+    assert payload["assistant_message"]["metadata"]["tools_used"] == []
+    assert payload["assistant_message"]["metadata"]["data_access"] == "none_phase_1c"
+    assert payload["session"]["title"] == "What can this GenAI workbench do?"
+    assert payload["session"]["last_message_at"] is not None
+    assert len(detail_response.json()["messages"]) == 2
+    system_message = captured_messages[0]["content"]
+    assert "Phase 1C" in system_message
+    assert "Generic Tickets means Incidents + SC Tasks only" in system_message
+    assert "governed analytics tools or live dashboard data" in system_message
+    logs = logs_response.json()
+    assert len(logs) == 1
+    assert logs[0]["operation"] == "chat"
+    assert logs[0]["status"] == "success"
+    assert logs[0]["prompt_tokens"] == 31
+    assert logs[0]["completion_tokens"] == 12
+
+
+def test_genai_chat_disabled_and_missing_model_return_clean_messages() -> None:
+    reset_genai_tables()
+
+    with TestClient(app) as client:
+        disabled_session = create_chat_session(client)
+        disabled_response = client.post(
+            f"/api/genai/chat-sessions/{disabled_session['id']}/messages",
+            json={"content": "Hello"},
+        )
+        configure_genai(client, model_name="")
+        missing_model_session = create_chat_session(client)
+        missing_model_response = client.post(
+            f"/api/genai/chat-sessions/{missing_model_session['id']}/messages",
+            json={"content": "Hello again"},
+        )
+        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat"})
+
+    assert disabled_response.status_code == 200
+    disabled_payload = disabled_response.json()
+    assert "disabled" in disabled_payload["assistant_message"]["content"].lower()
+    assert disabled_payload["assistant_message"]["metadata"]["status"] == "disabled"
+    assert missing_model_response.status_code == 200
+    missing_payload = missing_model_response.json()
+    assert "Model name" in missing_payload["assistant_message"]["content"]
+    assert missing_payload["assistant_message"]["metadata"]["status"] == "error"
+    statuses = {row["status"] for row in logs_response.json()}
+    assert {"disabled", "error"} <= statuses
+
+
+def test_genai_chat_litellm_failure_stores_error_and_usage(monkeypatch) -> None:
+    reset_genai_tables()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def fake_completion(**_: Any) -> dict[str, Any]:
+        raise RuntimeError("raw provider exception")
+
+    monkeypatch.setattr("app.services.genai.llm_client.litellm.completion", fake_completion)
+
+    with TestClient(app) as client:
+        configure_genai(client)
+        session = create_chat_session(client)
+        response = client.post(
+            f"/api/genai/chat-sessions/{session['id']}/messages",
+            json={"content": "Please respond"},
+        )
+        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["assistant_message"]["metadata"]["status"] == "error"
+    assert "raw provider exception" not in payload["assistant_message"]["content"]
+    assert "model request failed" in payload["assistant_message"]["content"].lower()
+    assert logs_response.json()[0]["status"] == "error"
+    assert "raw provider exception" not in str(logs_response.json())
+
+
+def test_genai_chat_rejects_blank_and_archived_messages() -> None:
+    reset_genai_tables()
+
+    with TestClient(app) as client:
+        session = create_chat_session(client)
+        blank_response = client.post(
+            f"/api/genai/chat-sessions/{session['id']}/messages",
+            json={"content": "   "},
+        )
+        client.post(f"/api/genai/chat-sessions/{session['id']}/archive")
+        archived_response = client.post(
+            f"/api/genai/chat-sessions/{session['id']}/messages",
+            json={"content": "Hello after archive"},
+        )
+
+    assert blank_response.status_code == 400
+    assert "required" in blank_response.json()["detail"].lower()
+    assert archived_response.status_code == 400
+    assert "archived" in archived_response.json()["detail"].lower()
+
+
+def test_genai_chat_context_endpoints_return_compact_options() -> None:
+    reset_genai_tables()
+    db = SessionLocal()
+    suffix = uuid4().hex[:8].upper()
+    customer_code = f"GENAI_CTX_{suffix}"
+    project_code = f"GENAI_CTX_PROJECT_{suffix}"
+    client_row = Client(name="GenAI Test Customer", code=customer_code, is_active=True)
+    db.add(client_row)
+    db.flush()
+    project_row = Project(
+        client_id=client_row.id,
+        name="GenAI Test Project",
+        code=project_code,
+        is_active=True,
+    )
+    db.add(project_row)
+    db.commit()
+    client_id = str(client_row.id)
+    project_id = str(project_row.id)
+    try:
+        with TestClient(app) as client:
+            customers_response = client.get("/api/genai/context/customers")
+            projects_response = client.get(
+                "/api/genai/context/projects",
+                params={"customer_id": str(client_row.id)},
+            )
+    finally:
+        db.delete(project_row)
+        db.delete(client_row)
+        db.commit()
+        db.close()
+
+    assert customers_response.status_code == 200
+    customers = customers_response.json()
+    assert any(row["id"] == client_id for row in customers)
+    assert "description" not in customers[0]
+    assert projects_response.status_code == 200
+    projects = projects_response.json()
+    assert projects == [
+        {
+            "id": project_id,
+            "name": "GenAI Test Project",
+            "code": project_code,
+            "customer_id": client_id,
+            "customer_name": "GenAI Test Customer",
+            "customer_code": customer_code,
+            "label": "GenAI Test Customer - GenAI Test Project",
+        },
+    ]
+
+
+def test_genai_chat_data_specific_question_keeps_phase_1c_no_data_metadata(
+    monkeypatch,
+) -> None:
+    reset_genai_tables()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    captured_messages: list[dict[str, str]] = []
+
+    def fake_chat_completion(_: Any, messages: list[dict[str, str]]) -> LLMCompletionResult:
+        captured_messages.extend(messages)
+        return LLMCompletionResult(
+            ok=True,
+            response_text=(
+                "I cannot answer that from live ticket data yet in Phase 1C because governed "
+                "analytics tools are not enabled."
+            ),
+            prompt_tokens=44,
+            completion_tokens=19,
+            duration_ms=321,
+        )
+
+    monkeypatch.setattr("app.services.genai.chat_service.chat_completion", fake_chat_completion)
+
+    with TestClient(app) as client:
+        configure_genai(client)
+        session = create_chat_session(client, metadata={"domain": "Tickets"})
+        response = client.post(
+            f"/api/genai/chat-sessions/{session['id']}/messages",
+            json={
+                "content": "Which applications have the highest ticket volume?",
+                "context": {"domain": "Tickets", "page": "Chat"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "cannot answer" in payload["assistant_message"]["content"].lower()
+    assert payload["assistant_message"]["metadata"]["data_access"] == "none_phase_1c"
+    assert payload["assistant_message"]["metadata"]["tools_used"] == []
+    system_message = " ".join(captured_messages[0]["content"].split())
+    assert "do not yet have access to governed analytics tools or live dashboard data" in (
+        system_message
+    )

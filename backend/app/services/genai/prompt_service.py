@@ -61,6 +61,13 @@ def get_prompt_template(db: Session, prompt_key: str) -> GenAIPromptTemplate:
     return row
 
 
+def get_active_prompt_text(db: Session, prompt_key: str) -> str:
+    row = get_prompt_template(db, prompt_key)
+    if row.is_custom_enabled and row.custom_prompt and row.custom_prompt.strip():
+        return row.custom_prompt.strip()
+    return row.default_prompt
+
+
 def update_prompt_template(
     db: Session,
     prompt_key: str,

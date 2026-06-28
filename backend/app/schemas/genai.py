@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 GenAIProvider = Literal["openai", "azure", "anthropic", "ollama", "custom"]
 GenAIResponseStyle = Literal["concise", "standard", "detailed"]
@@ -137,3 +137,98 @@ class GenAIUsageLogResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class GenAIContextOptionResponse(BaseModel):
+    id: UUID
+    name: str
+    code: str
+    customer_id: UUID | None = None
+    customer_name: str | None = None
+    customer_code: str | None = None
+    label: str
+
+
+class GenAIChatSessionCreateRequest(BaseModel):
+    customer_id: UUID | None = None
+    project_id: UUID | None = None
+    title: str | None = Field(default="New chat", max_length=255)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GenAIChatSessionUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=255)
+    metadata: dict[str, Any] | None = None
+
+
+class GenAIChatSessionResponse(BaseModel):
+    id: UUID
+    customer_id: UUID | None
+    project_id: UUID | None
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    last_message_at: datetime | None
+    is_archived: bool
+    metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_json")
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def default_metadata(cls, value: Any) -> dict[str, Any]:
+        return value or {}
+
+
+class GenAIChatSessionListResponse(BaseModel):
+    items: list[GenAIChatSessionResponse]
+    total: int
+
+
+class GenAIChatMessageResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    role: str
+    content: str
+    created_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_json")
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def default_metadata(cls, value: Any) -> dict[str, Any]:
+        return value or {}
+
+
+class GenAIChatSessionDetailResponse(BaseModel):
+    session: GenAIChatSessionResponse
+    messages: list[GenAIChatMessageResponse]
+
+
+class GenAIChatContext(BaseModel):
+    customer_id: UUID | None = None
+    project_id: UUID | None = None
+    domain: str = Field(default="General", max_length=100)
+    page: str = Field(default="Chat", max_length=100)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    time_range: dict[str, Any] = Field(default_factory=dict)
+
+
+class GenAIChatMessageCreateRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=8000)
+    context: GenAIChatContext = Field(default_factory=GenAIChatContext)
+
+
+class GenAIChatSendSessionSummary(BaseModel):
+    id: UUID
+    title: str
+    last_message_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class GenAIChatMessageCreateResponse(BaseModel):
+    user_message: GenAIChatMessageResponse
+    assistant_message: GenAIChatMessageResponse
+    session: GenAIChatSendSessionSummary

@@ -48,6 +48,7 @@ GENERIC_FAILURE_MESSAGE = (
     "The model request failed. Check the provider, model name, API key, and network settings."
 )
 NETWORK_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+LLMMessage = dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -137,19 +138,18 @@ def apply_network_environment() -> None:
             os.environ[key.lower()] = value
 
 
-def test_completion(config: GenAIConfig, prompt: str | None = None) -> LLMCompletionResult:
+def completion_request(config: GenAIConfig, messages: list[LLMMessage]) -> LLMCompletionResult:
     apply_network_environment()
     provider = config.provider.strip().lower()
     missing_key = missing_api_key_message(provider)
     if missing_key:
         return LLMCompletionResult(ok=False, error_message=missing_key)
 
-    request_prompt = (prompt or SAFE_DEFAULT_TEST_PROMPT).strip() or SAFE_DEFAULT_TEST_PROMPT
     started_at = time.perf_counter()
     try:
         response = litellm.completion(
             model=provider_model_name(config),
-            messages=[{"role": "user", "content": request_prompt}],
+            messages=messages,
             temperature=config.temperature,
             top_p=config.top_p,
             max_tokens=config.max_output_tokens,
@@ -172,3 +172,12 @@ def test_completion(config: GenAIConfig, prompt: str | None = None) -> LLMComple
             duration_ms=duration_ms,
             error_message=GENERIC_FAILURE_MESSAGE,
         )
+
+
+def chat_completion(config: GenAIConfig, messages: list[LLMMessage]) -> LLMCompletionResult:
+    return completion_request(config, messages)
+
+
+def test_completion(config: GenAIConfig, prompt: str | None = None) -> LLMCompletionResult:
+    request_prompt = (prompt or SAFE_DEFAULT_TEST_PROMPT).strip() or SAFE_DEFAULT_TEST_PROMPT
+    return completion_request(config, [{"role": "user", "content": request_prompt}])

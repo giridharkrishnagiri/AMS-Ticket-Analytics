@@ -6,7 +6,14 @@ from app.models.dashboard_aggregate import DashboardAggregate
 from app.models.dashboard_commentary import DashboardCommentary
 from app.models.dashboard_filter_fact import DashboardFilterFact
 from app.models.export_job import ExportJob
-from app.models.genai import GenAIConfig, GenAIPromptTemplate, GenAISafetySettings, GenAIUsageLog
+from app.models.genai import (
+    GenAIChatMessage,
+    GenAIChatSession,
+    GenAIConfig,
+    GenAIPromptTemplate,
+    GenAISafetySettings,
+    GenAIUsageLog,
+)
 from app.models.incident_sla_row import IncidentSlaRow
 from app.models.incident_sla_upload import IncidentSlaUpload
 from app.models.ingestion_job import IngestionJob
@@ -27,6 +34,8 @@ __all__ = [
     "DashboardCommentary",
     "DashboardFilterFact",
     "ExportJob",
+    "GenAIChatMessage",
+    "GenAIChatSession",
     "GenAIConfig",
     "GenAIPromptTemplate",
     "GenAISafetySettings",

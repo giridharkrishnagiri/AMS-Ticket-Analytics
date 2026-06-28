@@ -13,6 +13,7 @@ import {
   updateGenAIPrompt,
   updateGenAISafetySettings
 } from "./api/genai";
+import { ChatPage } from "./pages/ChatPage";
 import type {
   BackendHealth,
   GenAIConfig,
@@ -860,6 +861,7 @@ function UsageLogsPage() {
             <option value="">All</option>
             <option value="config_test">config_test</option>
             <option value="prompt_test">prompt_test</option>
+            <option value="chat">chat</option>
           </select>
         </label>
         <label>
@@ -999,9 +1001,7 @@ function App() {
         </button>
       </nav>
 
-      {activeView === "chat" ? (
-        <PagePlaceholder title="Chat" text="Chat will be implemented in Phase 1C." />
-      ) : null}
+      {activeView === "chat" ? <ChatPage /> : null}
       {activeView === "charts" ? (
         <PagePlaceholder
           title="AI Charts"
