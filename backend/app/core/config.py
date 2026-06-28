@@ -5,6 +5,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = BACKEND_DIR / ".env"
+LOCAL_FRONTEND_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3025",
+    "http://127.0.0.1:3025",
+)
 
 
 class Settings(BaseSettings):
@@ -21,16 +27,23 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: str = "local"
     database_url: str = "postgresql+psycopg://localhost:5432/ams_ticket_intelligence"
-    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_allowed_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:3025,http://127.0.0.1:3025"
+    )
     local_storage_root: Path = Path("storage")
 
     @property
     def cors_origins(self) -> list[str]:
-        return [
+        configured_origins = [
             origin.strip()
             for origin in self.cors_allowed_origins.split(",")
             if origin.strip()
         ]
+        for origin in LOCAL_FRONTEND_ORIGINS:
+            if origin not in configured_origins:
+                configured_origins.append(origin)
+        return configured_origins
 
     @property
     def resolved_storage_root(self) -> Path:

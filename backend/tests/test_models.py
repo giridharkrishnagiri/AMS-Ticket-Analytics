@@ -20,6 +20,10 @@ def test_expected_ams_tables_are_registered() -> None:
         "application_inventory_items",
         "assessment_out_of_scope_tickets",
         "incident_sla_rows",
+        "genai_config",
+        "genai_prompt_templates",
+        "genai_usage_logs",
+        "genai_safety_settings",
     }
 
     assert expected_tables.issubset(Base.metadata.tables.keys())

@@ -24,8 +24,11 @@ backend/
   alembic/
 frontend/
   src/
+genai_frontend/
+  src/
 run_backend.bat
 run_frontend.bat
+run_genai_frontend.bat
 seed_default_data.bat
 ```
 
@@ -67,6 +70,7 @@ From the project root, copy the example files:
 ```powershell
 copy backend\.env.example backend\.env
 copy frontend\.env.example frontend\.env
+copy genai_frontend\.env.example genai_frontend\.env
 ```
 
 The backend reads database settings from `backend\.env`. Example:
@@ -125,6 +129,24 @@ http://127.0.0.1:5173
 ```
 
 The home page calls `GET /api/health` and shows the backend status.
+
+## GenAI Workbench Setup And Run
+
+The GenAI workbench is a separate experimental React/Vite app. It does not replace or modify the main dashboard frontend.
+
+Use the batch file from the project root:
+
+```powershell
+.\run_genai_frontend.bat
+```
+
+The GenAI workbench will run at:
+
+```text
+http://127.0.0.1:3025
+```
+
+The workbench calls the same FastAPI backend and uses `VITE_API_BASE_URL` from `genai_frontend\.env`.
 
 The Upload Center tab lets you upload Incident and Service Catalog Task CSV/XLSX files. Enter the project UUID, choose the ticket type, choose the upload period type, enter a batch name, select one or more files, then submit. Monthly extracts require a Month-Year. Snapshot extracts require a snapshot date and do not require or store a fake Month-Year. After upload, the page refreshes the batch list and shows files for the selected batch.
 
@@ -882,6 +904,15 @@ Frontend:
 
 ```powershell
 cd frontend
+npm.cmd install
+npm.cmd run typecheck
+npm.cmd run build
+```
+
+GenAI frontend:
+
+```powershell
+cd genai_frontend
 npm.cmd install
 npm.cmd run typecheck
 npm.cmd run build

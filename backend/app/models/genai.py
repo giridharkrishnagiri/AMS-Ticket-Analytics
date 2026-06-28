@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+from app.models.mixins import TimestampMixin, UuidPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.models.client import Client
+    from app.models.project import Project
+
+
+class GenAIConfig(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_config"
+
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False, default="openai")
+    model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.2)
+    top_p: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    max_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    allow_recommendations: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    allow_chart_generation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    response_style: Mapped[str] = mapped_column(String(20), nullable=False, default="standard")
+
+
+class GenAIPromptTemplate(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_prompt_templates"
+
+    prompt_key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    custom_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_custom_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class GenAIUsageLog(UuidPrimaryKeyMixin, Base):
+    __tablename__ = "genai_usage_logs"
+    __table_args__ = (
+        Index("ix_genai_usage_logs_operation_created_at", "operation", "created_at"),
+        Index("ix_genai_usage_logs_status_created_at", "status", "created_at"),
+    )
+
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    operation: Mapped[str] = mapped_column(String(50), nullable=False)
+    question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    tools_used_json: Mapped[dict[str, Any] | list[Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    customer: Mapped[Client | None] = relationship()
+    project: Mapped[Project | None] = relationship()
+
+
+class GenAISafetySettings(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_safety_settings"
+
+    allow_application_detail_rows: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+    )
+    allow_ticket_detail_rows: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    allow_aggregate_ticket_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    allow_problem_change_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    allow_sla_ola_aggregate_data: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+    )
+    max_rows_returned_to_llm: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    max_chart_data_points: Mapped[int] = mapped_column(Integer, nullable=False, default=500)
+    enforce_complete_month_cutoff: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+    )
+    mask_sensitive_fields: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

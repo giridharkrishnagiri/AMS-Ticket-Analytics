@@ -38,6 +38,9 @@ logs/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+genai_frontend/node_modules/
+genai_frontend/dist/
+genai_frontend/.vite/
 
 # OS / editor
 .DS_Store
