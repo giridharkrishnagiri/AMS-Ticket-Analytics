@@ -22,6 +22,12 @@ VITE_API_BASE_URL=http://127.0.0.1:8000
 
 The client accepts either the backend root URL or a URL ending in `/api`.
 
+If your network uses corporate SSL inspection, configure the backend with a trusted CA bundle before testing LiteLLM/OpenAI connectivity:
+
+```text
+SSL_CERT_FILE=C:\path\to\corporate-ca-bundle.pem
+```
+
 ## MVP Scope
 
 - AI configuration admin

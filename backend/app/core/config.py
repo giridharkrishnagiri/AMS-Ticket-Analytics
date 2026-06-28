@@ -32,6 +32,11 @@ class Settings(BaseSettings):
         "http://localhost:3025,http://127.0.0.1:3025"
     )
     local_storage_root: Path = Path("storage")
+    ssl_cert_file: Path | None = None
+    ssl_cert_dir: Path | None = None
+    http_proxy: str | None = None
+    https_proxy: str | None = None
+    no_proxy: str | None = None
 
     @property
     def cors_origins(self) -> list[str]:
@@ -59,6 +64,11 @@ class Settings(BaseSettings):
     @property
     def exports_dir(self) -> Path:
         return self.resolved_storage_root / "exports"
+
+    def resolve_backend_path(self, path: Path) -> Path:
+        if not path.is_absolute():
+            path = BACKEND_DIR / path
+        return path.resolve()
 
 
 @lru_cache

@@ -4,10 +4,12 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import litellm
 
+from app.core.config import get_settings
 from app.models import GenAIConfig
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ PROVIDER_API_KEY_ENV: dict[str, str] = {
 GENERIC_FAILURE_MESSAGE = (
     "The model request failed. Check the provider, model name, API key, and network settings."
 )
+NETWORK_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
 
 
 @dataclass(frozen=True)
@@ -86,7 +89,32 @@ def estimated_completion_cost(response: Any) -> float | None:
     return float(cost) if cost is not None else None
 
 
+def resolved_env_path(value: Path | None) -> str | None:
+    if value is None:
+        return None
+    return str(get_settings().resolve_backend_path(value))
+
+
+def apply_network_environment() -> None:
+    settings = get_settings()
+    env_values = {
+        "SSL_CERT_FILE": resolved_env_path(settings.ssl_cert_file),
+        "SSL_CERT_DIR": resolved_env_path(settings.ssl_cert_dir),
+        "HTTP_PROXY": settings.http_proxy,
+        "HTTPS_PROXY": settings.https_proxy,
+        "NO_PROXY": settings.no_proxy,
+    }
+    for key, value in env_values.items():
+        if value and not os.getenv(key):
+            os.environ[key] = value
+    for key in NETWORK_ENV_KEYS:
+        value = os.getenv(key)
+        if value and not os.getenv(key.lower()):
+            os.environ[key.lower()] = value
+
+
 def test_completion(config: GenAIConfig, prompt: str | None = None) -> LLMCompletionResult:
+    apply_network_environment()
     provider = config.provider.strip().lower()
     missing_key = missing_api_key_message(provider)
     if missing_key:
