@@ -187,6 +187,7 @@ def add_inventory_item(
     active: bool | None = True,
     active_users: int | None = None,
     hosting_env: str | None = None,
+    global_application: str | None = None,
     cmdb_payload: dict[str, object] | None = None,
 ) -> ApplicationInventoryItem:
     item = ApplicationInventoryItem(
@@ -202,6 +203,7 @@ def add_inventory_item(
         active=active,
         active_users=active_users,
         hosting_env=hosting_env,
+        global_application=global_application,
         cmdb_payload=cmdb_payload,
         source_filename="overview-inventory.csv",
     )
@@ -726,6 +728,204 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         assert lifecycle_filtered_chart_response.status_code == 200
         assert lifecycle_filtered_chart_response.json()["lifecycle_stage"] == []
         assert bad_sort_response.status_code == 400
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_global_local() -> None:
+    db, client_id, project_id, _, _, _ = create_dashboard_project()
+    try:
+        inventory_rows = [
+            (
+                "Service A",
+                "Data & Analytics",
+                "Seshu Avala",
+                "IT-SAP-Group A",
+                "Production",
+                "Yes",
+                {
+                    "Business criticality": "Very Critical",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service A",
+                "Data & Analytics",
+                "Seshu Avala",
+                "IT-SAP-Group A",
+                "Production",
+                "Yes",
+                {
+                    "Business criticality": "Very Critical",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service B",
+                "Data & Analytics",
+                "Seshu Avala",
+                "IT-NSA-Group B",
+                "Non-Prod",
+                "No",
+                {
+                    "Business criticality": "Critical",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service C",
+                "Run",
+                "Another Owner",
+                "Group C",
+                "Dev",
+                "YES",
+                {
+                    "Business criticality": "High",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service D",
+                "Run",
+                "Another Owner",
+                "Group D",
+                "Test",
+                "No",
+                {
+                    "Business criticality": "Medium",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service E",
+                "Run",
+                "Another Owner",
+                "Group E",
+                "Historical & DR",
+                "",
+                {
+                    "Business criticality": "Low",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+            (
+                "Service F",
+                "Run",
+                "Another Owner",
+                "Group F",
+                "Production",
+                "Yes",
+                {
+                    "Business criticality": "Very Critical",
+                    "Life Cycle Stage": "End of Life",
+                    "Life Cycle Stage Status": "Obsolete",
+                },
+            ),
+            (
+                "Service G",
+                "Run",
+                "Another Owner",
+                "Group G",
+                "Production",
+                "Maybe",
+                {
+                    "Business criticality": "",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                },
+            ),
+        ]
+        for (
+            service_name,
+            functional_track,
+            ams_owner,
+            assignment_group,
+            hosting_env,
+            global_application,
+            cmdb_payload,
+        ) in inventory_rows:
+            add_inventory_item(
+                db,
+                project_id,
+                service_name,
+                supported_by_vendor="Vendor A",
+                functional_track=functional_track,
+                ams_owner=ams_owner,
+                assignment_group=assignment_group,
+                application_owner="App Owner",
+                parent_application_name="Parent",
+                hosting_env=hosting_env,
+                global_application=global_application,
+                cmdb_payload=cmdb_payload,
+            )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/applications/charts",
+                json={"project_id": str(project_id), "filters": {}},
+            )
+            filtered_response = client.post(
+                "/api/dashboard/applications/charts",
+                json={
+                    "project_id": str(project_id),
+                    "filters": {
+                        "functional_track_ams_owner": ["Data & Analytics - Seshu Avala"],
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["criticality_hosting_pivot"]["rows"] == [
+            "Very Critical",
+            "Critical",
+            "High",
+            "Medium",
+            "Low",
+        ]
+        assert payload["criticality_hosting_pivot"]["columns"] == [
+            "Production",
+            "Non-Prod",
+            "Dev",
+            "Test",
+            "Historical & DR",
+        ]
+        pivot_values = {
+            row["business_criticality"]: row
+            for row in payload["criticality_hosting_pivot"]["values"]
+        }
+        assert pivot_values["Very Critical"]["counts"]["Production"] == 1
+        assert pivot_values["Critical"]["counts"]["Non-Prod"] == 1
+        assert pivot_values["High"]["counts"]["Dev"] == 1
+        assert pivot_values["Medium"]["counts"]["Test"] == 1
+        assert pivot_values["Low"]["counts"]["Historical & DR"] == 1
+        assert payload["criticality_hosting_pivot"]["column_totals"] == {
+            "Production": 1,
+            "Non-Prod": 1,
+            "Dev": 1,
+            "Test": 1,
+            "Historical & DR": 1,
+        }
+        assert payload["criticality_hosting_pivot"]["grand_total"] == 5
+        assert payload["global_local_applications"] == [
+            {"label": "Global", "count": 3},
+            {"label": "Local", "count": 2},
+        ]
+
+        assert filtered_response.status_code == 200
+        filtered_payload = filtered_response.json()
+        assert filtered_payload["criticality_hosting_pivot"]["grand_total"] == 2
+        assert filtered_payload["global_local_applications"] == [
+            {"label": "Global", "count": 1},
+            {"label": "Local", "count": 1},
+        ]
     finally:
         cleanup_client(db, client_id)
 
@@ -2044,6 +2244,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             parent_application_name="Parent Payroll",
             active_users=500,
             hosting_env="Production",
+            global_application="Yes",
             cmdb_payload={
                 "Application type": "Business",
                 "Architecture type": "Cloud",
@@ -2190,6 +2391,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         document = response.text
         assert "Overview" in document
         assert "Applications" in document
+        assert "Global vs Local Applications" in document
+        assert "Application Criticality by Hosting Environment" in document
         assert "Volumetrics &amp; SLA" in document
         assert "Overall Volume Trends" in document
         assert "Overall SLA Trends" in document
@@ -2419,6 +2622,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["applications"]["rows"][0]["business_service_ci_name"] == "Payroll Portal"
         assert payload["applications"]["rows"][0]["active_users"] == 500
         assert payload["applications"]["rows"][0]["hosting_env"] == "Production"
+        assert payload["applications"]["rows"][0]["global_application"] == "Yes"
         assert payload["commentaries"] == [
             {
                 "project_id": str(project_id),
@@ -2438,6 +2642,13 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "architecture_type" in payload["applications"]["charts"]
         assert "install_type" in payload["applications"]["charts"]
         assert "hosting_env" in payload["applications"]["charts"]
+        assert "global_local_applications" in payload["applications"]["charts"]
+        assert "criticality_hosting_pivot" in payload["applications"]["charts"]
+        assert payload["applications"]["charts"]["global_local_applications"] == [
+            {"label": "Global", "count": 1},
+            {"label": "Local", "count": 0},
+        ]
+        assert payload["applications"]["charts"]["criticality_hosting_pivot"]["grand_total"] == 1
         assert "operating_system" not in payload["applications"]["charts"]
         assert "sox_scope" not in payload["applications"]["charts"]
         assert payload["volumetrics"]["monthly_rows"]

@@ -14,6 +14,7 @@ export type ApplicationInventoryItem = {
   ams_owner: string | null;
   supported_by_vendor: string | null;
   hosting_env: string | null;
+  global_application: string | null;
   active: boolean | null;
   active_users: number | null;
   cmdb_payload: Record<string, unknown> | null;

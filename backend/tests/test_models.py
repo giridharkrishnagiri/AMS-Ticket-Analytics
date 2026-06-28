@@ -130,6 +130,7 @@ def test_application_inventory_columns_exist() -> None:
     assert "ams_owner" in inventory_columns
     assert "supported_by_vendor" in inventory_columns
     assert "hosting_env" in inventory_columns
+    assert "global_application" in inventory_columns
     assert "active_users" in inventory_columns
     assert "cmdb_payload" in inventory_columns
     assert "application_inventory_id" in ticket_columns

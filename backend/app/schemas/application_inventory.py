@@ -19,6 +19,7 @@ class ApplicationInventoryItemUpdateRequest(BaseModel):
     ams_owner: str | None = None
     supported_by_vendor: str | None = None
     hosting_env: str | None = None
+    global_application: str | None = None
     active: bool | None = None
     active_users: int | None = None
     avg_monthly_ticket_volume_6m: float | None = None
@@ -40,6 +41,7 @@ class ApplicationInventoryItemResponse(BaseModel):
     ams_owner: str | None
     supported_by_vendor: str | None
     hosting_env: str | None
+    global_application: str | None
     active: bool | None
     active_users: int | None
     avg_monthly_ticket_volume_6m: float | None

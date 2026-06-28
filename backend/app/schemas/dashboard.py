@@ -283,6 +283,7 @@ class ApplicationsListRow(BaseModel):
     ams_owner: str
     supported_by_vendor: str
     hosting_env: str
+    global_application: str
     active_users: int | None
     avg_monthly_ticket_volume_6m: float | None
     tickets_per_user_per_month: float | None
@@ -319,6 +320,20 @@ class ApplicationsChartDatum(BaseModel):
     count: int
 
 
+class ApplicationsCriticalityHostingPivotRow(BaseModel):
+    business_criticality: str
+    counts: dict[str, int]
+    total: int
+
+
+class ApplicationsCriticalityHostingPivot(BaseModel):
+    rows: list[str]
+    columns: list[str]
+    values: list[ApplicationsCriticalityHostingPivotRow]
+    column_totals: dict[str, int]
+    grand_total: int
+
+
 class ApplicationsTopActiveUsersPoint(BaseModel):
     application_name: str
     parent_application_name: str
@@ -337,6 +352,8 @@ class ApplicationsChartsResponse(BaseModel):
     install_type: list[ApplicationsChartDatum]
     hosting_env: list[ApplicationsChartDatum]
     strategic: list[ApplicationsChartDatum]
+    criticality_hosting_pivot: ApplicationsCriticalityHostingPivot
+    global_local_applications: list[ApplicationsChartDatum]
 
 
 class VolumetricsFilters(BaseModel):

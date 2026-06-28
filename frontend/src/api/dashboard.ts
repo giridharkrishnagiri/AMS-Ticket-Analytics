@@ -279,6 +279,7 @@ export type DashboardApplicationRow = {
   ams_owner: string;
   supported_by_vendor: string;
   hosting_env: string;
+  global_application: string;
   active_users: number | null;
   avg_monthly_ticket_volume_6m: number | null;
   tickets_per_user_per_month: number | null;
@@ -380,12 +381,28 @@ export type DashboardApplicationsChartDatum = {
   count: number;
 };
 
+export type DashboardApplicationsCriticalityHostingPivotRow = {
+  business_criticality: string;
+  counts: Record<string, number>;
+  total: number;
+};
+
+export type DashboardApplicationsCriticalityHostingPivot = {
+  rows: string[];
+  columns: string[];
+  values: DashboardApplicationsCriticalityHostingPivotRow[];
+  column_totals: Record<string, number>;
+  grand_total: number;
+};
+
 export type DashboardApplicationsCharts = {
   lifecycle_stage: DashboardApplicationsChartDatum[];
   architecture_type: DashboardApplicationsChartDatum[];
   install_type: DashboardApplicationsChartDatum[];
   hosting_env: DashboardApplicationsChartDatum[];
   strategic: DashboardApplicationsChartDatum[];
+  criticality_hosting_pivot: DashboardApplicationsCriticalityHostingPivot;
+  global_local_applications: DashboardApplicationsChartDatum[];
 };
 
 export type VolumetricsScope = "in_scope" | "out_of_scope" | "all";

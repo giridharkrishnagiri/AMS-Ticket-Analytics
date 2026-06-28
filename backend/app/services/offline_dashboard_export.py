@@ -1886,6 +1886,31 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       min-width: 1800px;
       border-collapse: collapse;
     }
+    .applications-pivot-table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    .applications-pivot-table .numeric-cell {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .applications-pivot-table .total-cell {
+      color: #0f172a;
+      background: #f8fafc;
+      font-weight: 900;
+    }
+    .applications-pivot-table .pivot-total-row th,
+    .applications-pivot-table .pivot-total-row td {
+      background: #eef6ff;
+      font-weight: 900;
+    }
+    .applications-pivot-table .grand-total-cell {
+      color: #fff;
+      background: #1d4ed8;
+      font-weight: 900;
+    }
     th, td {
       padding: 8px 10px;
       border-bottom: 1px solid #e2e8f0;
@@ -2559,24 +2584,30 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       </svg>${legend([{ name: "Backlog(Open)", color: COLORS.orange }, { name: "Average", color: COLORS.purple }])}`;
     }
     function pieChart(items) {
-      const total = items.reduce((sum, item) => sum + item.count, 0);
+      const visibleItems = items.filter((item) => Number(item.count || 0) > 0);
+      const total = visibleItems.reduce((sum, item) => sum + item.count, 0);
       if (!total) return `<p class="muted">No chart data available.</p>`;
       let startAngle = -90;
       const radius = 106;
       const cx = 260;
       const cy = 146;
       const colors = [COLORS.blue, COLORS.green, COLORS.orange, COLORS.red, COLORS.purple, COLORS.slate];
-      const slices = items.map((item, index) => {
+      const labels = [];
+      const slices = visibleItems.map((item, index) => {
         const angle = (item.count / total) * 360;
         const endAngle = startAngle + angle;
         const start = polar(cx, cy, radius, endAngle);
         const end = polar(cx, cy, radius, startAngle);
+        const labelPoint = polar(cx, cy, radius + 34, startAngle + angle / 2);
+        if (angle >= 10) {
+          labels.push(`<text x="${labelPoint.x}" y="${labelPoint.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="900" fill="#0f172a">${fmt(item.count)} (${Math.round((item.count / total) * 100)}%)</text>`);
+        }
         const large = angle > 180 ? 1 : 0;
         const path = `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${large} 0 ${end.x} ${end.y} Z`;
         startAngle = endAngle;
         return `<path d="${path}" fill="${colors[index % colors.length]}"><title>${esc(item.label)}: ${fmt(item.count)}</title></path>`;
       });
-      return `<svg class="chart-svg pie-svg" viewBox="0 0 520 320" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Pie chart">${slices.join("")}</svg>${legend(items.map((item, index) => ({ name: `${item.label} (${fmt(item.count)})`, color: colors[index % colors.length] })))}`;
+      return `<svg class="chart-svg pie-svg" viewBox="0 0 520 320" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Pie chart">${slices.join("")}${labels.join("")}</svg>${legend(visibleItems.map((item, index) => ({ name: `${item.label} (${fmt(item.count)})`, color: colors[index % colors.length] })))}`;
     }
     function polar(cx, cy, radius, angle) {
       const radians = (angle * Math.PI) / 180;
@@ -2919,9 +2950,93 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function topActiveUsersToggle() {
       return ["10", "20"].map((value) => `<button type="button" data-top-active-users="${value}" class="${state.topActiveUsersN === value ? "active" : ""}">Top ${value}</button>`).join("");
     }
+    const APPLICATION_CRITICALITY_ORDER = ["Very Critical", "Critical", "High", "Medium", "Low"];
+    const APPLICATION_HOSTING_ENV_ORDER = ["Production", "Non-Prod", "Dev", "Test", "Historical & DR"];
+    function normalizeApplicationDimension(value) {
+      return String(value ?? "").trim().replace(/\s+/g, " ");
+    }
+    function fixedApplicationLabel(value, labels) {
+      const normalized = normalizeApplicationDimension(value).toLowerCase();
+      return labels.find((label) => label.toLowerCase() === normalized) || "";
+    }
+    function applicationServiceKey(row) {
+      return normalizeApplicationDimension(row.business_service_ci_name).toLowerCase();
+    }
+    function globalLocalApplications(rows) {
+      const buckets = {
+        Global: new Set(),
+        Local: new Set()
+      };
+      rows.forEach((row) => {
+        const serviceKey = applicationServiceKey(row);
+        if (!serviceKey) return;
+        const value = normalizeApplicationDimension(row.global_application).toLowerCase();
+        if (value === "yes") {
+          buckets.Global.add(serviceKey);
+        } else if (value === "no") {
+          buckets.Local.add(serviceKey);
+        }
+      });
+      return ["Global", "Local"].map((label) => ({ label, count: buckets[label].size }));
+    }
+    function criticalityHostingPivot(rows) {
+      const cellSets = new Map();
+      APPLICATION_CRITICALITY_ORDER.forEach((criticality) => {
+        APPLICATION_HOSTING_ENV_ORDER.forEach((hostingEnv) => {
+          cellSets.set(`${criticality}|${hostingEnv}`, new Set());
+        });
+      });
+      rows.forEach((row) => {
+        const serviceKey = applicationServiceKey(row);
+        if (!serviceKey) return;
+        const lifecycleStage = normalizeApplicationDimension(row.lifecycle_status).toLowerCase();
+        const lifecycleStageStatus = normalizeApplicationDimension(row.lifecycle_stage_status).toLowerCase();
+        if (lifecycleStage !== "in use" && lifecycleStageStatus !== "in use") return;
+        const criticality = fixedApplicationLabel(row.biz_criticality, APPLICATION_CRITICALITY_ORDER);
+        const hostingEnv = fixedApplicationLabel(row.hosting_env, APPLICATION_HOSTING_ENV_ORDER);
+        if (!criticality || !hostingEnv) return;
+        cellSets.get(`${criticality}|${hostingEnv}`)?.add(serviceKey);
+      });
+      const values = APPLICATION_CRITICALITY_ORDER.map((criticality) => {
+        const counts = {};
+        let total = 0;
+        APPLICATION_HOSTING_ENV_ORDER.forEach((hostingEnv) => {
+          const count = cellSets.get(`${criticality}|${hostingEnv}`)?.size || 0;
+          counts[hostingEnv] = count;
+          total += count;
+        });
+        return { business_criticality: criticality, counts, total };
+      });
+      const columnTotals = {};
+      APPLICATION_HOSTING_ENV_ORDER.forEach((hostingEnv) => {
+        columnTotals[hostingEnv] = values.reduce((sumValue, row) => sumValue + Number(row.counts[hostingEnv] || 0), 0);
+      });
+      return {
+        rows: APPLICATION_CRITICALITY_ORDER,
+        columns: APPLICATION_HOSTING_ENV_ORDER,
+        values,
+        column_totals: columnTotals,
+        grand_total: values.reduce((sumValue, row) => sumValue + row.total, 0)
+      };
+    }
+    function criticalityHostingPivotTable(pivot) {
+      if (!pivot.grand_total) return `<p class="muted">No in-use applications match the selected filters.</p>`;
+      return `<table class="applications-pivot-table">
+        <thead><tr><th>Business Criticality</th>${pivot.columns.map((column) => `<th class="numeric-cell">${esc(column)}</th>`).join("")}<th class="numeric-cell total-cell">Total</th></tr></thead>
+        <tbody>
+          ${pivot.rows.map((criticality) => {
+            const row = pivot.values.find((item) => item.business_criticality === criticality) || { counts: {}, total: 0 };
+            return `<tr><th>${esc(criticality)}</th>${pivot.columns.map((column) => `<td class="numeric-cell">${fmt(row.counts[column] || 0)}</td>`).join("")}<td class="numeric-cell total-cell">${fmt(row.total || 0)}</td></tr>`;
+          }).join("")}
+          <tr class="pivot-total-row"><th>Total</th>${pivot.columns.map((column) => `<td class="numeric-cell total-cell">${fmt(pivot.column_totals[column] || 0)}</td>`).join("")}<td class="numeric-cell grand-total-cell">${fmt(pivot.grand_total)}</td></tr>
+        </tbody>
+      </table>`;
+    }
     function renderApplications() {
       const rows = filteredApplications();
       const topActiveUsers = topActiveUsersPoints(rows);
+      const globalLocalData = globalLocalApplications(rows);
+      const criticalityPivot = criticalityHostingPivot(rows);
       const functionalValues = uniqueSorted(DASHBOARD.applications.rows, "functional_track_ams_owner");
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
       const businessCount = rows.filter((row) => ["business", "business application"].includes(String(row.app_type).toLowerCase())).length;
@@ -2950,7 +3065,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
             <section class="chart-card panel" data-commentary-key="architecture_type"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
             <section class="chart-card panel" data-commentary-key="install_type"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
             <section class="chart-card panel" data-commentary-key="hosting_env"><h3>Hosting Env</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "hosting_env").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.orange }], { width: 820, applicationChart: true })}</div></section>
+            <section class="chart-card panel" data-commentary-key="applications_global_local"><h3>Global vs Local Applications</h3><div class="chart-frame chart-stage">${pieChart(globalLocalData)}</div></section>
           </div>
+          <section class="chart-card panel full" data-commentary-key="applications_criticality_hosting_pivot"><h3>Application Criticality by Hosting Environment</h3><p class="muted">Count of unique Business Service CI Names with Lifecycle Stage/Status = In use.</p><div class="table-frame table-scroll">${criticalityHostingPivotTable(criticalityPivot)}</div></section>
           <section class="chart-card panel full" data-commentary-key="top_active_users"><div class="chart-title-row"><div><h3>Top Parent Business Applications by Active Users</h3><p class="muted">Application Inventory only. One row per Parent Business Application, using the highest Active Users value when duplicates exist.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Parent Business Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
           <section class="panel table-card" data-commentary-key="application_list" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
         </section>
@@ -2964,7 +3081,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       installChartCopyButtons(document.getElementById("applications"));
     }
     function applicationTable(rows) {
-      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
+      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
       return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(column === "active_users" && row[column] !== null && row[column] !== undefined ? fmt(row[column]) : (row[column] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function filteredVolumetricsRows() {

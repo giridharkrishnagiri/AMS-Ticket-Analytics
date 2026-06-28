@@ -56,6 +56,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_application_inventory_project_vendor", "project_id", "supported_by_vendor"),
         Index("ix_application_inventory_project_sap_non_sap", "project_id", "sap_non_sap"),
         Index("ix_application_inventory_project_hosting_env", "project_id", "hosting_env"),
+        Index("ix_application_inventory_project_global", "project_id", "global_application"),
     )
 
     project_id: Mapped[UUID] = mapped_column(
@@ -75,6 +76,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     supported_by_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     hosting_env: Mapped[str | None] = mapped_column(Text, nullable=True)
+    global_application: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
     avg_monthly_ticket_volume_6m: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -112,6 +112,14 @@ const emptyCharts: DashboardApplicationsCharts = {
   install_type: [],
   hosting_env: [],
   strategic: [],
+  global_local_applications: [],
+  criticality_hosting_pivot: {
+    rows: ["Very Critical", "Critical", "High", "Medium", "Low"],
+    columns: ["Production", "Non-Prod", "Dev", "Test", "Historical & DR"],
+    values: [],
+    column_totals: {},
+    grand_total: 0,
+  },
 };
 
 const emptyTopActiveUsers: DashboardApplicationsTopActiveUsers = {
@@ -137,6 +145,7 @@ const tableColumns: Array<{ key: TableColumnKey; label: string }> = [
   { key: "ams_owner", label: "AMS Owner" },
   { key: "supported_by_vendor", label: "Supported By Vendor" },
   { key: "hosting_env", label: "Hosting Env" },
+  { key: "global_application", label: "Global" },
   { key: "active_users", label: "Active Users" },
   { key: "app_family", label: "App Family" },
   { key: "biz_process", label: "Biz Process" },
@@ -1010,8 +1019,24 @@ function ApplicationsDashboard({
             status={charts.status}
             commentary={applicationCommentary("applications_charts", "hosting_env")}
           />
+          <PieApplicationChart
+            title="Global vs Local Applications"
+            data={charts.data.global_local_applications}
+            status={charts.status}
+            commentary={applicationCommentary("applications_charts", "applications_global_local")}
+          />
         </section>
         {charts.status === "error" ? <p className="error-text">{charts.error}</p> : null}
+
+        <ApplicationsCriticalityHostingPivotTable
+          data={charts.data.criticality_hosting_pivot}
+          error={charts.error}
+          status={charts.status}
+          commentary={applicationCommentary(
+            "applications_charts",
+            "applications_criticality_hosting_pivot",
+          )}
+        />
 
         <TopActiveUsersChart
           data={topActiveUsers.data}
@@ -1022,6 +1047,85 @@ function ApplicationsDashboard({
           commentary={applicationCommentary("applications_charts", "top_active_users")}
         />
       </div>
+    </section>
+  );
+}
+
+function ApplicationsCriticalityHostingPivotTable({
+  commentary,
+  data,
+  error,
+  status,
+}: {
+  commentary?: ReactNode;
+  data: DashboardApplicationsCharts["criticality_hosting_pivot"];
+  error: string | null;
+  status: LoadStatus;
+}) {
+  const title = "Application Criticality by Hosting Environment";
+  const hasRows = data.grand_total > 0;
+  const rowsByCriticality = new Map(data.values.map((row) => [row.business_criticality, row]));
+
+  return (
+    <section className="chart-card applications-chart-card applications-wide-chart" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Count of unique Business Service CI Names with Lifecycle Stage/Status = In use.
+          </p>
+        </div>
+      </div>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading table...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No in-use applications match the selected filters.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-pivot-table-frame">
+          <table className="applications-pivot-table">
+            <thead>
+              <tr>
+                <th scope="col">Business Criticality</th>
+                {data.columns.map((column) => (
+                  <th className="numeric-cell" key={column} scope="col">
+                    {column}
+                  </th>
+                ))}
+                <th className="numeric-cell total-cell" scope="col">
+                  Total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((criticality) => {
+                const row = rowsByCriticality.get(criticality);
+                return (
+                  <tr key={criticality}>
+                    <th scope="row">{criticality}</th>
+                    {data.columns.map((column) => (
+                      <td className="numeric-cell" key={column}>
+                        {formatNumber(row?.counts[column] ?? 0)}
+                      </td>
+                    ))}
+                    <td className="numeric-cell total-cell">{formatNumber(row?.total ?? 0)}</td>
+                  </tr>
+                );
+              })}
+              <tr className="pivot-total-row">
+                <th scope="row">Total</th>
+                {data.columns.map((column) => (
+                  <td className="numeric-cell total-cell" key={column}>
+                    {formatNumber(data.column_totals[column] ?? 0)}
+                  </td>
+                ))}
+                <td className="numeric-cell grand-total-cell">{formatNumber(data.grand_total)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {commentary}
     </section>
   );
 }
@@ -1140,7 +1244,9 @@ function PieApplicationChart({
   title: string;
 }) {
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartCopy(title);
-  const canCopy = !hiddenMessage && status !== "loading" && data.length > 0;
+  const chartData = data.filter((entry) => entry.count > 0);
+  const total = chartData.reduce((sum, entry) => sum + entry.count, 0);
+  const canCopy = !hiddenMessage && status !== "loading" && chartData.length > 0;
   const chartWidth = Math.max(500, plotWidth - 24);
 
   return (
@@ -1160,18 +1266,25 @@ function PieApplicationChart({
       {!hiddenMessage && status === "loading" ? (
         <p className="muted-text chart-state-text">Loading chart...</p>
       ) : null}
-      {!hiddenMessage && status !== "loading" && data.length === 0 ? (
+      {!hiddenMessage && status !== "loading" && chartData.length === 0 ? (
         <p className="muted-text chart-state-text">No chart data available.</p>
       ) : null}
-      {!hiddenMessage && status !== "loading" && data.length > 0 ? (
+      {!hiddenMessage && status !== "loading" && chartData.length > 0 ? (
         <div className="applications-chart-plot" ref={chartRef}>
           <div className="applications-chart-scroll">
             <div className="applications-chart-stage">
               <PieChart width={chartWidth} height={320}>
                 <Tooltip />
                 <Legend />
-                <Pie data={data} dataKey="count" nameKey="label" outerRadius={104}>
-                  {data.map((entry, index) => (
+                <Pie
+                  data={chartData}
+                  dataKey="count"
+                  label={(props) => renderApplicationPieLabel(props, total)}
+                  labelLine
+                  nameKey="label"
+                  outerRadius={104}
+                >
+                  {chartData.map((entry, index) => (
                     <Cell
                       fill={chartColors[index % chartColors.length]}
                       key={entry.label}
@@ -1179,7 +1292,6 @@ function PieApplicationChart({
                       strokeWidth={1.5}
                     />
                   ))}
-                  <LabelList dataKey="count" position="outside" />
                 </Pie>
               </PieChart>
             </div>
@@ -1189,6 +1301,24 @@ function PieApplicationChart({
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
       {commentary}
     </section>
+  );
+}
+
+function renderApplicationPieLabel(
+  props: { x?: number | string; y?: number | string; value?: number | string },
+  total: number,
+) {
+  const x = Number(props.x);
+  const y = Number(props.y);
+  const value = Number(props.value);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
+  return (
+    <text fill="#0f172a" fontSize={11} fontWeight={800} textAnchor="middle" x={x} y={y}>
+      {`${formatNumber(value)} (${percentage}%)`}
+    </text>
   );
 }
 

@@ -49,6 +49,7 @@ DIRECT_APPLICATION_FIELDS = {
     "supported_by_vendor": ApplicationInventoryItem.supported_by_vendor,
     "sap_non_sap": ApplicationInventoryItem.sap_non_sap,
     "hosting_env": ApplicationInventoryItem.hosting_env,
+    "global_application": ApplicationInventoryItem.global_application,
     "active_users": ApplicationInventoryItem.active_users,
     "avg_monthly_ticket_volume_6m": ApplicationInventoryItem.avg_monthly_ticket_volume_6m,
     "tickets_per_user_per_month": ApplicationInventoryItem.tickets_per_user_per_month,
@@ -98,6 +99,7 @@ APPLICATION_LIST_FIELDS = (
     "ams_owner",
     "supported_by_vendor",
     "hosting_env",
+    "global_application",
     "active_users",
     "avg_monthly_ticket_volume_6m",
     "tickets_per_user_per_month",
@@ -136,6 +138,10 @@ SINGLE_APPLICATION_FILTER_FIELDS = {
     "install_type": "install_type",
     "hosting_env": "hosting_env",
 }
+
+APPLICATION_CRITICALITY_ORDER = ("Very Critical", "Critical", "High", "Medium", "Low")
+APPLICATION_HOSTING_ENV_ORDER = ("Production", "Non-Prod", "Dev", "Test", "Historical & DR")
+APPLICATION_GLOBAL_LOCAL_ORDER = ("Global", "Local")
 
 COMBINED_APPLICATION_FILTER_FIELDS = {
     "functional_track_ams_owner": ("functional_track", "ams_owner"),
@@ -1237,7 +1243,119 @@ def applications_chart_counts(
     ]
 
 
-def applications_charts(db: Session, request: Any) -> dict[str, list[dict[str, Any]]]:
+def fixed_value_label_expression(expression: Any, labels: tuple[str, ...]) -> Any:
+    normalized_expression = func.lower(func.trim(func.coalesce(expression, literal(""))))
+    return case(
+        *[
+            (normalized_expression == label.casefold(), literal(label))
+            for label in labels
+        ],
+        else_=None,
+    )
+
+
+def applications_criticality_hosting_pivot(db: Session, request: Any) -> dict[str, Any]:
+    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
+    criticality_label = fixed_value_label_expression(
+        application_field_expression("biz_criticality"),
+        APPLICATION_CRITICALITY_ORDER,
+    )
+    hosting_label = fixed_value_label_expression(
+        application_field_expression("hosting_env"),
+        APPLICATION_HOSTING_ENV_ORDER,
+    )
+    lifecycle_stage_normalized = func.lower(
+        func.trim(func.coalesce(application_field_expression("lifecycle_status"), literal(""))),
+    )
+    lifecycle_stage_status_normalized = func.lower(
+        func.trim(
+            func.coalesce(application_field_expression("lifecycle_stage_status"), literal("")),
+        ),
+    )
+    statement = (
+        select(
+            criticality_label.label("business_criticality"),
+            hosting_label.label("hosting_env"),
+            func.count(func.distinct(service_expression)).label("application_count"),
+        )
+        .where(
+            *applications_filter_conditions(request.project_id, request.filters),
+            or_(
+                lifecycle_stage_normalized == "in use",
+                lifecycle_stage_status_normalized == "in use",
+            ),
+            criticality_label.is_not(None),
+            hosting_label.is_not(None),
+            service_expression.is_not(None),
+        )
+        .group_by(criticality_label, hosting_label)
+    )
+    values_by_key = {
+        (str(row["business_criticality"]), str(row["hosting_env"])): int(
+            row["application_count"] or 0,
+        )
+        for row in db.execute(statement).mappings().all()
+    }
+
+    column_totals = {column: 0 for column in APPLICATION_HOSTING_ENV_ORDER}
+    rows: list[dict[str, Any]] = []
+    for criticality in APPLICATION_CRITICALITY_ORDER:
+        counts = {
+            hosting_env: values_by_key.get((criticality, hosting_env), 0)
+            for hosting_env in APPLICATION_HOSTING_ENV_ORDER
+        }
+        row_total = sum(counts.values())
+        for hosting_env, count in counts.items():
+            column_totals[hosting_env] += count
+        rows.append(
+            {
+                "business_criticality": criticality,
+                "counts": counts,
+                "total": row_total,
+            },
+        )
+
+    return {
+        "rows": list(APPLICATION_CRITICALITY_ORDER),
+        "columns": list(APPLICATION_HOSTING_ENV_ORDER),
+        "values": rows,
+        "column_totals": column_totals,
+        "grand_total": sum(column_totals.values()),
+    }
+
+
+def applications_global_local(db: Session, request: Any) -> list[dict[str, Any]]:
+    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
+    global_expression = application_field_expression("global_application")
+    normalized_global = func.lower(func.trim(func.coalesce(global_expression, literal(""))))
+    global_label = case(
+        (normalized_global == "yes", literal("Global")),
+        (normalized_global == "no", literal("Local")),
+        else_=None,
+    )
+    statement = (
+        select(
+            global_label.label("label"),
+            func.count(func.distinct(service_expression)).label("count"),
+        )
+        .where(
+            *applications_filter_conditions(request.project_id, request.filters),
+            global_label.is_not(None),
+            service_expression.is_not(None),
+        )
+        .group_by(global_label)
+    )
+    counts = {
+        str(row["label"]): int(row["count"] or 0)
+        for row in db.execute(statement).mappings().all()
+    }
+    return [
+        {"label": label, "count": counts.get(label, 0)}
+        for label in APPLICATION_GLOBAL_LOCAL_ORDER
+    ]
+
+
+def applications_charts(db: Session, request: Any) -> dict[str, Any]:
     lifecycle_selected = bool(
         selected_application_filter_values(request.filters, "lifecycle_status_stage"),
     )
@@ -1249,6 +1367,8 @@ def applications_charts(db: Session, request: Any) -> dict[str, list[dict[str, A
         "install_type": applications_chart_counts(db, request, "install_type"),
         "hosting_env": applications_chart_counts(db, request, "hosting_env"),
         "strategic": applications_chart_counts(db, request, "strategic"),
+        "criticality_hosting_pivot": applications_criticality_hosting_pivot(db, request),
+        "global_local_applications": applications_global_local(db, request),
     }
 
 

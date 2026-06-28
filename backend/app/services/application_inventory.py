@@ -57,6 +57,7 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "ams_owner": ("AMS Owner",),
     "supported_by_vendor": ("Supported By Vendor", "Support vendor", "Vendor"),
     "hosting_env": ("Hosting Env", "Hosting Environment", "hosting_env"),
+    "global_application": ("Global", "Global Application", "global_application"),
     "active": ("Active",),
     "active_users": ("Active Users", "Active User", "Active Users Count"),
 }
@@ -349,6 +350,9 @@ def clean_inventory_values(
             get_raw_value(parsed_row.raw_data, "supported_by_vendor")
         ),
         "hosting_env": text_or_none(get_raw_value(parsed_row.raw_data, "hosting_env")),
+        "global_application": text_or_none(
+            get_raw_value(parsed_row.raw_data, "global_application")
+        ),
         "sap_non_sap": derive_sap_non_sap(assignment_group),
         "active": parse_active(
             get_raw_value(parsed_row.raw_data, "active"),

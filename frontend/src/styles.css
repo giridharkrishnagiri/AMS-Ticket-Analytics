@@ -1665,6 +1665,65 @@ h2 {
   margin: 0 auto;
 }
 
+.applications-pivot-table-frame {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.applications-pivot-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.applications-pivot-table th,
+.applications-pivot-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.applications-pivot-table thead th {
+  color: #475569;
+  background: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.applications-pivot-table tbody th {
+  color: #0f172a;
+  font-weight: 900;
+  text-align: left;
+}
+
+.applications-pivot-table .numeric-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.applications-pivot-table .total-cell {
+  color: #0f172a;
+  background: #f8fafc;
+  font-weight: 900;
+}
+
+.applications-pivot-table .pivot-total-row th,
+.applications-pivot-table .pivot-total-row td {
+  border-bottom: 0;
+  background: #eef6ff;
+  font-weight: 900;
+}
+
+.applications-pivot-table .grand-total-cell {
+  color: #ffffff;
+  background: #1d4ed8;
+  font-weight: 900;
+}
+
 .chart-copy-status {
   margin: 0;
   color: #64748b;
