@@ -50,6 +50,23 @@ def usage_log_count() -> int:
         db.close()
 
 
+def test_llm_client_applies_system_trust_store_once(monkeypatch) -> None:
+    from app.services.genai import llm_client
+
+    calls: list[bool] = []
+
+    def fake_inject_into_ssl() -> None:
+        calls.append(True)
+
+    monkeypatch.setattr("truststore.inject_into_ssl", fake_inject_into_ssl)
+    monkeypatch.setattr(llm_client, "SYSTEM_TRUST_STORE_APPLIED", False)
+
+    llm_client.apply_system_trust_store()
+    llm_client.apply_system_trust_store()
+
+    assert calls == [True]
+
+
 def test_genai_config_get_returns_defaults_and_no_api_keys() -> None:
     reset_genai_tables()
 

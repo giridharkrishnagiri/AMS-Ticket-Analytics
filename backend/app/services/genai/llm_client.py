@@ -7,12 +7,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import litellm
-
 from app.core.config import get_settings
 from app.models import GenAIConfig
 
 logger = logging.getLogger(__name__)
+
+SYSTEM_TRUST_STORE_APPLIED = False
+
+
+def apply_system_trust_store() -> None:
+    """Use the OS certificate store when available for corporate-managed laptops."""
+    global SYSTEM_TRUST_STORE_APPLIED
+    if SYSTEM_TRUST_STORE_APPLIED:
+        return
+    try:
+        import truststore
+    except ImportError:
+        logger.debug("truststore is not installed; using Python default SSL certificates")
+        return
+    try:
+        truststore.inject_into_ssl()
+    except Exception:
+        logger.warning("Unable to apply system SSL trust store", exc_info=True)
+        return
+    SYSTEM_TRUST_STORE_APPLIED = True
+
+
+apply_system_trust_store()
+
+import litellm  # noqa: E402
 
 SAFE_DEFAULT_TEST_PROMPT = "Say hello from the AMS GenAI Analytics Workbench."
 PROVIDER_API_KEY_ENV: dict[str, str] = {
@@ -96,6 +119,7 @@ def resolved_env_path(value: Path | None) -> str | None:
 
 
 def apply_network_environment() -> None:
+    apply_system_trust_store()
     settings = get_settings()
     env_values = {
         "SSL_CERT_FILE": resolved_env_path(settings.ssl_cert_file),
