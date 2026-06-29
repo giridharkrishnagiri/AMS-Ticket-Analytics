@@ -14,6 +14,7 @@ import {
   updateGenAISafetySettings
 } from "./api/genai";
 import { ChatPage } from "./pages/ChatPage";
+import { ToolsLabPage } from "./pages/ToolsLabPage";
 import type {
   BackendHealth,
   GenAIConfig,
@@ -27,7 +28,7 @@ import type {
   GenAIUsageLog
 } from "./types/genai";
 
-type AppView = "chat" | "charts" | "admin" | "usage";
+type AppView = "chat" | "tools" | "charts" | "admin" | "usage";
 type AdminTab = "config" | "prompts" | "safety";
 type MessageKind = "success" | "error" | "info";
 
@@ -862,6 +863,7 @@ function UsageLogsPage() {
             <option value="config_test">config_test</option>
             <option value="prompt_test">prompt_test</option>
             <option value="chat">chat</option>
+            <option value="tool_execution">tool_execution</option>
           </select>
         </label>
         <label>
@@ -980,6 +982,13 @@ function App() {
         </button>
         <button
           type="button"
+          className={activeView === "tools" ? "active" : ""}
+          onClick={() => setActiveView("tools")}
+        >
+          Tools Lab
+        </button>
+        <button
+          type="button"
           className={activeView === "charts" ? "active" : ""}
           onClick={() => setActiveView("charts")}
         >
@@ -1002,6 +1011,7 @@ function App() {
       </nav>
 
       {activeView === "chat" ? <ChatPage /> : null}
+      {activeView === "tools" ? <ToolsLabPage /> : null}
       {activeView === "charts" ? (
         <PagePlaceholder
           title="AI Charts"

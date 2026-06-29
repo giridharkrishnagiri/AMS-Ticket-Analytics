@@ -12,6 +12,7 @@ from app.models.genai import (
     GenAIConfig,
     GenAIPromptTemplate,
     GenAISafetySettings,
+    GenAIToolRun,
     GenAIUsageLog,
 )
 from app.models.incident_sla_row import IncidentSlaRow
@@ -39,6 +40,7 @@ __all__ = [
     "GenAIConfig",
     "GenAIPromptTemplate",
     "GenAISafetySettings",
+    "GenAIToolRun",
     "GenAIUsageLog",
     "IngestionJob",
     "IncidentSlaRow",

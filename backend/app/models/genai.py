@@ -172,3 +172,43 @@ class GenAIChatMessage(UuidPrimaryKeyMixin, Base):
     )
 
     session: Mapped[GenAIChatSession] = relationship(back_populates="messages")
+
+
+class GenAIToolRun(UuidPrimaryKeyMixin, Base):
+    __tablename__ = "genai_tool_runs"
+    __table_args__ = (
+        Index("ix_genai_tool_runs_tool_created_at", "tool_name", "created_at"),
+        Index("ix_genai_tool_runs_domain_created_at", "domain", "created_at"),
+        Index("ix_genai_tool_runs_status_created_at", "status", "created_at"),
+    )
+
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    domain: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    parameters_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    filters_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    execution_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    warnings_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    customer: Mapped[Client | None] = relationship()
+    project: Mapped[Project | None] = relationship()

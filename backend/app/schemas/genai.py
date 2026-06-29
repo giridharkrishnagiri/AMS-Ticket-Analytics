@@ -232,3 +232,74 @@ class GenAIChatMessageCreateResponse(BaseModel):
     user_message: GenAIChatMessageResponse
     assistant_message: GenAIChatMessageResponse
     session: GenAIChatSendSessionSummary
+
+
+class GenAIToolColumn(BaseModel):
+    key: str
+    label: str
+    type: str = "string"
+
+
+class GenAIToolSummary(BaseModel):
+    title: str
+    description: str | None = None
+
+
+class GenAIToolCatalogItem(BaseModel):
+    tool_name: str
+    domain: str
+    display_name: str
+    description: str
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    allowed_dimensions: list[str] = Field(default_factory=list)
+    allowed_metrics: list[str] = Field(default_factory=list)
+    max_rows: int
+    data_safety_level: str
+
+
+class GenAIToolCatalogResponse(BaseModel):
+    items: list[GenAIToolCatalogItem]
+
+
+class GenAIToolExecuteRequest(BaseModel):
+    tool_name: str = Field(..., min_length=1, max_length=120)
+    customer_id: UUID | None = None
+    project_id: UUID | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class GenAIToolExecuteResponse(BaseModel):
+    tool_name: str
+    domain: str
+    status: str
+    summary: GenAIToolSummary
+    columns: list[GenAIToolColumn] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    totals: dict[str, Any] = Field(default_factory=dict)
+    applied_filters: dict[str, Any] = Field(default_factory=dict)
+    data_notes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    row_count: int = 0
+    truncated: bool = False
+    execution_ms: int | None = None
+
+
+class GenAIToolRunResponse(BaseModel):
+    id: UUID
+    tool_name: str
+    domain: str | None
+    customer_id: UUID | None
+    project_id: UUID | None
+    status: str
+    parameters_json: dict[str, Any] | None
+    filters_json: dict[str, Any] | None
+    row_count: int | None
+    truncated: bool
+    execution_ms: int | None
+    warnings_json: list[str] | None
+    error_message: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

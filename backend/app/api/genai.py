@@ -25,6 +25,10 @@ from app.schemas.genai import (
     GenAISafetySettingsUpdateRequest,
     GenAITestRequest,
     GenAITestResponse,
+    GenAIToolCatalogResponse,
+    GenAIToolExecuteRequest,
+    GenAIToolExecuteResponse,
+    GenAIToolRunResponse,
     GenAIUsageLogResponse,
     GenAIUsageSummary,
 )
@@ -55,6 +59,7 @@ from app.services.genai.safety_service import (
     get_or_create_safety_settings,
     update_safety_settings,
 )
+from app.services.genai.tools import execute_tool, list_tool_runs, list_tools
 from app.services.genai.usage_log_service import create_usage_log, list_usage_logs
 
 router = APIRouter(prefix="/genai", tags=["genai"])
@@ -132,6 +137,38 @@ def put_genai_safety_settings(
     db: DbSession,
 ) -> GenAISafetySettingsResponse:
     return update_safety_settings(db, request.model_dump(exclude_unset=True))
+
+
+@router.get("/tools/catalog", response_model=GenAIToolCatalogResponse)
+def get_genai_tools_catalog() -> GenAIToolCatalogResponse:
+    return GenAIToolCatalogResponse(items=list_tools())
+
+
+@router.post("/tools/execute", response_model=GenAIToolExecuteResponse)
+def post_genai_tool_execute(
+    request: GenAIToolExecuteRequest,
+    db: DbSession,
+) -> GenAIToolExecuteResponse:
+    return execute_tool(db, request)
+
+
+@router.get("/tools/runs", response_model=list[GenAIToolRunResponse])
+def get_genai_tool_runs(
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    tool_name: str | None = None,
+    domain: str | None = None,
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+) -> list[GenAIToolRunResponse]:
+    return list_tool_runs(
+        db,
+        limit=limit,
+        offset=offset,
+        tool_name=tool_name,
+        domain=domain,
+        status=status_filter,
+    )
 
 
 @router.get("/context/customers", response_model=list[GenAIContextOptionResponse])
