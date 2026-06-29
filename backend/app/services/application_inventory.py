@@ -570,6 +570,8 @@ def update_application_inventory_active_users_from_file(
                 db.commit()
 
         recompute_application_ticket_user_metrics(db, project_id)
+        db.flush()
+        backfill_ticket_hosting_env_from_inventory(db, project_id)
         db.commit()
     except SQLAlchemyError as exc:
         db.rollback()
@@ -878,6 +880,7 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             supported_by_vendor=None,
             assignment_group_owner=None,
             sap_non_sap=None,
+            business_critical=None,
             hosting_env=None,
             derived_vendor=None,
         )
@@ -897,6 +900,7 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             supported_by_vendor=None,
             assignment_group_owner=None,
             sap_non_sap=None,
+            business_critical=None,
             hosting_env=None,
             derived_vendor=None,
         )
@@ -905,17 +909,21 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
 
 def backfill_ticket_hosting_env_from_inventory(db: Session, project_id: UUID) -> int:
     updated_count = 0
+    business_critical_expression = business_critical_expression_sql()
     for table_name in ("tickets", "assessment_out_of_scope_tickets"):
         result = db.execute(
             text(
                 f"""
                 UPDATE {table_name} AS t
-                SET hosting_env = NULLIF(btrim(i.hosting_env), '')
+                SET
+                    hosting_env = NULLIF(btrim(i.hosting_env), ''),
+                    business_critical = {business_critical_expression}
                 FROM application_inventory_items AS i
                 WHERE t.project_id = CAST(:project_id AS uuid)
                   AND t.application_inventory_id = i.id
                   AND (
                     t.hosting_env IS DISTINCT FROM NULLIF(btrim(i.hosting_env), '')
+                    OR t.business_critical IS DISTINCT FROM {business_critical_expression}
                   )
                 """,
             ),
@@ -923,6 +931,15 @@ def backfill_ticket_hosting_env_from_inventory(db: Session, project_id: UUID) ->
         )
         updated_count += int(result.rowcount or 0)
     return updated_count
+
+
+def business_critical_expression_sql(alias: str = "i") -> str:
+    keys = ("Business criticality", "Biz Criticality", "Business Criticality", "Business Critical")
+    expressions = []
+    for key in keys:
+        escaped_key = key.replace("'", "''")
+        expressions.append(f"NULLIF(btrim({alias}.cmdb_payload ->> '{escaped_key}'), '')")
+    return f"COALESCE({', '.join(expressions)})"
 
 
 def update_tickets_from_inventory(
@@ -951,6 +968,7 @@ def update_tickets_from_inventory(
                 i.supported_by_vendor,
                 i.assignment_group_owner,
                 i.hosting_env,
+                {business_critical_expression_sql()} AS business_critical,
                 row_number() OVER (
                     PARTITION BY t.id
                     ORDER BY
@@ -991,6 +1009,7 @@ def update_tickets_from_inventory(
             ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
             assignment_group_owner = candidates.assignment_group_owner,
+            business_critical = candidates.business_critical,
             hosting_env = candidates.hosting_env,
             sap_non_sap = CASE
                 WHEN upper(btrim(coalesce(t.assignment_group, ''))) LIKE 'IT-SAP%' THEN 'SAP'

@@ -24,6 +24,7 @@ from app.models import (
     Ticket,
 )
 from app.services.dashboard import (
+    APPLICATION_CRITICALITY_ORDER,
     APPLICATION_LIST_FIELDS,
     BLANK_LABEL,
     DURATION_BUCKETS,
@@ -185,6 +186,7 @@ def monthly_request(project_id: UUID, start_datetime: datetime, end_datetime: da
             application_owner=[],
             supported_by_vendor=[],
             sap_non_sap=[],
+            business_critical=[],
         ),
     )
 
@@ -280,10 +282,11 @@ def volumetrics_dimension_expressions(source: Any) -> dict[str, Any]:
             "ams_owner",
         ),
         "sap_non_sap": volumetrics_display_expression(source.c.sap_non_sap),
+        "business_critical": volumetrics_display_expression(source.c.business_critical),
     }
 
 
-def dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+def dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str, str]:
     return (
         str(row["scope"]),
         str(row["ticket_type"]),
@@ -291,10 +294,11 @@ def dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
         str(row["ams_owner"]),
         str(row["functional_track_ams_owner"]),
         str(row["sap_non_sap"]),
+        str(row["business_critical"]),
     )
 
 
-def dimension_dict(key: tuple[str, str, str, str, str, str]) -> dict[str, str]:
+def dimension_dict(key: tuple[str, str, str, str, str, str, str]) -> dict[str, str]:
     return {
         "scope": key[0],
         "ticket_type": key[1],
@@ -302,6 +306,7 @@ def dimension_dict(key: tuple[str, str, str, str, str, str]) -> dict[str, str]:
         "ams_owner": key[3],
         "functional_track_ams_owner": key[4],
         "sap_non_sap": key[5],
+        "business_critical": key[6],
     }
 
 
@@ -312,7 +317,7 @@ def offline_period_rows(
     date_expression: Any,
     value_label: str,
     extra_conditions: list[Any] | None = None,
-) -> dict[tuple[tuple[str, str, str, str, str, str], str], int]:
+) -> dict[tuple[tuple[str, str, str, str, str, str, str], str], int]:
     dimensions = volumetrics_dimension_expressions(source)
     period_expression = volumetrics_period_start_expression(date_expression, "monthly")
     conditions = [
@@ -333,7 +338,7 @@ def offline_period_rows(
         .where(*conditions)
         .group_by(*dimensions.values(), period_expression)
     )
-    results: dict[tuple[tuple[str, str, str, str, str, str], str], int] = {}
+    results: dict[tuple[tuple[str, str, str, str, str, str, str], str], int] = {}
     for row in db.execute(statement).mappings().all():
         key = dimension_key(row)
         period_start = row["period_start"]
@@ -347,7 +352,7 @@ def offline_initial_counts(
     request: Any,
     source: Any,
     date_expression: Any,
-) -> dict[tuple[str, str, str, str, str, str], int]:
+) -> dict[tuple[str, str, str, str, str, str, str], int]:
     dimensions = volumetrics_dimension_expressions(source)
     statement = (
         select(
@@ -372,7 +377,7 @@ def offline_sla_rows(
     db: Session,
     request: Any,
     source: Any,
-) -> dict[tuple[tuple[str, str, str, str, str, str], str], dict[str, int]]:
+) -> dict[tuple[tuple[str, str, str, str, str, str, str], str], dict[str, int]]:
     dimensions = volumetrics_dimension_expressions(source)
     period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
     statement = (
@@ -414,7 +419,7 @@ def offline_sla_rows(
         )
         .group_by(*dimensions.values(), period_expression)
     )
-    results: dict[tuple[tuple[str, str, str, str, str, str], str], dict[str, int]] = {}
+    results: dict[tuple[tuple[str, str, str, str, str, str, str], str], dict[str, int]] = {}
     for row in db.execute(statement).mappings().all():
         period_start = row["period_start"]
         if period_start is None:
@@ -440,7 +445,11 @@ def offline_sla_rows(
     return results
 
 
-def distinct_dimension_keys(db: Session, request: Any, source: Any) -> set[tuple[str, str, str, str, str, str]]:
+def distinct_dimension_keys(
+    db: Session,
+    request: Any,
+    source: Any,
+) -> set[tuple[str, str, str, str, str, str, str]]:
     dimensions = volumetrics_dimension_expressions(source)
     statement = (
         select(*[expression.label(name) for name, expression in dimensions.items()])
@@ -711,7 +720,7 @@ def offline_hourly_count_rows(
     day_type: str,
     value_label: str,
     extra_conditions: list[Any] | None = None,
-) -> dict[tuple[tuple[str, str, str, str, str, str], int], int]:
+) -> dict[tuple[tuple[str, str, str, str, str, str, str], int], int]:
     dimensions = volumetrics_dimension_expressions(source)
     hour_expression = cast(func.extract("hour", date_expression), Integer)
     dow_expression = cast(func.extract("dow", date_expression), Integer)
@@ -735,7 +744,7 @@ def offline_hourly_count_rows(
         .where(*conditions)
         .group_by(*dimensions.values(), hour_expression)
     )
-    rows: dict[tuple[tuple[str, str, str, str, str, str], int], int] = {}
+    rows: dict[tuple[tuple[str, str, str, str, str, str, str], int], int] = {}
     for row in db.execute(statement).mappings().all():
         if row["hour"] is None:
             continue
@@ -1211,6 +1220,20 @@ def build_filter_values(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
         {row["sap_non_sap"] for row in monthly_rows},
         key=lambda value: {"SAP": 0, "Non-SAP": 1, BLANK_LABEL: 2}.get(value, 3),
     )
+    criticality_rank = {
+        label.casefold(): index for index, label in enumerate(APPLICATION_CRITICALITY_ORDER)
+    }
+    business_critical_values = sorted(
+        {
+            row["business_critical"]
+            for row in monthly_rows
+            if row["business_critical"] != BLANK_LABEL
+        },
+        key=lambda value: (
+            criticality_rank.get(value.casefold(), len(APPLICATION_CRITICALITY_ORDER)),
+            str(value).casefold(),
+        ),
+    )
     return {
         "scope": [
             {"label": "All", "value": "all"},
@@ -1228,6 +1251,7 @@ def build_filter_values(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
         ],
         "functional_track_ams_owner": functional_values,
         "sap_non_sap": sap_values,
+        "business_critical": business_critical_values,
     }
 
 
@@ -1401,6 +1425,7 @@ def build_offline_dashboard_payload(db: Session, project_id: UUID) -> dict[str, 
                 "ticket_type",
                 "functional_track_ams_owner",
                 "sap_non_sap",
+                "business_critical",
             ],
         },
         "overview": overview,
@@ -2183,11 +2208,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       appSubTab: "overview",
       appFunctional: "all",
       appSap: "all",
+      appBusinessCritical: "all",
       lifecyclePlan: "Invest",
       volScope: "in_scope",
       volTicketType: "all",
       volFunctional: "all",
       volSap: "all",
+      volBusinessCritical: "all",
       pattern: "day_of_month",
       volSubTab: "overall_volume_trends",
       hourlyDayType: "weekdays",
@@ -2629,6 +2656,40 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         }).join("")}
       </svg>${legend([{ name: "Backlog(Open)", color: COLORS.orange }, { name: "Average", color: COLORS.purple }])}`;
     }
+    function lifecyclePlanLineChart(data, plan) {
+      if (!data.some((row) => Number(row.count || 0) > 0)) {
+        return `<p class="muted" style="padding:12px">No applications found for the selected lifecycle plan.</p>`;
+      }
+      const color = lifecyclePlanColor(plan);
+      const width = 760;
+      const height = 340;
+      const margin = { top: 54, right: 52, bottom: 82, left: 54 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const edgePadding = 58;
+      const activePlotWidth = Math.max(1, plotWidth - edgePadding * 2);
+      const maxValue = Math.max(1, ...data.map((row) => Number(row.count || 0)));
+      const point = (row, index) => {
+        const x = margin.left + edgePadding + (activePlotWidth * index) / Math.max(1, data.length - 1);
+        const y = margin.top + plotHeight - (Number(row.count || 0) / maxValue) * plotHeight;
+        return [x, y];
+      };
+      const points = data.map(point);
+      const path = points.map(([x, y], index) => `${index ? "L" : "M"}${x},${y}`).join(" ");
+      const pointLabels = data.map((row, index) => {
+        const [x, y] = points[index];
+        return `<circle cx="${x}" cy="${y}" r="5" fill="#ffffff" stroke="${color}" stroke-width="3"></circle><text x="${x}" y="${Math.max(margin.top - 14, y - 12)}" text-anchor="middle" font-size="13" font-weight="900" fill="#334155">${fmt(row.count)}</text>`;
+      }).join("");
+      const xLabels = data.map((row, index) => {
+        const [x] = points[index];
+        return `<text x="${x}" y="${height - 38}" text-anchor="middle" font-size="12" font-weight="800" fill="#334155">${esc(row.label)}</text>`;
+      }).join("");
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(lifecyclePlanTitle(plan))}">
+        <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
+        <path d="${path}" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
+        ${pointLabels}${xLabels}
+      </svg>${legend([{ name: `${plan} applications`, color }])}`;
+    }
     function pieChart(items) {
       const visibleItems = items.filter((item) => Number(item.count || 0) > 0);
       const total = visibleItems.reduce((sum, item) => sum + item.count, 0);
@@ -2971,7 +3032,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function filteredApplications() {
       return DASHBOARD.applications.rows.filter((row) =>
         (state.appFunctional === "all" || row.functional_track_ams_owner === state.appFunctional) &&
-        (state.appSap === "all" || row.sap_non_sap === state.appSap)
+        (state.appSap === "all" || row.sap_non_sap === state.appSap) &&
+        (state.appBusinessCritical === "all" || row.biz_criticality === state.appBusinessCritical)
       );
     }
     function topActiveUsersPoints(rows) {
@@ -3096,6 +3158,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       </table>`;
     }
     const LIFECYCLE_PLANS = ["Invest", "Disinvest", "Maintain", "Retired"];
+    const LIFECYCLE_PLAN_COLORS = {
+      Invest: COLORS.teal,
+      Disinvest: "#991b1b",
+      Maintain: COLORS.blue,
+      Retired: "#581c87"
+    };
     const LIFECYCLE_HORIZONS = [
       { label: "Current", field: "lifecycle_current" },
       { label: "1 to 3 years", field: "lifecycle_1_to_3_years" },
@@ -3107,6 +3175,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function lifecyclePlanTitle(plan) {
       return plan === "Retired" ? "Applications Planned to Retire" : `Applications Planned to ${plan}`;
+    }
+    function lifecyclePlanColor(plan) {
+      return LIFECYCLE_PLAN_COLORS[plan] || COLORS.slate;
     }
     function lifecyclePlanCommentaryKey(plan) {
       return `applications_lifecycle_plan_${String(plan || "Invest").toLowerCase()}`;
@@ -3221,6 +3292,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const lifecycleData = lifecyclePlanningData(rows, state.lifecyclePlan);
       const functionalValues = uniqueSorted(DASHBOARD.applications.rows, "functional_track_ams_owner");
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
+      const businessCriticalValues = uniqueSorted(DASHBOARD.applications.rows, "biz_criticality");
       const businessCount = rows.filter((row) => ["business", "business application"].includes(String(row.app_type).toLowerCase())).length;
       const technicalCount = rows.filter((row) => ["technical", "technical application"].includes(String(row.app_type).toLowerCase())).length;
       const criticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "critical").length;
@@ -3254,13 +3326,14 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         <section class="panel lifecycle-planning-intro"><p class="label">Applications</p><h2>Lifecycle Planning</h2><p class="muted">Lifecycle planning shows In Use applications across Current, 1 to 3 years, and 3 to 5 years planning horizons.</p></section>
         <section class="panel lifecycle-matrix-panel"><p class="label">Lifecycle Planning Matrix</p><h2>Application Lifecycle Planning Matrix</h2><p class="muted">Counts represent distinct Business Service CI Names per planning horizon. The same application can appear in multiple horizons.</p><div class="table-frame table-scroll">${lifecyclePlanningMatrixTable(lifecycleData)}</div></section>
         <section class="panel lifecycle-plan-panel"><div class="chart-title-row"><div><p class="label">Plan Focus</p><h2>${esc(lifecyclePlanTitle(state.lifecyclePlan))}</h2></div><div class="pattern-buttons">${lifecyclePlanToggle()}</div></div>${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "lifecycle_planning", section_key: "lifecycle_planning_selected_plan", chart_key: lifecyclePlanCommentaryKey(state.lifecyclePlan), scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}</section>
-        <section class="chart-card panel full"><h3>${esc(lifecyclePlanTitle(state.lifecyclePlan))}</h3><p class="muted">Count of unique Business Service CI Names by planning horizon.</p><div class="chart-frame chart-stage">${barChart(lifecycleData.selected_plan.chart, [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 760, applicationChart: true })}</div></section>
+        <section class="chart-card panel full"><h3>${esc(lifecyclePlanTitle(state.lifecyclePlan))}</h3><p class="muted">Count of unique Business Service CI Names by planning horizon.</p><div class="chart-frame chart-stage">${lifecyclePlanLineChart(lifecycleData.selected_plan.chart, state.lifecyclePlan)}</div></section>
         <section class="panel table-card" style="padding:14px"><h3>${esc(lifecyclePlanTitle(state.lifecyclePlan))} - Details</h3><p class="muted">Showing ${fmt(lifecycleData.selected_plan.application_count)} applications with ${esc(state.lifecyclePlan)} plan across one or more lifecycle horizons.</p><div class="table-frame table-scroll">${lifecycleDetailTable(lifecycleData.selected_plan.applications)}</div></section>`;
       document.getElementById("applications").innerHTML = `<div class="layout dashboard-layout">
         <aside class="filters filter-pane panel">
           <p class="label">Filters</p><h2>Applications</h2>
           ${renderSelect("app-functional", "Functional Track / AMS Owner", [{ value: "all", label: "All" }, ...functionalValues.map((value) => ({ value, label: value }))], state.appFunctional)}
           ${renderSelect("app-sap", "SAP / Non-SAP", [{ value: "all", label: "All" }, ...sapValues.map((value) => ({ value, label: value }))], state.appSap)}
+          ${renderSelect("app-business-critical", "Business Criticality", [{ value: "all", label: "All" }, ...businessCriticalValues.map((value) => ({ value, label: value }))], state.appBusinessCritical)}
         </aside>
         <section class="main main-content">
           <div class="pattern-buttons application-subtabs">${applicationsSubtabs}</div>
@@ -3269,6 +3342,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       </div>`;
       document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.getElementById("app-sap").addEventListener("change", (event) => { state.appSap = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
+      document.getElementById("app-business-critical").addEventListener("change", (event) => { state.appBusinessCritical = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.querySelectorAll("[data-app-subtab]").forEach((button) => {
         button.addEventListener("click", () => { state.appSubTab = button.dataset.appSubtab; safeRenderSection("applications", "Applications", renderApplications); });
       });
@@ -3287,20 +3361,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(column === "active_users" && row[column] !== null && row[column] !== undefined ? fmt(row[column]) : (row[column] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function filteredVolumetricsRows() {
-      return DASHBOARD.volumetrics.monthly_rows.filter((row) =>
-        (state.volScope === "all" || row.scope === state.volScope) &&
-        (state.volTicketType === "all" || row.ticket_type === state.volTicketType) &&
-        (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
-        (state.volSap === "all" || row.sap_non_sap === state.volSap)
-      );
+      return DASHBOARD.volumetrics.monthly_rows.filter(offlineFilterMatch);
     }
     function filteredPatternRows() {
       return DASHBOARD.volumetrics.created_patterns.rows.filter((row) =>
-        row.pattern_type === state.pattern &&
-        (state.volScope === "all" || row.scope === state.volScope) &&
-        (state.volTicketType === "all" || row.ticket_type === state.volTicketType) &&
-        (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
-        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+        row.pattern_type === state.pattern && offlineFilterMatch(row)
       );
     }
     function offlineFilterMatch(row) {
@@ -3308,7 +3373,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volTicketType === "all" || row.ticket_type === state.volTicketType) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
-        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+        (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
+        (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
     }
     function filteredHourlyRows() {
@@ -3323,7 +3389,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return (DASHBOARD.volumetrics.overall_sla_trends?.rows || []).filter((row) =>
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
-        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+        (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
+        (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
     }
     function renderVolumetrics() {
@@ -3336,15 +3403,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${renderSelect("vol-ticket", "Ticket Type", DASHBOARD.volumetrics.filter_values.ticket_type, state.volTicketType)}
           ${renderSelect("vol-functional", "Functional Track / AMS Owner", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.functional_track_ams_owner.map((value) => ({ value, label: value }))], state.volFunctional)}
           ${renderSelect("vol-sap", "SAP / Non-SAP", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.sap_non_sap.map((value) => ({ value, label: value }))], state.volSap)}
+          ${renderSelect("vol-business-critical", "Business Criticality", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.business_critical.map((value) => ({ value, label: value }))], state.volBusinessCritical)}
         </aside>
         <section class="main main-content">
           <section class="panel" style="padding:14px"><p class="muted"><strong>Monthly dashboard based on complete uploaded months.</strong> Charts use ${dateText(DASHBOARD.metadata.complete_month_from)} to ${dateText(DASHBOARD.metadata.complete_month_to)}. Data available from ${dateText(DASHBOARD.metadata.data_available_from)} to ${dateText(DASHBOARD.metadata.data_available_to)}.</p><div class="subtabs">${volSubTabs()}</div></section>
           ${renderVolumetricsSubTab(periods)}
         </section>
       </div>`;
-      ["vol-scope", "vol-ticket", "vol-functional", "vol-sap"].forEach((id) => {
+      ["vol-scope", "vol-ticket", "vol-functional", "vol-sap", "vol-business-critical"].forEach((id) => {
         document.getElementById(id).addEventListener("change", (event) => {
-          const map = { "vol-scope": "volScope", "vol-ticket": "volTicketType", "vol-functional": "volFunctional", "vol-sap": "volSap" };
+          const map = { "vol-scope": "volScope", "vol-ticket": "volTicketType", "vol-functional": "volFunctional", "vol-sap": "volSap", "vol-business-critical": "volBusinessCritical" };
           state[map[id]] = event.target.value;
           safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics);
         });
@@ -3417,7 +3485,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         row.ticket_type === "incident" &&
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
-        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+        (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
+        (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
     }
     function inRankingWindow(row) {
@@ -3504,7 +3573,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         (ticketType === "all" || row.ticket_type === ticketType) &&
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
-        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+        (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
+        (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
     }
     function distributionItems(field, ticketType) {
@@ -3636,7 +3706,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         row.ticket_type === ticketType &&
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
-        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+        (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
+        (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
     }
     function mttrShowLabel(priority, index) {

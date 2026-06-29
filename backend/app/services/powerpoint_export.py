@@ -374,6 +374,8 @@ def add_category_chart(
     for series_index, chart_series in enumerate(chart.series):
         chart_series.format.fill.solid()
         chart_series.format.fill.fore_color.rgb = series[series_index][2]
+        chart_series.format.line.color.rgb = series[series_index][2]
+        chart_series.format.line.width = Pt(2.25)
 
 
 def add_pie_chart(
@@ -576,6 +578,16 @@ def lifecycle_plan_title(plan: str) -> str:
     if plan == "Retired":
         return "Applications Planned to Retire"
     return f"Applications Planned to {plan}"
+
+
+def lifecycle_plan_color(plan: str) -> RGBColor:
+    if plan == "Disinvest":
+        return RED
+    if plan == "Maintain":
+        return BLUE
+    if plan == "Retired":
+        return PURPLE
+    return TEAL
 
 
 def lifecycle_plan_commentary_key(plan: str) -> str:
@@ -1131,16 +1143,16 @@ def add_lifecycle_plan_slides(
         [row[0] for row in data["selected_plan"]["chart"]],
         [
             (
-                "Applications",
+                f"{plan} applications",
                 [row[1] for row in data["selected_plan"]["chart"]],
-                TEAL,
+                lifecycle_plan_color(plan),
             ),
         ],
         0.55,
         1.2,
         5.75,
         3.0,
-        chart_type=XL_CHART_TYPE.COLUMN_CLUSTERED,
+        chart_type=XL_CHART_TYPE.LINE_MARKERS,
         legend=False,
     )
     commentary = get_commentary(

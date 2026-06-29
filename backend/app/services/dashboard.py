@@ -213,6 +213,7 @@ SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
     "sap_non_sap": "sap_non_sap",
+    "business_critical": "business_critical",
 }
 
 COMBINED_VOLUMETRICS_FILTER_FIELDS = {
@@ -225,6 +226,7 @@ FACT_SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
     "sap_non_sap": "sap_non_sap",
+    "business_critical": "business_critical",
 }
 
 FACT_COMBINED_VOLUMETRICS_FILTER_FIELDS = {
@@ -243,6 +245,10 @@ FACT_COMBINED_VOLUMETRICS_FILTER_FIELDS = {
 FACT_TICKET_TYPE_VALUES = {
     "incident": "incident",
     "sc_task": "sc_task",
+}
+
+VOLUMETRICS_FILTER_CUSTOM_SORTS = {
+    "business_critical": APPLICATION_CRITICALITY_ORDER,
 }
 
 
@@ -1746,6 +1752,7 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         volumetrics_supported_vendor_expression(model).label("supported_by_vendor"),
         model.sap_non_sap.label("sap_non_sap"),
         model.architecture_type.label("architecture_type"),
+        model.business_critical.label("business_critical"),
         model.install_type.label("install_type"),
         model.hosting_env.label("hosting_env"),
         model.is_batch_related.label("is_batch_related"),
@@ -1873,12 +1880,24 @@ def volumetrics_base_conditions(
 def add_missing_selected_volumetrics_single_values(
     rows: list[dict[str, Any]],
     selected_values: list[str],
+    *,
+    filter_name: str | None = None,
 ) -> list[dict[str, Any]]:
     existing = {str(row["label"]) for row in rows}
     for selected_value in selected_values:
         if selected_value not in existing:
             rows.append({"label": selected_value, "value": selected_value, "count": 0})
             existing.add(selected_value)
+    sort_order = VOLUMETRICS_FILTER_CUSTOM_SORTS.get(filter_name or "")
+    if sort_order:
+        sort_rank = {label.casefold(): index for index, label in enumerate(sort_order)}
+        return sorted(
+            rows,
+            key=lambda row: (
+                sort_rank.get(str(row["label"]).casefold(), len(sort_order)),
+                str(row["label"]).casefold(),
+            ),
+        )
     return sorted(rows, key=lambda row: str(row["label"]).casefold())
 
 
@@ -1934,6 +1953,7 @@ def volumetrics_filter_value_count_rows(
     return add_missing_selected_volumetrics_single_values(
         rows,
         selected_volumetrics_filter_values(request.filters, filter_name),
+        filter_name=filter_name,
     )
 
 
@@ -2120,6 +2140,7 @@ def volumetrics_filter_fact_value_count_rows(
     return add_missing_selected_volumetrics_single_values(
         rows,
         selected_volumetrics_filter_values(request.filters, filter_name),
+        filter_name=filter_name,
     )
 
 
@@ -2276,6 +2297,12 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
             request,
             "sap_non_sap",
             "sap_non_sap",
+        ),
+        "business_critical": volumetrics_filter_fact_value_count_rows(
+            db,
+            request,
+            "business_critical",
+            "business_critical",
         ),
         "source": "dashboard_filter_facts",
         "duration_ms": int((perf_counter() - started) * 1000),

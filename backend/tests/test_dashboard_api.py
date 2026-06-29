@@ -124,6 +124,7 @@ def add_ticket(
     short_description: str | None = None,
     business_service_ci_name: str | None = None,
     architecture_type: str | None = None,
+    business_critical: str | None = None,
     install_type: str | None = None,
     hosting_env: str | None = None,
 ) -> Ticket:
@@ -153,6 +154,7 @@ def add_ticket(
         assignment_group=assignment_group,
         sap_non_sap=resolved_sap_non_sap,
         architecture_type=architecture_type,
+        business_critical=business_critical,
         install_type=install_type,
         hosting_env=hosting_env,
         application=application,
@@ -1693,6 +1695,7 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             state="Resolved",
             resolved_at=dt("2026-02-03T00:00:00"),
             assignment_group="IT-SAP-Group A",
+            business_critical="Critical",
         )
         incident.functional_track = "Data"
         incident.ams_owner = "Owner A"
@@ -1716,6 +1719,7 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             state="Closed",
             closed_at=dt("2026-01-25T00:00:00"),
             assignment_group="IT-SAP-Group A",
+            business_critical="Critical",
         )
         sc_task.functional_track = "Data"
         sc_task.ams_owner = "Owner A"
@@ -1735,6 +1739,7 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             state="Cancelled",
             closed_at=dt("2026-01-18T00:00:00"),
             assignment_group="IT-NSA-Group B",
+            business_critical="Low",
         )
         cancelled.functional_track = "Run"
         cancelled.ams_owner = "Owner B"
@@ -1754,6 +1759,7 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             state="Cancelled",
             closed_at=dt("2026-03-23T00:00:00"),
             assignment_group="IT-NSA-Group B",
+            business_critical="Low",
         )
 
         db.add(
@@ -1773,10 +1779,11 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                 parent_application_name="Parent OOS",
                 application_owner="App Owner OOS",
                 supported_by_vendor="Vendor OOS",
-                    response_sla_breached=True,
-                    resolution_sla_breached=False,
-                    sla_response_sla_breached=False,
-                    sla_resolution_sla_breached=False,
+                business_critical="Medium",
+                response_sla_breached=True,
+                resolution_sla_breached=False,
+                sla_response_sla_breached=False,
+                sla_resolution_sla_breached=False,
                 out_of_scope_reason="assignment_group_not_in_application_inventory",
             ),
         )
@@ -1865,6 +1872,13 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
                 json={
                     **request_body,
                     "filters": {"sap_non_sap": ["SAP"]},
+                },
+            )
+            criticality_filtered_summary_response = client.post(
+                "/api/dashboard/volumetrics/summary",
+                json={
+                    **request_body,
+                    "filters": {"business_critical": ["Critical"]},
                 },
             )
             hourly_weekday_response = client.post(
@@ -2008,6 +2022,18 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             "Non-SAP": 1,
             "SAP": 2,
         }
+        assert {
+            row["label"]: row["count"] for row in filter_values["business_critical"]
+        } == {
+            "Critical": 2,
+            "Low": 1,
+            "Medium": 1,
+        }
+        assert [row["label"] for row in filter_values["business_critical"]] == [
+            "Critical",
+            "Medium",
+            "Low",
+        ]
 
         assert filtered_summary_response.status_code == 200
         filtered_summary = filtered_summary_response.json()
@@ -2019,6 +2045,12 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         assert sap_points[0]["created_count"] == 2
         assert sap_points[0]["resolved_closed_count"] == 1
         assert sap_points[0]["canceled_closed_incomplete_count"] == 0
+
+        assert criticality_filtered_summary_response.status_code == 200
+        criticality_filtered_summary = criticality_filtered_summary_response.json()
+        assert criticality_filtered_summary["created"]["total"] == 2
+        assert criticality_filtered_summary["resolved_closed"]["total"] == 2
+        assert criticality_filtered_summary["cancelled"]["total"] == 0
 
         assert hourly_weekday_response.status_code == 200
         weekday_hourly = hourly_weekday_response.json()
@@ -2629,6 +2661,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             assignment_group="IT-SAP-PAYROLL",
             business_duration_seconds=86400,
             architecture_type="Cloud",
+            business_critical="Critical",
             install_type="Production",
             hosting_env="Production",
             raw_payload={"secret": "raw ticket payload should not be exported"},
@@ -2658,6 +2691,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             assignment_group="IT-NSA-PAYROLL",
             business_duration_seconds=172800,
             architecture_type="On Premise",
+            business_critical="Critical",
             install_type="Production",
             hosting_env="Non-Production",
             raw_payload={"secret": "raw sc task payload should not be exported"},
@@ -2708,6 +2742,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
                 supported_by_vendor="Vendor A",
                 business_duration_seconds=86400,
                 architecture_type="Cloud",
+                business_critical="Critical",
                 install_type="Production",
                 hosting_env="Production",
                     response_sla_breached=False,
@@ -2768,6 +2803,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Lifecycle Planning" in document
         assert "Application Lifecycle Planning Matrix" in document
         assert "function lifecyclePlanTitle" in document
+        assert "function lifecyclePlanLineChart" in document
+        assert "LIFECYCLE_PLAN_COLORS" in document
+        assert (
+            "lifecyclePlanLineChart(lifecycleData.selected_plan.chart, state.lifecyclePlan)"
+            in document
+        )
         assert "Applications Planned to Retire" in document
         assert "applications_lifecycle_plan_invest" in document
         assert "lifecycle-matrix-note" in document
@@ -2996,6 +3037,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             "ticket_type",
             "functional_track_ams_owner",
             "sap_non_sap",
+            "business_critical",
         ]
         assert payload["metadata"]["data_available_to"].startswith("2026-01-31")
         assert payload["metadata"]["complete_month_from"].startswith("2026-01-01")
@@ -3045,6 +3087,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "operating_system" not in payload["applications"]["charts"]
         assert "sox_scope" not in payload["applications"]["charts"]
         assert payload["volumetrics"]["monthly_rows"]
+        assert payload["volumetrics"]["filter_values"]["business_critical"] == ["Critical"]
         assert [row["period_key"] for row in payload["volumetrics"]["periods"]] == ["2026-01"]
         assert {
             row["period_key"] for row in payload["volumetrics"]["monthly_rows"]
@@ -3079,6 +3122,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "architecture_type" in detailed_row
         assert "install_type" in detailed_row
         assert "hosting_env" in detailed_row
+        assert "business_critical" in detailed_row
         assert {
             row["split_type"]
             for row in payload["volumetrics"]["detailed_volume_trends"]["split_rows"]
@@ -3090,6 +3134,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "caller_id" not in kpi_row
         assert "normalized_payload" not in kpi_row
         assert "ticket_number" not in payload["volumetrics"]["monthly_rows"][0]
+        assert "business_critical" in payload["volumetrics"]["monthly_rows"][0]
         assert "normalized_payload" not in payload["volumetrics"]["monthly_rows"][0]
     finally:
         cleanup_client(db, client_id)

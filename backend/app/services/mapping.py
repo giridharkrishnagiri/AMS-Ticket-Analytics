@@ -44,6 +44,12 @@ PROBLEM_TICKET_TYPE = "PROBLEM"
 CHANGE_TICKET_TYPE = "CHANGE"
 PROBLEM_CHANGE_TICKET_TYPES = {PROBLEM_TICKET_TYPE, CHANGE_TICKET_TYPE}
 CMDB_ARCHITECTURE_TYPE_KEYS = ("Architecture type", "Architecture Type")
+CMDB_BUSINESS_CRITICAL_KEYS = (
+    "Business criticality",
+    "Biz Criticality",
+    "Business Criticality",
+    "Business Critical",
+)
 CMDB_INSTALL_TYPE_KEYS = ("Install type", "Install Type")
 
 NORMALIZED_FIELDS = (
@@ -1247,6 +1253,10 @@ def apply_inventory_enrichment_to_ticket(
         inventory_item.cmdb_payload,
         *CMDB_ARCHITECTURE_TYPE_KEYS,
     )
+    ticket.business_critical = cmdb_payload_text(
+        inventory_item.cmdb_payload,
+        *CMDB_BUSINESS_CRITICAL_KEYS,
+    )
     ticket.install_type = cmdb_payload_text(inventory_item.cmdb_payload, *CMDB_INSTALL_TYPE_KEYS)
 
 
@@ -1345,6 +1355,7 @@ def build_out_of_scope_ticket(
         assignment_group_owner=ticket.assignment_group_owner,
         sap_non_sap=ticket.sap_non_sap,
         architecture_type=ticket.architecture_type,
+        business_critical=ticket.business_critical,
         install_type=ticket.install_type,
         hosting_env=ticket.hosting_env,
         is_batch_related=ticket.is_batch_related,

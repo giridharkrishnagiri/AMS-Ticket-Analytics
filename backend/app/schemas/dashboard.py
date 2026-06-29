@@ -420,6 +420,7 @@ class VolumetricsFilters(BaseModel):
     application_owner: list[str] = Field(default_factory=list)
     supported_by_vendor: list[str] = Field(default_factory=list)
     sap_non_sap: list[str] = Field(default_factory=list)
+    business_critical: list[str] = Field(default_factory=list)
 
 
 class VolumetricsRequest(BaseModel):
@@ -442,6 +443,7 @@ class VolumetricsFilterValuesResponse(BaseModel):
     application_owner: list[ApplicationFilterCountValue]
     supported_by_vendor: list[ApplicationFilterCountValue]
     sap_non_sap: list[ApplicationFilterCountValue]
+    business_critical: list[ApplicationFilterCountValue]
     source: str = "dashboard_filter_facts"
     duration_ms: int | None = None
 

@@ -85,6 +85,7 @@ class Ticket(Base):
         Index("ix_tickets_project_supported_by_vendor", "project_id", "supported_by_vendor"),
         Index("ix_tickets_project_sap_non_sap", "project_id", "sap_non_sap"),
         Index("ix_tickets_project_architecture_type", "project_id", "architecture_type"),
+        Index("ix_tickets_project_business_critical", "project_id", "business_critical"),
         Index("ix_tickets_project_install_type", "project_id", "install_type"),
         Index("ix_tickets_project_hosting_env", "project_id", "hosting_env"),
         Index("ix_tickets_project_is_batch_related", "project_id", "is_batch_related"),
@@ -200,6 +201,7 @@ class Ticket(Base):
     assignment_group_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     architecture_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    business_critical: Mapped[str | None] = mapped_column(Text, nullable=True)
     install_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     hosting_env: Mapped[str | None] = mapped_column(Text, nullable=True)
     vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
