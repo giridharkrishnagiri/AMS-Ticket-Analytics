@@ -3059,6 +3059,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return ["10", "20"].map((value) => `<button type="button" data-top-active-users="${value}" class="${state.topActiveUsersN === value ? "active" : ""}">Top ${value}</button>`).join("");
     }
     const APPLICATION_CRITICALITY_ORDER = ["Very Critical", "Critical", "High", "Medium", "Low"];
+    function sortCriticalityValues(values) {
+      const criticalityRank = new Map(APPLICATION_CRITICALITY_ORDER.map((label, index) => [label.toLowerCase(), index]));
+      return [...values].sort((left, right) => {
+        const leftLabel = normalizeApplicationDimension(left);
+        const rightLabel = normalizeApplicationDimension(right);
+        const leftRank = criticalityRank.has(leftLabel.toLowerCase()) ? criticalityRank.get(leftLabel.toLowerCase()) : APPLICATION_CRITICALITY_ORDER.length;
+        const rightRank = criticalityRank.has(rightLabel.toLowerCase()) ? criticalityRank.get(rightLabel.toLowerCase()) : APPLICATION_CRITICALITY_ORDER.length;
+        return leftRank - rightRank || leftLabel.localeCompare(rightLabel);
+      });
+    }
     function normalizeApplicationDimension(value) {
       return String(value ?? "").trim().replace(/\s+/g, " ");
     }
@@ -3292,7 +3302,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const lifecycleData = lifecyclePlanningData(rows, state.lifecyclePlan);
       const functionalValues = uniqueSorted(DASHBOARD.applications.rows, "functional_track_ams_owner");
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
-      const businessCriticalValues = uniqueSorted(DASHBOARD.applications.rows, "biz_criticality");
+      const businessCriticalValues = sortCriticalityValues(uniqueSorted(DASHBOARD.applications.rows, "biz_criticality"));
       const businessCount = rows.filter((row) => ["business", "business application"].includes(String(row.app_type).toLowerCase())).length;
       const technicalCount = rows.filter((row) => ["technical", "technical application"].includes(String(row.app_type).toLowerCase())).length;
       const criticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "critical").length;

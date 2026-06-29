@@ -3028,6 +3028,11 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function lifecyclePlanTitle" in document
         assert "function lifecyclePlanLineChart" in document
         assert "LIFECYCLE_PLAN_COLORS" in document
+        assert "function sortCriticalityValues" in document
+        assert (
+            'sortCriticalityValues(uniqueSorted(DASHBOARD.applications.rows, "biz_criticality"))'
+            in document
+        )
         assert (
             "lifecyclePlanLineChart(lifecycleData.selected_plan.chart, state.lifecyclePlan)"
             in document
