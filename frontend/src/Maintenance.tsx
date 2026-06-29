@@ -3,15 +3,21 @@ import { useState } from "react";
 import {
   deleteClientAndRelatedData,
   deleteProjectAndRelatedData,
+  getDashboardFilterCacheStatus,
+  refreshDashboardFilterCache,
   resetProjectOperationalData,
 } from "./api/admin";
-import type { OperationalDataResetResponse } from "./api/admin";
+import type {
+  DashboardFilterCacheStatusItem,
+  OperationalDataResetResponse,
+} from "./api/admin";
 import { getScopeSummary } from "./api/applicationInventory";
 import type { ScopeSummary, ScopeSummaryValueCount } from "./api/applicationInventory";
 import type { ProjectOption } from "./api/projects";
 import CustomerSelector from "./CustomerSelector";
 
 type ResetMode = "selected-data" | "project-data" | "customer-data";
+type FilterCacheArea = "applications" | "volumetrics" | "all";
 
 const selectedDataConfirmation = "RESET OPERATIONAL DATA";
 const projectDataConfirmation = "RESET PROJECT DATA";
@@ -79,6 +85,9 @@ function Maintenance() {
   const [scopeSummary, setScopeSummary] = useState<ScopeSummary | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [isLoadingScope, setIsLoadingScope] = useState(false);
+  const [isRefreshingCache, setIsRefreshingCache] = useState(false);
+  const [cacheStatus, setCacheStatus] = useState<DashboardFilterCacheStatusItem[]>([]);
+  const [cacheMessage, setCacheMessage] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,6 +115,8 @@ function Maintenance() {
     setResetIncidentSla(false);
     setResult(null);
     setScopeSummary(null);
+    setCacheStatus([]);
+    setCacheMessage(null);
     setMessage(null);
     setError(null);
   }
@@ -115,6 +126,8 @@ function Maintenance() {
       setConfirmation("");
       setResult(null);
       setScopeSummary(null);
+      setCacheStatus([]);
+      setCacheMessage(null);
       setMessage(null);
       setError(null);
     }
@@ -145,6 +158,58 @@ function Maintenance() {
       setError(requestError instanceof Error ? requestError.message : "Unable to load scope summary");
     } finally {
       setIsLoadingScope(false);
+    }
+  }
+
+  async function refreshFilterCacheStatus() {
+    if (!projectId.trim() || !selectedProject) {
+      setError("Select a customer/project first.");
+      return;
+    }
+    setError(null);
+    try {
+      const status = await getDashboardFilterCacheStatus(
+        selectedProject.client_id,
+        projectId.trim()
+      );
+      setCacheStatus(status.items);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to load filter cache status"
+      );
+    }
+  }
+
+  async function handleRefreshFilterCache(area: FilterCacheArea) {
+    if (!projectId.trim() || !selectedProject) {
+      setError("Select a customer/project first.");
+      return;
+    }
+    setIsRefreshingCache(true);
+    setError(null);
+    setCacheMessage(null);
+    try {
+      const response = await refreshDashboardFilterCache(
+        selectedProject.client_id,
+        projectId.trim(),
+        area
+      );
+      setCacheMessage(
+        `Filter cache refreshed for ${response.dashboard_area}. Facts: ${formatNumber(
+          response.facts_count
+        )}; catalog values: ${formatNumber(response.catalog_count)}; duration: ${formatNumber(
+          response.duration_ms
+        )} ms.`
+      );
+      await refreshFilterCacheStatus();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Filter cache refresh failed"
+      );
+    } finally {
+      setIsRefreshingCache(false);
     }
   }
 
@@ -242,6 +307,87 @@ function Maintenance() {
             <span>{selectedProject?.name ?? "Choose a customer/project before resetting data."}</span>
           </div>
         </div>
+      </div>
+
+      <div className="panel maintenance-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Dashboard Filter Cache</p>
+            <h2>Refresh Static Filter Catalogs</h2>
+          </div>
+          <div className="panel-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!projectId.trim() || !selectedProject || isRefreshingCache}
+              onClick={() => void refreshFilterCacheStatus()}
+            >
+              Show Cache Status
+            </button>
+          </div>
+        </div>
+        <div className="warning-list">
+          <p>
+            Refresh the filter cache after data uploads or maintenance resets if dashboard filters
+            show stale counts. Dashboard dropdown values load from this catalog while dynamic counts
+            update in the background.
+          </p>
+        </div>
+        <div className="action-row">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={!projectId.trim() || !selectedProject || isRefreshingCache}
+            onClick={() => void handleRefreshFilterCache("applications")}
+          >
+            Refresh Applications Filter Cache
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={!projectId.trim() || !selectedProject || isRefreshingCache}
+            onClick={() => void handleRefreshFilterCache("volumetrics")}
+          >
+            Refresh Volumetrics Filter Cache
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={!projectId.trim() || !selectedProject || isRefreshingCache}
+            onClick={() => void handleRefreshFilterCache("all")}
+          >
+            {isRefreshingCache ? "Refreshing Filter Cache..." : "Refresh All Filter Caches"}
+          </button>
+        </div>
+        {cacheStatus.length > 0 ? (
+          <div className="table-scroll">
+            <table className="details-table">
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th>Status</th>
+                  <th>Stale</th>
+                  <th>Last Success</th>
+                  <th>Data Version</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cacheStatus.map((item) => (
+                  <tr key={item.dashboard_area}>
+                    <td>{item.dashboard_area}</td>
+                    <td>{item.status}</td>
+                    <td>{item.is_stale ? "Yes" : "No"}</td>
+                    <td>{item.last_success_at ?? "Not available"}</td>
+                    <td>{item.data_version ?? "Not available"}</td>
+                    <td>{item.error_message ?? ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {cacheMessage ? <p className="success-text">{cacheMessage}</p> : null}
       </div>
 
       <div className="panel maintenance-panel">

@@ -1091,6 +1091,7 @@ function Dashboard() {
 
       <div hidden={activeDashboardTab !== "applications"}>
         <ApplicationsDashboard
+          customerId={selectedProject?.client_id ?? ""}
           isActive={activeDashboardTab === "applications"}
           onExportContextChange={handleApplicationsPowerPointContextChange}
           projectId={projectId}
@@ -1099,6 +1100,7 @@ function Dashboard() {
 
       <div hidden={activeDashboardTab !== "volumetrics"}>
         <VolumetricsDashboard
+          customerId={selectedProject?.client_id ?? ""}
           isActive={activeDashboardTab === "volumetrics"}
           onExportContextChange={handleVolumetricsPowerPointContextChange}
           projectId={projectId}

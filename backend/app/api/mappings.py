@@ -16,6 +16,7 @@ from app.schemas.mapping import (
     SourceColumnsResponse,
     SuggestedMappingResponse,
 )
+from app.services.dashboard_filter_cache import mark_filter_caches_stale
 from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 from app.services.mapping import (
     MappingError,
@@ -194,6 +195,7 @@ def apply_mapping(
             and upload_batch is not None
         ):
             refresh_dashboard_filter_facts(db, upload_batch.project_id)
+            mark_filter_caches_stale(db, upload_batch.project_id)
             db.commit()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -238,6 +240,7 @@ def apply_mapping_for_scope(
         )
         if result.ticket_type in GENERIC_FILTER_FACT_TICKET_TYPES:
             refresh_dashboard_filter_facts(db, request.project_id)
+            mark_filter_caches_stale(db, request.project_id)
             db.commit()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

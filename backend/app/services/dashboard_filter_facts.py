@@ -24,7 +24,10 @@ class DashboardFilterFactsRefreshResult:
 
 def clear_dashboard_filter_facts(db: Session, project_id: UUID) -> int:
     result = db.execute(
-        delete(DashboardFilterFact).where(DashboardFilterFact.project_id == project_id)
+        delete(DashboardFilterFact).where(
+            DashboardFilterFact.project_id == project_id,
+            DashboardFilterFact.dashboard_area == "volumetrics",
+        )
     )
     return int(result.rowcount or 0)
 
@@ -59,6 +62,7 @@ def dashboard_filter_fact_count(db: Session, project_id: UUID) -> int:
         db.scalar(
             select(func.count(DashboardFilterFact.id)).where(
                 DashboardFilterFact.project_id == project_id,
+                DashboardFilterFact.dashboard_area == "volumetrics",
             ),
         )
         or 0,
@@ -90,14 +94,16 @@ def refresh_dashboard_filter_facts_for_batches(
 def refresh_dashboard_filter_facts(
     db: Session,
     project_id: UUID,
+    *,
+    data_version: str | None = None,
 ) -> DashboardFilterFactsRefreshResult:
     if db.get(Project, project_id) is None:
         raise FileNotFoundError(f"Project {project_id} was not found.")
 
     started = perf_counter()
     rows_deleted = clear_dashboard_filter_facts(db, project_id)
-    in_scope_rows = insert_in_scope_filter_facts(db, project_id)
-    out_of_scope_rows = insert_out_of_scope_filter_facts(db, project_id)
+    in_scope_rows = insert_in_scope_filter_facts(db, project_id, data_version)
+    out_of_scope_rows = insert_out_of_scope_filter_facts(db, project_id, data_version)
     duration_ms = int((perf_counter() - started) * 1000)
     return DashboardFilterFactsRefreshResult(
         project_id=project_id,
@@ -109,7 +115,11 @@ def refresh_dashboard_filter_facts(
     )
 
 
-def insert_in_scope_filter_facts(db: Session, project_id: UUID) -> int:
+def insert_in_scope_filter_facts(
+    db: Session,
+    project_id: UUID,
+    data_version: str | None,
+) -> int:
     result = db.execute(
         text(
             """
@@ -117,6 +127,8 @@ def insert_in_scope_filter_facts(db: Session, project_id: UUID) -> int:
                 id,
                 customer_id,
                 project_id,
+                dashboard_area,
+                record_domain,
                 record_source,
                 record_type,
                 scope,
@@ -145,12 +157,15 @@ def insert_in_scope_filter_facts(db: Session, project_id: UUID) -> int:
                 hosting_env,
                 priority,
                 state,
-                status_group
+                status_group,
+                data_version
             )
             SELECT
                 md5('tickets:' || t.id::text)::uuid,
                 p.client_id,
                 t.project_id,
+                'volumetrics',
+                'ticket',
                 'tickets',
                 CASE
                     WHEN t.ticket_type = 'INCIDENT' THEN 'incident'
@@ -219,19 +234,24 @@ def insert_in_scope_filter_facts(db: Session, project_id: UUID) -> int:
                         ELSE btrim(t.state)
                     END,
                     100
-                )
+                ),
+                :data_version
             FROM tickets AS t
             JOIN projects AS p ON p.id = t.project_id
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.ticket_type IN ('INCIDENT', 'SERVICE_CATALOG_TASK')
             """
         ),
-        {"project_id": str(project_id)},
+        {"project_id": str(project_id), "data_version": data_version},
     )
     return int(result.rowcount or 0)
 
 
-def insert_out_of_scope_filter_facts(db: Session, project_id: UUID) -> int:
+def insert_out_of_scope_filter_facts(
+    db: Session,
+    project_id: UUID,
+    data_version: str | None,
+) -> int:
     result = db.execute(
         text(
             """
@@ -239,6 +259,8 @@ def insert_out_of_scope_filter_facts(db: Session, project_id: UUID) -> int:
                 id,
                 customer_id,
                 project_id,
+                dashboard_area,
+                record_domain,
                 record_source,
                 record_type,
                 scope,
@@ -267,12 +289,15 @@ def insert_out_of_scope_filter_facts(db: Session, project_id: UUID) -> int:
                 hosting_env,
                 priority,
                 state,
-                status_group
+                status_group,
+                data_version
             )
             SELECT
                 md5('assessment_out_of_scope_tickets:' || t.id::text)::uuid,
                 p.client_id,
                 t.project_id,
+                'volumetrics',
+                'ticket',
                 'assessment_out_of_scope_tickets',
                 CASE
                     WHEN t.ticket_type = 'INCIDENT' THEN 'incident'
@@ -341,13 +366,14 @@ def insert_out_of_scope_filter_facts(db: Session, project_id: UUID) -> int:
                         ELSE btrim(t.state)
                     END,
                     100
-                )
+                ),
+                :data_version
             FROM assessment_out_of_scope_tickets AS t
             JOIN projects AS p ON p.id = t.project_id
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.ticket_type IN ('INCIDENT', 'SERVICE_CATALOG_TASK')
             """
         ),
-        {"project_id": str(project_id)},
+        {"project_id": str(project_id), "data_version": data_version},
     )
     return int(result.rowcount or 0)

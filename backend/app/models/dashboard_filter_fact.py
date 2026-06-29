@@ -19,6 +19,23 @@ if TYPE_CHECKING:
 class DashboardFilterFact(UuidPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "dashboard_filter_facts"
     __table_args__ = (
+        Index(
+            "ix_dashboard_filter_facts_project_area",
+            "project_id",
+            "dashboard_area",
+        ),
+        Index(
+            "ix_dashboard_filter_facts_project_area_domain",
+            "project_id",
+            "dashboard_area",
+            "record_domain",
+        ),
+        Index(
+            "ix_dashboard_filter_facts_project_area_version",
+            "project_id",
+            "dashboard_area",
+            "data_version",
+        ),
         Index("ix_dashboard_filter_facts_project_scope_type", "project_id", "scope", "record_type"),
         Index(
             "ix_dashboard_filter_facts_project_functional",
@@ -64,6 +81,18 @@ class DashboardFilterFact(UuidPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
+    dashboard_area: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="volumetrics",
+        server_default="volumetrics",
+    )
+    record_domain: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="ticket",
+        server_default="ticket",
+    )
     record_source: Mapped[str] = mapped_column(String(50), nullable=False)
     record_type: Mapped[str] = mapped_column(String(50), nullable=False)
     scope: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -96,9 +125,13 @@ class DashboardFilterFact(UuidPrimaryKeyMixin, TimestampMixin, Base):
     install_status: Mapped[str | None] = mapped_column(String(255), nullable=True)
     install_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     hosting_env: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    global_flag: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    life_cycle_stage: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    life_cycle_stage_status: Mapped[str | None] = mapped_column(String(255), nullable=True)
     priority: Mapped[str | None] = mapped_column(String(50), nullable=True)
     state: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    data_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     customer: Mapped[Client] = relationship()
     project: Mapped[Project] = relationship()

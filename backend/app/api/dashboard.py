@@ -27,6 +27,12 @@ from app.schemas.dashboard import (
     DashboardCommentaryContext,
     DashboardCommentaryContextResponse,
     DashboardCommentaryUpsertRequest,
+    DashboardFilterCacheRefreshRequest,
+    DashboardFilterCacheRefreshResponse,
+    DashboardFilterCacheStatusResponse,
+    DashboardFilterCatalogResponse,
+    DashboardFilterCountsRequest,
+    DashboardFilterCountsResponse,
     DashboardOverviewResponse,
     FilterValuesResponse,
     IncidentSlaNameBreakdownResponse,
@@ -109,6 +115,12 @@ from app.services.dashboard_commentary import (
     get_commentary_by_context,
     upsert_commentary,
 )
+from app.services.dashboard_filter_cache import (
+    dynamic_filter_counts,
+    filter_cache_status_items,
+    filter_catalog,
+    refresh_filter_cache,
+)
 from app.services.offline_dashboard_export import build_offline_dashboard_export
 from app.services.powerpoint_export import build_powerpoint_export
 
@@ -183,6 +195,86 @@ def dashboard_filters(
 
 
 DashboardFilterDependency = Annotated[DashboardFilters, Depends(dashboard_filters)]
+
+
+@router.get("/filter-cache/status", response_model=DashboardFilterCacheStatusResponse)
+def get_dashboard_filter_cache_status(
+    customer_id: Annotated[UUID, Query(...)],
+    project_id: Annotated[UUID, Query(...)],
+    db: DbSession,
+    dashboard_area: Annotated[str | None, Query()] = None,
+) -> dict[str, object]:
+    try:
+        return {
+            "items": filter_cache_status_items(
+                db,
+                customer_id,
+                project_id,
+                dashboard_area,
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/filter-cache/refresh", response_model=DashboardFilterCacheRefreshResponse)
+def post_dashboard_filter_cache_refresh(
+    request: DashboardFilterCacheRefreshRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        result = refresh_filter_cache(db, request.project_id, request.dashboard_area)
+        db.commit()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        db.commit()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "status": result.status,
+        "dashboard_area": result.dashboard_area,
+        "data_version": result.data_version,
+        "facts_count": result.facts_count,
+        "catalog_count": result.catalog_count,
+        "duration_ms": result.duration_ms,
+    }
+
+
+@router.get("/filter-catalog", response_model=DashboardFilterCatalogResponse)
+def get_dashboard_filter_catalog(
+    customer_id: Annotated[UUID, Query(...)],
+    project_id: Annotated[UUID, Query(...)],
+    dashboard_area: Annotated[str, Query(...)],
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return filter_catalog(db, customer_id, project_id, dashboard_area)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/filter-counts", response_model=DashboardFilterCountsResponse)
+def post_dashboard_filter_counts(
+    request: DashboardFilterCountsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    date_range = request.date_range
+    try:
+        return dynamic_filter_counts(
+            db,
+            request.customer_id,
+            request.project_id,
+            request.dashboard_area,
+            request.selected_filters,
+            scope=request.scope,
+            ticket_type=request.ticket_type,
+            from_datetime=date_range.from_date if date_range else None,
+            to_datetime=date_range.to_date if date_range else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/overview", response_model=DashboardOverviewResponse)

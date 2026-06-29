@@ -2087,7 +2087,11 @@ def volumetrics_filter_fact_base_conditions(
     include_date_bounds: bool = True,
 ) -> list[Any]:
     scope = normalize_volumetrics_scope(scope_override or request.scope)
-    conditions: list[Any] = [DashboardFilterFact.project_id == request.project_id]
+    conditions: list[Any] = [
+        DashboardFilterFact.project_id == request.project_id,
+        DashboardFilterFact.dashboard_area == "volumetrics",
+        DashboardFilterFact.record_domain == "ticket",
+    ]
     if scope != "all":
         conditions.append(DashboardFilterFact.scope == scope)
 

@@ -16,6 +16,8 @@ from app.models import (
     AssessmentProblemRecord,
     Client,
     DashboardAggregate,
+    DashboardFilterCacheStatus,
+    DashboardFilterCatalog,
     DashboardFilterFact,
     ExportJob,
     IncidentSlaRow,
@@ -28,6 +30,7 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
+from app.services.dashboard_filter_cache import mark_filter_caches_stale
 from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 
 RESET_CONFIRMATION = "RESET OPERATIONAL DATA"
@@ -82,6 +85,8 @@ SLA_ENRICHMENT_FIELDS = (
 
 
 RESET_MODELS: tuple[tuple[str, Any], ...] = (
+    ("dashboard_filter_cache_status", DashboardFilterCacheStatus),
+    ("dashboard_filter_catalog", DashboardFilterCatalog),
     ("dashboard_filter_facts", DashboardFilterFact),
     ("dashboard_aggregates", DashboardAggregate),
     ("export_jobs", ExportJob),
@@ -99,6 +104,8 @@ RESET_MODELS: tuple[tuple[str, Any], ...] = (
 )
 
 PROJECT_OPERATIONAL_MODELS: tuple[tuple[str, Any], ...] = (
+    ("dashboard_filter_cache_status", DashboardFilterCacheStatus),
+    ("dashboard_filter_catalog", DashboardFilterCatalog),
     ("dashboard_filter_facts", DashboardFilterFact),
     ("dashboard_aggregates", DashboardAggregate),
     ("export_jobs", ExportJob),
@@ -596,6 +603,7 @@ def reset_project_operational_data(
             sla_deleted_counts, sla_updated_counts = clear_incident_sla_data(db, project_id)
             deleted_counts.update(sla_deleted_counts)
             updated_counts.update(sla_updated_counts)
+        mark_filter_caches_stale(db, project_id)
         db.commit()
     except SQLAlchemyError as exc:
         db.rollback()

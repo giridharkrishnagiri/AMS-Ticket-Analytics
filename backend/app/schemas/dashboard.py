@@ -183,6 +183,73 @@ class ApplicationFilterCountValue(BaseModel):
     count: int
 
 
+class DashboardFilterCatalogValue(BaseModel):
+    value: str
+    label: str
+    baseline_count: int
+    sort_order: int
+
+
+class DashboardFilterCatalogResponse(BaseModel):
+    dashboard_area: str
+    status: str
+    data_version: str | None
+    filters: dict[str, list[DashboardFilterCatalogValue]]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DashboardFilterCacheStatusItem(BaseModel):
+    dashboard_area: str
+    status: str
+    data_version: str | None
+    last_success_at: datetime | None
+    is_stale: bool
+    error_message: str | None
+
+
+class DashboardFilterCacheStatusResponse(BaseModel):
+    items: list[DashboardFilterCacheStatusItem]
+
+
+class DashboardFilterCacheRefreshRequest(BaseModel):
+    customer_id: UUID
+    project_id: UUID
+    dashboard_area: str = "all"
+
+
+class DashboardFilterCacheRefreshResponse(BaseModel):
+    status: str
+    dashboard_area: str
+    data_version: str
+    facts_count: int
+    catalog_count: int
+    duration_ms: int
+
+
+class DashboardFilterCountsDateRange(BaseModel):
+    from_date: datetime | None = None
+    to_date: datetime | None = None
+
+
+class DashboardFilterCountsRequest(BaseModel):
+    customer_id: UUID
+    project_id: UUID
+    dashboard_area: str
+    selected_filters: dict[str, list[str]] = Field(default_factory=dict)
+    date_range: DashboardFilterCountsDateRange | None = None
+    ticket_type: str = "all"
+    scope: str = "in_scope"
+
+
+class DashboardFilterCountsResponse(BaseModel):
+    dashboard_area: str
+    status: str
+    data_version: str | None
+    counts: dict[str, dict[str, int]]
+    duration_ms: int
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ApplicationCombinedFilterCountValue(ApplicationCombinedFilterValue):
     count: int
 

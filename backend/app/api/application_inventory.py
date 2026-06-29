@@ -43,6 +43,7 @@ from app.services.application_metrics import (
     ApplicationTicketUserMetricsSummary,
     recompute_application_ticket_user_metrics,
 )
+from app.services.dashboard_filter_cache import mark_filter_caches_stale
 from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 
 router = APIRouter(prefix="/application-inventory", tags=["application-inventory"])
@@ -212,6 +213,7 @@ async def upload_application_inventory(
     try:
         result = upload_application_inventory_file(db, project_id, temp_path, filename)
         refresh_dashboard_filter_facts(db, project_id)
+        mark_filter_caches_stale(db, project_id)
         db.commit()
     except (FileNotFoundError, ApplicationInventoryError) as exc:
         raise_inventory_http_error(exc)
@@ -234,6 +236,7 @@ def enrich_application_inventory_tickets(
             replace_existing=request.replace_existing,
         )
         refresh_dashboard_filter_facts(db, request.project_id)
+        mark_filter_caches_stale(db, request.project_id)
         db.commit()
     except (FileNotFoundError, ApplicationInventoryError) as exc:
         raise_inventory_http_error(exc)
@@ -318,6 +321,7 @@ def put_application_inventory_item(
     try:
         item = update_inventory_item(db, item_id, request.model_dump(exclude_unset=True))
         refresh_dashboard_filter_facts(db, item.project_id)
+        mark_filter_caches_stale(db, item.project_id)
         db.commit()
         return item
     except (FileNotFoundError, ApplicationInventoryError) as exc:
@@ -333,6 +337,7 @@ def delete_application_inventory_item(
     try:
         item = deactivate_inventory_item(db, item_id)
         refresh_dashboard_filter_facts(db, item.project_id)
+        mark_filter_caches_stale(db, item.project_id)
         db.commit()
         return item
     except (FileNotFoundError, ApplicationInventoryError) as exc:

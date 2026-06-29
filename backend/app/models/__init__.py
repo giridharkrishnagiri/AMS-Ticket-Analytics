@@ -4,6 +4,8 @@ from app.models.assessment_out_of_scope_ticket import AssessmentOutOfScopeTicket
 from app.models.client import Client
 from app.models.dashboard_aggregate import DashboardAggregate
 from app.models.dashboard_commentary import DashboardCommentary
+from app.models.dashboard_filter_cache_status import DashboardFilterCacheStatus
+from app.models.dashboard_filter_catalog import DashboardFilterCatalog
 from app.models.dashboard_filter_fact import DashboardFilterFact
 from app.models.export_job import ExportJob
 from app.models.genai import (
@@ -33,6 +35,8 @@ __all__ = [
     "AssessmentOutOfScopeTicket",
     "DashboardAggregate",
     "DashboardCommentary",
+    "DashboardFilterCacheStatus",
+    "DashboardFilterCatalog",
     "DashboardFilterFact",
     "ExportJob",
     "GenAIChatMessage",

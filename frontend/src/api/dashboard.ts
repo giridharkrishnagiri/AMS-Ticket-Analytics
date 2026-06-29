@@ -203,6 +203,43 @@ export type ApplicationFilterValue = {
   count: number;
 };
 
+export type DashboardFilterCatalogValue = {
+  value: string;
+  label: string;
+  baseline_count: number;
+  sort_order: number;
+};
+
+export type DashboardFilterCatalogResponse = {
+  dashboard_area: "applications" | "volumetrics";
+  status: string;
+  data_version: string | null;
+  filters: Record<string, DashboardFilterCatalogValue[]>;
+  warnings: string[];
+};
+
+export type DashboardFilterCountsRequest = {
+  customer_id: string;
+  project_id: string;
+  dashboard_area: "applications" | "volumetrics";
+  selected_filters: Record<string, string[]>;
+  date_range?: {
+    from_date: string | null;
+    to_date: string | null;
+  } | null;
+  ticket_type?: string;
+  scope?: string;
+};
+
+export type DashboardFilterCountsResponse = {
+  dashboard_area: "applications" | "volumetrics";
+  status: string;
+  data_version: string | null;
+  counts: Record<string, Record<string, number>>;
+  duration_ms: number;
+  warnings: string[];
+};
+
 export type DashboardApplicationsFilterValues = {
   functional_track_ams_owner: ApplicationCombinedFilterValue[];
   assignment_group_owner: ApplicationCombinedFilterValue[];
@@ -470,6 +507,7 @@ export type DashboardVolumetricsFilters = {
   application_owner: string[];
   supported_by_vendor: string[];
   sap_non_sap: string[];
+  business_critical: string[];
 };
 
 export type DashboardVolumetricsRequest = {
@@ -492,6 +530,7 @@ export type DashboardVolumetricsFilterValues = {
   application_owner: ApplicationFilterValue[];
   supported_by_vendor: ApplicationFilterValue[];
   sap_non_sap: ApplicationFilterValue[];
+  business_critical: ApplicationFilterValue[];
   source?: string;
   duration_ms?: number | null;
 };
@@ -916,6 +955,31 @@ export function getDashboardApplicationsFilterValues(
       body: JSON.stringify(input),
     }
   );
+}
+
+export function getDashboardFilterCatalog(
+  customerId: string,
+  projectId: string,
+  dashboardArea: "applications" | "volumetrics"
+): Promise<DashboardFilterCatalogResponse> {
+  const query = new URLSearchParams({
+    customer_id: customerId.trim(),
+    project_id: projectId.trim(),
+    dashboard_area: dashboardArea,
+  });
+  return requestJson<DashboardFilterCatalogResponse>(
+    `/dashboard/filter-catalog?${query.toString()}`
+  );
+}
+
+export function getDashboardFilterCounts(
+  input: DashboardFilterCountsRequest
+): Promise<DashboardFilterCountsResponse> {
+  return requestJson<DashboardFilterCountsResponse>("/dashboard/filter-counts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 function postApplicationsRequest<T>(

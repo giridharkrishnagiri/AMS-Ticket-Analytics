@@ -47,6 +47,7 @@ from app.schemas.upload import (
     UploadMultipleTotalsResponse,
     ValidationSummaryResponse,
 )
+from app.services.dashboard_filter_cache import mark_filter_caches_stale
 from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 from app.services.ingestion import (
     IngestionError,
@@ -956,6 +957,7 @@ def normalize_upload_batches(
         result.status == BATCH_STATUS_NORMALIZED for result in results
     ):
         refresh_dashboard_filter_facts(db, request.project_id)
+        mark_filter_caches_stale(db, request.project_id)
         db.commit()
 
     return UploadBatchNormalizeMultipleResponse(
@@ -1175,6 +1177,7 @@ def apply_mapping_to_upload_batches(
         file.status == APPLY_STATUS_APPLIED for file in files
     ):
         refresh_dashboard_filter_facts(db, request.project_id)
+        mark_filter_caches_stale(db, request.project_id)
         db.commit()
 
     return UploadBatchApplyMappingMultipleResponse(

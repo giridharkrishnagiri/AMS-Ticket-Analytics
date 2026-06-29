@@ -7,6 +7,8 @@ import {
   Cell,
   LabelList,
   Legend,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   Tooltip,
@@ -16,7 +18,8 @@ import {
 
 import {
   getDashboardApplicationsCharts,
-  getDashboardApplicationsFilterValues,
+  getDashboardFilterCatalog,
+  getDashboardFilterCounts,
   getDashboardApplicationsLifecyclePlanning,
   getDashboardApplicationsList,
   getDashboardApplicationsSummary,
@@ -27,7 +30,8 @@ import type {
   DashboardApplicationsCharts,
   DashboardApplicationsFilters,
   DashboardApplicationsFilterValues,
-  DashboardApplicationsFilterValuesRequest,
+  DashboardFilterCatalogResponse,
+  DashboardFilterCountsResponse,
   DashboardApplicationsLifecycleApplication,
   DashboardApplicationsLifecyclePlan,
   DashboardApplicationsLifecyclePlanning,
@@ -50,6 +54,7 @@ type LoadState<T> = {
 };
 
 type ApplicationsDashboardProps = {
+  customerId: string;
   projectId: string;
   isActive: boolean;
   onExportContextChange?: (context: { functionalTrackAmsOwners: string[] }) => void;
@@ -139,6 +144,13 @@ const lifecyclePlans: DashboardApplicationsLifecyclePlan[] = [
   "Maintain",
   "Retired",
 ];
+
+const lifecyclePlanLineColors: Record<DashboardApplicationsLifecyclePlan, string> = {
+  Invest: "#0f766e",
+  Disinvest: "#991b1b",
+  Maintain: "#1d4ed8",
+  Retired: "#581c87",
+};
 
 const emptyLifecyclePlanning: DashboardApplicationsLifecyclePlanning = {
   matrix: {
@@ -304,6 +316,148 @@ function singleFilterOptions(values: Array<{ label: string; value: string; count
     label: value.label,
     count: value.count,
   }));
+}
+
+function splitCombinedFilterValue(label: string): { left_value: string; right_value: string } {
+  const separator = " - ";
+  const separatorIndex = label.indexOf(separator);
+  if (separatorIndex < 0) {
+    return { left_value: label, right_value: "(blank)" };
+  }
+  return {
+    left_value: label.slice(0, separatorIndex) || "(blank)",
+    right_value: label.slice(separatorIndex + separator.length) || "(blank)",
+  };
+}
+
+function catalogSingleRows(
+  catalog: DashboardFilterCatalogResponse | null,
+  counts: DashboardFilterCountsResponse | null,
+  filterKey: keyof DashboardApplicationsFilterValues,
+  selectedValues: string[]
+) {
+  const dynamicCounts = counts?.counts[filterKey] ?? {};
+  const rows = (catalog?.filters[filterKey] ?? []).map((item) => ({
+    label: item.label,
+    value: item.value,
+    count: dynamicCounts[item.value] ?? item.baseline_count,
+  }));
+  const existing = new Set(rows.map((row) => row.value));
+  for (const selectedValue of selectedValues) {
+    if (!existing.has(selectedValue)) {
+      rows.push({
+        label: selectedValue,
+        value: selectedValue,
+        count: dynamicCounts[selectedValue] ?? 0,
+      });
+      existing.add(selectedValue);
+    }
+  }
+  return rows;
+}
+
+function catalogCombinedRows(
+  catalog: DashboardFilterCatalogResponse | null,
+  counts: DashboardFilterCountsResponse | null,
+  filterKey: keyof DashboardApplicationsFilterValues,
+  selectedValues: string[]
+) {
+  const dynamicCounts = counts?.counts[filterKey] ?? {};
+  const rows = (catalog?.filters[filterKey] ?? []).map((item) => {
+    const splitValue = splitCombinedFilterValue(item.value);
+    return {
+      label: item.label,
+      left_value: splitValue.left_value,
+      right_value: splitValue.right_value,
+      count: dynamicCounts[item.value] ?? item.baseline_count,
+    };
+  });
+  const existing = new Set(rows.map((row) => row.label));
+  for (const selectedValue of selectedValues) {
+    if (!existing.has(selectedValue)) {
+      const splitValue = splitCombinedFilterValue(selectedValue);
+      rows.push({
+        label: selectedValue,
+        left_value: splitValue.left_value,
+        right_value: splitValue.right_value,
+        count: dynamicCounts[selectedValue] ?? 0,
+      });
+      existing.add(selectedValue);
+    }
+  }
+  return rows;
+}
+
+function applicationFilterValuesFromCatalog(
+  catalog: DashboardFilterCatalogResponse | null,
+  counts: DashboardFilterCountsResponse | null,
+  selectedFilters: DashboardApplicationsFilters
+): DashboardApplicationsFilterValues {
+  return {
+    functional_track_ams_owner: catalogCombinedRows(
+      catalog,
+      counts,
+      "functional_track_ams_owner",
+      selectedFilters.functional_track_ams_owner
+    ),
+    assignment_group_owner: catalogCombinedRows(
+      catalog,
+      counts,
+      "assignment_group_owner",
+      selectedFilters.assignment_group_owner
+    ),
+    parent_application_name: catalogSingleRows(
+      catalog,
+      counts,
+      "parent_application_name",
+      selectedFilters.parent_application_name
+    ),
+    application_owner: catalogSingleRows(
+      catalog,
+      counts,
+      "application_owner",
+      selectedFilters.application_owner
+    ),
+    supported_by_vendor: catalogSingleRows(
+      catalog,
+      counts,
+      "supported_by_vendor",
+      selectedFilters.supported_by_vendor
+    ),
+    sap_non_sap: catalogSingleRows(catalog, counts, "sap_non_sap", selectedFilters.sap_non_sap),
+    architecture_type: catalogSingleRows(
+      catalog,
+      counts,
+      "architecture_type",
+      selectedFilters.architecture_type
+    ),
+    application_type: catalogSingleRows(
+      catalog,
+      counts,
+      "application_type",
+      selectedFilters.application_type
+    ),
+    business_critical: catalogSingleRows(
+      catalog,
+      counts,
+      "business_critical",
+      selectedFilters.business_critical
+    ),
+    install_status: catalogSingleRows(
+      catalog,
+      counts,
+      "install_status",
+      selectedFilters.install_status
+    ),
+    install_type: catalogSingleRows(catalog, counts, "install_type", selectedFilters.install_type),
+    hosting_env: catalogSingleRows(catalog, counts, "hosting_env", selectedFilters.hosting_env),
+    lifecycle_status_stage: catalogCombinedRows(
+      catalog,
+      counts,
+      "lifecycle_status_stage",
+      selectedFilters.lifecycle_status_stage
+    ),
+  };
 }
 
 function escapeXml(value: string): string {
@@ -589,6 +743,7 @@ function useChartCopy(title: string) {
 }
 
 function ApplicationsDashboard({
+  customerId,
   projectId,
   isActive,
   onExportContextChange,
@@ -598,6 +753,9 @@ function ApplicationsDashboard({
   const [filterValues, setFilterValues] = useState<LoadState<DashboardApplicationsFilterValues>>(
     createLoadState(emptyFilterValues)
   );
+  const [filterCatalog, setFilterCatalog] = useState<DashboardFilterCatalogResponse | null>(null);
+  const [filterCounts, setFilterCounts] = useState<DashboardFilterCountsResponse | null>(null);
+  const filterCountsRequestRef = useRef(0);
   const [summary, setSummary] = useState<LoadState<DashboardApplicationsSummary>>(
     createLoadState(emptySummary)
   );
@@ -658,21 +816,8 @@ function ApplicationsDashboard({
     () => (requestBody ? JSON.stringify(requestBody) : ""),
     [requestBody]
   );
-  const filterValuesRequest = useMemo<DashboardApplicationsFilterValuesRequest | null>(() => {
-    const cleanedProjectId = projectId.trim();
-    if (!cleanedProjectId) {
-      return null;
-    }
-    return {
-      project_id: cleanedProjectId,
-      filters,
-    };
-  }, [filters, projectId]);
-  const filterValuesSignature = useMemo(
-    () => (filterValuesRequest ? JSON.stringify(filterValuesRequest) : ""),
-    [filterValuesRequest]
-  );
   const hasActiveProjectContext = Boolean(projectId.trim()) && projectId === loadedProjectId;
+  const hasFilterCacheContext = Boolean(customerId.trim()) && Boolean(projectId.trim());
 
   useEffect(() => {
     onExportContextChange?.({
@@ -680,22 +825,79 @@ function ApplicationsDashboard({
     });
   }, [filters.functional_track_ams_owner, onExportContextChange]);
 
-  const loadFilterValues = useCallback(async () => {
-    if (!filterValuesRequest) {
+  const loadFilterCatalog = useCallback(async () => {
+    const cleanedCustomerId = customerId.trim();
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedCustomerId || !cleanedProjectId) {
       return;
     }
-    setFilterValues(createLoadState(emptyFilterValues, "loading"));
+    setFilterValues((currentFilterValues) => ({
+      status: "loading",
+      data: currentFilterValues.data,
+      error: null,
+    }));
     try {
-      const values = await getDashboardApplicationsFilterValues(filterValuesRequest);
-      setFilterValues({ status: "success", data: values, error: null });
-    } catch (error) {
+      const catalog = await getDashboardFilterCatalog(
+        cleanedCustomerId,
+        cleanedProjectId,
+        "applications"
+      );
+      setFilterCatalog(catalog);
+      setFilterCounts(null);
       setFilterValues({
-        status: "error",
-        data: emptyFilterValues,
-        error: errorMessage(error, "Unable to load Application filters"),
+        status: "success",
+        data: applicationFilterValuesFromCatalog(catalog, null, filters),
+        error: catalog.warnings[0] ?? null,
       });
+    } catch (error) {
+      setFilterValues((currentFilterValues) => ({
+        status: "error",
+        data: currentFilterValues.data,
+        error: errorMessage(error, "Unable to load Application filters"),
+      }));
     }
-  }, [filterValuesRequest]);
+  }, [customerId, filters, projectId]);
+
+  const loadFilterCounts = useCallback(async () => {
+    const cleanedCustomerId = customerId.trim();
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedCustomerId || !cleanedProjectId || !filterCatalog) {
+      return;
+    }
+    const requestId = filterCountsRequestRef.current + 1;
+    filterCountsRequestRef.current = requestId;
+    setFilterValues((currentFilterValues) => ({
+      status: "loading",
+      data: currentFilterValues.data,
+      error: null,
+    }));
+    try {
+      const counts = await getDashboardFilterCounts({
+        customer_id: cleanedCustomerId,
+        project_id: cleanedProjectId,
+        dashboard_area: "applications",
+        selected_filters: filters,
+      });
+      if (filterCountsRequestRef.current !== requestId) {
+        return;
+      }
+      setFilterCounts(counts);
+      setFilterValues({
+        status: "success",
+        data: applicationFilterValuesFromCatalog(filterCatalog, counts, filters),
+        error: null,
+      });
+    } catch (error) {
+      if (filterCountsRequestRef.current !== requestId) {
+        return;
+      }
+      setFilterValues((currentFilterValues) => ({
+        status: "error",
+        data: currentFilterValues.data,
+        error: errorMessage(error, "Unable to update Application filter counts"),
+      }));
+    }
+  }, [customerId, filterCatalog, filters, projectId]);
 
   const loadApplicationsData = useCallback(async () => {
     if (!requestBody) {
@@ -755,6 +957,9 @@ function ApplicationsDashboard({
       setFilters(emptyFilters);
       setSort(defaultSort);
       setFilterValues(createLoadState(emptyFilterValues));
+      setFilterCatalog(null);
+      setFilterCounts(null);
+      filterCountsRequestRef.current = 0;
       setSummary(createLoadState(emptySummary));
       setApplicationList(createLoadState(emptyList));
       setCharts(createLoadState(emptyCharts));
@@ -767,15 +972,39 @@ function ApplicationsDashboard({
   }, [loadedProjectId, projectId]);
 
   useEffect(() => {
-    if (isActive && hasActiveProjectContext && filterValuesRequest) {
-      void loadFilterValues();
+    if (isActive && hasActiveProjectContext && hasFilterCacheContext && !filterCatalog) {
+      void loadFilterCatalog();
     }
   }, [
-    filterValuesRequest,
-    filterValuesSignature,
+    filterCatalog,
     hasActiveProjectContext,
+    hasFilterCacheContext,
     isActive,
-    loadFilterValues,
+    loadFilterCatalog,
+  ]);
+
+  useEffect(() => {
+    if (!isActive || !hasActiveProjectContext || !hasFilterCacheContext || !filterCatalog) {
+      return;
+    }
+    setFilterValues((currentFilterValues) => ({
+      status: currentFilterValues.status === "idle" ? "success" : currentFilterValues.status,
+      data: applicationFilterValuesFromCatalog(filterCatalog, null, filters),
+      error: null,
+    }));
+    const timeoutId = window.setTimeout(() => {
+      void loadFilterCounts();
+    }, 400);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    filterCatalog,
+    filters,
+    hasActiveProjectContext,
+    hasFilterCacheContext,
+    isActive,
+    loadFilterCounts,
   ]);
 
   useEffect(() => {
@@ -934,7 +1163,9 @@ function ApplicationsDashboard({
         </div>
 
         {filterValues.status === "loading" ? (
-          <p className="muted-text">Loading filter values...</p>
+          <p className="muted-text">
+            {filterCatalog ? "Updating counts..." : "Loading filter catalog..."}
+          </p>
         ) : null}
         {filterValues.status === "error" ? (
           <p className="error-text">{filterValues.error}</p>
@@ -1270,7 +1501,7 @@ function LifecyclePlanningPanel({
         {commentary}
       </section>
 
-      <LifecyclePlanBarChart data={data} selectedPlan={selectedPlan} status={status} />
+      <LifecyclePlanLineChart data={data} selectedPlan={selectedPlan} status={status} />
       <LifecyclePlanDetailTable data={data} selectedPlan={selectedPlan} status={status} />
     </div>
   );
@@ -1342,7 +1573,7 @@ function LifecyclePlanningMatrixTable({
   );
 }
 
-function LifecyclePlanBarChart({
+function LifecyclePlanLineChart({
   data,
   selectedPlan,
   status,
@@ -1356,6 +1587,7 @@ function LifecyclePlanBarChart({
   const chartData = data.selected_plan.chart;
   const hasRows = chartData.some((entry) => entry.count > 0);
   const chartWidth = Math.max(620, plotWidth - 24, chartData.length * 150);
+  const planLineColor = lifecyclePlanLineColors[selectedPlan];
   const canCopy = status !== "loading" && hasRows;
 
   return (
@@ -1384,20 +1616,28 @@ function LifecyclePlanBarChart({
         <div className="applications-chart-plot" ref={chartRef}>
           <div className="applications-chart-scroll">
             <div className="applications-chart-stage">
-              <BarChart
+              <LineChart
                 data={chartData}
                 width={chartWidth}
                 height={320}
                 margin={{ top: 30, right: 52, bottom: 64, left: 48 }}
               >
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="horizon" interval={0} />
+                <XAxis dataKey="horizon" interval={0} padding={{ left: 54, right: 54 }} />
                 <YAxis allowDecimals={false} />
                 <Tooltip formatter={(value) => formatNumber(Number(value))} />
-                <Bar dataKey="count" fill="#0f766e" name="Applications" radius={[5, 5, 0, 0]}>
+                <Line
+                  type="monotone"
+                  dataKey="count"
+                  name={`${selectedPlan} applications`}
+                  stroke={planLineColor}
+                  strokeWidth={3}
+                  dot={{ r: 5, fill: "#ffffff", stroke: planLineColor, strokeWidth: 2 }}
+                  activeDot={{ r: 7, fill: planLineColor, stroke: "#ffffff", strokeWidth: 2 }}
+                >
                   <LabelList dataKey="count" formatter={(value) => formatNumber(Number(value))} position="top" />
-                </Bar>
-              </BarChart>
+                </Line>
+              </LineChart>
             </div>
           </div>
         </div>

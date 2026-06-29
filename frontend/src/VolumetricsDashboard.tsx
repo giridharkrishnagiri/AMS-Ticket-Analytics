@@ -19,13 +19,14 @@ import {
 } from "recharts";
 
 import {
+  getDashboardFilterCatalog,
+  getDashboardFilterCounts,
   getDashboardVolumetricsBacklog,
   getDashboardVolumetricsCreatedPattern,
   getDashboardVolumetricsCreatedResolvedCanceled,
   getDashboardVolumetricsDataRange,
   getDashboardVolumetricsDetailedArchitectureInstallSplits,
   getDashboardVolumetricsDistributionSplits,
-  getDashboardVolumetricsFilterValues,
   getDashboardVolumetricsHourlyCreatedResolved,
   getDashboardVolumetricsIncidentBatchTrend,
   getDashboardVolumetricsKpiDurationBuckets,
@@ -48,6 +49,8 @@ import type {
   DashboardVolumetricsDurationBucketRow,
   DashboardVolumetricsFilterValues,
   DashboardVolumetricsFilters,
+  DashboardFilterCatalogResponse,
+  DashboardFilterCountsResponse,
   DashboardVolumetricsHourlyCreatedResolved,
   DashboardVolumetricsIncidentBatchTrend,
   DashboardVolumetricsKpiDurationBuckets,
@@ -83,6 +86,7 @@ type LoadState<T> = {
 };
 
 type VolumetricsDashboardProps = {
+  customerId: string;
   projectId: string;
   isActive: boolean;
   onExportContextChange?: (context: {
@@ -123,6 +127,7 @@ const emptyFilters: DashboardVolumetricsFilters = {
   application_owner: [],
   supported_by_vendor: [],
   sap_non_sap: [],
+  business_critical: [],
 };
 
 const emptyFilterValues: DashboardVolumetricsFilterValues = {
@@ -134,6 +139,7 @@ const emptyFilterValues: DashboardVolumetricsFilterValues = {
   application_owner: [],
   supported_by_vendor: [],
   sap_non_sap: [],
+  business_critical: [],
 };
 
 const emptySummary: DashboardVolumetricsSummary = {
@@ -493,6 +499,126 @@ function singleOptions(values: Array<{ label: string; value: string; count: numb
   }));
 }
 
+function splitCombinedFilterValue(label: string): { left_value: string; right_value: string } {
+  const separator = " - ";
+  const separatorIndex = label.indexOf(separator);
+  if (separatorIndex < 0) {
+    return { left_value: label, right_value: "(blank)" };
+  }
+  return {
+    left_value: label.slice(0, separatorIndex) || "(blank)",
+    right_value: label.slice(separatorIndex + separator.length) || "(blank)",
+  };
+}
+
+function catalogSingleRows(
+  catalog: DashboardFilterCatalogResponse | null,
+  counts: DashboardFilterCountsResponse | null,
+  filterKey: keyof DashboardVolumetricsFilterValues,
+  selectedValues: string[]
+) {
+  const dynamicCounts = counts?.counts[filterKey] ?? {};
+  const rows = (catalog?.filters[filterKey] ?? []).map((item) => ({
+    label: item.label,
+    value: item.value,
+    count: dynamicCounts[item.value] ?? item.baseline_count,
+  }));
+  const existing = new Set(rows.map((row) => row.value));
+  for (const selectedValue of selectedValues) {
+    if (!existing.has(selectedValue)) {
+      rows.push({
+        label: selectedValue,
+        value: selectedValue,
+        count: dynamicCounts[selectedValue] ?? 0,
+      });
+      existing.add(selectedValue);
+    }
+  }
+  return rows;
+}
+
+function catalogCombinedRows(
+  catalog: DashboardFilterCatalogResponse | null,
+  counts: DashboardFilterCountsResponse | null,
+  filterKey: keyof DashboardVolumetricsFilterValues,
+  selectedValues: string[]
+) {
+  const dynamicCounts = counts?.counts[filterKey] ?? {};
+  const rows = (catalog?.filters[filterKey] ?? []).map((item) => {
+    const splitValue = splitCombinedFilterValue(item.value);
+    return {
+      label: item.label,
+      left_value: splitValue.left_value,
+      right_value: splitValue.right_value,
+      count: dynamicCounts[item.value] ?? item.baseline_count,
+    };
+  });
+  const existing = new Set(rows.map((row) => row.label));
+  for (const selectedValue of selectedValues) {
+    if (!existing.has(selectedValue)) {
+      const splitValue = splitCombinedFilterValue(selectedValue);
+      rows.push({
+        label: selectedValue,
+        left_value: splitValue.left_value,
+        right_value: splitValue.right_value,
+        count: dynamicCounts[selectedValue] ?? 0,
+      });
+      existing.add(selectedValue);
+    }
+  }
+  return rows;
+}
+
+function volumetricsFilterValuesFromCatalog(
+  catalog: DashboardFilterCatalogResponse | null,
+  counts: DashboardFilterCountsResponse | null,
+  filters: DashboardVolumetricsFilters,
+  scope: VolumetricsScope,
+  ticketType: VolumetricsTicketType
+): DashboardVolumetricsFilterValues {
+  return {
+    scope: catalogSingleRows(catalog, counts, "scope", [scope]),
+    ticket_type: catalogSingleRows(catalog, counts, "ticket_type", [ticketType]),
+    functional_track_ams_owner: catalogCombinedRows(
+      catalog,
+      counts,
+      "functional_track_ams_owner",
+      filters.functional_track_ams_owner
+    ),
+    assignment_group_support_lead: catalogCombinedRows(
+      catalog,
+      counts,
+      "assignment_group_support_lead",
+      filters.assignment_group_support_lead
+    ),
+    parent_application_name: catalogSingleRows(
+      catalog,
+      counts,
+      "parent_application_name",
+      filters.parent_application_name
+    ),
+    application_owner: catalogSingleRows(
+      catalog,
+      counts,
+      "application_owner",
+      filters.application_owner
+    ),
+    supported_by_vendor: catalogSingleRows(
+      catalog,
+      counts,
+      "supported_by_vendor",
+      filters.supported_by_vendor
+    ),
+    sap_non_sap: catalogSingleRows(catalog, counts, "sap_non_sap", filters.sap_non_sap),
+    business_critical: catalogSingleRows(
+      catalog,
+      counts,
+      "business_critical",
+      filters.business_critical
+    ),
+  };
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -779,6 +905,7 @@ function useChartFrame(title: string) {
 }
 
 function VolumetricsDashboard({
+  customerId,
   projectId,
   isActive,
   onExportContextChange,
@@ -803,6 +930,8 @@ function VolumetricsDashboard({
   const [filterValues, setFilterValues] = useState<LoadState<DashboardVolumetricsFilterValues>>(
     createLoadState(emptyFilterValues)
   );
+  const [filterCatalog, setFilterCatalog] = useState<DashboardFilterCatalogResponse | null>(null);
+  const [filterCounts, setFilterCounts] = useState<DashboardFilterCountsResponse | null>(null);
   const [summary, setSummary] = useState<LoadState<DashboardVolumetricsSummary>>(
     createLoadState(emptySummary)
   );
@@ -853,7 +982,7 @@ function VolumetricsDashboard({
   >(createLoadState(emptyDurationBuckets));
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
-  const filterValuesCacheRef = useRef<Map<string, DashboardVolumetricsFilterValues>>(new Map());
+  const filterCountsRequestRef = useRef(0);
 
   const effectiveRange = useMemo(() => {
     if (timeGrain === "monthly") {
@@ -899,6 +1028,7 @@ function VolumetricsDashboard({
       application_owner: singleOptions(filterValues.data.application_owner),
       supported_by_vendor: singleOptions(filterValues.data.supported_by_vendor),
       sap_non_sap: singleOptions(filterValues.data.sap_non_sap),
+      business_critical: singleOptions(filterValues.data.business_critical),
     }),
     [filterValues.data]
   );
@@ -934,6 +1064,7 @@ function VolumetricsDashboard({
     [requestBody]
   );
   const hasActiveProjectContext = Boolean(projectId.trim()) && projectId === loadedProjectId;
+  const hasFilterCacheContext = Boolean(customerId.trim()) && Boolean(projectId.trim());
   const isDateRangeReady = dataRange.status === "error" || rangeInitializedProjectId === projectId;
 
   useEffect(() => {
@@ -962,26 +1093,30 @@ function VolumetricsDashboard({
     }
   }, [projectId]);
 
-  const loadVolumetricsFilterValues = useCallback(async () => {
-    if (!requestBody || !requestSignature) {
+  const loadVolumetricsFilterCatalog = useCallback(async () => {
+    const cleanedCustomerId = customerId.trim();
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedCustomerId || !cleanedProjectId) {
       return;
     }
-
-    const cachedFilterValues = filterValuesCacheRef.current.get(requestSignature);
-    if (cachedFilterValues) {
-      setFilterValues({ status: "success", data: cachedFilterValues, error: null });
-      return;
-    }
-
     setFilterValues((currentFilterValues) => ({
       status: "loading",
       data: currentFilterValues.data,
       error: null,
     }));
     try {
-      const nextFilterValues = await getDashboardVolumetricsFilterValues(requestBody);
-      filterValuesCacheRef.current.set(requestSignature, nextFilterValues);
-      setFilterValues({ status: "success", data: nextFilterValues, error: null });
+      const catalog = await getDashboardFilterCatalog(
+        cleanedCustomerId,
+        cleanedProjectId,
+        "volumetrics"
+      );
+      setFilterCatalog(catalog);
+      setFilterCounts(null);
+      setFilterValues({
+        status: "success",
+        data: volumetricsFilterValuesFromCatalog(catalog, null, filters, scope, ticketType),
+        error: catalog.warnings[0] ?? null,
+      });
     } catch (error) {
       setFilterValues((currentFilterValues) => ({
         status: "error",
@@ -989,7 +1124,54 @@ function VolumetricsDashboard({
         error: errorMessage(error, "Unable to load Volumetrics filters"),
       }));
     }
-  }, [requestBody, requestSignature]);
+  }, [customerId, filters, projectId, scope, ticketType]);
+
+  const loadVolumetricsFilterCounts = useCallback(async () => {
+    const cleanedCustomerId = customerId.trim();
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedCustomerId || !cleanedProjectId || !filterCatalog || !requestBody) {
+      return;
+    }
+    const requestId = filterCountsRequestRef.current + 1;
+    filterCountsRequestRef.current = requestId;
+    setFilterValues((currentFilterValues) => ({
+      status: "loading",
+      data: currentFilterValues.data,
+      error: null,
+    }));
+    try {
+      const counts = await getDashboardFilterCounts({
+        customer_id: cleanedCustomerId,
+        project_id: cleanedProjectId,
+        dashboard_area: "volumetrics",
+        selected_filters: filters,
+        date_range: {
+          from_date: requestBody.start_datetime,
+          to_date: requestBody.end_datetime,
+        },
+        scope,
+        ticket_type: ticketType,
+      });
+      if (filterCountsRequestRef.current !== requestId) {
+        return;
+      }
+      setFilterCounts(counts);
+      setFilterValues({
+        status: "success",
+        data: volumetricsFilterValuesFromCatalog(filterCatalog, counts, filters, scope, ticketType),
+        error: null,
+      });
+    } catch (error) {
+      if (filterCountsRequestRef.current !== requestId) {
+        return;
+      }
+      setFilterValues((currentFilterValues) => ({
+        status: "error",
+        data: currentFilterValues.data,
+        error: errorMessage(error, "Unable to update Volumetrics filter counts"),
+      }));
+    }
+  }, [customerId, filterCatalog, filters, projectId, requestBody, scope, ticketType]);
 
   const loadVolumetricsData = useCallback(async () => {
     if (!requestBody) {
@@ -1226,7 +1408,7 @@ function VolumetricsDashboard({
 
   useEffect(() => {
     if (projectId !== loadedProjectId) {
-      filterValuesCacheRef.current.clear();
+      filterCountsRequestRef.current = 0;
       setLoadedProjectId(projectId);
       setScope("in_scope");
       setTicketType("all");
@@ -1238,6 +1420,8 @@ function VolumetricsDashboard({
       setTopBatchApplicationsN(10);
       setTicketsPerUserN(10);
       setFilterValues(createLoadState(emptyFilterValues));
+      setFilterCatalog(null);
+      setFilterCounts(null);
       setSummary(createLoadState(emptySummary));
       setDataRange(createLoadState(emptyDataRange));
       setVolumeTrend(createLoadState(emptyVolumeTrend));
@@ -1319,24 +1503,53 @@ function VolumetricsDashboard({
   ]);
 
   useEffect(() => {
-    if (!isActive || !hasActiveProjectContext || !isDateRangeReady || !requestBody) {
+    if (isActive && hasActiveProjectContext && hasFilterCacheContext && !filterCatalog) {
+      void loadVolumetricsFilterCatalog();
+    }
+  }, [
+    filterCatalog,
+    hasActiveProjectContext,
+    hasFilterCacheContext,
+    isActive,
+    loadVolumetricsFilterCatalog,
+  ]);
+
+  useEffect(() => {
+    if (
+      !isActive ||
+      !hasActiveProjectContext ||
+      !hasFilterCacheContext ||
+      !isDateRangeReady ||
+      !requestBody ||
+      !filterCatalog
+    ) {
       return;
     }
+    setFilterValues((currentFilterValues) => ({
+      status: currentFilterValues.status === "idle" ? "success" : currentFilterValues.status,
+      data: volumetricsFilterValuesFromCatalog(filterCatalog, null, filters, scope, ticketType),
+      error: null,
+    }));
 
     const timeoutId = window.setTimeout(() => {
-      void loadVolumetricsFilterValues();
+      void loadVolumetricsFilterCounts();
     }, 400);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
   }, [
+    filterCatalog,
+    filters,
     hasActiveProjectContext,
+    hasFilterCacheContext,
     isActive,
     isDateRangeReady,
-    loadVolumetricsFilterValues,
+    loadVolumetricsFilterCounts,
     requestBody,
     requestSignature,
+    scope,
+    ticketType,
   ]);
 
   function updateFilter(filterName: FilterKey, values: string[]) {
@@ -1404,7 +1617,9 @@ function VolumetricsDashboard({
         </div>
 
         {filterValues.status === "loading" ? (
-          <p className="muted-text">Updating filter counts...</p>
+          <p className="muted-text">
+            {filterCatalog ? "Updating counts..." : "Loading filter catalog..."}
+          </p>
         ) : null}
         {filterValues.status === "error" ? (
           <p className="error-text">{filterValues.error}</p>
@@ -1436,6 +1651,12 @@ function VolumetricsDashboard({
             options={filterOptions.sap_non_sap}
             selectedValues={filters.sap_non_sap}
             onChange={(values) => updateFilter("sap_non_sap", values)}
+          />
+          <ExcelMultiSelectFilter
+            label="Business Criticality"
+            options={filterOptions.business_critical}
+            selectedValues={filters.business_critical}
+            onChange={(values) => updateFilter("business_critical", values)}
           />
           <ExcelMultiSelectFilter
             label="Assignment Group - Support Lead"

@@ -7,7 +7,7 @@ from io import BytesIO
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.db.session import SessionLocal
 from app.main import app
@@ -17,6 +17,7 @@ from app.models import (
     AssessmentOutOfScopeTicket,
     Client,
     DashboardCommentary,
+    DashboardFilterFact,
     IncidentSlaRow,
     Project,
     Ticket,
@@ -414,6 +415,228 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
         assert payload["tickets"]["applications_80pct_monthly_volume_count"] == 2
         assert "response_sla_adherence_pct" not in str(payload)
         assert "resolution_sla_adherence_pct" not in str(payload)
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "Cache App A",
+            supported_by_vendor="Vendor A",
+            functional_track="Finance",
+            ams_owner="Owner A",
+            assignment_group="IT-SAP-Group A",
+            application_owner="Application Owner A",
+            parent_application_name="Parent A",
+            hosting_env="Production",
+            global_application="Yes",
+            lifecycle_stage_status="In Use",
+            cmdb_payload={
+                "Application type": "Business",
+                "Architecture type": "Cloud",
+                "Business criticality": "Critical",
+                "Install Status": "In production",
+                "Install type": "Production",
+                "Life Cycle Stage": "Operational",
+            },
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Cache App B",
+            supported_by_vendor="Vendor B",
+            functional_track="Run",
+            ams_owner="Owner B",
+            assignment_group="IT-NSA-Group B",
+            application_owner="Application Owner B",
+            parent_application_name="Parent B",
+            hosting_env="Non-Production",
+            global_application="No",
+            lifecycle_stage_status="In Use",
+            cmdb_payload={
+                "Application type": "Business",
+                "Architecture type": "On Premise",
+                "Business criticality": "Low",
+                "Install Status": "In production",
+                "Install type": "Non-Production",
+                "Life Cycle Stage": "Operational",
+            },
+        )
+        incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-CACHE-1",
+            "INCIDENT",
+            dt("2026-01-05T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-08T00:00:00"),
+            assignment_group="IT-SAP-Group A",
+            business_service_ci_name="Cache App A",
+            architecture_type="Cloud",
+            business_critical="Critical",
+            install_type="Production",
+            hosting_env="Production",
+        )
+        incident.functional_track = "Finance"
+        incident.ams_owner = "Owner A"
+        incident.support_lead = "Lead A"
+        incident.parent_application_name = "Parent A"
+        incident.application_owner = "Application Owner A"
+        incident.supported_by_vendor = "Vendor A"
+
+        sc_task = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-CACHE-1",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-10T00:00:00"),
+            state="Closed",
+            closed_at=dt("2026-01-12T00:00:00"),
+            assignment_group="IT-NSA-Group B",
+            business_service_ci_name="Cache App B",
+            architecture_type="On Premise",
+            business_critical="Low",
+            install_type="Non-Production",
+            hosting_env="Non-Production",
+        )
+        sc_task.functional_track = "Run"
+        sc_task.ams_owner = "Owner B"
+        sc_task.support_lead = "Lead B"
+        sc_task.parent_application_name = "Parent B"
+        sc_task.application_owner = "Application Owner B"
+        sc_task.supported_by_vendor = "Vendor B"
+        db.commit()
+
+        with TestClient(app) as client:
+            refresh_response = client.post(
+                "/api/dashboard/filter-cache/refresh",
+                json={
+                    "customer_id": str(client_id),
+                    "project_id": str(project_id),
+                    "dashboard_area": "all",
+                },
+            )
+            status_response = client.get(
+                "/api/dashboard/filter-cache/status",
+                params={"customer_id": str(client_id), "project_id": str(project_id)},
+            )
+            applications_catalog_response = client.get(
+                "/api/dashboard/filter-catalog",
+                params={
+                    "customer_id": str(client_id),
+                    "project_id": str(project_id),
+                    "dashboard_area": "applications",
+                },
+            )
+            volumetrics_catalog_response = client.get(
+                "/api/dashboard/filter-catalog",
+                params={
+                    "customer_id": str(client_id),
+                    "project_id": str(project_id),
+                    "dashboard_area": "volumetrics",
+                },
+            )
+            applications_counts_response = client.post(
+                "/api/dashboard/filter-counts",
+                json={
+                    "customer_id": str(client_id),
+                    "project_id": str(project_id),
+                    "dashboard_area": "applications",
+                    "selected_filters": {"sap_non_sap": ["SAP"]},
+                },
+            )
+            volumetrics_counts_response = client.post(
+                "/api/dashboard/filter-counts",
+                json={
+                    "customer_id": str(client_id),
+                    "project_id": str(project_id),
+                    "dashboard_area": "volumetrics",
+                    "selected_filters": {"business_critical": ["Critical"]},
+                    "scope": "in_scope",
+                    "ticket_type": "all",
+                    "date_range": {
+                        "from_date": "2026-01-01T00:00:00+00:00",
+                        "to_date": "2026-01-31T23:59:59+00:00",
+                    },
+                },
+            )
+
+        assert refresh_response.status_code == 200
+        refresh_payload = refresh_response.json()
+        assert refresh_payload["dashboard_area"] == "all"
+        assert refresh_payload["facts_count"] == 4
+        assert refresh_payload["catalog_count"] > 0
+
+        assert status_response.status_code == 200
+        status_by_area = {
+            row["dashboard_area"]: row["status"] for row in status_response.json()["items"]
+        }
+        assert status_by_area == {
+            "applications": "ready",
+            "volumetrics": "ready",
+        }
+
+        assert applications_catalog_response.status_code == 200
+        applications_catalog = applications_catalog_response.json()
+        assert applications_catalog["status"] == "ready"
+        assert [row["value"] for row in applications_catalog["filters"]["business_critical"]] == [
+            "Critical",
+            "Low",
+        ]
+        assert applications_catalog["filters"]["supported_by_vendor"][0]["baseline_count"] == 1
+
+        assert volumetrics_catalog_response.status_code == 200
+        volumetrics_catalog = volumetrics_catalog_response.json()
+        assert volumetrics_catalog["status"] == "ready"
+        assert [row["value"] for row in volumetrics_catalog["filters"]["ticket_type"]] == [
+            "all",
+            "incident",
+            "sc_task",
+        ]
+        assert [row["value"] for row in volumetrics_catalog["filters"]["business_critical"]] == [
+            "Critical",
+            "Low",
+        ]
+
+        assert applications_counts_response.status_code == 200
+        applications_counts = applications_counts_response.json()["counts"]
+        assert applications_counts["supported_by_vendor"] == {"Vendor A": 1}
+        assert applications_counts["sap_non_sap"] == {"Non-SAP": 1, "SAP": 1}
+
+        assert volumetrics_counts_response.status_code == 200
+        volumetrics_counts = volumetrics_counts_response.json()["counts"]
+        assert volumetrics_counts["supported_by_vendor"] == {"Vendor A": 1}
+        assert volumetrics_counts["business_critical"]["Critical"] == 1
+
+        fact_types = set(
+            db.execute(
+                select(DashboardFilterFact.dashboard_area, DashboardFilterFact.record_type).where(
+                    DashboardFilterFact.project_id == project_id,
+                ),
+            ).all(),
+        )
+        assert ("applications", "application") in fact_types
+        assert ("volumetrics", "incident") in fact_types
+        assert ("volumetrics", "sc_task") in fact_types
+        assert all(record_type not in {"problem", "change"} for _, record_type in fact_types)
+        combined_payload_text = json.dumps(
+            {
+                "applications_catalog": applications_catalog,
+                "volumetrics_catalog": volumetrics_catalog,
+                "applications_counts": applications_counts,
+                "volumetrics_counts": volumetrics_counts,
+            },
+        )
+        assert "normalized_payload" not in combined_payload_text
+        assert "cmdb_payload" not in combined_payload_text
     finally:
         cleanup_client(db, client_id)
 
