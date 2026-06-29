@@ -40,6 +40,8 @@ SSL_CERT_FILE=C:\path\to\corporate-ca-bundle.pem
 - Phase 1D Tools Lab for deterministic governed analytics tools
 - Recent governed tool-run history
 - Phase 1E data-aware chat through LangGraph and governed analytics tools
+- Phase 2A AI Charts workspace for governed Plotly charts
+- Chat chart requests that generate persisted chart specs from governed tool results
 
 Phase 1E chat can answer supported Applications, Tickets, and SLA/OLA questions through approved
 governed analytics tools. The LLM does not write SQL, does not access the database directly, and
@@ -48,4 +50,9 @@ does not receive raw ticket rows or payload fields.
 Phase 1D Tools Lab executes approved backend aggregate tools directly. It does not use an LLM,
 does not generate SQL, and remains available for direct tool testing.
 
-Chart generation is still planned for Phase 2. The existing main dashboard UI remains unchanged.
+Phase 2A chart requests use governed analytics tool results only. The backend creates sanitized
+Plotly-compatible JSON specs, stores generated charts, and the AI Charts page renders the chart and
+its verification data table. No SQL generation, raw ticket charting, or raw payload charting is
+allowed. 3-D charts are deferred to a later Phase 2 enhancement.
+
+The existing main dashboard UI remains unchanged.

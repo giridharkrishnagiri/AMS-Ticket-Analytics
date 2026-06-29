@@ -23,6 +23,7 @@ from app.services.genai.agent.state import (
     LLMUsageAccumulator,
 )
 from app.services.genai.agent.synthesizer import synthesize_answer
+from app.services.genai.charts import generate_charts_for_agent
 from app.services.genai.config_service import get_or_create_config
 from app.services.genai.llm_client import LLMCompletionResult
 from app.services.genai.prompt_service import get_active_prompt_text
@@ -88,6 +89,7 @@ def _assistant_metadata(
 ) -> dict[str, Any]:
     tool_results = state.get("tool_results", [])
     tools_used = state.get("tools_used", [])
+    generated_charts = state.get("generated_charts", [])
     return {
         "provider": runtime.config.provider,
         "model_name": runtime.config.model_name,
@@ -101,6 +103,7 @@ def _assistant_metadata(
         "tools_used": tools_used,
         "tool_results_summary": _collect_result_summaries(tool_results),
         "tool_results": tool_results,
+        "generated_charts": generated_charts,
         "data_notes": state.get("data_notes", []),
         "warnings": state.get("warnings", []),
         "assumptions": state.get("assumptions", []),
@@ -206,6 +209,23 @@ def run_governed_chat_agent(
             "assumptions": assumptions,
         }
 
+    def build_charts(state: GenAIAgentState) -> GenAIAgentState:
+        classification = state.get("classification") or {}
+        if classification.get("category") != "chart_request":
+            return {"generated_charts": state.get("generated_charts", [])}
+        generated_charts, chart_warnings = generate_charts_for_agent(
+            db,
+            session=session,
+            user_message=user_message,
+            context=state.get("context", {}),
+            question=state["question"],
+            tool_results=state.get("tool_results", []),
+        )
+        return {
+            "generated_charts": generated_charts,
+            "warnings": [*state.get("warnings", []), *chart_warnings],
+        }
+
     def synthesize(state: GenAIAgentState) -> GenAIAgentState:
         assumptions = state.get("assumptions", [])
         if not assumptions and not state.get("tools_used"):
@@ -220,6 +240,7 @@ def run_governed_chat_agent(
             data_notes=state.get("data_notes", []),
             warnings=state.get("warnings", []),
             assumptions=assumptions,
+            generated_charts=state.get("generated_charts", []),
             usage=usage,
         )
         return {
@@ -249,6 +270,7 @@ def run_governed_chat_agent(
     graph.add_node("plan_tools", plan)
     graph.add_node("validate_tool_plan", validate)
     graph.add_node("execute_tools", execute)
+    graph.add_node("build_charts", build_charts)
     graph.add_node("synthesize_answer", synthesize)
     graph.set_entry_point("apply_guardrails")
     graph.add_edge("apply_guardrails", "classify_question")
@@ -263,7 +285,8 @@ def run_governed_chat_agent(
         route_after_validate,
         {"execute_tools": "execute_tools", "synthesize_answer": "synthesize_answer"},
     )
-    graph.add_edge("execute_tools", "synthesize_answer")
+    graph.add_edge("execute_tools", "build_charts")
+    graph.add_edge("build_charts", "synthesize_answer")
     graph.add_edge("synthesize_answer", END)
 
     initial_state: GenAIAgentState = {
@@ -281,6 +304,7 @@ def run_governed_chat_agent(
         "tool_plan": [],
         "validated_tool_plan": [],
         "tool_results": [],
+        "generated_charts": [],
         "data_notes": [],
         "warnings": [],
         "assumptions": [],

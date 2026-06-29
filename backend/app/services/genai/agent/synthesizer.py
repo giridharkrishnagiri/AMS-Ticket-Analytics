@@ -8,11 +8,11 @@ from app.services.genai.agent.json_utils import compact_json
 from app.services.genai.agent.state import LLMUsageAccumulator
 from app.services.genai.llm_client import chat_completion
 
-GENERIC_PHASE_1E_PROMPT = """
-You are running in Phase 1E of the AMS GenAI Analytics Workbench.
+GENERIC_PHASE_2A_PROMPT = """
+You are running in Phase 2A of the AMS GenAI Analytics Workbench.
 You can answer general questions and summarize aggregate data returned by approved governed
 analytics tools. You must not write SQL, request raw rows, or claim direct database access.
-Chart generation is planned for Phase 2.
+Chart requests can generate Plotly charts only from approved governed tool results.
 """.strip()
 
 UNSUPPORTED_RESPONSE = (
@@ -81,8 +81,7 @@ def deterministic_answer(
         )
     if classification.get("category") == "chart_request":
         prefix = (
-            "Chart generation is planned for Phase 2. I can provide the governed aggregate "
-            "summary behind the request now."
+            "I generated the governed aggregate result behind this chart request."
         )
     else:
         prefix = "Here is the governed aggregate result for your question."
@@ -102,6 +101,7 @@ def synthesize_answer(
     data_notes: list[str],
     warnings: list[str],
     assumptions: list[str],
+    generated_charts: list[dict[str, Any]] | None = None,
     usage: LLMUsageAccumulator,
 ) -> tuple[str, list[str], list[str], str | None]:
     if classification.get("category") in {"unsafe", "unsupported"} and not tool_results:
@@ -113,17 +113,13 @@ def synthesize_answer(
         )
         return sanitize_answer(answer), [], warnings, None
 
-    if classification.get("category") == "chart_request":
-        warnings = [
-            *warnings,
-            "Chart rendering is planned for Phase 2; Phase 1E returns governed text and tables.",
-        ]
+    generated_charts = generated_charts or []
 
     system_prompt_parts = [
         prompt_templates.get("system_domain_rules", ""),
         prompt_templates.get("safety_guardrails", ""),
         prompt_templates.get("answer_summarizer", ""),
-        GENERIC_PHASE_1E_PROMPT,
+        GENERIC_PHASE_2A_PROMPT,
     ]
     if config.allow_recommendations:
         system_prompt_parts.append(prompt_templates.get("recommendation_generator", ""))
@@ -138,11 +134,12 @@ def synthesize_answer(
         "data_notes": data_notes,
         "warnings": warnings,
         "assumptions": assumptions,
+        "generated_charts": generated_charts,
         "response_requirements": [
             "Summarize only the provided governed tool results.",
             "Do not invent numbers.",
             "Do not mention SQL.",
-            "For chart requests, state that chart generation is planned for Phase 2.",
+            "For chart requests with generated_charts, say the chart was saved in AI Charts.",
             "Include filters, assumptions, data notes, and warnings when relevant.",
         ],
     }
@@ -167,6 +164,12 @@ def synthesize_answer(
         error_message = result.error_message
 
     answer = sanitize_answer(answer)
+    if classification.get("category") == "chart_request" and generated_charts:
+        chart_titles = ", ".join(
+            str(item.get("title") or "Generated chart") for item in generated_charts
+        )
+        if "ai charts" not in answer.lower():
+            answer = f"{answer}\n\nI generated {chart_titles} and saved it in AI Charts."
     answer += _bullet_section("Assumptions / filters used", assumptions)
     answer += _bullet_section("Data notes", data_notes)
     answer += _bullet_section("Warnings", warnings)

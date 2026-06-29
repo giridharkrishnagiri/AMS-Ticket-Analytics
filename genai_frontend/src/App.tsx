@@ -13,6 +13,7 @@ import {
   updateGenAIPrompt,
   updateGenAISafetySettings
 } from "./api/genai";
+import { AIChartsPage } from "./pages/AIChartsPage";
 import { ChatPage } from "./pages/ChatPage";
 import { ToolsLabPage } from "./pages/ToolsLabPage";
 import type {
@@ -865,6 +866,7 @@ function UsageLogsPage() {
             <option value="chat">chat</option>
             <option value="chat_agent">chat_agent</option>
             <option value="tool_execution">tool_execution</option>
+            <option value="chart_generation">chart_generation</option>
           </select>
         </label>
         <label>
@@ -930,6 +932,7 @@ function UsageLogsPage() {
 
 function App() {
   const [activeView, setActiveView] = useState<AppView>("admin");
+  const [selectedChartId, setSelectedChartId] = useState<string | null>(null);
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
 
@@ -1011,12 +1014,19 @@ function App() {
         </button>
       </nav>
 
-      {activeView === "chat" ? <ChatPage /> : null}
+      {activeView === "chat" ? (
+        <ChatPage
+          onOpenChart={(chartId) => {
+            setSelectedChartId(chartId);
+            setActiveView("charts");
+          }}
+        />
+      ) : null}
       {activeView === "tools" ? <ToolsLabPage /> : null}
       {activeView === "charts" ? (
-        <PagePlaceholder
-          title="AI Charts"
-          text="AI-generated charts will be implemented in Phase 2."
+        <AIChartsPage
+          selectedChartId={selectedChartId}
+          onSelectedChartChange={setSelectedChartId}
         />
       ) : null}
       {activeView === "admin" ? <AdminPage /> : null}

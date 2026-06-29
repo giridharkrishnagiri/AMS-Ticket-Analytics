@@ -212,3 +212,43 @@ class GenAIToolRun(UuidPrimaryKeyMixin, Base):
 
     customer: Mapped[Client | None] = relationship()
     project: Mapped[Project | None] = relationship()
+
+
+class GenAIGeneratedChart(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_generated_charts"
+    __table_args__ = (
+        Index("ix_genai_generated_charts_archived_created", "is_archived", "created_at"),
+    )
+
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    session_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    subtitle: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chart_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    chart_library: Mapped[str] = mapped_column(String(50), nullable=False, default="plotly")
+    chart_spec_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source_tool_names_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    source_tool_results_summary_json: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    parameters_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    filters_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    data_notes_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    warnings_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    customer: Mapped[Client | None] = relationship()
+    project: Mapped[Project | None] = relationship()

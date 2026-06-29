@@ -8,6 +8,18 @@ from pydantic import BaseModel, Field, field_validator
 
 GenAIProvider = Literal["openai", "azure", "anthropic", "ollama", "custom"]
 GenAIResponseStyle = Literal["concise", "standard", "detailed"]
+GenAIChartType = Literal[
+    "bar",
+    "horizontal_bar",
+    "grouped_bar",
+    "stacked_bar",
+    "line",
+    "multi_line",
+    "pie",
+    "donut",
+    "scatter",
+    "table",
+]
 
 
 class GenAIConfigResponse(BaseModel):
@@ -303,3 +315,68 @@ class GenAIToolRunResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class GenAIChartTable(BaseModel):
+    columns: list[GenAIToolColumn] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GenAIGeneratedChartSummary(BaseModel):
+    chart_id: UUID
+    title: str
+    chart_type: str
+    chart_library: str = "plotly"
+
+
+class GenAIGeneratedChartListItemResponse(BaseModel):
+    id: UUID
+    customer_id: UUID | None
+    project_id: UUID | None
+    session_id: str | None
+    message_id: str | None
+    title: str
+    subtitle: str | None
+    chart_type: str
+    chart_library: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class GenAIGeneratedChartListResponse(BaseModel):
+    items: list[GenAIGeneratedChartListItemResponse]
+    total: int
+
+
+class GenAIGeneratedChartResponse(BaseModel):
+    id: UUID
+    customer_id: UUID | None
+    project_id: UUID | None
+    session_id: str | None
+    message_id: str | None
+    title: str
+    subtitle: str | None
+    chart_type: str
+    chart_library: str
+    chart_spec: dict[str, Any]
+    table: GenAIChartTable
+    source_tool_names: list[str]
+    source_tool_results_summary: list[dict[str, Any]]
+    parameters: dict[str, Any]
+    filters: dict[str, Any]
+    data_notes: list[str]
+    warnings: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class GenAIChartFromToolResultRequest(BaseModel):
+    tool_result: dict[str, Any]
+    customer_id: UUID | None = None
+    project_id: UUID | None = None
+    session_id: str | None = Field(default=None, max_length=255)
+    message_id: str | None = Field(default=None, max_length=255)
+    question: str | None = Field(default=None, max_length=1000)
+    chart_type: GenAIChartType | None = None

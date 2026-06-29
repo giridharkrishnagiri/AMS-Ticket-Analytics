@@ -12,6 +12,7 @@ from app.models import (
     GenAIChatMessage,
     GenAIChatSession,
     GenAIConfig,
+    GenAIGeneratedChart,
     GenAIPromptTemplate,
     GenAISafetySettings,
     GenAIToolRun,
@@ -20,11 +21,13 @@ from app.models import (
 from app.services.genai.agent.classifier import classify_question, rule_based_classification
 from app.services.genai.agent.planner import (
     ToolPlanValidationError,
+    plan_tools,
     rule_based_tool_plan,
     validate_tool_plan,
 )
 from app.services.genai.agent.state import LLMUsageAccumulator
 from app.services.genai.llm_client import LLMCompletionResult
+from app.services.genai.tools.registry import list_tools
 
 
 def reset_agent_tables() -> None:
@@ -32,6 +35,7 @@ def reset_agent_tables() -> None:
     try:
         for model in (
             GenAIToolRun,
+            GenAIGeneratedChart,
             GenAIUsageLog,
             GenAIChatMessage,
             GenAIChatSession,
@@ -207,6 +211,42 @@ def test_tool_plan_validation_rejects_unknown_invalid_and_excessive_plans() -> N
         )
 
 
+def test_chart_planning_uses_deterministic_parameters_when_llm_omits_them(monkeypatch) -> None:
+    config = GenAIConfig(
+        is_enabled=True,
+        provider="openai",
+        model_name="gpt-4.1-mini",
+    )
+
+    def fake_incomplete_chart_plan(_: Any, __: list[dict[str, str]]) -> LLMCompletionResult:
+        return LLMCompletionResult(
+            ok=True,
+            response_text=(
+                '{"tools":[{"tool_name":"get_application_distribution",'
+                '"reason":"chart","parameters":{},"filters":{}}],'
+                '"answer_strategy":"chart"}'
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.genai.agent.planner.chat_completion",
+        fake_incomplete_chart_plan,
+    )
+
+    plan, _ = plan_tools(
+        config,
+        {"tool_planner": "Plan."},
+        "Plot applications by functional track.",
+        {"domain": "Applications"},
+        {"category": "chart_request", "domain": "applications", "requires_tools": True},
+        list_tools(),
+        LLMUsageAccumulator(),
+    )
+
+    assert plan[0]["tool_name"] == "get_application_distribution"
+    assert plan[0]["parameters"]["dimension"] == "functional_track"
+
+
 def test_agent_chat_executes_governed_tool_and_logs_usage(monkeypatch) -> None:
     reset_agent_tables()
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -272,7 +312,7 @@ def test_agent_chat_refuses_unsafe_raw_payload_request(monkeypatch) -> None:
     assert "cmdb_payload" not in str(payload)
 
 
-def test_agent_chat_defers_chart_generation_but_uses_governed_summary(monkeypatch) -> None:
+def test_agent_chat_generates_governed_chart_metadata(monkeypatch) -> None:
     reset_agent_tables()
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr("app.services.genai.agent.classifier.chat_completion", fake_invalid_json)
@@ -294,7 +334,15 @@ def test_agent_chat_defers_chart_generation_but_uses_governed_summary(monkeypatc
     payload = response.json()
     metadata = payload["assistant_message"]["metadata"]
     assert metadata["tools_used"] == ["get_ticket_trend_summary"]
-    assert any("Phase 2" in warning for warning in metadata["warnings"])
-    assert "chart rendering is planned for phase 2" in (
-        payload["assistant_message"]["content"].lower()
-    )
+    assert metadata["generated_charts"][0]["chart_type"] == "multi_line"
+    assert metadata["data_access"] == "governed_tools"
+    assert any("3-D charting is deferred" in warning for warning in metadata["warnings"])
+    assert "normalized_payload" not in str(payload)
+    assert "cmdb_payload" not in str(payload)
+
+    with TestClient(app) as client:
+        chart_response = client.get(
+            f"/api/genai/charts/{metadata['generated_charts'][0]['chart_id']}",
+        )
+    assert chart_response.status_code == 200
+    assert chart_response.json()["chart_library"] == "plotly"

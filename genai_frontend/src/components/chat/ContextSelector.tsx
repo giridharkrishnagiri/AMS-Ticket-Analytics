@@ -94,8 +94,8 @@ export function ContextSelector({
         </label>
       </div>
       <p className="helper-text">
-        Phase 1E chat answers supported data questions through approved governed analytics tools.
-        Chart rendering remains planned for Phase 2.
+        Phase 2A chat answers supported data questions through approved governed analytics tools
+        and can generate Plotly charts from governed results.
       </p>
       {isLoading ? <p className="loading-text">Loading context options...</p> : null}
       {error ? <div className="status-message status-error">{error}</div> : null}

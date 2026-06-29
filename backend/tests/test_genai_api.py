@@ -13,6 +13,7 @@ from app.models import (
     GenAIChatMessage,
     GenAIChatSession,
     GenAIConfig,
+    GenAIGeneratedChart,
     GenAIPromptTemplate,
     GenAISafetySettings,
     GenAIToolRun,
@@ -29,6 +30,7 @@ def reset_genai_tables() -> None:
     try:
         for model in (
             GenAIToolRun,
+            GenAIGeneratedChart,
             GenAIUsageLog,
             GenAIChatMessage,
             GenAIChatSession,

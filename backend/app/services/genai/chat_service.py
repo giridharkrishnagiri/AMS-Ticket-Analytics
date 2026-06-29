@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models import Client, GenAIChatMessage, GenAIChatSession, Project
 from app.schemas.genai import GenAIChatContext
 from app.services.genai.agent import run_governed_chat_agent
+from app.services.genai.charts import attach_charts_to_message
 from app.services.genai.config_service import get_or_create_config
 from app.services.genai.llm_client import LLMCompletionResult
 from app.services.genai.prompt_service import get_active_prompt_text
@@ -390,6 +391,17 @@ def send_chat_message(
         content=agent_result.answer,
         metadata=agent_result.metadata,
     )
+    generated_charts = agent_result.metadata.get("generated_charts")
+    if isinstance(generated_charts, list):
+        attach_charts_to_message(
+            db,
+            [
+                str(item.get("chart_id"))
+                for item in generated_charts
+                if isinstance(item, dict) and item.get("chart_id")
+            ],
+            assistant_message.id,
+        )
     create_usage_log(
         db,
         operation="chat_agent",

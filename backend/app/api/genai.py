@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.genai import (
+    GenAIChartFromToolResultRequest,
     GenAIChatMessageCreateRequest,
     GenAIChatMessageCreateResponse,
     GenAIChatSessionCreateRequest,
@@ -18,6 +19,8 @@ from app.schemas.genai import (
     GenAIConfigResponse,
     GenAIConfigUpdateRequest,
     GenAIContextOptionResponse,
+    GenAIGeneratedChartListResponse,
+    GenAIGeneratedChartResponse,
     GenAIPromptReseedResponse,
     GenAIPromptTemplateResponse,
     GenAIPromptTemplateUpdateRequest,
@@ -32,6 +35,17 @@ from app.schemas.genai import (
     GenAIUsageLogResponse,
     GenAIUsageSummary,
 )
+from app.services.genai.charts import (
+    create_chart_from_tool_result,
+    get_generated_chart,
+    list_generated_charts,
+)
+from app.services.genai.charts.chart_store import (
+    GeneratedChartNotFoundError,
+    to_chart_list_item,
+    to_chart_response,
+)
+from app.services.genai.charts.validation import ChartValidationError
 from app.services.genai.chat_service import (
     ChatServiceError,
     ChatSessionNotFoundError,
@@ -169,6 +183,62 @@ def get_genai_tool_runs(
         domain=domain,
         status=status_filter,
     )
+
+
+@router.get("/charts", response_model=GenAIGeneratedChartListResponse)
+def get_genai_charts(
+    db: DbSession,
+    customer_id: UUID | None = None,
+    project_id: UUID | None = None,
+    session_id: str | None = None,
+    chart_type: str | None = None,
+    include_archived: bool = False,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> GenAIGeneratedChartListResponse:
+    result = list_generated_charts(
+        db,
+        customer_id=customer_id,
+        project_id=project_id,
+        session_id=session_id,
+        chart_type=chart_type,
+        include_archived=include_archived,
+        limit=limit,
+        offset=offset,
+    )
+    return GenAIGeneratedChartListResponse(
+        items=[to_chart_list_item(item) for item in result.items],
+        total=result.total,
+    )
+
+
+@router.get("/charts/{chart_id}", response_model=GenAIGeneratedChartResponse)
+def get_genai_chart(chart_id: UUID, db: DbSession) -> GenAIGeneratedChartResponse:
+    try:
+        return to_chart_response(get_generated_chart(db, chart_id))
+    except GeneratedChartNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/charts/from-tool-result", response_model=GenAIGeneratedChartResponse)
+def post_genai_chart_from_tool_result(
+    request: GenAIChartFromToolResultRequest,
+    db: DbSession,
+) -> GenAIGeneratedChartResponse:
+    try:
+        chart = create_chart_from_tool_result(
+            db,
+            tool_result=request.tool_result,
+            customer_id=request.customer_id,
+            project_id=request.project_id,
+            session_id=request.session_id,
+            message_id=request.message_id,
+            question=request.question,
+            chart_type=request.chart_type,
+        )
+    except ChartValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return to_chart_response(chart)
 
 
 @router.get("/context/customers", response_model=list[GenAIContextOptionResponse])

@@ -7,7 +7,13 @@ const starterQuestions = [
   "How many tickets were created in the latest complete 6 months?",
   "Which applications have the highest ticket volume?",
   "Show ticket distribution by SAP vs Non-SAP.",
-  "What is the OLA summary?"
+  "What is the OLA summary?",
+  "Plot applications by functional track.",
+  "Create a bar chart of top applications by active users.",
+  "Show ticket distribution by SAP vs Non-SAP as a pie chart.",
+  "Create a line chart of monthly ticket volume.",
+  "Plot top applications by ticket volume.",
+  "Show OLA adherence by vendor as a bar chart."
 ];
 
 type ChatInputProps = {
@@ -49,7 +55,7 @@ export function ChatInput({ disabled, isSending, onSend }: ChatInputProps) {
         <textarea
           value={content}
           rows={4}
-          placeholder="Ask a governed aggregate question about Applications, Tickets, or SLA / OLA."
+          placeholder="Ask a governed aggregate or chart question about Applications, Tickets, or SLA / OLA."
           disabled={disabled || isSending}
           onChange={(event) => setContent(event.target.value)}
           onKeyDown={(event) => {

@@ -109,12 +109,84 @@ def rule_based_tool_plan(
     top_n = _top_n(question)
 
     if category == "chart_request":
-        if "ticket" in q:
+        if domain == "sla_ola" or _contains(q, r"\b(sla|ola|adherence|vendor)\b"):
+            agreement_type = (
+                "sla"
+                if _contains(q, r"\bsla\b") and not _contains(q, r"\bola\b")
+                else "ola"
+            )
+            if _contains(q, r"\b(by|vendor|weak)\b"):
+                return (
+                    [
+                        _plan_item(
+                            "get_sla_ola_by_dimension",
+                            reason="Chart request needs governed SLA/OLA adherence by dimension.",
+                            parameters={
+                                "agreement_type": agreement_type,
+                                "metric": "both",
+                                "dimension": "supported_by_vendor",
+                                "scope": "in_scope",
+                                "top_n": top_n,
+                            },
+                        ),
+                    ],
+                    "Generate a governed Plotly chart from SLA/OLA aggregate tool results.",
+                )
+            return (
+                [
+                    _plan_item(
+                        "get_sla_ola_summary",
+                        reason="Chart request needs governed SLA/OLA summary data.",
+                        parameters={
+                            "agreement_type": agreement_type,
+                            "metric": "both",
+                            "scope": "in_scope",
+                        },
+                    ),
+                ],
+                "Generate a governed Plotly chart from SLA/OLA aggregate tool results.",
+            )
+        if domain == "tickets" or "ticket" in q:
+            if _contains(q, r"\b(distribution|sap|non-sap|non sap|pie|donut|by)\b"):
+                return (
+                    [
+                        _plan_item(
+                            "get_ticket_distribution",
+                            reason="Chart request needs governed ticket distribution data.",
+                            parameters={
+                                "scope": "in_scope",
+                                "ticket_type": _ticket_type(question),
+                                "metric": _metric(question),
+                                "dimension": _dimension_from_question(question, domain="tickets"),
+                                "top_n": top_n,
+                            },
+                        ),
+                    ],
+                    "Generate a governed Plotly chart from ticket distribution results.",
+                )
+            if _contains(q, r"\b(highest|top|application|applications)\b"):
+                return (
+                    [
+                        _plan_item(
+                            "get_top_applications_by_ticket_volume",
+                            reason=(
+                                "Chart request needs top applications by governed ticket volume."
+                            ),
+                            parameters={
+                                "scope": "in_scope",
+                                "ticket_type": _ticket_type(question),
+                                "metric": _metric(question),
+                                "top_n": top_n,
+                            },
+                        ),
+                    ],
+                    "Generate a governed Plotly chart from top ticket-volume results.",
+                )
             return (
                 [
                     _plan_item(
                         "get_ticket_trend_summary",
-                        reason="Chart request can be answered as a governed ticket trend table.",
+                        reason="Chart request needs governed monthly ticket trend data.",
                         parameters={
                             "scope": "in_scope",
                             "ticket_type": _ticket_type(question),
@@ -122,26 +194,37 @@ def rule_based_tool_plan(
                         },
                     ),
                 ],
-                "Chart rendering is planned for Phase 2; Phase 1E returns compact governed tables.",
+                "Generate a governed Plotly chart from ticket trend results.",
             )
-        if "application" in q:
+        if domain == "applications" or "application" in q:
+            if _contains(q, r"active users?"):
+                return (
+                    [
+                        _plan_item(
+                            "get_top_parent_applications_by_active_users",
+                            reason="Chart request needs top parent applications by active users.",
+                            parameters={"top_n": top_n},
+                        ),
+                    ],
+                    "Generate a governed Plotly chart from active-user results.",
+                )
             return (
                 [
                     _plan_item(
                         "get_application_distribution",
                         reason=(
-                            "Chart request can be answered as an application distribution "
-                            "table."
+                            "Chart request needs governed Application Inventory distribution data."
                         ),
                         parameters={
                             "dimension": _dimension_from_question(
                                 question,
                                 domain="applications",
-                            )
+                            ),
+                            "top_n": top_n,
                         },
                     ),
                 ],
-                "Chart rendering is planned for Phase 2; Phase 1E returns compact governed tables.",
+                "Generate a governed Plotly chart from Application Inventory results.",
             )
 
     if domain == "applications":
@@ -391,6 +474,8 @@ def plan_tools(
     if not result.ok:
         return fallback_plan, fallback_strategy
     planned, answer_strategy = _normalize_llm_plan(parse_json_object(result.response_text))
+    if classification.get("category") == "chart_request":
+        return fallback_plan, (answer_strategy or fallback_strategy)
     return (planned or fallback_plan), (answer_strategy or fallback_strategy)
 
 

@@ -24,6 +24,7 @@ class GenAIAgentState(TypedDict, total=False):
     validated_tool_plan: list[dict[str, Any]]
     answer_strategy: str | None
     tool_results: list[dict[str, Any]]
+    generated_charts: list[dict[str, Any]]
     answer: str | None
     recommendations: list[str]
     data_notes: list[str]

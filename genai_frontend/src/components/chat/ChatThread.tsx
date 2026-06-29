@@ -3,6 +3,7 @@ import type { ChatMessage } from "../../types/chat";
 type ChatThreadProps = {
   messages: ChatMessage[];
   isLoading: boolean;
+  onOpenChart: (chartId: string) => void;
 };
 
 type UsageMetadata = {
@@ -32,6 +33,13 @@ type ToolResult = {
   truncated?: boolean;
 };
 
+type GeneratedChartMetadata = {
+  chart_id: string;
+  title: string;
+  chart_type: string;
+  chart_library: string;
+};
+
 function metadataString(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
 }
@@ -58,6 +66,23 @@ function toolResultsMetadata(value: unknown): ToolResult[] {
     return [];
   }
   return value.filter((item): item is ToolResult => Boolean(item && typeof item === "object"));
+}
+
+function generatedChartsMetadata(value: unknown): GeneratedChartMetadata[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is GeneratedChartMetadata => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    const candidate = item as Record<string, unknown>;
+    return (
+      typeof candidate.chart_id === "string" &&
+      typeof candidate.title === "string" &&
+      typeof candidate.chart_type === "string"
+    );
+  });
 }
 
 function formatCellValue(value: unknown): string {
@@ -152,7 +177,40 @@ function CompactResults({ results }: { results: ToolResult[] }) {
   );
 }
 
-function assistantMetadata(message: ChatMessage) {
+function GeneratedCharts({
+  charts,
+  onOpenChart
+}: {
+  charts: GeneratedChartMetadata[];
+  onOpenChart: (chartId: string) => void;
+}) {
+  if (charts.length === 0) {
+    return null;
+  }
+  return (
+    <div className="generated-chart-cards">
+      {charts.map((chart) => (
+        <div key={chart.chart_id} className="generated-chart-card">
+          <div>
+            <strong>{chart.title}</strong>
+            <span>
+              {chart.chart_type.replace("_", " ")} / {chart.chart_library || "plotly"}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => onOpenChart(chart.chart_id)}
+          >
+            Open chart in AI Charts
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function assistantMetadata(message: ChatMessage, onOpenChart: (chartId: string) => void) {
   if (message.role !== "assistant" && message.role !== "error") {
     return null;
   }
@@ -166,6 +224,7 @@ function assistantMetadata(message: ChatMessage) {
   const warnings = stringArrayMetadata(message.metadata.warnings);
   const assumptions = stringArrayMetadata(message.metadata.assumptions);
   const toolResults = toolResultsMetadata(message.metadata.tool_results);
+  const generatedCharts = generatedChartsMetadata(message.metadata.generated_charts);
 
   return (
     <>
@@ -189,6 +248,7 @@ function assistantMetadata(message: ChatMessage) {
           <dd>{dataAccess ?? "none_general"}</dd>
         </div>
       </dl>
+      <GeneratedCharts charts={generatedCharts} onOpenChart={onOpenChart} />
       <div className="message-details">
         <MetadataList title="Tools Used" values={toolsUsed} />
         <MetadataList title="Data Notes" values={dataNotes} />
@@ -200,7 +260,7 @@ function assistantMetadata(message: ChatMessage) {
   );
 }
 
-export function ChatThread({ messages, isLoading }: ChatThreadProps) {
+export function ChatThread({ messages, isLoading, onOpenChart }: ChatThreadProps) {
   return (
     <section className="chat-thread" aria-live="polite" aria-label="Chat messages">
       {messages.map((message) => (
@@ -210,7 +270,7 @@ export function ChatThread({ messages, isLoading }: ChatThreadProps) {
             {message.content.split("\n").map((line, index) => (
               <p key={`${message.id}-${index}`}>{line || " "}</p>
             ))}
-            {assistantMetadata(message)}
+            {assistantMetadata(message, onOpenChart)}
           </div>
         </article>
       ))}
@@ -229,8 +289,8 @@ export function ChatThread({ messages, isLoading }: ChatThreadProps) {
 
       {messages.length === 0 && !isLoading ? (
         <div className="empty-thread">
-          Start a Phase 1E chat. This workbench now answers supported data questions through
-          approved governed analytics tools, while raw rows and chart generation remain unavailable.
+          Start a Phase 2A chat. This workbench answers supported data questions through approved
+          governed analytics tools and can generate governed Plotly charts from those results.
         </div>
       ) : null}
     </section>

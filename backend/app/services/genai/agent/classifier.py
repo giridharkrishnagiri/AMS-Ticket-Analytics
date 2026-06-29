@@ -50,15 +50,25 @@ def rule_based_classification(
     domain_hint = str((context or {}).get("domain") or "").lower()
 
     if _contains(q, r"\b(plot|chart|graph|visuali[sz]e|3d)\b"):
-        domain = "tickets" if "ticket" in q else "applications" if "application" in q else "general"
+        if _contains(q, r"\b(sla|ola|adherence|vendor)\b"):
+            domain = "sla_ola"
+        elif _contains(q, r"\b(ticket|tickets|incident|sc task|volume)\b"):
+            domain = "tickets"
+        elif _contains(
+            q,
+            r"\b(application|applications|inventory|functional track|active users)\b",
+        ):
+            domain = "applications"
+        else:
+            domain = "general"
         return {
             "category": "chart_request",
             "domain": domain,
             "requires_tools": domain != "general",
             "confidence": 0.8,
             "reason": (
-                "The user asked for charting; Phase 1E can return governed tabular "
-                "summaries only."
+                "The user asked for charting; Phase 2A can generate governed Plotly charts "
+                "from approved tool results."
             ),
         }
 
@@ -89,7 +99,7 @@ def rule_based_classification(
             category = "top_n"
         elif _contains(q, r"\btrend|month|monthly|week|weekly|over time|latest complete\b"):
             category = "trend_analysis"
-        elif _contains(q, r"\bdistribution|by|vs|versus|sap|non-sap|priority|state)\b"):
+        elif _contains(q, r"\b(distribution|by|vs|versus|sap|non-sap|priority|state)\b"):
             category = "distribution"
         return {
             "category": category,

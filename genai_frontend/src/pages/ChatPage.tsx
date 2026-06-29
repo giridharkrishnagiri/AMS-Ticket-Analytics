@@ -30,7 +30,11 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error";
 }
 
-export function ChatPage() {
+type ChatPageProps = {
+  onOpenChart: (chartId: string) => void;
+};
+
+export function ChatPage({ onOpenChart }: ChatPageProps) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ChatSessionDetail | null>(null);
@@ -182,7 +186,7 @@ export function ChatPage() {
       <section className="surface chat-workspace" aria-labelledby="chat-heading">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Phase 1E</p>
+            <p className="eyebrow">Phase 2A</p>
             <h2 id="chat-heading">{detail?.session.title ?? "Chat"}</h2>
           </div>
           <div className="button-row">
@@ -214,7 +218,11 @@ export function ChatPage() {
 
         {message ? <div className={`status-message status-${messageKind}`}>{message}</div> : null}
 
-        <ChatThread messages={detail?.messages ?? []} isLoading={isLoadingDetail || isSending} />
+        <ChatThread
+          messages={detail?.messages ?? []}
+          isLoading={isLoadingDetail || isSending}
+          onOpenChart={onOpenChart}
+        />
 
         <ChatInput
           disabled={detail?.session.is_archived ?? false}
