@@ -863,6 +863,7 @@ function UsageLogsPage() {
             <option value="config_test">config_test</option>
             <option value="prompt_test">prompt_test</option>
             <option value="chat">chat</option>
+            <option value="chat_agent">chat_agent</option>
             <option value="tool_execution">tool_execution</option>
           </select>
         </label>

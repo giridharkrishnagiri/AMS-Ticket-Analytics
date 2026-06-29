@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.models import Client, GenAIChatMessage, GenAIChatSession, Project
 from app.schemas.genai import GenAIChatContext
+from app.services.genai.agent import run_governed_chat_agent
 from app.services.genai.config_service import get_or_create_config
-from app.services.genai.llm_client import LLMCompletionResult, chat_completion
+from app.services.genai.llm_client import LLMCompletionResult
 from app.services.genai.prompt_service import get_active_prompt_text
 from app.services.genai.usage_log_service import create_usage_log
 
@@ -234,7 +235,7 @@ def chat_metadata(
             "estimated_cost": result.estimated_cost if result else None,
         },
         "tools_used": [],
-        "data_access": "none_phase_1c",
+        "data_access": "none_general",
         "status": status,
         "error_message": error_message,
         "context": {
@@ -330,7 +331,7 @@ def send_chat_message(
         )
         create_usage_log(
             db,
-            operation="chat",
+            operation="chat_agent",
             status="disabled",
             provider=provider,
             model_name=model_name,
@@ -362,7 +363,7 @@ def send_chat_message(
         )
         create_usage_log(
             db,
-            operation="chat",
+            operation="chat_agent",
             status="error",
             provider=provider,
             model_name=model_name,
@@ -376,51 +377,36 @@ def send_chat_message(
         )
         return ChatSendResult(user_message, assistant_message, session)
 
-    messages = build_chat_prompt_messages(
+    agent_result = run_governed_chat_agent(
         db,
         session=session,
+        user_message=user_message,
+        context=context.model_dump(mode="json"),
         history=recent_messages(db, session.id),
-        context=context,
-    )
-    result = chat_completion(config, messages)
-    status = "success" if result.ok else "error"
-    response_text = (
-        result.response_text
-        if result.ok and result.response_text
-        else result.error_message or "The model request failed."
-    )
-    metadata = chat_metadata(
-        session=session,
-        context=context,
-        provider=provider,
-        model_name=model_name,
-        result=result,
-        status=status,
-        error_message=None if result.ok else result.error_message,
     )
     assistant_message = store_assistant_message(
         db,
         session=session,
-        content=response_text,
-        metadata=metadata,
+        content=agent_result.answer,
+        metadata=agent_result.metadata,
     )
     create_usage_log(
         db,
-        operation="chat",
-        status=status,
+        operation="chat_agent",
+        status=agent_result.status,
         provider=provider,
         model_name=model_name,
         question=normalized_content,
-        customer_id=session.customer_id,
-        project_id=session.project_id,
+        customer_id=context.customer_id or session.customer_id,
+        project_id=context.project_id or session.project_id,
         session_id=str(session.id),
         message_id=str(assistant_message.id),
-        tools_used_json=[],
-        prompt_tokens=result.prompt_tokens,
-        completion_tokens=result.completion_tokens,
-        estimated_cost=result.estimated_cost,
-        duration_ms=result.duration_ms,
-        error_message=result.error_message,
+        tools_used_json=agent_result.metadata.get("tools_used", []),
+        prompt_tokens=agent_result.usage.prompt_tokens,
+        completion_tokens=agent_result.usage.completion_tokens,
+        estimated_cost=agent_result.usage.estimated_cost,
+        duration_ms=agent_result.usage.duration_ms,
+        error_message=agent_result.error_message,
     )
     return ChatSendResult(user_message, assistant_message, session)
 

@@ -39,13 +39,13 @@ SSL_CERT_FILE=C:\path\to\corporate-ca-bundle.pem
 - Chat responses through the configured LiteLLM model
 - Phase 1D Tools Lab for deterministic governed analytics tools
 - Recent governed tool-run history
+- Phase 1E data-aware chat through LangGraph and governed analytics tools
 
-Phase 1C chat does not query live Applications, Tickets, SLA, OLA, Problem, or Change data. It can
-answer general questions about the workbench and future capabilities, and it will state when
-data-aware Q&A is not available yet.
+Phase 1E chat can answer supported Applications, Tickets, and SLA/OLA questions through approved
+governed analytics tools. The LLM does not write SQL, does not access the database directly, and
+does not receive raw ticket rows or payload fields.
 
 Phase 1D Tools Lab executes approved backend aggregate tools directly. It does not use an LLM,
-does not generate SQL, and does not connect those tools to Chat yet.
+does not generate SQL, and remains available for direct tool testing.
 
-Future phases will add LangGraph-driven tool selection for data-aware Q&A, AI chart generation,
-and recommendations.
+Chart generation is still planned for Phase 2. The existing main dashboard UI remains unchanged.

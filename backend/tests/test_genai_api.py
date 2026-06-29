@@ -15,6 +15,7 @@ from app.models import (
     GenAIConfig,
     GenAIPromptTemplate,
     GenAISafetySettings,
+    GenAIToolRun,
     GenAIUsageLog,
     Project,
 )
@@ -27,6 +28,7 @@ def reset_genai_tables() -> None:
     db = SessionLocal()
     try:
         for model in (
+            GenAIToolRun,
             GenAIUsageLog,
             GenAIChatMessage,
             GenAIChatSession,
@@ -425,20 +427,31 @@ def test_genai_chat_session_lifecycle() -> None:
 def test_genai_chat_message_success_persists_messages_and_usage(monkeypatch) -> None:
     reset_genai_tables()
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    captured_messages: list[dict[str, str]] = []
 
-    def fake_chat_completion(_: Any, messages: list[dict[str, str]]) -> LLMCompletionResult:
-        captured_messages.extend(messages)
+    def fake_classifier(_: Any, __: list[dict[str, str]]) -> LLMCompletionResult:
+        return LLMCompletionResult(
+            ok=True,
+            response_text=(
+                '{"category":"general","domain":"general","requires_tools":false,'
+                '"confidence":0.9,"reason":"General question."}'
+            ),
+            prompt_tokens=11,
+            completion_tokens=7,
+            duration_ms=100,
+        )
+
+    def fake_synthesizer(_: Any, __: list[dict[str, str]]) -> LLMCompletionResult:
         return LLMCompletionResult(
             ok=True,
             response_text="The workbench can help configure and test GenAI features.",
-            prompt_tokens=31,
-            completion_tokens=12,
+            prompt_tokens=20,
+            completion_tokens=5,
             estimated_cost=0.001,
-            duration_ms=456,
+            duration_ms=356,
         )
 
-    monkeypatch.setattr("app.services.genai.chat_service.chat_completion", fake_chat_completion)
+    monkeypatch.setattr("app.services.genai.agent.classifier.chat_completion", fake_classifier)
+    monkeypatch.setattr("app.services.genai.agent.synthesizer.chat_completion", fake_synthesizer)
 
     with TestClient(app) as client:
         configure_genai(client)
@@ -451,7 +464,7 @@ def test_genai_chat_message_success_persists_messages_and_usage(monkeypatch) -> 
             },
         )
         detail_response = client.get(f"/api/genai/chat-sessions/{session['id']}")
-        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat"})
+        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat_agent"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -460,20 +473,16 @@ def test_genai_chat_message_success_persists_messages_and_usage(monkeypatch) -> 
     assert payload["assistant_message"]["content"].startswith("The workbench can help")
     assert payload["assistant_message"]["metadata"]["provider"] == "openai"
     assert payload["assistant_message"]["metadata"]["model_name"] == "gpt-4.1-mini"
-    assert payload["assistant_message"]["metadata"]["duration_ms"] == 456
+    assert payload["assistant_message"]["metadata"]["agent_mode"] == "langgraph_governed_tools"
+    assert payload["assistant_message"]["metadata"]["data_access"] == "none_general"
     assert payload["assistant_message"]["metadata"]["usage"]["prompt_tokens"] == 31
     assert payload["assistant_message"]["metadata"]["tools_used"] == []
-    assert payload["assistant_message"]["metadata"]["data_access"] == "none_phase_1c"
     assert payload["session"]["title"] == "What can this GenAI workbench do?"
     assert payload["session"]["last_message_at"] is not None
     assert len(detail_response.json()["messages"]) == 2
-    system_message = captured_messages[0]["content"]
-    assert "Phase 1C" in system_message
-    assert "Generic Tickets means Incidents + SC Tasks only" in system_message
-    assert "governed analytics tools or live dashboard data" in system_message
     logs = logs_response.json()
     assert len(logs) == 1
-    assert logs[0]["operation"] == "chat"
+    assert logs[0]["operation"] == "chat_agent"
     assert logs[0]["status"] == "success"
     assert logs[0]["prompt_tokens"] == 31
     assert logs[0]["completion_tokens"] == 12
@@ -494,7 +503,7 @@ def test_genai_chat_disabled_and_missing_model_return_clean_messages() -> None:
             f"/api/genai/chat-sessions/{missing_model_session['id']}/messages",
             json={"content": "Hello again"},
         )
-        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat"})
+        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat_agent"})
 
     assert disabled_response.status_code == 200
     disabled_payload = disabled_response.json()
@@ -522,15 +531,15 @@ def test_genai_chat_litellm_failure_stores_error_and_usage(monkeypatch) -> None:
         session = create_chat_session(client)
         response = client.post(
             f"/api/genai/chat-sessions/{session['id']}/messages",
-            json={"content": "Please respond"},
+            json={"content": "What can this GenAI workbench do?"},
         )
-        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat"})
+        logs_response = client.get("/api/genai/usage-logs", params={"operation": "chat_agent"})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["assistant_message"]["metadata"]["status"] == "error"
     assert "raw provider exception" not in payload["assistant_message"]["content"]
-    assert "model request failed" in payload["assistant_message"]["content"].lower()
+    assert "workbench" in payload["assistant_message"]["content"].lower()
     assert logs_response.json()[0]["status"] == "error"
     assert "raw provider exception" not in str(logs_response.json())
 
@@ -607,27 +616,33 @@ def test_genai_chat_context_endpoints_return_compact_options() -> None:
     ]
 
 
-def test_genai_chat_data_specific_question_keeps_phase_1c_no_data_metadata(
+def test_genai_chat_data_specific_question_uses_governed_tool_metadata(
     monkeypatch,
 ) -> None:
     reset_genai_tables()
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    captured_messages: list[dict[str, str]] = []
 
-    def fake_chat_completion(_: Any, messages: list[dict[str, str]]) -> LLMCompletionResult:
-        captured_messages.extend(messages)
+    def fake_invalid_json(_: Any, __: list[dict[str, str]]) -> LLMCompletionResult:
         return LLMCompletionResult(
             ok=True,
-            response_text=(
-                "I cannot answer that from live ticket data yet in Phase 1C because governed "
-                "analytics tools are not enabled."
-            ),
+            response_text="not json",
+            prompt_tokens=10,
+            completion_tokens=3,
+            duration_ms=25,
+        )
+
+    def fake_synthesizer(_: Any, __: list[dict[str, str]]) -> LLMCompletionResult:
+        return LLMCompletionResult(
+            ok=True,
+            response_text="The governed ticket tool returned the top application volume summary.",
             prompt_tokens=44,
             completion_tokens=19,
             duration_ms=321,
         )
 
-    monkeypatch.setattr("app.services.genai.chat_service.chat_completion", fake_chat_completion)
+    monkeypatch.setattr("app.services.genai.agent.classifier.chat_completion", fake_invalid_json)
+    monkeypatch.setattr("app.services.genai.agent.planner.chat_completion", fake_invalid_json)
+    monkeypatch.setattr("app.services.genai.agent.synthesizer.chat_completion", fake_synthesizer)
 
     with TestClient(app) as client:
         configure_genai(client)
@@ -642,10 +657,11 @@ def test_genai_chat_data_specific_question_keeps_phase_1c_no_data_metadata(
 
     assert response.status_code == 200
     payload = response.json()
-    assert "cannot answer" in payload["assistant_message"]["content"].lower()
-    assert payload["assistant_message"]["metadata"]["data_access"] == "none_phase_1c"
-    assert payload["assistant_message"]["metadata"]["tools_used"] == []
-    system_message = " ".join(captured_messages[0]["content"].split())
-    assert "do not yet have access to governed analytics tools or live dashboard data" in (
-        system_message
+    metadata = payload["assistant_message"]["metadata"]
+    assert metadata["data_access"] == "governed_tools"
+    assert metadata["tools_used"] == ["get_top_applications_by_ticket_volume"]
+    assert metadata["tool_results_summary"][0]["tool_name"] == (
+        "get_top_applications_by_ticket_volume"
     )
+    assert "normalized_payload" not in str(payload)
+    assert "cmdb_payload" not in str(payload)

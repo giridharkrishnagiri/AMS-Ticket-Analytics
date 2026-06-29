@@ -94,8 +94,8 @@ export function ContextSelector({
         </label>
       </div>
       <p className="helper-text">
-        Phase 1C chat does not query live dashboard data yet. Data-aware Q&amp;A will be added in
-        Phase 1D/1E using governed analytics tools.
+        Phase 1E chat answers supported data questions through approved governed analytics tools.
+        Chart rendering remains planned for Phase 2.
       </p>
       {isLoading ? <p className="loading-text">Loading context options...</p> : null}
       {error ? <div className="status-message status-error">{error}</div> : null}

@@ -636,6 +636,85 @@ tbody tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.message-details {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.message-detail-section {
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.message-detail-section summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  color: #12395b;
+  font-weight: 700;
+}
+
+.message-detail-section ul {
+  margin: 0;
+  padding: 0 14px 10px 28px;
+}
+
+.message-detail-section li {
+  margin: 4px 0;
+}
+
+.compact-results {
+  display: grid;
+  gap: 12px;
+  padding: 0 10px 10px;
+}
+
+.compact-result {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-result-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  color: #52616f;
+}
+
+.compact-result-heading strong {
+  color: #102a43;
+}
+
+.compact-table-scroll {
+  overflow-x: auto;
+}
+
+.compact-result-table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.compact-result-table th,
+.compact-result-table td {
+  padding: 7px 8px;
+  border: 1px solid #d9e2ec;
+  text-align: left;
+  vertical-align: top;
+}
+
+.compact-result-table th {
+  background: #f0f4f8;
+  color: #243b53;
+}
+
+.muted-inline {
+  color: #627d98;
+}
+
 .chat-input-area {
   display: grid;
   gap: 12px;

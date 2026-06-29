@@ -1,11 +1,13 @@
 import { useState } from "react";
 
 const starterQuestions = [
-  "What can this GenAI workbench do?",
-  "What will data-aware Q&A support in the next phase?",
-  "How will governed analytics tools protect dashboard data?",
-  "Why should GenAI not write SQL directly?",
-  "What kind of questions will I be able to ask about Applications and Tickets?"
+  "How many applications are in the inventory?",
+  "Show applications by functional track.",
+  "Which parent applications have the highest active users?",
+  "How many tickets were created in the latest complete 6 months?",
+  "Which applications have the highest ticket volume?",
+  "Show ticket distribution by SAP vs Non-SAP.",
+  "What is the OLA summary?"
 ];
 
 type ChatInputProps = {
@@ -47,7 +49,7 @@ export function ChatInput({ disabled, isSending, onSend }: ChatInputProps) {
         <textarea
           value={content}
           rows={4}
-          placeholder="Ask about the GenAI workbench setup or future governed analytics plans."
+          placeholder="Ask a governed aggregate question about Applications, Tickets, or SLA / OLA."
           disabled={disabled || isSending}
           onChange={(event) => setContent(event.target.value)}
           onKeyDown={(event) => {

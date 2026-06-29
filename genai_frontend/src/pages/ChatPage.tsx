@@ -182,7 +182,7 @@ export function ChatPage() {
       <section className="surface chat-workspace" aria-labelledby="chat-heading">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Phase 1C</p>
+            <p className="eyebrow">Phase 1E</p>
             <h2 id="chat-heading">{detail?.session.title ?? "Chat"}</h2>
           </div>
           <div className="button-row">
