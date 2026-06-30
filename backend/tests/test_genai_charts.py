@@ -144,7 +144,7 @@ def test_chart_builder_enforces_max_data_points_and_three_d_fallback() -> None:
     )
     assert len(chart.table["rows"]) == 3
     assert chart.chart_type in {"bar", "horizontal_bar"}
-    assert any("3-D charting is deferred" in warning for warning in chart.warnings)
+    assert any("three numeric measures" in warning for warning in chart.warnings)
     assert any("capped at 3 points" in warning for warning in chart.warnings)
 
 

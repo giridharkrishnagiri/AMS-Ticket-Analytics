@@ -867,6 +867,10 @@ function UsageLogsPage() {
             <option value="chat_agent">chat_agent</option>
             <option value="tool_execution">tool_execution</option>
             <option value="chart_generation">chart_generation</option>
+            <option value="chart_update">chart_update</option>
+            <option value="chart_duplicate">chart_duplicate</option>
+            <option value="chart_archive">chart_archive</option>
+            <option value="chart_reset">chart_reset</option>
           </select>
         </label>
         <label>

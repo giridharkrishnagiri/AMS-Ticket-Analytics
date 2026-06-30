@@ -18,8 +18,12 @@ GenAIChartType = Literal[
     "pie",
     "donut",
     "scatter",
+    "scatter_3d",
     "table",
 ]
+GenAIChartOrientation = Literal["vertical", "horizontal"]
+GenAIChartDisplayMode = Literal["2d", "3d"]
+GenAIChartSortOrder = Literal["original", "ascending", "descending"]
 
 
 class GenAIConfigResponse(BaseModel):
@@ -339,6 +343,7 @@ class GenAIGeneratedChartListItemResponse(BaseModel):
     subtitle: str | None
     chart_type: str
     chart_library: str
+    is_archived: bool
     created_at: datetime
     updated_at: datetime
 
@@ -360,6 +365,7 @@ class GenAIGeneratedChartResponse(BaseModel):
     subtitle: str | None
     chart_type: str
     chart_library: str
+    is_archived: bool
     chart_spec: dict[str, Any]
     table: GenAIChartTable
     source_tool_names: list[str]
@@ -380,3 +386,27 @@ class GenAIChartFromToolResultRequest(BaseModel):
     message_id: str | None = Field(default=None, max_length=255)
     question: str | None = Field(default=None, max_length=1000)
     chart_type: GenAIChartType | None = None
+
+
+class GenAIChartUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    subtitle: str | None = Field(default=None, max_length=1000)
+    chart_type: GenAIChartType | None = None
+    orientation: GenAIChartOrientation | None = None
+    display_mode: GenAIChartDisplayMode | None = None
+    show_labels: bool | None = None
+    show_legend: bool | None = None
+    sort_order: GenAIChartSortOrder | None = None
+    top_n: int | None = Field(default=None, ge=1, le=10000)
+    x_axis_title: str | None = Field(default=None, max_length=255)
+    y_axis_title: str | None = Field(default=None, max_length=255)
+    z_axis_title: str | None = Field(default=None, max_length=255)
+    color_by: str | None = Field(default=None, max_length=120)
+
+    model_config = {"extra": "forbid"}
+
+
+class GenAIChartDuplicateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+
+    model_config = {"extra": "forbid"}

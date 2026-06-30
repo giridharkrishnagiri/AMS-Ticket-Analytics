@@ -8,7 +8,12 @@ export type ChartType =
   | "pie"
   | "donut"
   | "scatter"
+  | "scatter_3d"
   | "table";
+
+export type ChartOrientation = "vertical" | "horizontal";
+export type ChartDisplayMode = "2d" | "3d";
+export type ChartSortOrder = "original" | "ascending" | "descending";
 
 export type ChartColumn = {
   key: string;
@@ -37,6 +42,7 @@ export type GeneratedChartListItem = {
   subtitle: string | null;
   chart_type: ChartType | string;
   chart_library: string;
+  is_archived: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -56,6 +62,7 @@ export type GeneratedChart = GeneratedChartListItem & {
     table?: ChartTable;
     data_notes?: string[];
     warnings?: string[];
+    presentation_settings?: Partial<ChartEditSettings>;
   };
   table: ChartTable;
   source_tool_names: string[];
@@ -64,4 +71,24 @@ export type GeneratedChart = GeneratedChartListItem & {
   filters: Record<string, unknown>;
   data_notes: string[];
   warnings: string[];
+};
+
+export type ChartEditSettings = {
+  title?: string;
+  subtitle?: string | null;
+  chart_type?: ChartType;
+  orientation?: ChartOrientation;
+  display_mode?: ChartDisplayMode;
+  show_labels?: boolean;
+  show_legend?: boolean;
+  sort_order?: ChartSortOrder;
+  top_n?: number | null;
+  x_axis_title?: string | null;
+  y_axis_title?: string | null;
+  z_axis_title?: string | null;
+  color_by?: string | null;
+};
+
+export type ChartDuplicateRequest = {
+  title?: string;
 };

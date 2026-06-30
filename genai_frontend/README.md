@@ -42,6 +42,8 @@ SSL_CERT_FILE=C:\path\to\corporate-ca-bundle.pem
 - Phase 1E data-aware chat through LangGraph and governed analytics tools
 - Phase 2A AI Charts workspace for governed Plotly charts
 - Chat chart requests that generate persisted chart specs from governed tool results
+- Phase 2B safe AI Charts editing controls, chart duplication, reset, archive, and limited
+  compatible 3D scatter support
 
 Phase 1E chat can answer supported Applications, Tickets, and SLA/OLA questions through approved
 governed analytics tools. The LLM does not write SQL, does not access the database directly, and
@@ -53,6 +55,12 @@ does not generate SQL, and remains available for direct tool testing.
 Phase 2A chart requests use governed analytics tool results only. The backend creates sanitized
 Plotly-compatible JSON specs, stores generated charts, and the AI Charts page renders the chart and
 its verification data table. No SQL generation, raw ticket charting, or raw payload charting is
-allowed. 3-D charts are deferred to a later Phase 2 enhancement.
+allowed. Full 3-D charting was deferred beyond the initial Phase 2A chart foundation.
+
+Phase 2B adds safe chart presentation editing in AI Charts. Users can edit titles, subtitles,
+compatible chart types, orientation, top-N row limits, labels, legends, sorting, and axis titles.
+Charts can be saved, duplicated, reset, and archived. Limited 3D scatter rendering is available
+only when the governed table has three real numeric measures. Chart editing does not allow SQL,
+raw data access, arbitrary JavaScript, or raw payload exposure.
 
 The existing main dashboard UI remains unchanged.

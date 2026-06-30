@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.genai import (
+    GenAIChartDuplicateRequest,
     GenAIChartFromToolResultRequest,
+    GenAIChartUpdateRequest,
     GenAIChatMessageCreateRequest,
     GenAIChatMessageCreateResponse,
     GenAIChatSessionCreateRequest,
@@ -36,9 +38,13 @@ from app.schemas.genai import (
     GenAIUsageSummary,
 )
 from app.services.genai.charts import (
+    archive_generated_chart,
     create_chart_from_tool_result,
+    duplicate_generated_chart,
     get_generated_chart,
     list_generated_charts,
+    reset_generated_chart,
+    update_generated_chart,
 )
 from app.services.genai.charts.chart_store import (
     GeneratedChartNotFoundError,
@@ -216,6 +222,49 @@ def get_genai_charts(
 def get_genai_chart(chart_id: UUID, db: DbSession) -> GenAIGeneratedChartResponse:
     try:
         return to_chart_response(get_generated_chart(db, chart_id))
+    except GeneratedChartNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.put("/charts/{chart_id}", response_model=GenAIGeneratedChartResponse)
+def put_genai_chart(
+    chart_id: UUID,
+    request: GenAIChartUpdateRequest,
+    db: DbSession,
+) -> GenAIGeneratedChartResponse:
+    try:
+        chart = update_generated_chart(db, chart_id, request.model_dump(exclude_unset=True))
+    except GeneratedChartNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ChartValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return to_chart_response(chart)
+
+
+@router.post("/charts/{chart_id}/duplicate", response_model=GenAIGeneratedChartResponse)
+def post_duplicate_genai_chart(
+    chart_id: UUID,
+    request: GenAIChartDuplicateRequest,
+    db: DbSession,
+) -> GenAIGeneratedChartResponse:
+    try:
+        return to_chart_response(duplicate_generated_chart(db, chart_id, title=request.title))
+    except GeneratedChartNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/charts/{chart_id}/archive", response_model=GenAIGeneratedChartResponse)
+def post_archive_genai_chart(chart_id: UUID, db: DbSession) -> GenAIGeneratedChartResponse:
+    try:
+        return to_chart_response(archive_generated_chart(db, chart_id))
+    except GeneratedChartNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/charts/{chart_id}/reset", response_model=GenAIGeneratedChartResponse)
+def post_reset_genai_chart(chart_id: UUID, db: DbSession) -> GenAIGeneratedChartResponse:
+    try:
+        return to_chart_response(reset_generated_chart(db, chart_id))
     except GeneratedChartNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

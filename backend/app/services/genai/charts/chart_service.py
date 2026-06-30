@@ -17,6 +17,8 @@ def _chart_metadata(row: Any) -> dict[str, Any]:
         "title": row.title,
         "chart_type": row.chart_type,
         "chart_library": row.chart_library,
+        "source_tool_names": row.source_tool_names_json or [],
+        "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
 

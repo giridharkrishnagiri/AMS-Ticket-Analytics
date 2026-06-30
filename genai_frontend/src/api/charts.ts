@@ -1,11 +1,17 @@
 import { requestJson } from "./client";
-import type { GeneratedChart, GeneratedChartList } from "../types/charts";
+import type {
+  ChartDuplicateRequest,
+  ChartEditSettings,
+  GeneratedChart,
+  GeneratedChartList
+} from "../types/charts";
 
 export type ChartListFilters = {
   customerId?: string | null;
   projectId?: string | null;
   sessionId?: string | null;
   chartType?: string;
+  includeArchived?: boolean;
   limit?: number;
   offset?: number;
 };
@@ -23,6 +29,9 @@ function chartListQuery(filters: ChartListFilters): string {
   }
   if (filters.chartType) {
     params.set("chart_type", filters.chartType);
+  }
+  if (filters.includeArchived) {
+    params.set("include_archived", "true");
   }
   if (filters.limit) {
     params.set("limit", String(filters.limit));
@@ -46,4 +55,48 @@ export async function getGeneratedChart(
   signal?: AbortSignal
 ): Promise<GeneratedChart> {
   return requestJson<GeneratedChart>(`/genai/charts/${chartId}`, { signal });
+}
+
+export async function updateGeneratedChart(
+  chartId: string,
+  payload: ChartEditSettings,
+  signal?: AbortSignal
+): Promise<GeneratedChart> {
+  return requestJson<GeneratedChart>(`/genai/charts/${chartId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+    signal
+  });
+}
+
+export async function duplicateGeneratedChart(
+  chartId: string,
+  payload: ChartDuplicateRequest,
+  signal?: AbortSignal
+): Promise<GeneratedChart> {
+  return requestJson<GeneratedChart>(`/genai/charts/${chartId}/duplicate`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    signal
+  });
+}
+
+export async function archiveGeneratedChart(
+  chartId: string,
+  signal?: AbortSignal
+): Promise<GeneratedChart> {
+  return requestJson<GeneratedChart>(`/genai/charts/${chartId}/archive`, {
+    method: "POST",
+    signal
+  });
+}
+
+export async function resetGeneratedChart(
+  chartId: string,
+  signal?: AbortSignal
+): Promise<GeneratedChart> {
+  return requestJson<GeneratedChart>(`/genai/charts/${chartId}/reset`, {
+    method: "POST",
+    signal
+  });
 }

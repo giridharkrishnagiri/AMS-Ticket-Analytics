@@ -38,6 +38,8 @@ type GeneratedChartMetadata = {
   title: string;
   chart_type: string;
   chart_library: string;
+  source_tool_names?: string[];
+  created_at?: string | null;
 };
 
 function metadataString(value: unknown): string | null {
@@ -96,6 +98,14 @@ function formatCellValue(value: unknown): string {
     return JSON.stringify(value);
   }
   return String(value);
+}
+
+function formatOptionalDate(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
 function roleLabel(role: string): string {
@@ -196,6 +206,12 @@ function GeneratedCharts({
             <span>
               {chart.chart_type.replace("_", " ")} / {chart.chart_library || "plotly"}
             </span>
+            {chart.source_tool_names && chart.source_tool_names.length > 0 ? (
+              <span>{chart.source_tool_names.join(", ")}</span>
+            ) : null}
+            {formatOptionalDate(chart.created_at) ? (
+              <span>{formatOptionalDate(chart.created_at)}</span>
+            ) : null}
           </div>
           <button
             type="button"

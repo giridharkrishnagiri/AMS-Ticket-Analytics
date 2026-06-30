@@ -14,6 +14,7 @@ ALLOWED_CHART_TYPES = {
     "pie",
     "donut",
     "scatter",
+    "scatter_3d",
     "table",
 }
 

@@ -28,6 +28,8 @@ export function ChartList({ charts, selectedChartId, isLoading, onSelect }: Char
         >
           <strong>{chart.title}</strong>
           <span>{chart.chart_type.replace("_", " ")}</span>
+          {chart.session_id ? <span>Session {chart.session_id.slice(0, 8)}</span> : null}
+          {chart.is_archived ? <span>Archived</span> : null}
           <small>{formatDateTime(chart.created_at)}</small>
         </button>
       ))}

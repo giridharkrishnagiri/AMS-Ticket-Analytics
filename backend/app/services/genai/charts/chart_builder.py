@@ -133,10 +133,7 @@ def _requested_chart_type(
         return validate_chart_type(explicit), warnings
     text = (question or "").lower()
     if re.search(r"\b(3d|3-d|three dimensional|three-dimensional)\b", text):
-        warnings.append(
-            "3-D charting is deferred to a later Phase 2 enhancement; "
-            "a supported 2-D chart was generated."
-        )
+        return "scatter_3d", warnings
     if "donut" in text or "doughnut" in text:
         return "donut", warnings
     if "pie" in text:
@@ -187,6 +184,11 @@ def _label_for(columns: list[dict[str, str]], key: str) -> str:
     return key.replace("_", " ").title()
 
 
+def _append_warning(warnings: list[str], warning: str) -> None:
+    if warning not in warnings:
+        warnings.append(warning)
+
+
 def _select_chart_type(
     *,
     requested: str | None,
@@ -199,19 +201,56 @@ def _select_chart_type(
 ) -> str:
     if not rows or not metric_key:
         return "table"
+    measure_keys = [key for key in numeric_keys if key != time_key]
+    if requested == "table":
+        return "table"
+    if requested == "scatter_3d":
+        if len(measure_keys) >= 3:
+            return "scatter_3d"
+        _append_warning(
+            warnings,
+            "This governed dataset does not have three numeric measures required for a 3D "
+            "chart. The chart was kept as a compatible 2D chart.",
+        )
+    if requested == "scatter":
+        if len(measure_keys) >= 2:
+            return "scatter"
+        _append_warning(
+            warnings,
+            "Scatter charts require at least two numeric measures. A compatible chart type was "
+            "used instead.",
+        )
+    if requested in {"grouped_bar", "stacked_bar"}:
+        if category_key and len(measure_keys) >= 2:
+            return requested
+        _append_warning(
+            warnings,
+            "Grouped and stacked bar charts require one category and at least two numeric "
+            "measures. A compatible chart type was used instead.",
+        )
     if requested in {"pie", "donut"} and category_key:
         if len(rows) > 12:
-            warnings.append(
+            _append_warning(
+                warnings,
                 "Pie and donut charts are capped at 12 slices; "
-                "a horizontal bar chart was generated instead."
+                "a horizontal bar chart was generated instead.",
             )
             return "horizontal_bar"
         return requested
+    if requested in {"pie", "donut"}:
+        _append_warning(
+            warnings,
+            "Pie and donut charts require one category and one numeric measure. A compatible "
+            "chart type was used instead.",
+        )
     if requested in {"line", "multi_line"} and time_key:
-        return "multi_line" if len([key for key in numeric_keys if key != time_key]) > 1 else "line"
-    if requested == "scatter" and len(numeric_keys) >= 2:
-        return "scatter"
-    if time_key and len([key for key in numeric_keys if key != time_key]) > 1:
+        return "multi_line" if len(measure_keys) > 1 else "line"
+    if requested in {"line", "multi_line"}:
+        _append_warning(
+            warnings,
+            "Line charts require a time period field. A compatible chart type was used instead.",
+        )
+    if time_key and len(measure_keys) > 1:
         return "multi_line"
     if time_key:
         return "line"
@@ -220,7 +259,9 @@ def _select_chart_type(
         has_long_label = any(len(label) > 22 for label in labels)
         if requested == "horizontal_bar" or has_long_label or len(rows) > 8:
             return "horizontal_bar"
-        return "bar" if requested in {None, "bar", "grouped_bar", "stacked_bar"} else requested
+        if requested in {None, "bar", "grouped_bar", "stacked_bar", "scatter", "scatter_3d"}:
+            return "bar"
+        return requested
     return "table"
 
 
@@ -258,6 +299,11 @@ def _build_plotly(
     metric_key: str | None,
     numeric_keys: list[str],
     time_key: str | None,
+    show_labels: bool = True,
+    show_legend: bool = True,
+    x_axis_title: str | None = None,
+    y_axis_title: str | None = None,
+    z_axis_title: str | None = None,
 ) -> dict[str, Any]:
     layout = _base_layout(title, subtitle)
     config = {"responsive": True, "displaylogo": False}
@@ -266,28 +312,30 @@ def _build_plotly(
 
     metric_label = _label_for(columns, metric_key)
     category_label = _label_for(columns, category_key or time_key or "")
+    measure_keys = [key for key in numeric_keys if key != time_key]
+    layout["showlegend"] = show_legend
 
     if chart_type == "horizontal_bar":
         y_values = [row.get(category_key or time_key or "") for row in rows]
         x_values = [row.get(metric_key) for row in rows]
         layout.update(
             {
-                "xaxis": {"title": {"text": metric_label}},
-                "yaxis": {"title": {"text": category_label}, "automargin": True},
+                "xaxis": {"title": {"text": x_axis_title or metric_label}},
+                "yaxis": {"title": {"text": y_axis_title or category_label}, "automargin": True},
             }
         )
+        trace: dict[str, Any] = {
+            "type": "bar",
+            "orientation": "h",
+            "x": x_values,
+            "y": y_values,
+            "marker": {"color": "#0f766e"},
+            "showlegend": show_legend,
+        }
+        if show_labels:
+            trace.update({"text": x_values, "textposition": "auto"})
         return {
-            "data": [
-                {
-                    "type": "bar",
-                    "orientation": "h",
-                    "x": x_values,
-                    "y": y_values,
-                    "text": x_values,
-                    "textposition": "auto",
-                    "marker": {"color": "#0f766e"},
-                }
-            ],
+            "data": [trace],
             "layout": layout,
             "config": config,
         }
@@ -297,20 +345,45 @@ def _build_plotly(
         y_values = [row.get(metric_key) for row in rows]
         layout.update(
             {
-                "xaxis": {"title": {"text": category_label}, "automargin": True},
-                "yaxis": {"title": {"text": metric_label}},
+                "xaxis": {"title": {"text": x_axis_title or category_label}, "automargin": True},
+                "yaxis": {"title": {"text": y_axis_title or metric_label}},
+            }
+        )
+        trace = {
+            "type": "bar",
+            "x": x_values,
+            "y": y_values,
+            "marker": {"color": "#2563eb"},
+            "showlegend": show_legend,
+        }
+        if show_labels:
+            trace.update({"text": y_values, "textposition": "auto"})
+        return {
+            "data": [trace],
+            "layout": layout,
+            "config": config,
+        }
+
+    if chart_type in {"grouped_bar", "stacked_bar"} and category_key and len(measure_keys) >= 2:
+        layout.update(
+            {
+                "barmode": "stack" if chart_type == "stacked_bar" else "group",
+                "xaxis": {"title": {"text": x_axis_title or category_label}, "automargin": True},
+                "yaxis": {"title": {"text": y_axis_title or "Value"}},
             }
         )
         return {
             "data": [
                 {
                     "type": "bar",
-                    "x": x_values,
-                    "y": y_values,
-                    "text": y_values,
-                    "textposition": "auto",
-                    "marker": {"color": "#2563eb"},
+                    "name": _label_for(columns, key),
+                    "x": [row.get(category_key) for row in rows],
+                    "y": [row.get(key) for row in rows],
+                    "text": [row.get(key) for row in rows] if show_labels else None,
+                    "textposition": "auto" if show_labels else None,
+                    "showlegend": show_legend,
                 }
+                for key in measure_keys
             ],
             "layout": layout,
             "config": config,
@@ -325,7 +398,8 @@ def _build_plotly(
                     "labels": [row.get(category_key or "") for row in rows],
                     "values": [row.get(metric_key) for row in rows],
                     "hole": 0.45 if chart_type == "donut" else 0,
-                    "textinfo": "label+percent",
+                    "textinfo": "label+percent" if show_labels else "none",
+                    "showlegend": show_legend,
                 }
             ],
             "layout": layout,
@@ -338,8 +412,8 @@ def _build_plotly(
             line_keys = [metric_key]
         layout.update(
             {
-                "xaxis": {"title": {"text": _label_for(columns, time_key)}},
-                "yaxis": {"title": {"text": "Count"}},
+                "xaxis": {"title": {"text": x_axis_title or _label_for(columns, time_key)}},
+                "yaxis": {"title": {"text": y_axis_title or "Count"}},
             }
         )
         return {
@@ -350,6 +424,8 @@ def _build_plotly(
                     "name": _label_for(columns, key),
                     "x": [row.get(time_key) for row in rows],
                     "y": [row.get(key) for row in rows],
+                    "text": [row.get(key) for row in rows] if show_labels else None,
+                    "showlegend": show_legend,
                 }
                 for key in line_keys
             ],
@@ -357,13 +433,13 @@ def _build_plotly(
             "config": config,
         }
 
-    if chart_type == "scatter" and len(numeric_keys) >= 2:
-        x_key, y_key = numeric_keys[:2]
+    if chart_type == "scatter" and len(measure_keys) >= 2:
+        x_key, y_key = measure_keys[:2]
         text_key = category_key
         layout.update(
             {
-                "xaxis": {"title": {"text": _label_for(columns, x_key)}},
-                "yaxis": {"title": {"text": _label_for(columns, y_key)}},
+                "xaxis": {"title": {"text": x_axis_title or _label_for(columns, x_key)}},
+                "yaxis": {"title": {"text": y_axis_title or _label_for(columns, y_key)}},
             }
         )
         return {
@@ -375,6 +451,36 @@ def _build_plotly(
                     "y": [row.get(y_key) for row in rows],
                     "text": [row.get(text_key) for row in rows] if text_key else None,
                     "marker": {"color": "#7c3aed", "size": 10},
+                    "showlegend": show_legend,
+                }
+            ],
+            "layout": layout,
+            "config": config,
+        }
+
+    if chart_type == "scatter_3d" and len(measure_keys) >= 3:
+        x_key, y_key, z_key = measure_keys[:3]
+        text_key = category_key
+        layout.update(
+            {
+                "scene": {
+                    "xaxis": {"title": {"text": x_axis_title or _label_for(columns, x_key)}},
+                    "yaxis": {"title": {"text": y_axis_title or _label_for(columns, y_key)}},
+                    "zaxis": {"title": {"text": z_axis_title or _label_for(columns, z_key)}},
+                }
+            }
+        )
+        return {
+            "data": [
+                {
+                    "type": "scatter3d",
+                    "mode": "markers",
+                    "x": [row.get(x_key) for row in rows],
+                    "y": [row.get(y_key) for row in rows],
+                    "z": [row.get(z_key) for row in rows],
+                    "text": [row.get(text_key) for row in rows] if text_key else None,
+                    "marker": {"color": "#7c3aed", "size": 5},
+                    "showlegend": show_legend,
                 }
             ],
             "layout": layout,
@@ -382,6 +488,194 @@ def _build_plotly(
         }
 
     return {"data": _table_trace(columns, rows), "layout": layout, "config": config}
+
+
+def _columns_from_table(table: dict[str, Any]) -> list[dict[str, str]]:
+    columns = table.get("columns") if isinstance(table, dict) else []
+    if not isinstance(columns, list):
+        return []
+    return [
+        {
+            "key": _column_key(column),
+            "label": _column_label(column),
+            "type": _column_type(column),
+        }
+        for column in columns
+        if _column_key(column)
+    ]
+
+
+def _rows_from_table(table: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = table.get("rows") if isinstance(table, dict) else []
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _sort_rows(
+    rows: list[dict[str, Any]],
+    *,
+    sort_order: str,
+    metric_key: str | None,
+) -> list[dict[str, Any]]:
+    if sort_order == "original" or not metric_key:
+        return list(rows)
+
+    def sort_value(row: dict[str, Any]) -> float:
+        value = row.get(metric_key)
+        return float(value) if _is_number(value) else float("-inf")
+
+    return sorted(rows, key=sort_value, reverse=sort_order == "descending")
+
+
+def _requested_from_settings(
+    *,
+    chart_type: str | None,
+    orientation: str | None,
+    display_mode: str | None,
+    current_chart_type: str | None,
+) -> str | None:
+    requested = validate_chart_type(chart_type) if chart_type else current_chart_type
+    if display_mode == "3d":
+        return "scatter_3d"
+    if orientation == "horizontal" and requested in {None, "bar", "horizontal_bar"}:
+        return "horizontal_bar"
+    if orientation == "vertical" and requested in {"horizontal_bar", "bar"}:
+        return "bar"
+    return validate_chart_type(requested) if requested else None
+
+
+def build_chart_from_table(
+    table: dict[str, Any],
+    *,
+    title: str,
+    subtitle: str | None,
+    current_chart_type: str | None,
+    source_tool_names: list[str] | None = None,
+    source_tool_results_summary: list[dict[str, Any]] | None = None,
+    parameters: dict[str, Any] | None = None,
+    filters: dict[str, Any] | None = None,
+    data_notes: list[str] | None = None,
+    warnings: list[str] | None = None,
+    chart_type: str | None = None,
+    orientation: str | None = None,
+    display_mode: str | None = None,
+    show_labels: bool = True,
+    show_legend: bool = True,
+    sort_order: str = "original",
+    top_n: int | None = None,
+    x_axis_title: str | None = None,
+    y_axis_title: str | None = None,
+    z_axis_title: str | None = None,
+    max_data_points: int = 500,
+) -> BuiltChart:
+    columns = _columns_from_table(table)
+    rows = _rows_from_table(table)
+    if not columns and rows:
+        columns = _as_columns({"rows": rows})
+    build_warnings = list(warnings or [])
+    requested = _requested_from_settings(
+        chart_type=chart_type,
+        orientation=orientation,
+        display_mode=display_mode,
+        current_chart_type=current_chart_type,
+    )
+
+    max_points = max(1, int(max_data_points or 500))
+    if top_n is not None and top_n > max_points:
+        _append_warning(
+            build_warnings,
+            f"Top N was capped at {max_points} points by GenAI safety settings.",
+        )
+    row_limit = min(top_n or max_points, max_points)
+
+    numeric_keys = _numeric_keys(columns, rows)
+    time_key = _time_key(columns, rows)
+    category_keys = [key for key in _category_keys(columns, numeric_keys) if key != time_key]
+    category_key = category_keys[0] if category_keys else time_key
+    metric_key = _metric_key(None, [key for key in numeric_keys if key != time_key])
+    rows = _sort_rows(rows, sort_order=sort_order, metric_key=metric_key)
+
+    truncated = False
+    if len(rows) > row_limit:
+        rows = rows[:row_limit]
+        truncated = True
+        _append_warning(
+            build_warnings,
+            f"Chart data was capped at {row_limit} points by GenAI safety settings.",
+        )
+
+    chart_type_value = _select_chart_type(
+        requested=requested,
+        rows=rows,
+        category_key=category_key,
+        numeric_keys=numeric_keys,
+        time_key=time_key,
+        metric_key=metric_key,
+        warnings=build_warnings,
+    )
+    chart_type_value = validate_chart_type(chart_type_value)
+
+    plotly = _build_plotly(
+        chart_type=chart_type_value,
+        title=title,
+        subtitle=subtitle,
+        columns=columns,
+        rows=rows,
+        category_key=category_key,
+        metric_key=metric_key,
+        numeric_keys=numeric_keys,
+        time_key=time_key,
+        show_labels=show_labels,
+        show_legend=show_legend,
+        x_axis_title=x_axis_title,
+        y_axis_title=y_axis_title,
+        z_axis_title=z_axis_title,
+    )
+    rebuilt_table: dict[str, Any] = {"columns": columns, "rows": rows}
+    if truncated:
+        rebuilt_table["truncated"] = True
+
+    presentation_settings = {
+        "orientation": orientation,
+        "display_mode": "3d" if chart_type_value == "scatter_3d" else "2d",
+        "show_labels": show_labels,
+        "show_legend": show_legend,
+        "sort_order": sort_order,
+        "top_n": top_n,
+        "x_axis_title": x_axis_title,
+        "y_axis_title": y_axis_title,
+        "z_axis_title": z_axis_title,
+    }
+    chart_spec = {
+        "title": title,
+        "subtitle": subtitle,
+        "chart_type": chart_type_value,
+        "chart_library": "plotly",
+        "plotly": plotly,
+        "table": rebuilt_table,
+        "data_notes": list(data_notes or []),
+        "warnings": build_warnings,
+        "presentation_settings": presentation_settings,
+    }
+    chart_spec = sanitize_chart_json(chart_spec)
+    assert_no_forbidden_markers(chart_spec)
+    ensure_json_serializable(chart_spec)
+
+    return BuiltChart(
+        title=title,
+        subtitle=subtitle,
+        chart_type=chart_type_value,
+        chart_library="plotly",
+        chart_spec=chart_spec,
+        table=rebuilt_table,
+        source_tool_names=list(source_tool_names or []),
+        source_tool_results_summary=list(source_tool_results_summary or []),
+        parameters=parameters or {},
+        filters=filters or {},
+        data_notes=list(data_notes or []),
+        warnings=build_warnings,
+    )
 
 
 def build_chart_from_tool_result(
