@@ -189,6 +189,8 @@ class Ticket(Base):
     category: Mapped[str | None] = mapped_column(String(255), nullable=True)
     subcategory: Mapped[str | None] = mapped_column(String(255), nullable=True)
     catalog_item: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    catalog_item_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    catalog_knowledge_base: Mapped[str | None] = mapped_column(Text, nullable=True)
     service_offering: Mapped[str | None] = mapped_column(String(255), nullable=True)
     parent_application_number: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_application_name: Mapped[str | None] = mapped_column(Text, nullable=True)

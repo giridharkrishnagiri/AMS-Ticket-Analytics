@@ -66,6 +66,8 @@ NORMALIZED_FIELDS = (
     "impact",
     "category",
     "subcategory",
+    "catalog_item_name",
+    "catalog_knowledge_base",
     "application",
     "business_service",
     "configuration_item",
@@ -169,6 +171,26 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "impact": ("impact",),
     "category": ("category", "sc_catalog"),
     "subcategory": ("subcategory", "sub_category"),
+    "catalog_item_name": (
+        "cat_item.name",
+        "item",
+        "item_name",
+        "item name",
+        "catalog_item",
+        "catalog item",
+        "catalog_item_name",
+        "catalog item name",
+    ),
+    "catalog_knowledge_base": (
+        "cat_item.ref_sc_cat_item_content.kb_article.ref_u_kb_template_global_communication.u_kb_kb_knowledge_base",
+        "knowledge_base",
+        "knowledge base",
+        "kb",
+        "kb_article_knowledge_base",
+        "kb article knowledge base",
+        "catalog_knowledge_base",
+        "catalog knowledge base",
+    ),
     "application": (
         "application",
         "cmdb_ci_business_app",
@@ -399,6 +421,11 @@ BUILT_IN_DEFAULT_MAPPINGS: dict[str, dict[str, str]] = {
         "application": "cmdb_ci_business_app",
         "configuration_item": "cmdb_ci",
         "category": "sc_catalog",
+        "catalog_item_name": "cat_item.name",
+        "catalog_knowledge_base": (
+            "cat_item.ref_sc_cat_item_content.kb_article."
+            "ref_u_kb_template_global_communication.u_kb_kb_knowledge_base"
+        ),
         "closed_at": "closed_at",
         "created_channel": "contact_type",
         "sla_breached": "made_sla",
@@ -1533,6 +1560,8 @@ def build_out_of_scope_ticket(
         category=ticket.category,
         subcategory=ticket.subcategory,
         catalog_item=ticket.catalog_item,
+        catalog_item_name=ticket.catalog_item_name,
+        catalog_knowledge_base=ticket.catalog_knowledge_base,
         service_offering=ticket.service_offering,
         reopen_count=ticket.reopen_count,
         reassignment_count=ticket.reassignment_count,
@@ -1687,6 +1716,10 @@ def build_ticket_from_raw_row(
         category=text_or_none(normalized_values.get("category")),
         subcategory=text_or_none(normalized_values.get("subcategory")),
         catalog_item=text_or_none(normalized_values.get("catalog_item")),
+        catalog_item_name=text_or_none(normalized_values.get("catalog_item_name")),
+        catalog_knowledge_base=text_or_none(
+            normalized_values.get("catalog_knowledge_base"),
+        ),
         service_offering=text_or_none(normalized_values.get("service_offering")),
         vendor=get_raw_vendor_value(raw_row.raw_data, mapping, ticket_type),
         sla_breached=parse_sla_breached_value(

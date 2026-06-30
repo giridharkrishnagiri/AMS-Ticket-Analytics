@@ -10,6 +10,7 @@ from app.models import (
     ApplicationInventoryItem,
     AssessmentOutOfScopeTicket,
     Client,
+    DashboardFilterCacheStatus,
     Project,
     Ticket,
     TicketRawRow,
@@ -480,6 +481,113 @@ def test_apply_mapping_multiple_uses_selected_batches_and_skips_existing_outputs
         assert selected_ticket_count == 1
         assert selected_out_of_scope_count == 1
         assert unselected_ticket_count == 0
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_apply_mapping_multiple_sc_task_catalog_fields_and_filter_cache_stale() -> None:
+    db, client_id, project_id = create_project_fixture()
+    kb_column = (
+        "cat_item.ref_sc_cat_item_content.kb_article."
+        "ref_u_kb_template_global_communication.u_kb_kb_knowledge_base"
+    )
+
+    try:
+        db.add(
+            DashboardFilterCacheStatus(
+                customer_id=client_id,
+                project_id=project_id,
+                dashboard_area="volumetrics",
+                status="ready",
+                is_stale=False,
+            )
+        )
+        first_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="SC Catalog Multi First",
+            ticket_type="SERVICE_CATALOG_TASK",
+            rows=[
+                {
+                    "number": "SCTASK-CAT-MULTI-1",
+                    "short_description": "Selected in-scope SC Task",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-01",
+                    "cat_item.name": "  Laptop Access  ",
+                    kb_column: "  End User KB  ",
+                }
+            ],
+        )
+        second_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="SC Catalog Multi Second",
+            ticket_type="SERVICE_CATALOG_TASK",
+            rows=[
+                {
+                    "number": "SCTASK-CAT-MULTI-2",
+                    "short_description": "Selected out-of-scope SC Task",
+                    "assignment_group": "External Support",
+                    "business_service": "External Service",
+                    "sys_created_on": "2026-06-02",
+                    "cat_item.name": "  Mobile Device  ",
+                    kb_column: "  Field Services KB  ",
+                }
+            ],
+        )
+        mapping = {
+            "ticket_id": "number",
+            "title": "short_description",
+            "assignment_group": "assignment_group",
+            "business_service": "business_service",
+            "created_at": "sys_created_on",
+            "catalog_item_name": "cat_item.name",
+            "catalog_knowledge_base": kb_column,
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/uploads/batches/apply-mapping-multiple",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "SERVICE_CATALOG_TASK",
+                    "upload_batch_ids": [str(first_batch_id), str(second_batch_id)],
+                    "mapping": mapping,
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["totals"]["total_files"] == 2
+        assert payload["totals"]["applied"] == 2
+        assert payload["totals"]["in_scope_rows"] == 1
+        assert payload["totals"]["out_of_scope_rows"] == 1
+
+        ticket = db.scalar(
+            select(Ticket).where(Ticket.ticket_number == "SCTASK-CAT-MULTI-1")
+        )
+        out_of_scope_ticket = db.scalar(
+            select(AssessmentOutOfScopeTicket).where(
+                AssessmentOutOfScopeTicket.ticket_number == "SCTASK-CAT-MULTI-2"
+            )
+        )
+        cache_status = db.scalar(
+            select(DashboardFilterCacheStatus).where(
+                DashboardFilterCacheStatus.project_id == project_id,
+                DashboardFilterCacheStatus.dashboard_area == "volumetrics",
+            )
+        )
+
+        assert ticket is not None
+        assert ticket.catalog_item_name == "Laptop Access"
+        assert ticket.catalog_knowledge_base == "End User KB"
+        assert out_of_scope_ticket is not None
+        assert out_of_scope_ticket.catalog_item_name == "Mobile Device"
+        assert out_of_scope_ticket.catalog_knowledge_base == "Field Services KB"
+        assert cache_status is not None
+        assert cache_status.status == "stale"
+        assert cache_status.is_stale is True
     finally:
         cleanup_client(db, client_id)
 

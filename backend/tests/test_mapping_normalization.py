@@ -38,6 +38,7 @@ from app.services.mapping import (
     parse_linked_incident_count,
     parse_sla_breached_value,
     save_mapping_template,
+    suggest_mapping,
 )
 
 INCIDENT_SOURCE_COLUMNS = [
@@ -729,6 +730,8 @@ def test_apply_mapping_normalizes_incident_rows_and_is_idempotent() -> None:
         assert ticket.install_type == "Cloud"
         assert ticket.sla_breached is False
         assert ticket.reopen_count == 2
+        assert ticket.catalog_item_name is None
+        assert ticket.catalog_knowledge_base is None
         assert ticket.normalized_payload is not None
         assert ticket.normalized_payload["raw_payload_json"]["number"] == "INC100"
         assert ticket.normalized_payload["raw_payload_json"]["comments"] == "User called back"
@@ -738,6 +741,10 @@ def test_apply_mapping_normalizes_incident_rows_and_is_idempotent() -> None:
 
 
 def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
+    kb_column = (
+        "cat_item.ref_sc_cat_item_content.kb_article."
+        "ref_u_kb_template_global_communication.u_kb_kb_knowledge_base"
+    )
     rows = [
         {
             "task_number": "SCTASK100",
@@ -751,6 +758,8 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
             "has_breached": "No",
             "business_duration": "172800",
             "reassignment_count": "3",
+            "cat_item.name": "  Laptop Access  ",
+            kb_column: "End User KB",
         }
     ]
     db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
@@ -769,6 +778,8 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
         "sla_breached": "has_breached",
         "business_duration_seconds": "business_duration",
         "reassignment_count": "reassignment_count",
+        "catalog_item_name": "cat_item.name",
+        "catalog_knowledge_base": kb_column,
     }
 
     try:
@@ -786,6 +797,91 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
         assert ticket.sla_breached is False
         assert ticket.business_duration_seconds == 172800
         assert ticket.reassignment_count == 3
+        assert ticket.catalog_item_name == "Laptop Access"
+        assert ticket.catalog_knowledge_base == "End User KB"
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_service_catalog_task_catalog_item_mapping_suggestions() -> None:
+    source_columns = [
+        "number",
+        "short_description",
+        "assignment_group",
+        "sys_created_on",
+        "cat_item.name",
+        "cat_item.ref_sc_cat_item_content.kb_article.ref_u_kb_template_global_communication.u_kb_kb_knowledge_base",
+    ]
+
+    suggested = suggest_mapping(source_columns, "SERVICE_CATALOG_TASK")
+
+    assert suggested["catalog_item_name"] == "cat_item.name"
+    assert suggested["catalog_knowledge_base"] == (
+        "cat_item.ref_sc_cat_item_content.kb_article."
+        "ref_u_kb_template_global_communication.u_kb_kb_knowledge_base"
+    )
+
+
+def test_service_catalog_task_catalog_fields_populate_out_of_scope_and_blank_values_null() -> None:
+    rows = [
+        {
+            "number": "SCTASK-OOS-CAT",
+            "short_description": "Out of scope catalog task",
+            "state": "Open",
+            "assignment_group": "External Support",
+            "business_service": "External Service",
+            "sys_created_on": "2026-06-15",
+            "cat_item.name": "  Mobile Device  ",
+            "knowledge_base": "  Service Catalog KB  ",
+        },
+        {
+            "number": "SCTASK-OOS-BLANK",
+            "short_description": "Out of scope blank catalog task",
+            "state": "Open",
+            "assignment_group": "External Support",
+            "business_service": "External Service",
+            "sys_created_on": "2026-06-16",
+            "cat_item.name": "   ",
+            "knowledge_base": "",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
+        rows,
+        ticket_type="SERVICE_CATALOG_TASK",
+    )
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+        "catalog_item_name": "cat_item.name",
+        "catalog_knowledge_base": "knowledge_base",
+    }
+
+    try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        out_tickets = {
+            row.ticket_number: row
+            for row in db.scalars(
+                select(AssessmentOutOfScopeTicket).where(
+                    AssessmentOutOfScopeTicket.project_id == project_id
+                )
+            ).all()
+        }
+
+        assert result.normalized_ticket_count == 0
+        assert result.out_of_scope_ticket_count == 2
+        assert out_tickets["SCTASK-OOS-CAT"].catalog_item_name == "Mobile Device"
+        assert (
+            out_tickets["SCTASK-OOS-CAT"].catalog_knowledge_base
+            == "Service Catalog KB"
+        )
+        assert out_tickets["SCTASK-OOS-BLANK"].catalog_item_name is None
+        assert out_tickets["SCTASK-OOS-BLANK"].catalog_knowledge_base is None
     finally:
         cleanup_client(db, client_id)
 

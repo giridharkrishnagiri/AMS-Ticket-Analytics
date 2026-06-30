@@ -75,10 +75,15 @@ def test_upload_batches_include_period_metadata() -> None:
 
 def test_dashboard_foundation_columns_exist() -> None:
     ticket_columns = Base.metadata.tables["tickets"].columns.keys()
+    out_of_scope_columns = Base.metadata.tables["assessment_out_of_scope_tickets"].columns.keys()
     application_dimension_columns = Base.metadata.tables["application_dimensions"].columns.keys()
 
     assert "business_duration_seconds" in ticket_columns
     assert "reassignment_count" in ticket_columns
+    assert "catalog_item_name" in ticket_columns
+    assert "catalog_knowledge_base" in ticket_columns
+    assert "catalog_item_name" in out_of_scope_columns
+    assert "catalog_knowledge_base" in out_of_scope_columns
     assert "application_dimension_id" in ticket_columns
     assert "technical_functional_type" in ticket_columns
     assert "technical_functional_confidence" in ticket_columns

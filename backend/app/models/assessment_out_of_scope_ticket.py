@@ -107,6 +107,8 @@ class AssessmentOutOfScopeTicket(Base):
     category: Mapped[str | None] = mapped_column(String(255), nullable=True)
     subcategory: Mapped[str | None] = mapped_column(String(255), nullable=True)
     catalog_item: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    catalog_item_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    catalog_knowledge_base: Mapped[str | None] = mapped_column(Text, nullable=True)
     service_offering: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     reopen_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

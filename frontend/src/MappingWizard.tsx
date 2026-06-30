@@ -33,6 +33,8 @@ const ticketNormalizedFields = [
   "impact",
   "category",
   "subcategory",
+  "catalog_item_name",
+  "catalog_knowledge_base",
   "application",
   "business_service",
   "configuration_item",
