@@ -12,6 +12,8 @@ from app.models import (
     ApplicationDimension,
     ApplicationInventoryItem,
     AssessmentChangeRecord,
+    AssessmentOutOfScopeChangeRecord,
+    AssessmentOutOfScopeProblemRecord,
     AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Client,
@@ -93,7 +95,9 @@ RESET_MODELS: tuple[tuple[str, Any], ...] = (
     ("tickets", Ticket),
     ("assessment_out_of_scope_tickets", AssessmentOutOfScopeTicket),
     ("assessment_problem_records", AssessmentProblemRecord),
+    ("assessment_out_of_scope_problem_records", AssessmentOutOfScopeProblemRecord),
     ("assessment_change_records", AssessmentChangeRecord),
+    ("assessment_out_of_scope_change_records", AssessmentOutOfScopeChangeRecord),
     ("incident_sla_rows", IncidentSlaRow),
     ("incident_sla_uploads", IncidentSlaUpload),
     ("ticket_raw_rows", TicketRawRow),
@@ -112,7 +116,9 @@ PROJECT_OPERATIONAL_MODELS: tuple[tuple[str, Any], ...] = (
     ("tickets", Ticket),
     ("assessment_out_of_scope_tickets", AssessmentOutOfScopeTicket),
     ("assessment_problem_records", AssessmentProblemRecord),
+    ("assessment_out_of_scope_problem_records", AssessmentOutOfScopeProblemRecord),
     ("assessment_change_records", AssessmentChangeRecord),
+    ("assessment_out_of_scope_change_records", AssessmentOutOfScopeChangeRecord),
     ("incident_sla_rows", IncidentSlaRow),
     ("incident_sla_uploads", IncidentSlaUpload),
     ("ticket_raw_rows", TicketRawRow),
@@ -431,9 +437,13 @@ def clear_project_problem_change_operational_data(
     if normalized_ticket_type == "PROBLEM":
         table_name = "assessment_problem_records"
         model = AssessmentProblemRecord
+        out_table_name = "assessment_out_of_scope_problem_records"
+        out_model = AssessmentOutOfScopeProblemRecord
     elif normalized_ticket_type == "CHANGE":
         table_name = "assessment_change_records"
         model = AssessmentChangeRecord
+        out_table_name = "assessment_out_of_scope_change_records"
+        out_model = AssessmentOutOfScopeChangeRecord
     else:
         return {}
 
@@ -449,6 +459,7 @@ def clear_project_problem_change_operational_data(
     )
     deleted_counts = {
         table_name: count_project_rows(db, model, [project_id]),
+        out_table_name: count_project_rows(db, out_model, [project_id]),
         "ticket_raw_rows": count_ticket_type_rows(
             db,
             TicketRawRow,
@@ -465,6 +476,7 @@ def clear_project_problem_change_operational_data(
     }
 
     db.execute(delete(model).where(model.project_id == project_id))
+    db.execute(delete(out_model).where(out_model.project_id == project_id))
     delete_ingestion_jobs_for_file_or_batch_ids(db, uploaded_file_ids, upload_batch_ids)
     db.execute(
         delete(TicketRawRow).where(

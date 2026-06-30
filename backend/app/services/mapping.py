@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.models import (
     ApplicationInventoryItem,
     AssessmentChangeRecord,
+    AssessmentOutOfScopeChangeRecord,
+    AssessmentOutOfScopeProblemRecord,
     AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Project,
@@ -1303,8 +1305,16 @@ def apply_inventory_enrichment_to_ticket(
     ticket.install_type = cmdb_payload_text(inventory_item.cmdb_payload, *CMDB_INSTALL_TYPE_KEYS)
 
 
+OperationalRecord = (
+    AssessmentProblemRecord
+    | AssessmentOutOfScopeProblemRecord
+    | AssessmentChangeRecord
+    | AssessmentOutOfScopeChangeRecord
+)
+
+
 def apply_inventory_enrichment_to_operational_record(
-    record: AssessmentProblemRecord | AssessmentChangeRecord,
+    record: OperationalRecord,
     inventory_item: ApplicationInventoryItem | None,
 ) -> None:
     if inventory_item is None:
@@ -1323,6 +1333,160 @@ def apply_inventory_enrichment_to_operational_record(
     )
     record.install_type = cmdb_payload_text(inventory_item.cmdb_payload, *CMDB_INSTALL_TYPE_KEYS)
     record.application_inventory_match_status = "matched"
+
+
+def operational_record_scope_reason(
+    record: OperationalRecord,
+    active_assignment_groups: set[str],
+) -> str:
+    assignment_group_key = normalize_match_key(record.assignment_group)
+    if assignment_group_key is None:
+        return "blank_assignment_group"
+    if assignment_group_key not in active_assignment_groups:
+        return "assignment_group_not_in_application_inventory"
+    return ""
+
+
+def build_out_of_scope_problem_record(
+    record: AssessmentProblemRecord,
+    reason: str,
+) -> AssessmentOutOfScopeProblemRecord:
+    return AssessmentOutOfScopeProblemRecord(
+        project_id=record.project_id,
+        upload_batch_id=record.upload_batch_id,
+        uploaded_file_id=record.uploaded_file_id,
+        raw_row_id=record.raw_row_id,
+        application_inventory_id=record.application_inventory_id,
+        source_row_number=record.source_row_number,
+        row_fingerprint=record.row_fingerprint,
+        number=record.number,
+        state=record.state,
+        problem_state=record.problem_state,
+        problem_statement=record.problem_statement,
+        short_description_or_statement=record.short_description_or_statement,
+        description=record.description,
+        business_application=record.business_application,
+        business_service=record.business_service,
+        configuration_item=record.configuration_item,
+        category=record.category,
+        subcategory=record.subcategory,
+        assignment_group=record.assignment_group,
+        assigned_to=record.assigned_to,
+        urgency=record.urgency,
+        priority=record.priority,
+        active=record.active,
+        created_at_source=record.created_at_source,
+        opened_at=record.opened_at,
+        actual_start_at=record.actual_start_at,
+        actual_end_at=record.actual_end_at,
+        closed_at=record.closed_at,
+        resolved_at=record.resolved_at,
+        business_duration_seconds=record.business_duration_seconds,
+        duration_seconds=record.duration_seconds,
+        made_sla=record.made_sla,
+        major_incident=record.major_incident,
+        major_problem=record.major_problem,
+        known_error=record.known_error,
+        related_incidents=record.related_incidents,
+        linked_incident_count=record.linked_incident_count,
+        change_request=record.change_request,
+        caused_by_change=record.caused_by_change,
+        duplicate_of=record.duplicate_of,
+        parent=record.parent,
+        reassignment_count=record.reassignment_count,
+        reopen_count=record.reopen_count,
+        resolution_code=record.resolution_code,
+        close_notes=record.close_notes,
+        cause_notes=record.cause_notes,
+        fix_notes=record.fix_notes,
+        workaround=record.workaround,
+        source=record.source,
+        contact_type=record.contact_type,
+        company=record.company,
+        vendor_or_supplier_if_available=record.vendor_or_supplier_if_available,
+        functional_track=record.functional_track,
+        ams_owner=record.ams_owner,
+        parent_business_application=record.parent_business_application,
+        supported_by_vendor=record.supported_by_vendor,
+        sap_non_sap=record.sap_non_sap,
+        architecture_type=record.architecture_type,
+        install_type=record.install_type,
+        application_inventory_match_status=record.application_inventory_match_status,
+        out_of_scope_reason=reason,
+        normalized_payload=record.normalized_payload,
+    )
+
+
+def build_out_of_scope_change_record(
+    record: AssessmentChangeRecord,
+    reason: str,
+) -> AssessmentOutOfScopeChangeRecord:
+    return AssessmentOutOfScopeChangeRecord(
+        project_id=record.project_id,
+        upload_batch_id=record.upload_batch_id,
+        uploaded_file_id=record.uploaded_file_id,
+        raw_row_id=record.raw_row_id,
+        application_inventory_id=record.application_inventory_id,
+        source_row_number=record.source_row_number,
+        row_fingerprint=record.row_fingerprint,
+        number=record.number,
+        short_description=record.short_description,
+        type=record.type,
+        state=record.state,
+        phase=record.phase,
+        phase_state=record.phase_state,
+        business_application=record.business_application,
+        business_service=record.business_service,
+        application_name=record.application_name,
+        affected_ci_service=record.affected_ci_service,
+        category=record.category,
+        assignment_group=record.assignment_group,
+        assigned_to=record.assigned_to,
+        priority=record.priority,
+        urgency=record.urgency,
+        impact=record.impact,
+        risk=record.risk,
+        risk_value=record.risk_value,
+        vendor=record.vendor,
+        created_at_source=record.created_at_source,
+        opened_at=record.opened_at,
+        planned_start_at=record.planned_start_at,
+        planned_end_at=record.planned_end_at,
+        actual_start_at=record.actual_start_at,
+        actual_end_at=record.actual_end_at,
+        closed_at=record.closed_at,
+        business_duration_seconds=record.business_duration_seconds,
+        duration_seconds=record.duration_seconds,
+        made_sla=record.made_sla,
+        unauthorized=record.unauthorized,
+        outside_maintenance_schedule=record.outside_maintenance_schedule,
+        cab_required=record.cab_required,
+        cab_approval=record.cab_approval,
+        cab_date=record.cab_date,
+        change_reason=record.change_reason,
+        close_code=record.close_code,
+        close_code_sub_category=record.close_code_sub_category,
+        incident=record.incident,
+        problem=record.problem,
+        caused_by_change=record.caused_by_change,
+        parent=record.parent,
+        reassignment_count=record.reassignment_count,
+        service_outage_required=record.service_outage_required,
+        implementation_plan=record.implementation_plan,
+        backout_plan=record.backout_plan,
+        test_plan=record.test_plan,
+        communication_plan=record.communication_plan,
+        functional_track=record.functional_track,
+        ams_owner=record.ams_owner,
+        parent_business_application=record.parent_business_application,
+        supported_by_vendor=record.supported_by_vendor,
+        sap_non_sap=record.sap_non_sap,
+        architecture_type=record.architecture_type,
+        install_type=record.install_type,
+        application_inventory_match_status=record.application_inventory_match_status,
+        out_of_scope_reason=reason,
+        normalized_payload=record.normalized_payload,
+    )
 
 
 def cmdb_payload_text(payload: Mapping[str, Any] | None, *keys: str) -> str | None:
@@ -1722,7 +1886,7 @@ def build_change_record_from_raw_row(
 
 
 def select_inventory_item_for_operational_record(
-    record: AssessmentProblemRecord | AssessmentChangeRecord,
+    record: OperationalRecord,
     inventory_items: list[ApplicationInventoryItem],
 ) -> ApplicationInventoryItem | None:
     application = first_text_value(
@@ -1748,17 +1912,25 @@ def apply_problem_or_change_mapping_to_batch(
     delete_existing: bool,
 ) -> ApplyMappingResult:
     model: type[AssessmentProblemRecord] | type[AssessmentChangeRecord]
+    out_model: type[AssessmentOutOfScopeProblemRecord] | type[AssessmentOutOfScopeChangeRecord]
     if ticket_type == PROBLEM_TICKET_TYPE:
         model = AssessmentProblemRecord
+        out_model = AssessmentOutOfScopeProblemRecord
         builder = build_problem_record_from_raw_row
+        out_builder = build_out_of_scope_problem_record
         record_label = "Problem"
     else:
         model = AssessmentChangeRecord
+        out_model = AssessmentOutOfScopeChangeRecord
         builder = build_change_record_from_raw_row
+        out_builder = build_out_of_scope_change_record
         record_label = "Change"
 
     total_raw_rows = 0
     normalized_record_count = 0
+    out_of_scope_record_count = 0
+    blank_assignment_group_count = 0
+    assignment_group_not_in_inventory_count = 0
     unmatched_inventory_count = 0
     duplicate_skipped_count = 0
     failed_row_count = 0
@@ -1771,14 +1943,25 @@ def apply_problem_or_change_mapping_to_batch(
 
     if delete_existing:
         db.execute(delete(model).where(model.upload_batch_id == upload_batch.id))
+        db.execute(delete(out_model).where(out_model.upload_batch_id == upload_batch.id))
         db.flush()
 
     inventory_items = load_active_inventory_items(db, upload_batch.project_id)
+    active_assignment_groups = {
+        normalize_match_key(item.assignment_group)
+        for item in inventory_items
+        if normalize_match_key(item.assignment_group) is not None
+    }
     existing_fingerprint_statement = select(model.row_fingerprint).where(
         model.project_id == upload_batch.project_id,
         model.upload_batch_id != upload_batch.id,
     )
+    existing_out_fingerprint_statement = select(out_model.row_fingerprint).where(
+        out_model.project_id == upload_batch.project_id,
+        out_model.upload_batch_id != upload_batch.id,
+    )
     existing_fingerprints = set(db.scalars(existing_fingerprint_statement).all())
+    existing_fingerprints.update(db.scalars(existing_out_fingerprint_statement).all())
 
     raw_row_statement = (
         select(TicketRawRow)
@@ -1806,9 +1989,23 @@ def apply_problem_or_change_mapping_to_batch(
             if record.application_inventory_match_status == "unmatched":
                 unmatched_inventory_count += 1
 
-            db.add(record)
-            normalized_record_count += 1
-            if normalized_record_count % INGESTION_BATCH_SIZE == 0:
+            out_of_scope_reason = operational_record_scope_reason(
+                record,
+                active_assignment_groups,
+            )
+            if out_of_scope_reason == "blank_assignment_group":
+                blank_assignment_group_count += 1
+            elif out_of_scope_reason:
+                assignment_group_not_in_inventory_count += 1
+
+            if out_of_scope_reason:
+                db.add(out_builder(record, out_of_scope_reason))
+                out_of_scope_record_count += 1
+            else:
+                db.add(record)
+                normalized_record_count += 1
+            processed_record_count = normalized_record_count + out_of_scope_record_count
+            if processed_record_count % INGESTION_BATCH_SIZE == 0:
                 db.flush()
         except MappingError as exc:
             failed_row_count += 1
@@ -1836,6 +2033,11 @@ def apply_problem_or_change_mapping_to_batch(
             f"{unmatched_inventory_count} {record_label} row(s) did not match "
             "Application Inventory enrichment."
         )
+    if out_of_scope_record_count:
+        warnings.append(
+            f"{out_of_scope_record_count} {record_label} row(s) were classified as "
+            "out of scope by Application Inventory assignment group."
+        )
 
     if total_raw_rows > 0 and failed_row_count == 0:
         mark_upload_batch_normalized(upload_batch)
@@ -1846,9 +2048,9 @@ def apply_problem_or_change_mapping_to_batch(
         upload_batch_id=upload_batch.id,
         total_raw_rows=total_raw_rows,
         normalized_ticket_count=normalized_record_count,
-        out_of_scope_ticket_count=0,
-        blank_assignment_group_count=0,
-        assignment_group_not_in_inventory_count=unmatched_inventory_count,
+        out_of_scope_ticket_count=out_of_scope_record_count,
+        blank_assignment_group_count=blank_assignment_group_count,
+        assignment_group_not_in_inventory_count=assignment_group_not_in_inventory_count,
         duplicate_skipped_count=duplicate_skipped_count,
         failed_row_count=failed_row_count,
         warnings=warnings[:MAX_WARNING_SAMPLES],

@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import (
     AssessmentChangeRecord,
+    AssessmentOutOfScopeChangeRecord,
+    AssessmentOutOfScopeProblemRecord,
     AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     IngestionJob,
@@ -115,10 +117,34 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
         ),
     )
     if ticket_type in {"PROBLEM", "CHANGE"}:
-        model = AssessmentProblemRecord if ticket_type == "PROBLEM" else AssessmentChangeRecord
+        if ticket_type == "PROBLEM":
+            model = AssessmentProblemRecord
+            out_model = AssessmentOutOfScopeProblemRecord
+        else:
+            model = AssessmentChangeRecord
+            out_model = AssessmentOutOfScopeChangeRecord
         normalized_rows = get_count(
             db,
             select(func.count(model.id)).where(model.upload_batch_id == upload_batch_id),
+        )
+        out_of_scope_rows = get_count(
+            db,
+            select(func.count(out_model.id)).where(out_model.upload_batch_id == upload_batch_id),
+        )
+        blank_assignment_group_rows = get_count(
+            db,
+            select(func.count(out_model.id)).where(
+                out_model.upload_batch_id == upload_batch_id,
+                out_model.out_of_scope_reason == "blank_assignment_group",
+            ),
+        )
+        assignment_group_not_in_inventory_rows = get_count(
+            db,
+            select(func.count(out_model.id)).where(
+                out_model.upload_batch_id == upload_batch_id,
+                out_model.out_of_scope_reason
+                == "assignment_group_not_in_application_inventory",
+            ),
         )
         unmatched_rows = get_count(
             db,
@@ -126,8 +152,14 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
                 model.upload_batch_id == upload_batch_id,
                 model.application_inventory_match_status == "unmatched",
             ),
+        ) + get_count(
+            db,
+            select(func.count(out_model.id)).where(
+                out_model.upload_batch_id == upload_batch_id,
+                out_model.application_inventory_match_status == "unmatched",
+            ),
         )
-        output_rows = normalized_rows
+        output_rows = normalized_rows + out_of_scope_rows
         effective_output_rows = (
             raw_rows
             if upload_batch is not None and upload_batch.status == BATCH_STATUS_NORMALIZED
@@ -136,9 +168,10 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
         return {
             "raw_rows": raw_rows,
             "in_scope_rows": normalized_rows,
-            "out_of_scope_rows": 0,
-            "blank_assignment_group_rows": 0,
-            "assignment_group_not_in_inventory_rows": unmatched_rows,
+            "out_of_scope_rows": out_of_scope_rows,
+            "blank_assignment_group_rows": blank_assignment_group_rows,
+            "assignment_group_not_in_inventory_rows": assignment_group_not_in_inventory_rows,
+            "unmatched_inventory_rows": unmatched_rows,
             "duplicate_skipped_rows": max(raw_rows - output_rows, 0)
             if upload_batch is not None and upload_batch.status == BATCH_STATUS_NORMALIZED
             else 0,

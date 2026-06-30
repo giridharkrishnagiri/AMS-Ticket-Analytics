@@ -21,7 +21,12 @@ from app.models.genai import (
 from app.models.incident_sla_row import IncidentSlaRow
 from app.models.incident_sla_upload import IncidentSlaUpload
 from app.models.ingestion_job import IngestionJob
-from app.models.problem_change_record import AssessmentChangeRecord, AssessmentProblemRecord
+from app.models.problem_change_record import (
+    AssessmentChangeRecord,
+    AssessmentOutOfScopeChangeRecord,
+    AssessmentOutOfScopeProblemRecord,
+    AssessmentProblemRecord,
+)
 from app.models.project import Project
 from app.models.source_column_mapping import SourceColumnMapping
 from app.models.ticket import Ticket
@@ -53,6 +58,8 @@ __all__ = [
     "IncidentSlaUpload",
     "Project",
     "AssessmentChangeRecord",
+    "AssessmentOutOfScopeChangeRecord",
+    "AssessmentOutOfScopeProblemRecord",
     "AssessmentProblemRecord",
     "SourceColumnMapping",
     "Ticket",

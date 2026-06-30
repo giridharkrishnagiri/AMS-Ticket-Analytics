@@ -9,6 +9,8 @@ from app.main import app
 from app.models import (
     ApplicationInventoryItem,
     AssessmentChangeRecord,
+    AssessmentOutOfScopeChangeRecord,
+    AssessmentOutOfScopeProblemRecord,
     AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Client,
@@ -1481,6 +1483,107 @@ def test_change_register_mapping_inserts_separate_records_and_preserves_links() 
         cleanup_client(db, client_id)
 
 
+def test_problem_and_change_mapping_splits_out_of_scope_records_by_assignment_group() -> None:
+    problem_rows = [
+        in_scope_raw({"number": "PRB-IN", "problem_statement": "In scope"}),
+        in_scope_raw(
+            {
+                "number": "PRB-OUT",
+                "problem_statement": "Out scope",
+                "assignment_group": "External Support",
+            }
+        ),
+    ]
+    db, client_id, project_id, problem_batch_id, _, _ = create_raw_batch_fixture(
+        problem_rows,
+        ticket_type="PROBLEM",
+    )
+    change_batch_id = add_upload_batch_with_raw_rows(
+        db,
+        project_id,
+        [
+            in_scope_raw({"number": "CHG-IN", "short_description": "In scope change"}),
+            in_scope_raw(
+                {
+                    "number": "CHG-OUT",
+                    "short_description": "Out scope change",
+                    "assignment_group": "External Support",
+                }
+            ),
+        ],
+        "CHANGE",
+        "change-scope-split",
+    )
+    problem_mapping = {
+        "number": "number",
+        "problem_statement": "problem_statement",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+    }
+    change_mapping = {
+        "number": "number",
+        "short_description": "short_description",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+    }
+
+    try:
+        add_application_inventory_scope(db, project_id)
+        db.commit()
+
+        problem_result = apply_mapping_to_batch(db, problem_batch_id, problem_mapping)
+        change_result = apply_mapping_to_batch(db, change_batch_id, change_mapping)
+
+        in_scope_problem = db.scalar(
+            select(AssessmentProblemRecord).where(
+                AssessmentProblemRecord.number == "PRB-IN"
+            )
+        )
+        out_of_scope_problem = db.scalar(
+            select(AssessmentOutOfScopeProblemRecord).where(
+                AssessmentOutOfScopeProblemRecord.number == "PRB-OUT"
+            )
+        )
+        in_scope_change = db.scalar(
+            select(AssessmentChangeRecord).where(AssessmentChangeRecord.number == "CHG-IN")
+        )
+        out_of_scope_change = db.scalar(
+            select(AssessmentOutOfScopeChangeRecord).where(
+                AssessmentOutOfScopeChangeRecord.number == "CHG-OUT"
+            )
+        )
+
+        assert problem_result.normalized_ticket_count == 1
+        assert problem_result.out_of_scope_ticket_count == 1
+        assert problem_result.assignment_group_not_in_inventory_count == 1
+        assert change_result.normalized_ticket_count == 1
+        assert change_result.out_of_scope_ticket_count == 1
+        assert change_result.assignment_group_not_in_inventory_count == 1
+        assert in_scope_problem is not None
+        assert out_of_scope_problem is not None
+        assert out_of_scope_problem.out_of_scope_reason == (
+            "assignment_group_not_in_application_inventory"
+        )
+        assert out_of_scope_problem.application_inventory_match_status == "matched"
+        assert in_scope_change is not None
+        assert out_of_scope_change is not None
+        assert out_of_scope_change.out_of_scope_reason == (
+            "assignment_group_not_in_application_inventory"
+        )
+        assert out_of_scope_change.application_inventory_match_status == "matched"
+        assert db.scalar(select(func.count(Ticket.id)).where(Ticket.project_id == project_id)) == 0
+        assert (
+            db.scalar(
+                select(func.count(AssessmentOutOfScopeTicket.id)).where(
+                    AssessmentOutOfScopeTicket.project_id == project_id
+                )
+            )
+            == 0
+        )
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_problem_duplicate_upload_rows_are_skipped_by_project_fingerprint() -> None:
     row = in_scope_raw({"number": "PRB-DUP", "problem_statement": "Duplicate"})
     db, client_id, project_id, first_batch_id, _, first_raw_rows = create_raw_batch_fixture(
@@ -1594,6 +1697,29 @@ def test_selected_reset_clears_problem_or_change_without_ticket_tables() -> None
                 "created_at": "sys_created_on",
             },
         )
+        db.add(
+            AssessmentOutOfScopeProblemRecord(
+                project_id=project_id,
+                upload_batch_id=problem_batch_id,
+                row_fingerprint="problem-reset-oos",
+                number="PRB-RESET-OOS",
+                assignment_group="External Support",
+                out_of_scope_reason="assignment_group_not_in_application_inventory",
+                normalized_payload={},
+            )
+        )
+        db.add(
+            AssessmentOutOfScopeChangeRecord(
+                project_id=project_id,
+                upload_batch_id=change_batch_id,
+                row_fingerprint="change-reset-oos",
+                number="CHG-RESET-OOS",
+                assignment_group="External Support",
+                out_of_scope_reason="assignment_group_not_in_application_inventory",
+                normalized_payload={},
+            )
+        )
+        db.commit()
 
         result = reset_project_operational_data(
             db,
@@ -1614,8 +1740,24 @@ def test_selected_reset_clears_problem_or_change_without_ticket_tables() -> None
         )
         assert (
             db.scalar(
+                select(func.count(AssessmentOutOfScopeProblemRecord.id)).where(
+                    AssessmentOutOfScopeProblemRecord.project_id == project_id
+                )
+            )
+            == 0
+        )
+        assert (
+            db.scalar(
                 select(func.count(AssessmentChangeRecord.id)).where(
                     AssessmentChangeRecord.project_id == project_id
+                )
+            )
+            == 1
+        )
+        assert (
+            db.scalar(
+                select(func.count(AssessmentOutOfScopeChangeRecord.id)).where(
+                    AssessmentOutOfScopeChangeRecord.project_id == project_id
                 )
             )
             == 1
@@ -1632,6 +1774,14 @@ def test_selected_reset_clears_problem_or_change_without_ticket_tables() -> None
             db.scalar(
                 select(func.count(AssessmentChangeRecord.id)).where(
                     AssessmentChangeRecord.project_id == project_id
+                )
+            )
+            == 0
+        )
+        assert (
+            db.scalar(
+                select(func.count(AssessmentOutOfScopeChangeRecord.id)).where(
+                    AssessmentOutOfScopeChangeRecord.project_id == project_id
                 )
             )
             == 0

@@ -853,6 +853,7 @@ export type DashboardVolumetricsProblemManagementAxis = {
 
 export type DashboardVolumetricsProblemManagementTrend = {
   time_grain: "monthly";
+  scope: VolumetricsScope;
   date_range: DashboardVolumetricsProblemManagementDateRange;
   points: DashboardVolumetricsProblemManagementPoint[];
   axis: DashboardVolumetricsProblemManagementAxis;

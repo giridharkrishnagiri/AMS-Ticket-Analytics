@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentOutOfScopeProblemRecord,
     AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Client,
@@ -492,23 +493,47 @@ def offline_reassignment_hops_rows(
     return results
 
 
-def problem_dimension_expressions() -> dict[str, Any]:
+def problem_management_source_select(model: Any, scope_label: str, project_id: UUID) -> Any:
+    return select(
+        literal(scope_label).label("scope"),
+        model.id.label("id"),
+        model.created_at_source.label("created_at_source"),
+        model.closed_at.label("closed_at"),
+        model.linked_incident_count.label("linked_incident_count"),
+        model.functional_track.label("functional_track"),
+        model.ams_owner.label("ams_owner"),
+        model.sap_non_sap.label("sap_non_sap"),
+    ).where(model.project_id == project_id)
+
+
+def problem_management_source_subquery(project_id: UUID) -> Any:
+    return union_all(
+        problem_management_source_select(AssessmentProblemRecord, "in_scope", project_id),
+        problem_management_source_select(
+            AssessmentOutOfScopeProblemRecord,
+            "out_of_scope",
+            project_id,
+        ),
+    ).subquery("offline_problem_management_source")
+
+
+def problem_dimension_expressions(source: Any) -> dict[str, Any]:
     return {
-        "functional_track": volumetrics_display_expression(
-            AssessmentProblemRecord.functional_track,
-        ),
-        "ams_owner": volumetrics_display_expression(AssessmentProblemRecord.ams_owner),
+        "scope": source.c.scope,
+        "functional_track": volumetrics_display_expression(source.c.functional_track),
+        "ams_owner": volumetrics_display_expression(source.c.ams_owner),
         "functional_track_ams_owner": func.concat(
-            volumetrics_display_expression(AssessmentProblemRecord.functional_track),
+            volumetrics_display_expression(source.c.functional_track),
             literal(" - "),
-            volumetrics_display_expression(AssessmentProblemRecord.ams_owner),
+            volumetrics_display_expression(source.c.ams_owner),
         ),
-        "sap_non_sap": volumetrics_display_expression(AssessmentProblemRecord.sap_non_sap),
+        "sap_non_sap": volumetrics_display_expression(source.c.sap_non_sap),
     }
 
 
-def problem_dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+def problem_dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
     return (
+        str(row["scope"]),
         str(row["functional_track"]),
         str(row["ams_owner"]),
         str(row["functional_track_ams_owner"]),
@@ -516,17 +541,18 @@ def problem_dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def problem_dimension_dict(key: tuple[str, str, str, str]) -> dict[str, str]:
+def problem_dimension_dict(key: tuple[str, str, str, str, str]) -> dict[str, str]:
     return {
-        "functional_track": key[0],
-        "ams_owner": key[1],
-        "functional_track_ams_owner": key[2],
-        "sap_non_sap": key[3],
+        "scope": key[0],
+        "functional_track": key[1],
+        "ams_owner": key[2],
+        "functional_track_ams_owner": key[3],
+        "sap_non_sap": key[4],
     }
 
 
-def non_negative_problem_linked_incident_expression() -> Any:
-    linked_incident_count = func.coalesce(AssessmentProblemRecord.linked_incident_count, 0)
+def non_negative_problem_linked_incident_expression(source: Any) -> Any:
+    linked_incident_count = func.coalesce(source.c.linked_incident_count, 0)
     return case((linked_incident_count < 0, 0), else_=linked_incident_count)
 
 
@@ -538,49 +564,50 @@ def build_problem_management_payload(
 ) -> dict[str, Any]:
     request = monthly_request(project_id, start_datetime, end_datetime)
     periods = build_volumetrics_periods(request)
-    dimensions = problem_dimension_expressions()
+    source = problem_management_source_subquery(project_id)
+    dimensions = problem_dimension_expressions(source)
     created_period = volumetrics_period_start_expression(
-        AssessmentProblemRecord.created_at_source,
+        source.c.created_at_source,
         "monthly",
     )
     created_statement = (
         select(
             *[expression.label(name) for name, expression in dimensions.items()],
             created_period.label("period_start"),
-            func.count(AssessmentProblemRecord.id).label("problem_tickets_created"),
+            func.count(source.c.id).label("problem_tickets_created"),
         )
+        .select_from(source)
         .where(
-            AssessmentProblemRecord.project_id == project_id,
-            AssessmentProblemRecord.created_at_source.is_not(None),
-            AssessmentProblemRecord.created_at_source >= normalize_dashboard_datetime(start_datetime),
-            AssessmentProblemRecord.created_at_source <= normalize_dashboard_datetime(end_datetime),
+            source.c.created_at_source.is_not(None),
+            source.c.created_at_source >= normalize_dashboard_datetime(start_datetime),
+            source.c.created_at_source <= normalize_dashboard_datetime(end_datetime),
         )
         .group_by(*dimensions.values(), created_period)
     )
 
     closed_period = volumetrics_period_start_expression(
-        AssessmentProblemRecord.closed_at,
+        source.c.closed_at,
         "monthly",
     )
-    linked_incident_count = non_negative_problem_linked_incident_expression()
+    linked_incident_count = non_negative_problem_linked_incident_expression(source)
     closed_statement = (
         select(
             *[expression.label(name) for name, expression in dimensions.items()],
             closed_period.label("period_start"),
-            func.count(AssessmentProblemRecord.id).label("problem_tickets_closed"),
+            func.count(source.c.id).label("problem_tickets_closed"),
             func.sum(linked_incident_count).label("linked_incidents_resolved_permanently"),
         )
+        .select_from(source)
         .where(
-            AssessmentProblemRecord.project_id == project_id,
-            AssessmentProblemRecord.closed_at.is_not(None),
-            AssessmentProblemRecord.closed_at >= normalize_dashboard_datetime(start_datetime),
-            AssessmentProblemRecord.closed_at <= normalize_dashboard_datetime(end_datetime),
+            source.c.closed_at.is_not(None),
+            source.c.closed_at >= normalize_dashboard_datetime(start_datetime),
+            source.c.closed_at <= normalize_dashboard_datetime(end_datetime),
         )
         .group_by(*dimensions.values(), closed_period)
     )
 
-    created_rows: dict[tuple[tuple[str, str, str, str], str], int] = {}
-    dimension_keys: set[tuple[str, str, str, str]] = set()
+    created_rows: dict[tuple[tuple[str, str, str, str, str], str], int] = {}
+    dimension_keys: set[tuple[str, str, str, str, str]] = set()
     for row in db.execute(created_statement).mappings().all():
         period_start = row["period_start"]
         if period_start is None:
@@ -589,7 +616,7 @@ def build_problem_management_payload(
         dimension_keys.add(key)
         created_rows[(key, month_key(period_start))] = int(row["problem_tickets_created"] or 0)
 
-    closed_rows: dict[tuple[tuple[str, str, str, str], str], dict[str, int]] = {}
+    closed_rows: dict[tuple[tuple[str, str, str, str, str], str], dict[str, int]] = {}
     for row in db.execute(closed_statement).mappings().all():
         period_start = row["period_start"]
         if period_start is None:
@@ -626,6 +653,7 @@ def build_problem_management_payload(
         "rows": rows,
         "data_notes": [
             "Problem records are analyzed separately from generic tickets.",
+            "Problem scope is classified using active Application Inventory assignment groups.",
             "Linked incidents are summed for Problems closed in each month.",
             "Complete-month cutoff applied.",
         ],
@@ -4141,6 +4169,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function problemFilterMatch(row) {
       return (
+        (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
         (state.volSap === "all" || row.sap_non_sap === state.volSap)
       );
@@ -4220,7 +4249,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function problemManagementGroup() {
       const points = problemManagementPoints();
-      return `<section class="panel full" data-commentary-key="problem_management_trend"><p class="label">KPI Trends</p><h3>Problem Management Trend</h3><p class="muted">Shows Problem tickets created and closed by month, plus linked Incidents expected to be permanently resolved through closed Problems.</p><section class="chart-card panel full"><h3>Monthly Problem Management Trend</h3><p class="muted">Problem records are analyzed separately. Generic ticket totals continue to include Incidents and SC Tasks only.</p><div class="chart-frame chart-stage">${problemManagementChart(points)}</div>${problemManagementTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "problem_management_trend" })}</section>`;
+      return `<section class="panel full" data-commentary-key="problem_management_trend"><p class="label">KPI Trends</p><h3>Problem Management Trend</h3><p class="muted">Shows Problem tickets created and closed by month, plus linked Incidents expected to be permanently resolved through closed Problems.</p><section class="chart-card panel full"><h3>Monthly Problem Management Trend</h3><p class="muted">Problem records are analyzed separately. The selected scope is applied to Problem records by Application Inventory assignment group.</p><div class="chart-frame chart-stage">${problemManagementChart(points)}</div>${problemManagementTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "problem_management_trend" })}</section>`;
     }
     function renderKpiTrends() {
       return `

@@ -310,6 +310,7 @@ const emptyReassignmentHopsTrend: DashboardVolumetricsReassignmentHopsTrend = {
 
 const emptyProblemManagementTrend: DashboardVolumetricsProblemManagementTrend = {
   time_grain: "monthly",
+  scope: "in_scope",
   date_range: {
     from_date: "",
     to_date: "",
@@ -3419,7 +3420,8 @@ function ProblemManagementTrendChart({
 
       <p className="muted-text">
         Shows Problem tickets created and closed by month, plus linked Incidents expected to be
-        permanently resolved through closed Problems.
+        permanently resolved through closed Problems. The selected scope is applied to Problem
+        records by Application Inventory assignment group.
       </p>
 
       {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}

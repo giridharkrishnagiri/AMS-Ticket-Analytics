@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AssessmentChangeRecord,
+    AssessmentOutOfScopeChangeRecord,
+    AssessmentOutOfScopeProblemRecord,
     AssessmentProblemRecord,
     Ticket,
     UploadBatch,
@@ -54,12 +56,26 @@ def count_normalized_tickets(db: Session, upload_batch_id: UUID) -> int:
                 )
             )
             or 0
+        ) + int(
+            db.scalar(
+                select(func.count(AssessmentOutOfScopeProblemRecord.id)).where(
+                    AssessmentOutOfScopeProblemRecord.upload_batch_id == upload_batch_id
+                )
+            )
+            or 0
         )
     if normalized_ticket_type == "CHANGE":
         return int(
             db.scalar(
                 select(func.count(AssessmentChangeRecord.id)).where(
                     AssessmentChangeRecord.upload_batch_id == upload_batch_id
+                )
+            )
+            or 0
+        ) + int(
+            db.scalar(
+                select(func.count(AssessmentOutOfScopeChangeRecord.id)).where(
+                    AssessmentOutOfScopeChangeRecord.upload_batch_id == upload_batch_id
                 )
             )
             or 0

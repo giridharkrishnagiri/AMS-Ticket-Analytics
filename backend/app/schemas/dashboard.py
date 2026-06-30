@@ -895,6 +895,7 @@ class VolumetricsProblemManagementAxis(BaseModel):
 
 class VolumetricsProblemManagementTrendResponse(BaseModel):
     time_grain: str
+    scope: str = "in_scope"
     date_range: VolumetricsProblemManagementDateRange
     points: list[VolumetricsProblemManagementPoint]
     axis: VolumetricsProblemManagementAxis

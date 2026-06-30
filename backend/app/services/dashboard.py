@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentOutOfScopeProblemRecord,
     AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Client,
@@ -4165,7 +4166,44 @@ PROBLEM_UNSUPPORTED_FILTERS = {
 }
 
 
-def problem_management_filter_conditions(filters: Any) -> tuple[list[Any], list[str]]:
+def problem_management_source_select(model: Any, scope_label: str, project_id: UUID) -> Any:
+    return select(
+        literal(scope_label).label("scope"),
+        model.id.label("id"),
+        model.created_at_source.label("created_at_source"),
+        model.closed_at.label("closed_at"),
+        model.linked_incident_count.label("linked_incident_count"),
+        model.functional_track.label("functional_track"),
+        model.ams_owner.label("ams_owner"),
+        model.parent_business_application.label("parent_business_application"),
+        model.supported_by_vendor.label("supported_by_vendor"),
+        model.sap_non_sap.label("sap_non_sap"),
+    ).where(model.project_id == project_id)
+
+
+def problem_management_source_subquery(request: Any) -> Any:
+    scope = normalize_volumetrics_scope(request.scope)
+    in_scope_select = problem_management_source_select(
+        AssessmentProblemRecord,
+        "in_scope",
+        request.project_id,
+    )
+    out_of_scope_select = problem_management_source_select(
+        AssessmentOutOfScopeProblemRecord,
+        "out_of_scope",
+        request.project_id,
+    )
+    if scope == "in_scope":
+        return in_scope_select.subquery("problem_management_source")
+    if scope == "out_of_scope":
+        return out_of_scope_select.subquery("problem_management_source")
+    return union_all(in_scope_select, out_of_scope_select).subquery("problem_management_source")
+
+
+def problem_management_filter_conditions(
+    source: Any,
+    filters: Any,
+) -> tuple[list[Any], list[str]]:
     conditions: list[Any] = []
     warnings: list[str] = []
     for filter_name, field_name in PROBLEM_SINGLE_FILTER_FIELDS.items():
@@ -4173,7 +4211,7 @@ def problem_management_filter_conditions(filters: Any) -> tuple[list[Any], list[
         if selected_values:
             conditions.append(
                 volumetrics_display_expression(
-                    getattr(AssessmentProblemRecord, field_name),
+                    getattr(source.c, field_name),
                 ).in_(selected_values),
             )
 
@@ -4183,11 +4221,11 @@ def problem_management_filter_conditions(filters: Any) -> tuple[list[Any], list[
             conditions.append(
                 func.concat(
                     volumetrics_display_expression(
-                        getattr(AssessmentProblemRecord, fields[0]),
+                        getattr(source.c, fields[0]),
                     ),
                     literal(" - "),
                     volumetrics_display_expression(
-                        getattr(AssessmentProblemRecord, fields[1]),
+                        getattr(source.c, fields[1]),
                     ),
                 ).in_(selected_values),
             )
@@ -4199,14 +4237,15 @@ def problem_management_filter_conditions(filters: Any) -> tuple[list[Any], list[
     return conditions, warnings
 
 
-def non_negative_linked_incident_count_expression() -> Any:
-    linked_incident_count = func.coalesce(AssessmentProblemRecord.linked_incident_count, 0)
+def non_negative_linked_incident_count_expression(source: Any) -> Any:
+    linked_incident_count = func.coalesce(source.c.linked_incident_count, 0)
     return case((linked_incident_count < 0, 0), else_=linked_incident_count)
 
 
 def empty_problem_management_trend_response(request: Any) -> dict[str, Any]:
     return {
         "time_grain": "monthly",
+        "scope": normalize_volumetrics_scope(request.scope),
         "date_range": {
             "from_date": normalize_dashboard_datetime(request.start_datetime),
             "to_date": normalize_dashboard_datetime(request.end_datetime),
@@ -4219,6 +4258,7 @@ def empty_problem_management_trend_response(request: Any) -> dict[str, Any]:
         },
         "data_notes": [
             "Problem records are analyzed separately from generic tickets.",
+            "Problem scope is classified using active Application Inventory assignment groups.",
             "Generic ticket counts still include only Incidents and SC Tasks.",
             "Linked incidents are summed for Problems closed in each month.",
             "Complete-month cutoff applied.",
@@ -4257,6 +4297,7 @@ def problem_management_secondary_axis(points: list[dict[str, Any]]) -> dict[str,
 
 
 def volumetrics_kpi_problem_management_trend(db: Session, request: Any) -> dict[str, Any]:
+    scope = normalize_volumetrics_scope(request.scope)
     start_datetime, end_datetime = complete_month_bounds(
         request.start_datetime,
         request.end_datetime,
@@ -4271,47 +4312,51 @@ def volumetrics_kpi_problem_management_trend(db: Session, request: Any) -> dict[
     )
     monthly_request = replace_request_value(monthly_request, "time_grain", "monthly")
     periods = build_volumetrics_periods(monthly_request)
-    filter_conditions, warnings = problem_management_filter_conditions(monthly_request.filters)
+    source = problem_management_source_subquery(monthly_request)
+    filter_conditions, warnings = problem_management_filter_conditions(
+        source,
+        monthly_request.filters,
+    )
 
     created_period = volumetrics_period_start_expression(
-        AssessmentProblemRecord.created_at_source,
+        source.c.created_at_source,
         "monthly",
     )
     created_statement = (
         select(
             created_period.label("period_start"),
-            func.count(AssessmentProblemRecord.id).label("problem_tickets_created"),
+            func.count(source.c.id).label("problem_tickets_created"),
         )
+        .select_from(source)
         .where(
-            AssessmentProblemRecord.project_id == monthly_request.project_id,
             *filter_conditions,
-            AssessmentProblemRecord.created_at_source.is_not(None),
-            AssessmentProblemRecord.created_at_source
+            source.c.created_at_source.is_not(None),
+            source.c.created_at_source
             >= normalize_dashboard_datetime(monthly_request.start_datetime),
-            AssessmentProblemRecord.created_at_source
+            source.c.created_at_source
             <= normalize_dashboard_datetime(monthly_request.end_datetime),
         )
         .group_by(created_period)
     )
 
-    linked_incident_count = non_negative_linked_incident_count_expression()
+    linked_incident_count = non_negative_linked_incident_count_expression(source)
     closed_period = volumetrics_period_start_expression(
-        AssessmentProblemRecord.closed_at,
+        source.c.closed_at,
         "monthly",
     )
     closed_statement = (
         select(
             closed_period.label("period_start"),
-            func.count(AssessmentProblemRecord.id).label("problem_tickets_closed"),
+            func.count(source.c.id).label("problem_tickets_closed"),
             func.sum(linked_incident_count).label("linked_incidents_resolved_permanently"),
         )
+        .select_from(source)
         .where(
-            AssessmentProblemRecord.project_id == monthly_request.project_id,
             *filter_conditions,
-            AssessmentProblemRecord.closed_at.is_not(None),
-            AssessmentProblemRecord.closed_at
+            source.c.closed_at.is_not(None),
+            source.c.closed_at
             >= normalize_dashboard_datetime(monthly_request.start_datetime),
-            AssessmentProblemRecord.closed_at
+            source.c.closed_at
             <= normalize_dashboard_datetime(monthly_request.end_datetime),
         )
         .group_by(closed_period)
@@ -4365,6 +4410,7 @@ def volumetrics_kpi_problem_management_trend(db: Session, request: Any) -> dict[
 
     return {
         "time_grain": "monthly",
+        "scope": scope,
         "date_range": {
             "from_date": monthly_request.start_datetime,
             "to_date": monthly_request.end_datetime,
@@ -4374,6 +4420,8 @@ def volumetrics_kpi_problem_management_trend(db: Session, request: Any) -> dict[
         "axis": problem_management_secondary_axis(points),
         "data_notes": [
             "Problem records are analyzed separately from generic tickets.",
+            "Problem scope is classified using active Application Inventory assignment groups.",
+            "Out-of-scope Problems are excluded unless scope is set to out_of_scope or all.",
             "Generic ticket counts still include only Incidents and SC Tasks.",
             "Linked incidents are summed for Problems closed in each month.",
             "Created volume uses Problem created date; closed volume and linked incident counts "

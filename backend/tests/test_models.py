@@ -19,6 +19,8 @@ def test_expected_ams_tables_are_registered() -> None:
         "application_dimensions",
         "application_inventory_items",
         "assessment_out_of_scope_tickets",
+        "assessment_out_of_scope_problem_records",
+        "assessment_out_of_scope_change_records",
         "incident_sla_rows",
         "genai_config",
         "genai_prompt_templates",
@@ -87,9 +89,41 @@ def test_dashboard_foundation_columns_exist() -> None:
 
 def test_problem_management_columns_exist() -> None:
     problem_columns = Base.metadata.tables["assessment_problem_records"].columns.keys()
+    out_problem_columns = Base.metadata.tables[
+        "assessment_out_of_scope_problem_records"
+    ].columns.keys()
 
     assert "related_incidents" in problem_columns
     assert "linked_incident_count" in problem_columns
+    assert "related_incidents" in out_problem_columns
+    assert "linked_incident_count" in out_problem_columns
+    assert "out_of_scope_reason" in out_problem_columns
+
+
+def test_problem_change_scope_split_tables_exist() -> None:
+    out_problem_columns = Base.metadata.tables[
+        "assessment_out_of_scope_problem_records"
+    ].columns.keys()
+    out_change_columns = Base.metadata.tables[
+        "assessment_out_of_scope_change_records"
+    ].columns.keys()
+
+    for columns in (out_problem_columns, out_change_columns):
+        assert "project_id" in columns
+        assert "upload_batch_id" in columns
+        assert "raw_row_id" in columns
+        assert "number" in columns
+        assert "assignment_group" in columns
+        assert "application_inventory_match_status" in columns
+        assert "functional_track" in columns
+        assert "ams_owner" in columns
+        assert "parent_business_application" in columns
+        assert "supported_by_vendor" in columns
+        assert "sap_non_sap" in columns
+        assert "architecture_type" in columns
+        assert "install_type" in columns
+        assert "out_of_scope_reason" in columns
+        assert "normalized_payload" in columns
 
 
 def test_application_dimension_enrichment_columns_exist() -> None:

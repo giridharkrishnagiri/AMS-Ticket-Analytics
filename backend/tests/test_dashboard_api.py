@@ -15,6 +15,7 @@ from app.models import (
     ApplicationDimension,
     ApplicationInventoryItem,
     AssessmentChangeRecord,
+    AssessmentOutOfScopeProblemRecord,
     AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Client,
@@ -213,6 +214,48 @@ def add_problem_record(
         parent_business_application=parent_business_application,
         supported_by_vendor=supported_by_vendor,
         application_inventory_match_status="matched",
+        normalized_payload=normalized_payload or {"raw_payload_json": {"secret": "hidden"}},
+    )
+    db.add(problem)
+    return problem
+
+
+def add_out_of_scope_problem_record(
+    db,
+    project_id: UUID,
+    upload_batch_id: UUID,
+    uploaded_file_id: UUID,
+    number: str,
+    *,
+    created_at_source: datetime | None,
+    closed_at: datetime | None = None,
+    linked_incident_count: int = 0,
+    functional_track: str | None = "External",
+    ams_owner: str | None = "Owner X",
+    sap_non_sap: str | None = "Non-SAP",
+    parent_business_application: str | None = "Parent External",
+    supported_by_vendor: str | None = "Vendor X",
+    normalized_payload: dict[str, object] | None = None,
+) -> AssessmentOutOfScopeProblemRecord:
+    problem = AssessmentOutOfScopeProblemRecord(
+        project_id=project_id,
+        upload_batch_id=upload_batch_id,
+        uploaded_file_id=uploaded_file_id,
+        row_fingerprint=f"oos-problem-{number}",
+        number=number,
+        state="Closed" if closed_at else "Open",
+        problem_state="Closed" if closed_at else "Open",
+        created_at_source=created_at_source,
+        closed_at=closed_at,
+        related_incidents=None,
+        linked_incident_count=linked_incident_count,
+        functional_track=functional_track,
+        ams_owner=ams_owner,
+        sap_non_sap=sap_non_sap,
+        parent_business_application=parent_business_application,
+        supported_by_vendor=supported_by_vendor,
+        application_inventory_match_status="unmatched",
+        out_of_scope_reason="assignment_group_not_in_application_inventory",
         normalized_payload=normalized_payload or {"raw_payload_json": {"secret": "hidden"}},
     )
     db.add(problem)
@@ -3110,6 +3153,16 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
             closed_at=dt("2026-06-12T00:00:00"),
             linked_incident_count=99,
         )
+        add_out_of_scope_problem_record(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-FEB-OOS",
+            created_at_source=dt("2025-02-03T00:00:00"),
+            closed_at=dt("2025-02-18T00:00:00"),
+            linked_incident_count=20,
+        )
         add_ticket(
             db,
             project_id,
@@ -3139,7 +3192,7 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
 
         request_body = {
             "project_id": str(project_id),
-            "scope": "all",
+            "scope": "in_scope",
             "ticket_type": "all",
             "time_grain": "monthly",
             "start_datetime": "2025-01-01T00:00:00+00:00",
@@ -3148,9 +3201,21 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
         }
 
         with TestClient(app) as client:
+            default_response = client.post(
+                "/api/dashboard/volumetrics/kpi-problem-management-trend",
+                json={key: value for key, value in request_body.items() if key != "scope"},
+            )
             response = client.post(
                 "/api/dashboard/volumetrics/kpi-problem-management-trend",
                 json=request_body,
+            )
+            out_of_scope_response = client.post(
+                "/api/dashboard/volumetrics/kpi-problem-management-trend",
+                json={**request_body, "scope": "out_of_scope"},
+            )
+            all_scope_response = client.post(
+                "/api/dashboard/volumetrics/kpi-problem-management-trend",
+                json={**request_body, "scope": "all"},
             )
             filtered_response = client.post(
                 "/api/dashboard/volumetrics/kpi-problem-management-trend",
@@ -3174,8 +3239,16 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
                 },
             )
 
+        assert default_response.status_code == 200
+        default_rows_by_month = {
+            row["period_key"]: row for row in default_response.json()["points"]
+        }
+        assert default_response.json()["scope"] == "in_scope"
+        assert default_rows_by_month["2025-02"]["problem_tickets_closed"] == 3
+
         assert response.status_code == 200
         payload = response.json()
+        assert payload["scope"] == "in_scope"
         rows_by_month = {row["period_key"]: row for row in payload["points"]}
         assert "2026-06" not in rows_by_month
         assert rows_by_month["2025-01"]["problem_tickets_created"] == 1
@@ -3191,6 +3264,26 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
         )
         assert "normalized_payload" not in response.text
         assert "cmdb_payload" not in response.text
+
+        assert out_of_scope_response.status_code == 200
+        out_rows_by_month = {
+            row["period_key"]: row for row in out_of_scope_response.json()["points"]
+        }
+        assert out_of_scope_response.json()["scope"] == "out_of_scope"
+        assert out_rows_by_month["2025-02"]["problem_tickets_created"] == 1
+        assert out_rows_by_month["2025-02"]["problem_tickets_closed"] == 1
+        assert (
+            out_rows_by_month["2025-02"]["linked_incidents_resolved_permanently"] == 20
+        )
+
+        assert all_scope_response.status_code == 200
+        all_rows_by_month = {
+            row["period_key"]: row for row in all_scope_response.json()["points"]
+        }
+        assert all_scope_response.json()["scope"] == "all"
+        assert all_rows_by_month["2025-02"]["problem_tickets_created"] == 3
+        assert all_rows_by_month["2025-02"]["problem_tickets_closed"] == 4
+        assert all_rows_by_month["2025-02"]["linked_incidents_resolved_permanently"] == 36
 
         assert filtered_response.status_code == 200
         filtered_february = {
@@ -3772,6 +3865,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "short_description" not in reassignment_row
         assert "normalized_payload" not in reassignment_row
         problem_row = payload["volumetrics"]["kpi_trends"]["problem_management"]["rows"][0]
+        assert "scope" in problem_row
         assert "problem_tickets_created" in problem_row
         assert "problem_tickets_closed" in problem_row
         assert "linked_incidents_resolved_permanently" in problem_row
