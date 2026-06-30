@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     ApplicationInventoryItem,
     AssessmentOutOfScopeTicket,
+    AssessmentProblemRecord,
     Client,
     Project,
     Ticket,
@@ -489,6 +490,146 @@ def offline_reassignment_hops_rows(
             "total_reassignment_hops_ge_2": int(row["total_reassignment_hops_ge_2"] or 0),
         }
     return results
+
+
+def problem_dimension_expressions() -> dict[str, Any]:
+    return {
+        "functional_track": volumetrics_display_expression(
+            AssessmentProblemRecord.functional_track,
+        ),
+        "ams_owner": volumetrics_display_expression(AssessmentProblemRecord.ams_owner),
+        "functional_track_ams_owner": func.concat(
+            volumetrics_display_expression(AssessmentProblemRecord.functional_track),
+            literal(" - "),
+            volumetrics_display_expression(AssessmentProblemRecord.ams_owner),
+        ),
+        "sap_non_sap": volumetrics_display_expression(AssessmentProblemRecord.sap_non_sap),
+    }
+
+
+def problem_dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(row["functional_track"]),
+        str(row["ams_owner"]),
+        str(row["functional_track_ams_owner"]),
+        str(row["sap_non_sap"]),
+    )
+
+
+def problem_dimension_dict(key: tuple[str, str, str, str]) -> dict[str, str]:
+    return {
+        "functional_track": key[0],
+        "ams_owner": key[1],
+        "functional_track_ams_owner": key[2],
+        "sap_non_sap": key[3],
+    }
+
+
+def non_negative_problem_linked_incident_expression() -> Any:
+    linked_incident_count = func.coalesce(AssessmentProblemRecord.linked_incident_count, 0)
+    return case((linked_incident_count < 0, 0), else_=linked_incident_count)
+
+
+def build_problem_management_payload(
+    db: Session,
+    project_id: UUID,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> dict[str, Any]:
+    request = monthly_request(project_id, start_datetime, end_datetime)
+    periods = build_volumetrics_periods(request)
+    dimensions = problem_dimension_expressions()
+    created_period = volumetrics_period_start_expression(
+        AssessmentProblemRecord.created_at_source,
+        "monthly",
+    )
+    created_statement = (
+        select(
+            *[expression.label(name) for name, expression in dimensions.items()],
+            created_period.label("period_start"),
+            func.count(AssessmentProblemRecord.id).label("problem_tickets_created"),
+        )
+        .where(
+            AssessmentProblemRecord.project_id == project_id,
+            AssessmentProblemRecord.created_at_source.is_not(None),
+            AssessmentProblemRecord.created_at_source >= normalize_dashboard_datetime(start_datetime),
+            AssessmentProblemRecord.created_at_source <= normalize_dashboard_datetime(end_datetime),
+        )
+        .group_by(*dimensions.values(), created_period)
+    )
+
+    closed_period = volumetrics_period_start_expression(
+        AssessmentProblemRecord.closed_at,
+        "monthly",
+    )
+    linked_incident_count = non_negative_problem_linked_incident_expression()
+    closed_statement = (
+        select(
+            *[expression.label(name) for name, expression in dimensions.items()],
+            closed_period.label("period_start"),
+            func.count(AssessmentProblemRecord.id).label("problem_tickets_closed"),
+            func.sum(linked_incident_count).label("linked_incidents_resolved_permanently"),
+        )
+        .where(
+            AssessmentProblemRecord.project_id == project_id,
+            AssessmentProblemRecord.closed_at.is_not(None),
+            AssessmentProblemRecord.closed_at >= normalize_dashboard_datetime(start_datetime),
+            AssessmentProblemRecord.closed_at <= normalize_dashboard_datetime(end_datetime),
+        )
+        .group_by(*dimensions.values(), closed_period)
+    )
+
+    created_rows: dict[tuple[tuple[str, str, str, str], str], int] = {}
+    dimension_keys: set[tuple[str, str, str, str]] = set()
+    for row in db.execute(created_statement).mappings().all():
+        period_start = row["period_start"]
+        if period_start is None:
+            continue
+        key = problem_dimension_key(row)
+        dimension_keys.add(key)
+        created_rows[(key, month_key(period_start))] = int(row["problem_tickets_created"] or 0)
+
+    closed_rows: dict[tuple[tuple[str, str, str, str], str], dict[str, int]] = {}
+    for row in db.execute(closed_statement).mappings().all():
+        period_start = row["period_start"]
+        if period_start is None:
+            continue
+        key = problem_dimension_key(row)
+        dimension_keys.add(key)
+        closed_rows[(key, month_key(period_start))] = {
+            "problem_tickets_closed": int(row["problem_tickets_closed"] or 0),
+            "linked_incidents_resolved_permanently": int(
+                row["linked_incidents_resolved_permanently"] or 0,
+            ),
+        }
+
+    rows: list[dict[str, Any]] = []
+    for key in sorted(dimension_keys):
+        for period in periods:
+            period_key = month_key(period.start)
+            closed_values = closed_rows.get((key, period_key), {})
+            rows.append(
+                {
+                    **problem_dimension_dict(key),
+                    "period_key": period_key,
+                    "period_label": period.label,
+                    "problem_tickets_created": created_rows.get((key, period_key), 0),
+                    "problem_tickets_closed": closed_values.get("problem_tickets_closed", 0),
+                    "linked_incidents_resolved_permanently": closed_values.get(
+                        "linked_incidents_resolved_permanently",
+                        0,
+                    ),
+                },
+            )
+
+    return {
+        "rows": rows,
+        "data_notes": [
+            "Problem records are analyzed separately from generic tickets.",
+            "Linked incidents are summed for Problems closed in each month.",
+            "Complete-month cutoff applied.",
+        ],
+    }
 
 
 def distinct_dimension_keys(
@@ -1378,6 +1519,7 @@ def build_volumetrics_payload(
                 "mttr": {"rows": []},
                 "duration_buckets": {"periods": [], "buckets": [], "rows": []},
                 "reassignment_hops": {"rows": []},
+                "problem_management": {"rows": [], "data_notes": []},
             },
             "placeholders": {
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
@@ -1416,6 +1558,7 @@ def build_volumetrics_payload(
                 "mttr": {"rows": []},
                 "duration_buckets": {"periods": [], "buckets": [], "rows": []},
                 "reassignment_hops": {"rows": []},
+                "problem_management": {"rows": [], "data_notes": []},
             },
             "placeholders": {
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
@@ -1482,6 +1625,12 @@ def build_volumetrics_payload(
             "mttr": build_kpi_mttr_payload(db, project_id, start_datetime, end_datetime),
             "duration_buckets": build_duration_bucket_payload(db, project_id),
             "reassignment_hops": build_reassignment_hops_payload(monthly_rows),
+            "problem_management": build_problem_management_payload(
+                db,
+                project_id,
+                start_datetime,
+                end_datetime,
+            ),
         },
         "placeholders": {
             "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
@@ -3990,11 +4139,95 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const points = reassignmentHopsPoints();
       return `<section class="panel full" data-commentary-key="reassignment_hops_trend"><p class="label">KPI Trends</p><h3>Reassignment / Hops Trend</h3><p class="muted">Tickets with 2+ reassignments indicate handoffs between support teams. The percentage shows reassignment hops as a share of monthly created ticket volume.</p><section class="chart-card panel full"><h3>Monthly Reassignment / Hops Trend</h3><p class="muted">Generic Tickets includes Incidents and SC Tasks only. Problems and Changes are excluded.</p><div class="chart-frame chart-stage">${reassignmentHopsLineChart(points)}</div>${reassignmentHopsTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "reassignment_hops_trend" })}</section>`;
     }
+    function problemFilterMatch(row) {
+      return (
+        (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volSap === "all" || row.sap_non_sap === state.volSap)
+      );
+    }
+    function problemManagementPoints() {
+      const rows = (DASHBOARD.volumetrics.kpi_trends?.problem_management?.rows || []).filter(problemFilterMatch);
+      const totals = new Map();
+      rows.forEach((row) => {
+        const current = totals.get(row.period_key) || { created: 0, closed: 0, linked: 0 };
+        current.created += Number(row.problem_tickets_created || 0);
+        current.closed += Number(row.problem_tickets_closed || 0);
+        current.linked += Number(row.linked_incidents_resolved_permanently || 0);
+        totals.set(row.period_key, current);
+      });
+      return DASHBOARD.volumetrics.periods.map((period) => {
+        const values = totals.get(period.period_key) || { created: 0, closed: 0, linked: 0 };
+        return {
+          label: period.period_label,
+          period_key: period.period_key,
+          created: values.created,
+          closed: values.closed,
+          linked: values.linked,
+          avgLinked: values.closed ? values.linked / values.closed : null
+        };
+      });
+    }
+    function problemManagementChart(data) {
+      if (!data.length) return `<p class="muted" style="padding:12px">No Problem Management data available.</p>`;
+      const width = 1040;
+      const height = 420;
+      const margin = { top: 58, right: 84, bottom: 82, left: 64 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const problemMax = Math.max(1, ...data.map((row) => Math.max(Number(row.created || 0), Number(row.closed || 0))));
+      const linkedMax = Math.max(1, ...data.map((row) => Number(row.linked || 0)));
+      const useSecondary = linkedMax > 0 && (problemMax === 0 || linkedMax >= problemMax * 3);
+      const linkedScaleMax = useSecondary ? linkedMax : Math.max(problemMax, linkedMax);
+      const problemScaleMax = useSecondary ? problemMax : Math.max(problemMax, linkedMax);
+      const step = plotWidth / Math.max(1, data.length);
+      const barWidth = Math.min(24, Math.max(8, step / 5));
+      const xAt = (index) => margin.left + step * index + step / 2;
+      const problemY = (value) => margin.top + plotHeight - (Number(value || 0) / problemScaleMax) * plotHeight;
+      const linkedY = (value) => margin.top + plotHeight - (Number(value || 0) / linkedScaleMax) * plotHeight;
+      const linePoints = data.map((row, index) => ({ x: xAt(index), y: linkedY(row.linked), value: row.linked }));
+      const linePath = linePoints.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
+      const gridLines = Array.from({ length: 4 }, (_, index) => {
+        const y = margin.top + (plotHeight * index) / 3;
+        return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#e2e8f0"></line>`;
+      }).join("");
+      const bars = data.map((row, index) => {
+        const x = xAt(index);
+        const createdY = problemY(row.created);
+        const closedY = problemY(row.closed);
+        const createdHeight = margin.top + plotHeight - createdY;
+        const closedHeight = margin.top + plotHeight - closedY;
+        return `<rect x="${x - barWidth - 2}" y="${createdY}" width="${barWidth}" height="${createdHeight}" rx="4" fill="${COLORS.teal}"></rect><text x="${x - barWidth / 2 - 2}" y="${Math.max(margin.top + 12, createdY - 8)}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${fmt(row.created)}</text><rect x="${x + 2}" y="${closedY}" width="${barWidth}" height="${closedHeight}" rx="4" fill="${COLORS.blue}"></rect><text x="${x + barWidth / 2 + 2}" y="${Math.max(margin.top + 12, closedY - 8)}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${fmt(row.closed)}</text>`;
+      }).join("");
+      const axisLabels = data.map((row, index) => {
+        const x = xAt(index);
+        return `<text x="${x}" y="${height - 38}" text-anchor="end" transform="rotate(-35 ${x} ${height - 38})" font-size="10" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
+      }).join("");
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Problem Management trend">
+        ${gridLines}
+        <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + plotHeight}" stroke="#94a3b8"></line>
+        ${useSecondary ? `<line x1="${width - margin.right}" y1="${margin.top}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#94a3b8"></line>` : ""}
+        <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
+        <text x="18" y="${margin.top + plotHeight / 2}" transform="rotate(-90 18 ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">Problem ticket count</text>
+        ${useSecondary ? `<text x="${width - 18}" y="${margin.top + plotHeight / 2}" transform="rotate(90 ${width - 18} ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">Linked incident count</text>` : ""}
+        ${bars}
+        <path d="${linePath}" fill="none" stroke="${COLORS.orange}" stroke-width="3"></path>
+        ${linePoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${COLORS.orange}" stroke-width="2"></circle><text x="${point.x}" y="${Math.max(margin.top + 12, point.y - 14)}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${fmt(point.value)}</text>`).join("")}
+        ${axisLabels}
+      </svg>${legend([{ name: "Problem Tickets Created", color: COLORS.teal }, { name: "Problem Tickets Closed", color: COLORS.blue }, { name: "Linked Incidents Resolved Permanently", color: COLORS.orange }])}`;
+    }
+    function problemManagementTable(data) {
+      return `<div class="table-card"><div class="table-scroll"><table class="applications-table"><thead><tr><th>Month</th><th>Problem Tickets Created</th><th>Problem Tickets Closed</th><th>Linked Incidents Resolved Permanently</th><th>Avg Linked Incidents per Closed Problem</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.created)}</td><td>${fmt(row.closed)}</td><td>${fmt(row.linked)}</td><td>${row.avgLinked === null ? "N/A" : fmt(row.avgLinked, 2)}</td></tr>`).join("")}</tbody></table></div></div>`;
+    }
+    function problemManagementGroup() {
+      const points = problemManagementPoints();
+      return `<section class="panel full" data-commentary-key="problem_management_trend"><p class="label">KPI Trends</p><h3>Problem Management Trend</h3><p class="muted">Shows Problem tickets created and closed by month, plus linked Incidents expected to be permanently resolved through closed Problems.</p><section class="chart-card panel full"><h3>Monthly Problem Management Trend</h3><p class="muted">Problem records are analyzed separately. Generic ticket totals continue to include Incidents and SC Tasks only.</p><div class="chart-frame chart-stage">${problemManagementChart(points)}</div>${problemManagementTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "problem_management_trend" })}</section>`;
+    }
     function renderKpiTrends() {
       return `
-        ${reassignmentHopsGroup()}
         ${mttrGroup("Incident MTTR by Priority", "incident")}
         ${mttrGroup("SC Task MTTR by Priority", "sc_task")}
+        ${reassignmentHopsGroup()}
+        ${problemManagementGroup()}
         ${durationGroup("Incident Resolved Volume by Resolution Duration", "incident")}
         ${durationGroup("SC Task Closed Volume by Closed Duration", "sc_task")}
       `;

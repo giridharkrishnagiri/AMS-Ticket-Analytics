@@ -31,6 +31,7 @@ import {
   getDashboardVolumetricsIncidentBatchTrend,
   getDashboardVolumetricsKpiDurationBuckets,
   getDashboardVolumetricsKpiMttrTrends,
+  getDashboardVolumetricsKpiProblemManagementTrend,
   getDashboardVolumetricsKpiReassignmentHopsTrend,
   getDashboardVolumetricsPriorityDistribution,
   getDashboardVolumetricsSlaTrends,
@@ -58,6 +59,8 @@ import type {
   DashboardVolumetricsKpiMttrPoint,
   DashboardVolumetricsKpiMttrPrioritySet,
   DashboardVolumetricsKpiMttrTrends,
+  DashboardVolumetricsProblemManagementPoint,
+  DashboardVolumetricsProblemManagementTrend,
   DashboardVolumetricsPriorityDistribution,
   DashboardVolumetricsPriorityDistributionPoint,
   DashboardVolumetricsRankingWindow,
@@ -305,6 +308,22 @@ const emptyReassignmentHopsTrend: DashboardVolumetricsReassignmentHopsTrend = {
   warnings: [],
 };
 
+const emptyProblemManagementTrend: DashboardVolumetricsProblemManagementTrend = {
+  time_grain: "monthly",
+  date_range: {
+    from_date: "",
+    to_date: "",
+    complete_month_cutoff_applied: true,
+  },
+  points: [],
+  axis: {
+    use_secondary_axis_for_linked_incidents: false,
+    reason: "",
+  },
+  data_notes: [],
+  warnings: [],
+};
+
 const chartColors = {
   created: "#0f766e",
   resolved: "#2563eb",
@@ -313,6 +332,9 @@ const chartColors = {
   average: "#7c3aed",
   reassignment: "#0f766e",
   reassignmentPct: "#7c3aed",
+  problemCreated: "#0f766e",
+  problemClosed: "#2563eb",
+  linkedIncidents: "#d97706",
   pattern: "#0891b2",
   patternAlt: "#7c3aed",
   priority: ["#0f766e", "#2563eb", "#d97706", "#7c3aed", "#dc2626", "#64748b"],
@@ -1000,6 +1022,9 @@ function VolumetricsDashboard({
   const [reassignmentHopsTrend, setReassignmentHopsTrend] = useState<
     LoadState<DashboardVolumetricsReassignmentHopsTrend>
   >(createLoadState(emptyReassignmentHopsTrend));
+  const [problemManagementTrend, setProblemManagementTrend] = useState<
+    LoadState<DashboardVolumetricsProblemManagementTrend>
+  >(createLoadState(emptyProblemManagementTrend));
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
   const filterCountsRequestRef = useRef(0);
@@ -1214,6 +1239,7 @@ function VolumetricsDashboard({
     setKpiMttrTrends(createLoadState(emptyKpiMttrTrends, "loading"));
     setKpiDurationBuckets(createLoadState(emptyDurationBuckets, "loading"));
     setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend, "loading"));
+    setProblemManagementTrend(createLoadState(emptyProblemManagementTrend, "loading"));
 
     void getDashboardVolumetricsSummary(requestBody)
       .then((nextSummary) => {
@@ -1434,6 +1460,22 @@ function VolumetricsDashboard({
         });
       });
 
+    void getDashboardVolumetricsKpiProblemManagementTrend(requestBody)
+      .then((nextProblemManagementTrend) => {
+        setProblemManagementTrend({
+          status: "success",
+          data: nextProblemManagementTrend,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setProblemManagementTrend({
+          status: "error",
+          data: emptyProblemManagementTrend,
+          error: errorMessage(error, "Unable to load Problem Management trend"),
+        });
+      });
+
   }, [
     createdPatternType,
     hourlyDayType,
@@ -1476,6 +1518,7 @@ function VolumetricsDashboard({
       setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
       setKpiDurationBuckets(createLoadState(emptyDurationBuckets));
       setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend));
+      setProblemManagementTrend(createLoadState(emptyProblemManagementTrend));
       setRangeInitializedProjectId("");
     }
   }, [loadedProjectId, projectId]);
@@ -2006,6 +2049,9 @@ function VolumetricsDashboard({
             reassignmentHops={reassignmentHopsTrend.data}
             reassignmentHopsError={reassignmentHopsTrend.error}
             reassignmentHopsStatus={reassignmentHopsTrend.status}
+            problemManagement={problemManagementTrend.data}
+            problemManagementError={problemManagementTrend.error}
+            problemManagementStatus={problemManagementTrend.status}
             ticketType={ticketType}
             timeGrain={timeGrain}
             commentaryForChart={(chartKey) =>
@@ -3013,6 +3059,9 @@ function KpiTrends({
   mttr,
   mttrError,
   mttrStatus,
+  problemManagement,
+  problemManagementError,
+  problemManagementStatus,
   reassignmentHops,
   reassignmentHopsError,
   reassignmentHopsStatus,
@@ -3026,6 +3075,9 @@ function KpiTrends({
   mttr: DashboardVolumetricsKpiMttrTrends;
   mttrError: string | null;
   mttrStatus: LoadStatus;
+  problemManagement: DashboardVolumetricsProblemManagementTrend;
+  problemManagementError: string | null;
+  problemManagementStatus: LoadStatus;
   reassignmentHops: DashboardVolumetricsReassignmentHopsTrend;
   reassignmentHopsError: string | null;
   reassignmentHopsStatus: LoadStatus;
@@ -3034,12 +3086,6 @@ function KpiTrends({
 }) {
   return (
     <>
-      <ReassignmentHopsTrendChart
-        commentary={commentaryForChart("reassignment_hops_trend")}
-        data={reassignmentHops}
-        error={reassignmentHopsError}
-        status={reassignmentHopsStatus}
-      />
       <MttrPriorityGroup
         data={mttr.incident}
         error={mttrError}
@@ -3059,6 +3105,18 @@ function KpiTrends({
         valueTicketType="sc_task"
         timeGrain={timeGrain}
         commentaryForChart={commentaryForChart}
+      />
+      <ReassignmentHopsTrendChart
+        commentary={commentaryForChart("reassignment_hops_trend")}
+        data={reassignmentHops}
+        error={reassignmentHopsError}
+        status={reassignmentHopsStatus}
+      />
+      <ProblemManagementTrendChart
+        commentary={commentaryForChart("problem_management_trend")}
+        data={problemManagement}
+        error={problemManagementError}
+        status={problemManagementStatus}
       />
       <DurationBucketGroup
         commentary={commentaryForChart("incident_duration_buckets_row")}
@@ -3295,6 +3353,224 @@ function ReassignmentHopsTable({
               <td>{formatNumber(point.total_reassignment_hops_ge_2)}</td>
               <td>{formatPercent(point.pct_tickets_with_2_plus_reassignments)}</td>
               <td>{formatPercent(point.reassignment_hops_pct_of_created)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ProblemManagementTrendChart({
+  commentary,
+  data,
+  error,
+  status,
+}: {
+  commentary: ReactNode;
+  data: DashboardVolumetricsProblemManagementTrend;
+  error: string | null;
+  status: LoadStatus;
+}) {
+  const title = "Problem Management Trend";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const useSecondaryAxis = data.axis.use_secondary_axis_for_linked_incidents;
+  const linkedAxisId = useSecondaryAxis ? "linked" : "problems";
+  const rows = data.points.map((point) => ({
+    ...point,
+    created_label:
+      point.problem_tickets_created > 0 ? String(point.problem_tickets_created) : null,
+    closed_label: point.problem_tickets_closed > 0 ? String(point.problem_tickets_closed) : null,
+    linked_label:
+      point.linked_incidents_resolved_permanently > 0
+        ? String(point.linked_incidents_resolved_permanently)
+        : null,
+  }));
+  const hasRows = rows.length > 0;
+  const hasValues = rows.some(
+    (row) =>
+      row.problem_tickets_created > 0 ||
+      row.problem_tickets_closed > 0 ||
+      row.linked_incidents_resolved_permanently > 0
+  );
+  const chartWidth = trendChartWidth(rows.length, "monthly", plotWidth);
+  const canCopy = status !== "loading" && hasRows && hasValues;
+
+  return (
+    <section className="panel kpi-trends-section">
+      <div className="applications-chart-header">
+        <div>
+          <p className="label">KPI Trends</p>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Problem tickets created/closed and linked incidents permanently resolved by closed
+            month.
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      <p className="muted-text">
+        Shows Problem tickets created and closed by month, plus linked Incidents expected to be
+        permanently resolved through closed Problems.
+      </p>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No Problem Management data available.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <>
+          <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+            <div className="applications-chart-scroll">
+              <div className="applications-chart-stage">
+                <ComposedChart
+                  data={rows}
+                  width={chartWidth}
+                  height={400}
+                  margin={{ top: 58, right: useSecondaryAxis ? 82 : 48, bottom: 82, left: 58 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="period_label"
+                    angle={-35}
+                    height={86}
+                    interval={0}
+                    textAnchor="end"
+                    tickMargin={12}
+                  />
+                  <YAxis
+                    yAxisId="problems"
+                    label={{
+                      value: "Problem ticket count",
+                      angle: -90,
+                      position: "insideLeft",
+                    }}
+                    tickFormatter={(value) => formatNumber(Number(value))}
+                  />
+                  {useSecondaryAxis ? (
+                    <YAxis
+                      yAxisId="linked"
+                      orientation="right"
+                      label={{
+                        value: "Linked incident count",
+                        angle: 90,
+                        position: "insideRight",
+                      }}
+                      tickFormatter={(value) => formatNumber(Number(value))}
+                    />
+                  ) : null}
+                  <Tooltip
+                    formatter={(value) => [formatNumber(Number(value)), ""]}
+                    labelFormatter={(label) => `Month: ${label}`}
+                  />
+                  <Legend />
+                  <Bar
+                    dataKey="problem_tickets_created"
+                    fill={chartColors.problemCreated}
+                    name="Problem Tickets Created"
+                    radius={[4, 4, 0, 0]}
+                    yAxisId="problems"
+                  >
+                    <LabelList dataKey="created_label" position="top" fontSize={11} />
+                  </Bar>
+                  <Bar
+                    dataKey="problem_tickets_closed"
+                    fill={chartColors.problemClosed}
+                    name="Problem Tickets Closed"
+                    radius={[4, 4, 0, 0]}
+                    yAxisId="problems"
+                  >
+                    <LabelList dataKey="closed_label" position="top" fontSize={11} />
+                  </Bar>
+                  <Line
+                    connectNulls
+                    dataKey="linked_incidents_resolved_permanently"
+                    dot={{ r: 3 }}
+                    name="Linked Incidents Resolved Permanently"
+                    stroke={chartColors.linkedIncidents}
+                    strokeWidth={2.5}
+                    type="monotone"
+                    yAxisId={linkedAxisId}
+                  >
+                    <LabelList
+                      content={(props) =>
+                        renderMttrPointLabel({
+                          ...props,
+                          verticalOffset: -18,
+                        })
+                      }
+                      dataKey="linked_label"
+                    />
+                  </Line>
+                </ComposedChart>
+              </div>
+            </div>
+          </div>
+
+          <p className="muted-text">
+            Problem records are analyzed separately. Generic ticket totals continue to include
+            Incidents and SC Tasks only.
+          </p>
+          <p className="muted-text">{data.axis.reason}</p>
+          <ProblemManagementTable points={data.points} />
+        </>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {data.data_notes.length ? (
+        <ul className="muted-text volumetrics-note-list">
+          {data.data_notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+      {data.warnings.length ? (
+        <ul className="error-text volumetrics-note-list">
+          {data.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+      {commentary}
+    </section>
+  );
+}
+
+function ProblemManagementTable({
+  points,
+}: {
+  points: DashboardVolumetricsProblemManagementPoint[];
+}) {
+  return (
+    <div className="applications-table-frame volumetrics-data-table-frame">
+      <table className="applications-table volumetrics-data-table">
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th>Problem Tickets Created</th>
+            <th>Problem Tickets Closed</th>
+            <th>Linked Incidents Resolved Permanently</th>
+            <th>Avg Linked Incidents per Closed Problem</th>
+          </tr>
+        </thead>
+        <tbody>
+          {points.map((point) => (
+            <tr key={point.period_key}>
+              <td>{point.period_label}</td>
+              <td>{formatNumber(point.problem_tickets_created)}</td>
+              <td>{formatNumber(point.problem_tickets_closed)}</td>
+              <td>{formatNumber(point.linked_incidents_resolved_permanently)}</td>
+              <td>{formatNumber(point.avg_linked_incidents_per_closed_problem, 2)}</td>
             </tr>
           ))}
         </tbody>

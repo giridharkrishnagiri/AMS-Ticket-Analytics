@@ -872,3 +872,31 @@ class VolumetricsReassignmentHopsTrendResponse(BaseModel):
     points: list[VolumetricsReassignmentHopsPoint]
     data_notes: list[str]
     warnings: list[str]
+
+
+class VolumetricsProblemManagementDateRange(BaseModel):
+    from_date: datetime
+    to_date: datetime
+    complete_month_cutoff_applied: bool
+
+
+class VolumetricsProblemManagementPoint(PeriodMetricRow):
+    period_key: str
+    problem_tickets_created: int
+    problem_tickets_closed: int
+    linked_incidents_resolved_permanently: int
+    avg_linked_incidents_per_closed_problem: float | None
+
+
+class VolumetricsProblemManagementAxis(BaseModel):
+    use_secondary_axis_for_linked_incidents: bool
+    reason: str
+
+
+class VolumetricsProblemManagementTrendResponse(BaseModel):
+    time_grain: str
+    date_range: VolumetricsProblemManagementDateRange
+    points: list[VolumetricsProblemManagementPoint]
+    axis: VolumetricsProblemManagementAxis
+    data_notes: list[str]
+    warnings: list[str]

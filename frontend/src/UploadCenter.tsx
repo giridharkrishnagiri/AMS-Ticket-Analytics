@@ -164,6 +164,7 @@ const problemNormalizedFields = [
   "major_problem",
   "known_error",
   "related_incidents",
+  "linked_incident_count",
   "change_request",
   "caused_by_change",
   "problem_state",

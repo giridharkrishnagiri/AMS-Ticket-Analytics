@@ -85,6 +85,13 @@ def test_dashboard_foundation_columns_exist() -> None:
     assert "application_name" in application_dimension_columns
 
 
+def test_problem_management_columns_exist() -> None:
+    problem_columns = Base.metadata.tables["assessment_problem_records"].columns.keys()
+
+    assert "related_incidents" in problem_columns
+    assert "linked_incident_count" in problem_columns
+
+
 def test_application_dimension_enrichment_columns_exist() -> None:
     ticket_columns = Base.metadata.tables["tickets"].columns.keys()
     dimension_columns = Base.metadata.tables["application_dimensions"].columns.keys()

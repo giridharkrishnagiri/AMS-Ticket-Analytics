@@ -43,6 +43,7 @@ APPLY_SCOPE_TICKET_TYPE = "TICKET_TYPE"
 PROBLEM_TICKET_TYPE = "PROBLEM"
 CHANGE_TICKET_TYPE = "CHANGE"
 PROBLEM_CHANGE_TICKET_TYPES = {PROBLEM_TICKET_TYPE, CHANGE_TICKET_TYPE}
+INCIDENT_NUMBER_PATTERN = re.compile(r"\bINC[0-9][A-Z0-9-]*\b", flags=re.IGNORECASE)
 CMDB_ARCHITECTURE_TYPE_KEYS = ("Architecture type", "Architecture Type")
 CMDB_BUSINESS_CRITICAL_KEYS = (
     "Business criticality",
@@ -112,6 +113,7 @@ PROBLEM_CHANGE_NORMALIZED_FIELDS = (
     "major_problem",
     "known_error",
     "related_incidents",
+    "linked_incident_count",
     "change_request",
     "caused_by_change",
     "duplicate_of",
@@ -250,7 +252,30 @@ FIELD_ALIASES.update(
         "major_incident": ("major_incident", "major incident"),
         "major_problem": ("major_problem", "major problem"),
         "known_error": ("known_error", "known error"),
-        "related_incidents": ("related_incidents", "related incidents"),
+        "related_incidents": (
+            "related_incidents",
+            "related incidents",
+            "linked_incidents",
+            "linked incidents",
+            "incidents",
+        ),
+        "linked_incident_count": (
+            "linked_incident_count",
+            "linked incident count",
+            "related_incident_count",
+            "related incident count",
+            "related_incidents_count",
+            "related incidents count",
+            "incident_count",
+            "incident count",
+            "number_of_incidents",
+            "number of incidents",
+            "related_incidents",
+            "related incidents",
+            "linked_incidents",
+            "linked incidents",
+            "incidents",
+        ),
         "change_request": ("change_request", "change request"),
         "caused_by_change": ("caused_by_change", "caused by change"),
         "duplicate_of": ("duplicate_of", "duplicate of"),
@@ -318,6 +343,7 @@ FIELD_DATA_TYPES.update(
         "planned_end_at": "datetime",
         "cab_date": "datetime",
         "duration_seconds": "integer",
+        "linked_incident_count": "integer",
         "made_sla": "boolean",
         "major_incident": "boolean",
         "major_problem": "boolean",
@@ -406,6 +432,7 @@ BUILT_IN_DEFAULT_MAPPINGS: dict[str, dict[str, str]] = {
         "major_problem": "major_problem",
         "known_error": "known_error",
         "related_incidents": "related_incidents",
+        "linked_incident_count": "related_incidents",
         "change_request": "change_request",
         "caused_by_change": "caused_by_change",
         "problem_state": "problem_state",
@@ -1022,6 +1049,22 @@ def parse_optional_int_value(value: Any) -> int | None:
         return None
 
 
+def parse_linked_incident_count(value: Any, related_incidents: Any = None) -> int:
+    parsed = parse_optional_int_value(value)
+    if parsed is not None:
+        return max(parsed, 0)
+
+    related_text = text_or_none(related_incidents)
+    if related_text is None:
+        return 0
+
+    parsed_related = parse_optional_int_value(related_text)
+    if parsed_related is not None:
+        return max(parsed_related, 0)
+
+    return len(INCIDENT_NUMBER_PATTERN.findall(related_text))
+
+
 def parse_business_duration_seconds(value: Any) -> int | None:
     if value is None:
         return None
@@ -1512,6 +1555,7 @@ def build_problem_record_from_raw_row(
     assignment_group = text_or_none(normalized_values.get("assignment_group"))
     problem_statement = text_or_none(normalized_values.get("problem_statement"))
     description = text_or_none(normalized_values.get("description"))
+    related_incidents = text_or_none(normalized_values.get("related_incidents"))
     short_description_or_statement = first_text_value(
         normalized_values.get("short_description_or_statement"),
         problem_statement,
@@ -1557,7 +1601,11 @@ def build_problem_record_from_raw_row(
         major_incident=parse_bool_value(normalized_values.get("major_incident")),
         major_problem=parse_bool_value(normalized_values.get("major_problem")),
         known_error=parse_bool_value(normalized_values.get("known_error")),
-        related_incidents=text_or_none(normalized_values.get("related_incidents")),
+        related_incidents=related_incidents,
+        linked_incident_count=parse_linked_incident_count(
+            normalized_values.get("linked_incident_count"),
+            related_incidents,
+        ),
         change_request=text_or_none(normalized_values.get("change_request")),
         caused_by_change=text_or_none(normalized_values.get("caused_by_change")),
         duplicate_of=text_or_none(normalized_values.get("duplicate_of")),

@@ -14,7 +14,9 @@ from app.main import app
 from app.models import (
     ApplicationDimension,
     ApplicationInventoryItem,
+    AssessmentChangeRecord,
     AssessmentOutOfScopeTicket,
+    AssessmentProblemRecord,
     Client,
     DashboardCommentary,
     DashboardFilterFact,
@@ -174,6 +176,47 @@ def add_ticket(
     )
     db.add(ticket)
     return ticket
+
+
+def add_problem_record(
+    db,
+    project_id: UUID,
+    upload_batch_id: UUID,
+    uploaded_file_id: UUID,
+    number: str,
+    *,
+    created_at_source: datetime | None,
+    closed_at: datetime | None = None,
+    linked_incident_count: int = 0,
+    functional_track: str | None = "Data",
+    ams_owner: str | None = "Owner A",
+    sap_non_sap: str | None = "SAP",
+    parent_business_application: str | None = "Parent Payroll",
+    supported_by_vendor: str | None = "Vendor A",
+    normalized_payload: dict[str, object] | None = None,
+) -> AssessmentProblemRecord:
+    problem = AssessmentProblemRecord(
+        project_id=project_id,
+        upload_batch_id=upload_batch_id,
+        uploaded_file_id=uploaded_file_id,
+        row_fingerprint=f"problem-{number}",
+        number=number,
+        state="Closed" if closed_at else "Open",
+        problem_state="Closed" if closed_at else "Open",
+        created_at_source=created_at_source,
+        closed_at=closed_at,
+        related_incidents=None,
+        linked_incident_count=linked_incident_count,
+        functional_track=functional_track,
+        ams_owner=ams_owner,
+        sap_non_sap=sap_non_sap,
+        parent_business_application=parent_business_application,
+        supported_by_vendor=supported_by_vendor,
+        application_inventory_match_status="matched",
+        normalized_payload=normalized_payload or {"raw_payload_json": {"secret": "hidden"}},
+    )
+    db.add(problem)
+    return problem
 
 
 def add_inventory_item(
@@ -3009,6 +3052,169 @@ def test_volumetrics_reassignment_hops_trend_counts_hops_and_filters() -> None:
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_problem_record(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-JAN-CREATED",
+            created_at_source=dt("2025-01-10T00:00:00"),
+            closed_at=None,
+            linked_incident_count=0,
+        )
+        add_problem_record(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-FEB-CLOSED-ONLY",
+            created_at_source=dt("2024-12-20T00:00:00"),
+            closed_at=dt("2025-02-06T00:00:00"),
+            linked_incident_count=12,
+        )
+        add_problem_record(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-FEB-CREATED-CLOSED",
+            created_at_source=dt("2025-02-02T00:00:00"),
+            closed_at=dt("2025-02-15T00:00:00"),
+            linked_incident_count=3,
+        )
+        add_problem_record(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-FEB-RUN",
+            created_at_source=dt("2025-02-12T00:00:00"),
+            closed_at=dt("2025-02-20T00:00:00"),
+            linked_incident_count=1,
+            functional_track="Run",
+            ams_owner="Owner B",
+            sap_non_sap="Non-SAP",
+            parent_business_application="Parent Retail",
+            supported_by_vendor="Vendor B",
+        )
+        add_problem_record(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-JUN-PARTIAL",
+            created_at_source=dt("2026-06-10T00:00:00"),
+            closed_at=dt("2026-06-12T00:00:00"),
+            linked_incident_count=99,
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-NOT-PROBLEM",
+            "INCIDENT",
+            dt("2025-02-01T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2025-02-02T00:00:00"),
+        )
+        db.add(
+            AssessmentChangeRecord(
+                project_id=project_id,
+                upload_batch_id=batch_id,
+                uploaded_file_id=file_id,
+                row_fingerprint="change-not-problem",
+                number="CHG-NOT-PROBLEM",
+                state="Closed",
+                created_at_source=dt("2025-02-01T00:00:00"),
+                closed_at=dt("2025-02-28T00:00:00"),
+                application_inventory_match_status="matched",
+                normalized_payload={"raw_payload_json": {"secret": "hidden"}},
+            ),
+        )
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "all",
+            "ticket_type": "all",
+            "time_grain": "monthly",
+            "start_datetime": "2025-01-01T00:00:00+00:00",
+            "end_datetime": "2026-06-30T23:59:59+00:00",
+            "filters": {},
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/kpi-problem-management-trend",
+                json=request_body,
+            )
+            filtered_response = client.post(
+                "/api/dashboard/volumetrics/kpi-problem-management-trend",
+                json={
+                    **request_body,
+                    "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
+                },
+            )
+            comparable_response = client.post(
+                "/api/dashboard/volumetrics/kpi-problem-management-trend",
+                json={
+                    **request_body,
+                    "filters": {"functional_track_ams_owner": ["Run - Owner B"]},
+                },
+            )
+            unsupported_filter_response = client.post(
+                "/api/dashboard/volumetrics/kpi-problem-management-trend",
+                json={
+                    **request_body,
+                    "filters": {"application_owner": ["Application Owner A"]},
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        rows_by_month = {row["period_key"]: row for row in payload["points"]}
+        assert "2026-06" not in rows_by_month
+        assert rows_by_month["2025-01"]["problem_tickets_created"] == 1
+        assert rows_by_month["2025-01"]["problem_tickets_closed"] == 0
+        assert rows_by_month["2025-02"]["problem_tickets_created"] == 2
+        assert rows_by_month["2025-02"]["problem_tickets_closed"] == 3
+        assert rows_by_month["2025-02"]["linked_incidents_resolved_permanently"] == 16
+        assert rows_by_month["2025-02"]["avg_linked_incidents_per_closed_problem"] == 5.33
+        assert payload["axis"]["use_secondary_axis_for_linked_incidents"] is True
+        assert (
+            "Problem records are analyzed separately from generic tickets."
+            in payload["data_notes"]
+        )
+        assert "normalized_payload" not in response.text
+        assert "cmdb_payload" not in response.text
+
+        assert filtered_response.status_code == 200
+        filtered_february = {
+            row["period_key"]: row for row in filtered_response.json()["points"]
+        }["2025-02"]
+        assert filtered_february["problem_tickets_created"] == 1
+        assert filtered_february["problem_tickets_closed"] == 2
+        assert filtered_february["linked_incidents_resolved_permanently"] == 15
+
+        assert comparable_response.status_code == 200
+        assert (
+            comparable_response.json()["axis"]["use_secondary_axis_for_linked_incidents"]
+            is False
+        )
+
+        assert unsupported_filter_response.status_code == 200
+        assert any(
+            "Application Owner is not normalized on Problem records." == warning
+            for warning in unsupported_filter_response.json()["warnings"]
+        )
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
@@ -3149,6 +3355,21 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
                     out_of_scope_reason="assignment_group_not_in_application_inventory",
                 ),
             )
+        add_problem_record(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-OFFLINE-LINKED",
+            created_at_source=dt("2026-01-04T00:00:00"),
+            closed_at=dt("2026-01-25T00:00:00"),
+            linked_incident_count=7,
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            parent_business_application="Parent Payroll",
+            supported_by_vendor="Vendor A",
+        )
         db.add(
             DashboardCommentary(
                 client_id=client_id,
@@ -3343,6 +3564,11 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "sc_task_duration_buckets_row" in document
         assert "Reassignment / Hops Trend" in document
         assert "reassignment_hops_trend" in document
+        assert "Problem Management Trend" in document
+        assert "problem_management_trend" in document
+        assert "function problemManagementChart" in document
+        assert "Problem Tickets Created" in document
+        assert "Linked Incidents Resolved Permanently" in document
         assert "sap_non_sap_tickets_individual" not in document
         assert "architecture_incidents_individual" not in document
         assert "install_sc_tasks_individual" not in document
@@ -3519,6 +3745,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["volumetrics"]["kpi_trends"]["mttr"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["duration_buckets"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["reassignment_hops"]["rows"]
+        assert payload["volumetrics"]["kpi_trends"]["problem_management"]["rows"]
         detailed_row = payload["volumetrics"]["detailed_volume_trends"]["application_rows"][0]
         assert "ticket_number" not in detailed_row
         assert "short_description" not in detailed_row
@@ -3544,6 +3771,14 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "ticket_number" not in reassignment_row
         assert "short_description" not in reassignment_row
         assert "normalized_payload" not in reassignment_row
+        problem_row = payload["volumetrics"]["kpi_trends"]["problem_management"]["rows"][0]
+        assert "problem_tickets_created" in problem_row
+        assert "problem_tickets_closed" in problem_row
+        assert "linked_incidents_resolved_permanently" in problem_row
+        assert "ticket_number" not in problem_row
+        assert "short_description" not in problem_row
+        assert "normalized_payload" not in problem_row
+        assert "cmdb_payload" not in problem_row
         assert "ticket_number" not in payload["volumetrics"]["monthly_rows"][0]
         assert "business_critical" in payload["volumetrics"]["monthly_rows"][0]
         assert "normalized_payload" not in payload["volumetrics"]["monthly_rows"][0]

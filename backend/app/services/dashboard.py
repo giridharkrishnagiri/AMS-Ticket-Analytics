@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     ApplicationInventoryItem,
     AssessmentOutOfScopeTicket,
+    AssessmentProblemRecord,
     Client,
     DashboardFilterFact,
     IncidentSlaRow,
@@ -4143,6 +4144,244 @@ def non_negative_reassignment_expression(source: Any) -> Any:
 def rounded_percentage(numerator: int, denominator: int) -> float | None:
     percentage_value = percentage(numerator, denominator)
     return round(percentage_value, 2) if percentage_value is not None else None
+
+
+PROBLEM_SINGLE_FILTER_FIELDS = {
+    "parent_application_name": "parent_business_application",
+    "supported_by_vendor": "supported_by_vendor",
+    "sap_non_sap": "sap_non_sap",
+}
+
+PROBLEM_COMBINED_FILTER_FIELDS = {
+    "functional_track_ams_owner": ("functional_track", "ams_owner"),
+}
+
+PROBLEM_UNSUPPORTED_FILTERS = {
+    "assignment_group_support_lead": (
+        "Assignment Group - Support Lead is not normalized on Problem records."
+    ),
+    "application_owner": "Application Owner is not normalized on Problem records.",
+    "business_critical": "Business Criticality is not normalized on Problem records.",
+}
+
+
+def problem_management_filter_conditions(filters: Any) -> tuple[list[Any], list[str]]:
+    conditions: list[Any] = []
+    warnings: list[str] = []
+    for filter_name, field_name in PROBLEM_SINGLE_FILTER_FIELDS.items():
+        selected_values = selected_volumetrics_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(
+                volumetrics_display_expression(
+                    getattr(AssessmentProblemRecord, field_name),
+                ).in_(selected_values),
+            )
+
+    for filter_name, fields in PROBLEM_COMBINED_FILTER_FIELDS.items():
+        selected_values = selected_volumetrics_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(
+                func.concat(
+                    volumetrics_display_expression(
+                        getattr(AssessmentProblemRecord, fields[0]),
+                    ),
+                    literal(" - "),
+                    volumetrics_display_expression(
+                        getattr(AssessmentProblemRecord, fields[1]),
+                    ),
+                ).in_(selected_values),
+            )
+
+    for filter_name, message in PROBLEM_UNSUPPORTED_FILTERS.items():
+        if selected_volumetrics_filter_values(filters, filter_name):
+            warnings.append(message)
+
+    return conditions, warnings
+
+
+def non_negative_linked_incident_count_expression() -> Any:
+    linked_incident_count = func.coalesce(AssessmentProblemRecord.linked_incident_count, 0)
+    return case((linked_incident_count < 0, 0), else_=linked_incident_count)
+
+
+def empty_problem_management_trend_response(request: Any) -> dict[str, Any]:
+    return {
+        "time_grain": "monthly",
+        "date_range": {
+            "from_date": normalize_dashboard_datetime(request.start_datetime),
+            "to_date": normalize_dashboard_datetime(request.end_datetime),
+            "complete_month_cutoff_applied": True,
+        },
+        "points": [],
+        "axis": {
+            "use_secondary_axis_for_linked_incidents": False,
+            "reason": "No complete months are available for the selected range.",
+        },
+        "data_notes": [
+            "Problem records are analyzed separately from generic tickets.",
+            "Generic ticket counts still include only Incidents and SC Tasks.",
+            "Linked incidents are summed for Problems closed in each month.",
+            "Complete-month cutoff applied.",
+        ],
+        "warnings": [],
+    }
+
+
+def problem_management_secondary_axis(points: list[dict[str, Any]]) -> dict[str, Any]:
+    max_problem_volume = max(
+        (
+            max(
+                int_count(point.get("problem_tickets_created")),
+                int_count(point.get("problem_tickets_closed")),
+            )
+            for point in points
+        ),
+        default=0,
+    )
+    max_linked_incidents = max(
+        (int_count(point.get("linked_incidents_resolved_permanently")) for point in points),
+        default=0,
+    )
+    use_secondary_axis = (
+        max_linked_incidents > 0
+        and (max_problem_volume == 0 or max_linked_incidents >= max_problem_volume * 3)
+    )
+    return {
+        "use_secondary_axis_for_linked_incidents": use_secondary_axis,
+        "reason": (
+            "Linked incident count is at least 3x higher than Problem ticket volume."
+            if use_secondary_axis
+            else "Linked incident count is comparable with Problem ticket volume."
+        ),
+    }
+
+
+def volumetrics_kpi_problem_management_trend(db: Session, request: Any) -> dict[str, Any]:
+    start_datetime, end_datetime = complete_month_bounds(
+        request.start_datetime,
+        request.end_datetime,
+    )
+    if start_datetime is None or end_datetime is None:
+        return empty_problem_management_trend_response(request)
+
+    monthly_request = replace_request_value(
+        replace_request_value(request, "start_datetime", start_datetime),
+        "end_datetime",
+        end_datetime,
+    )
+    monthly_request = replace_request_value(monthly_request, "time_grain", "monthly")
+    periods = build_volumetrics_periods(monthly_request)
+    filter_conditions, warnings = problem_management_filter_conditions(monthly_request.filters)
+
+    created_period = volumetrics_period_start_expression(
+        AssessmentProblemRecord.created_at_source,
+        "monthly",
+    )
+    created_statement = (
+        select(
+            created_period.label("period_start"),
+            func.count(AssessmentProblemRecord.id).label("problem_tickets_created"),
+        )
+        .where(
+            AssessmentProblemRecord.project_id == monthly_request.project_id,
+            *filter_conditions,
+            AssessmentProblemRecord.created_at_source.is_not(None),
+            AssessmentProblemRecord.created_at_source
+            >= normalize_dashboard_datetime(monthly_request.start_datetime),
+            AssessmentProblemRecord.created_at_source
+            <= normalize_dashboard_datetime(monthly_request.end_datetime),
+        )
+        .group_by(created_period)
+    )
+
+    linked_incident_count = non_negative_linked_incident_count_expression()
+    closed_period = volumetrics_period_start_expression(
+        AssessmentProblemRecord.closed_at,
+        "monthly",
+    )
+    closed_statement = (
+        select(
+            closed_period.label("period_start"),
+            func.count(AssessmentProblemRecord.id).label("problem_tickets_closed"),
+            func.sum(linked_incident_count).label("linked_incidents_resolved_permanently"),
+        )
+        .where(
+            AssessmentProblemRecord.project_id == monthly_request.project_id,
+            *filter_conditions,
+            AssessmentProblemRecord.closed_at.is_not(None),
+            AssessmentProblemRecord.closed_at
+            >= normalize_dashboard_datetime(monthly_request.start_datetime),
+            AssessmentProblemRecord.closed_at
+            <= normalize_dashboard_datetime(monthly_request.end_datetime),
+        )
+        .group_by(closed_period)
+    )
+
+    created_by_period: dict[str, int] = {}
+    for row in db.execute(created_statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], "monthly")
+        if period_start is None:
+            continue
+        created_by_period[volumetrics_period_lookup_key(period_start, "monthly")] = int_count(
+            row["problem_tickets_created"],
+        )
+
+    closed_by_period: dict[str, dict[str, int]] = {}
+    for row in db.execute(closed_statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], "monthly")
+        if period_start is None:
+            continue
+        closed_by_period[volumetrics_period_lookup_key(period_start, "monthly")] = {
+            "problem_tickets_closed": int_count(row["problem_tickets_closed"]),
+            "linked_incidents_resolved_permanently": int_count(
+                row["linked_incidents_resolved_permanently"],
+            ),
+        }
+
+    points: list[dict[str, Any]] = []
+    for period in periods:
+        period_key = volumetrics_period_lookup_key(period.start, "monthly")
+        closed_values = closed_by_period.get(period_key, {})
+        problem_tickets_closed = int_count(closed_values.get("problem_tickets_closed"))
+        linked_incidents = int_count(
+            closed_values.get("linked_incidents_resolved_permanently"),
+        )
+        points.append(
+            {
+                "period_key": period_key,
+                "period_label": period.label,
+                "period_start": period.start,
+                "period_end": period.end,
+                "problem_tickets_created": created_by_period.get(period_key, 0),
+                "problem_tickets_closed": problem_tickets_closed,
+                "linked_incidents_resolved_permanently": linked_incidents,
+                "avg_linked_incidents_per_closed_problem": (
+                    round(linked_incidents / problem_tickets_closed, 2)
+                    if problem_tickets_closed
+                    else None
+                ),
+            },
+        )
+
+    return {
+        "time_grain": "monthly",
+        "date_range": {
+            "from_date": monthly_request.start_datetime,
+            "to_date": monthly_request.end_datetime,
+            "complete_month_cutoff_applied": True,
+        },
+        "points": points,
+        "axis": problem_management_secondary_axis(points),
+        "data_notes": [
+            "Problem records are analyzed separately from generic tickets.",
+            "Generic ticket counts still include only Incidents and SC Tasks.",
+            "Linked incidents are summed for Problems closed in each month.",
+            "Created volume uses Problem created date; closed volume and linked incident counts "
+            "use Problem closed date.",
+            "Complete-month cutoff applied.",
+        ],
+        "warnings": warnings,
+    }
 
 
 def volumetrics_kpi_reassignment_hops_trend(db: Session, request: Any) -> dict[str, Any]:

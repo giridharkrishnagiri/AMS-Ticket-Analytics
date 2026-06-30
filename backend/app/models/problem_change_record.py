@@ -110,6 +110,7 @@ class AssessmentProblemRecord(UuidPrimaryKeyMixin, TimestampMixin, Base):
     major_problem: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     known_error: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     related_incidents: Mapped[str | None] = mapped_column(Text, nullable=True)
+    linked_incident_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     change_request: Mapped[str | None] = mapped_column(Text, nullable=True)
     caused_by_change: Mapped[str | None] = mapped_column(Text, nullable=True)
     duplicate_of: Mapped[str | None] = mapped_column(Text, nullable=True)

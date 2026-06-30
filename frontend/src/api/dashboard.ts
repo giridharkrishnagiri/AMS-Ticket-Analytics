@@ -829,6 +829,37 @@ export type DashboardVolumetricsReassignmentHopsTrend = {
   warnings: string[];
 };
 
+export type DashboardVolumetricsProblemManagementDateRange = {
+  from_date: string;
+  to_date: string;
+  complete_month_cutoff_applied: boolean;
+};
+
+export type DashboardVolumetricsProblemManagementPoint = {
+  period_key: string;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  problem_tickets_created: number;
+  problem_tickets_closed: number;
+  linked_incidents_resolved_permanently: number;
+  avg_linked_incidents_per_closed_problem: number | null;
+};
+
+export type DashboardVolumetricsProblemManagementAxis = {
+  use_secondary_axis_for_linked_incidents: boolean;
+  reason: string;
+};
+
+export type DashboardVolumetricsProblemManagementTrend = {
+  time_grain: "monthly";
+  date_range: DashboardVolumetricsProblemManagementDateRange;
+  points: DashboardVolumetricsProblemManagementPoint[];
+  axis: DashboardVolumetricsProblemManagementAxis;
+  data_notes: string[];
+  warnings: string[];
+};
+
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
   for (const value of values ?? []) {
     if (value.trim()) {
@@ -1283,6 +1314,15 @@ export function getDashboardVolumetricsKpiReassignmentHopsTrend(
 ): Promise<DashboardVolumetricsReassignmentHopsTrend> {
   return postVolumetricsRequest<DashboardVolumetricsReassignmentHopsTrend>(
     "/dashboard/volumetrics/kpi-reassignment-hops-trend",
+    input
+  );
+}
+
+export function getDashboardVolumetricsKpiProblemManagementTrend(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsProblemManagementTrend> {
+  return postVolumetricsRequest<DashboardVolumetricsProblemManagementTrend>(
+    "/dashboard/volumetrics/kpi-problem-management-trend",
     input
   );
 }

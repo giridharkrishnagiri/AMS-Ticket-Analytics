@@ -33,6 +33,7 @@ from app.services.mapping import (
     normalize_priority,
     parse_business_duration_seconds,
     parse_datetime_value,
+    parse_linked_incident_count,
     parse_sla_breached_value,
     save_mapping_template,
 )
@@ -1290,6 +1291,15 @@ def test_business_duration_parsing() -> None:
     assert parse_business_duration_seconds("1 02:03:04") == 93784
 
 
+def test_linked_incident_count_parsing() -> None:
+    assert parse_linked_incident_count("5") == 5
+    assert parse_linked_incident_count("1,234") == 1234
+    assert parse_linked_incident_count("-4") == 0
+    assert parse_linked_incident_count("", "INC001, INC002 INC003") == 3
+    assert parse_linked_incident_count("not a count", "no incident identifiers") == 0
+    assert parse_linked_incident_count(None, None) == 0
+
+
 def test_problem_register_mapping_inserts_separate_records_and_enriches_inventory() -> None:
     rows = [
         in_scope_raw(
@@ -1306,6 +1316,7 @@ def test_problem_register_mapping_inserts_separate_records_and_enriches_inventor
                 "made_sla": "true",
                 "major_problem": "Y",
                 "known_error": "N",
+                "related_incidents": "INC001, INC002, INC003",
                 "workaround": "Restart integration",
             }
         )
@@ -1329,6 +1340,7 @@ def test_problem_register_mapping_inserts_separate_records_and_enriches_inventor
         "made_sla": "made_sla",
         "major_problem": "major_problem",
         "known_error": "known_error",
+        "related_incidents": "related_incidents",
         "workaround": "workaround",
     }
 
@@ -1363,6 +1375,8 @@ def test_problem_register_mapping_inserts_separate_records_and_enriches_inventor
         assert problem.made_sla is True
         assert problem.major_problem is True
         assert problem.known_error is False
+        assert problem.related_incidents == "INC001, INC002, INC003"
+        assert problem.linked_incident_count == 3
         assert problem.workaround == "Restart integration"
         assert problem.application_inventory_match_status == "matched"
         assert problem.functional_track == "Mapping Track"
