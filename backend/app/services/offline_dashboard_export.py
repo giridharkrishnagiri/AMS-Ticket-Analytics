@@ -42,6 +42,7 @@ from app.services.dashboard import (
     duration_bucket_expression,
     latest_complete_month_window,
     latest_complete_window_payload,
+    non_negative_reassignment_expression,
     normalize_dashboard_datetime,
     overview_summary,
     priority_bucket_expression,
@@ -445,6 +446,51 @@ def offline_sla_rows(
     return results
 
 
+def offline_reassignment_hops_rows(
+    db: Session,
+    request: Any,
+    source: Any,
+) -> dict[tuple[tuple[str, str, str, str, str, str, str], str], dict[str, int]]:
+    dimensions = volumetrics_dimension_expressions(source)
+    period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
+    reassignment_count = non_negative_reassignment_expression(source)
+    high_reassignment_condition = reassignment_count >= 2
+    statement = (
+        select(
+            *[expression.label(name) for name, expression in dimensions.items()],
+            period_expression.label("period_start"),
+            func.count(source.c.id).label("total_created_tickets"),
+            func.count(source.c.id)
+            .filter(high_reassignment_condition)
+            .label("tickets_with_2_plus_reassignments"),
+            func.sum(case((high_reassignment_condition, reassignment_count), else_=0)).label(
+                "total_reassignment_hops_ge_2",
+            ),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(source, request, include_date_bounds=False),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= normalize_dashboard_datetime(request.start_datetime),
+            source.c.created_at <= normalize_dashboard_datetime(request.end_datetime),
+        )
+        .group_by(*dimensions.values(), period_expression)
+    )
+    results: dict[tuple[tuple[str, str, str, str, str, str, str], str], dict[str, int]] = {}
+    for row in db.execute(statement).mappings().all():
+        period_start = row["period_start"]
+        if period_start is None:
+            continue
+        results[(dimension_key(row), month_key(period_start))] = {
+            "total_created_tickets": int(row["total_created_tickets"] or 0),
+            "tickets_with_2_plus_reassignments": int(
+                row["tickets_with_2_plus_reassignments"] or 0,
+            ),
+            "total_reassignment_hops_ge_2": int(row["total_reassignment_hops_ge_2"] or 0),
+        }
+    return results
+
+
 def distinct_dimension_keys(
     db: Session,
     request: Any,
@@ -490,6 +536,7 @@ def build_monthly_volumetrics_rows(
     )
     exit_rows = offline_period_rows(db, request, source, source.c.exit_at, "exit_count")
     sla_rows = offline_sla_rows(db, request, source)
+    reassignment_hops_rows = offline_reassignment_hops_rows(db, request, source)
     initial_created = offline_initial_counts(db, request, source, source.c.created_at)
     initial_exits = offline_initial_counts(db, request, source, source.c.exit_at)
 
@@ -500,6 +547,7 @@ def build_monthly_volumetrics_rows(
         *cancelled_rows.keys(),
         *exit_rows.keys(),
         *sla_rows.keys(),
+        *reassignment_hops_rows.keys(),
     ]:
         dimension_keys.add(row_key)
 
@@ -513,12 +561,21 @@ def build_monthly_volumetrics_rows(
             running_created += created_count
             running_exits += exit_rows.get((key, period_key), 0)
             sla_values = sla_rows.get((key, period_key), {})
+            reassignment_values = reassignment_hops_rows.get((key, period_key), {})
             rows.append(
                 {
                     **dimension_dict(key),
                     "period_key": period_key,
                     "period_label": period.label,
                     "created_count": created_count,
+                    "tickets_with_2_plus_reassignments": reassignment_values.get(
+                        "tickets_with_2_plus_reassignments",
+                        0,
+                    ),
+                    "total_reassignment_hops_ge_2": reassignment_values.get(
+                        "total_reassignment_hops_ge_2",
+                        0,
+                    ),
                     "resolved_closed_count": completed_rows.get((key, period_key), 0),
                     "canceled_closed_incomplete_count": cancelled_rows.get((key, period_key), 0),
                     "backlog_open": max(running_created - running_exits, 0),
@@ -555,6 +612,36 @@ def build_monthly_volumetrics_rows(
                 },
             )
     return rows
+
+
+def build_reassignment_hops_payload(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "rows": [
+            {
+                **dimension_dict(
+                    (
+                        str(row["scope"]),
+                        str(row["ticket_type"]),
+                        str(row["functional_track"]),
+                        str(row["ams_owner"]),
+                        str(row["functional_track_ams_owner"]),
+                        str(row["sap_non_sap"]),
+                        str(row["business_critical"]),
+                    ),
+                ),
+                "period_key": row["period_key"],
+                "period_label": row["period_label"],
+                "total_created_tickets": int(row.get("created_count") or 0),
+                "tickets_with_2_plus_reassignments": int(
+                    row.get("tickets_with_2_plus_reassignments") or 0,
+                ),
+                "total_reassignment_hops_ge_2": int(
+                    row.get("total_reassignment_hops_ge_2") or 0,
+                ),
+            }
+            for row in monthly_rows
+        ],
+    }
 
 
 def pattern_bucket_metadata(start_date: datetime, end_date: datetime) -> dict[str, list[dict[str, Any]]]:
@@ -1290,6 +1377,7 @@ def build_volumetrics_payload(
             "kpi_trends": {
                 "mttr": {"rows": []},
                 "duration_buckets": {"periods": [], "buckets": [], "rows": []},
+                "reassignment_hops": {"rows": []},
             },
             "placeholders": {
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
@@ -1327,6 +1415,7 @@ def build_volumetrics_payload(
             "kpi_trends": {
                 "mttr": {"rows": []},
                 "duration_buckets": {"periods": [], "buckets": [], "rows": []},
+                "reassignment_hops": {"rows": []},
             },
             "placeholders": {
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
@@ -1392,6 +1481,7 @@ def build_volumetrics_payload(
         "kpi_trends": {
             "mttr": build_kpi_mttr_payload(db, project_id, start_datetime, end_datetime),
             "duration_buckets": build_duration_bucket_payload(db, project_id),
+            "reassignment_hops": build_reassignment_hops_payload(monthly_rows),
         },
         "placeholders": {
             "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
@@ -3832,8 +3922,77 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const commentaryKey = ticketType === "incident" ? "incident_duration_buckets_row" : "sc_task_duration_buckets_row";
       return `<section class="panel full"><p class="label">Duration Buckets</p><h3>${esc(title)}</h3><div class="duration-grid">${durationRows(ticketType).map(durationBucketChart).join("")}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: commentaryKey })}</section>`;
     }
+    function reassignmentHopsPoints() {
+      const rows = (DASHBOARD.volumetrics.kpi_trends?.reassignment_hops?.rows || []).filter(offlineFilterMatch);
+      const totals = new Map();
+      rows.forEach((row) => {
+        const current = totals.get(row.period_key) || { created: 0, tickets: 0, hops: 0 };
+        current.created += Number(row.total_created_tickets || 0);
+        current.tickets += Number(row.tickets_with_2_plus_reassignments || 0);
+        current.hops += Number(row.total_reassignment_hops_ge_2 || 0);
+        totals.set(row.period_key, current);
+      });
+      return DASHBOARD.volumetrics.periods.map((period) => {
+        const values = totals.get(period.period_key) || { created: 0, tickets: 0, hops: 0 };
+        return {
+          label: period.period_label,
+          period_key: period.period_key,
+          created: values.created,
+          tickets: values.tickets,
+          hops: values.hops,
+          ticketPct: values.created ? (values.tickets / values.created) * 100 : null,
+          hopsPct: values.created ? (values.hops / values.created) * 100 : null
+        };
+      });
+    }
+    function reassignmentHopsLineChart(data) {
+      if (!data.length) return `<p class="muted" style="padding:12px">No reassignment data available.</p>`;
+      const width = 1040;
+      const height = 380;
+      const margin = { top: 58, right: 76, bottom: 82, left: 64 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const ticketMax = Math.max(1, ...data.map((row) => Number(row.tickets || 0)));
+      const pctMax = Math.max(1, ...data.map((row) => Number(row.hopsPct || 0)));
+      const xAt = (index) => margin.left + (plotWidth * index) / Math.max(1, data.length - 1);
+      const ticketY = (value) => margin.top + plotHeight - (Number(value || 0) / ticketMax) * plotHeight;
+      const pctY = (value) => margin.top + plotHeight - (Number(value || 0) / pctMax) * plotHeight;
+      const ticketPoints = data.map((row, index) => ({ x: xAt(index), y: ticketY(row.tickets), value: row.tickets }));
+      const pctPoints = data.map((row, index) => ({ x: xAt(index), y: row.hopsPct === null ? null : pctY(row.hopsPct), value: row.hopsPct }));
+      const ticketPath = ticketPoints.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
+      const pctPath = pctPoints.filter((point) => point.y !== null).map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
+      const gridLines = Array.from({ length: 4 }, (_, index) => {
+        const y = margin.top + (plotHeight * index) / 3;
+        return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#e2e8f0"></line>`;
+      }).join("");
+      const axisLabels = data.map((row, index) => {
+        const x = xAt(index);
+        return `<text x="${x}" y="${height - 38}" text-anchor="end" transform="rotate(-35 ${x} ${height - 38})" font-size="10" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
+      }).join("");
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Reassignment hops trend">
+        ${gridLines}
+        <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + plotHeight}" stroke="#94a3b8"></line>
+        <line x1="${width - margin.right}" y1="${margin.top}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#94a3b8"></line>
+        <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
+        <text x="18" y="${margin.top + plotHeight / 2}" transform="rotate(-90 18 ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">Tickets with 2+ reassignments</text>
+        <text x="${width - 18}" y="${margin.top + plotHeight / 2}" transform="rotate(90 ${width - 18} ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">Hops % of created</text>
+        <path d="${ticketPath}" fill="none" stroke="${COLORS.teal}" stroke-width="3"></path>
+        <path d="${pctPath}" fill="none" stroke="${COLORS.purple}" stroke-width="3"></path>
+        ${ticketPoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${COLORS.teal}" stroke-width="2"></circle><text x="${point.x}" y="${Math.max(margin.top + 12, point.y - 12)}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${fmt(point.value)}</text>`).join("")}
+        ${pctPoints.filter((point) => point.y !== null).map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${COLORS.purple}" stroke-width="2"></circle><text x="${point.x}" y="${Math.min(margin.top + plotHeight + 28, point.y + 22)}" text-anchor="middle" font-size="10" font-weight="900" fill="${COLORS.purple}" stroke="#fff" stroke-width="3" paint-order="stroke">${Number(point.value || 0).toFixed(1)}%</text>`).join("")}
+        ${axisLabels}
+      </svg>${legend([{ name: "Tickets with 2+ reassignments", color: COLORS.teal }, { name: "Hops % of created", color: COLORS.purple }])}`;
+    }
+    function reassignmentHopsTable(data) {
+      return `<div class="table-card"><div class="table-scroll"><table class="applications-table"><thead><tr><th>Month</th><th>Total Created Tickets</th><th>Tickets with 2+ Reassignments</th><th>Total Reassignment Hops for 2+ Reassignment Tickets</th><th>% Tickets with 2+ Reassignments</th><th>% Reassignment Hops to Created Volume</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.created)}</td><td>${fmt(row.tickets)}</td><td>${fmt(row.hops)}</td><td>${row.ticketPct === null ? "N/A" : `${row.ticketPct.toFixed(1)}%`}</td><td>${row.hopsPct === null ? "N/A" : `${row.hopsPct.toFixed(1)}%`}</td></tr>`).join("")}</tbody></table></div></div>`;
+    }
+    function reassignmentHopsGroup() {
+      const points = reassignmentHopsPoints();
+      return `<section class="panel full" data-commentary-key="reassignment_hops_trend"><p class="label">KPI Trends</p><h3>Reassignment / Hops Trend</h3><p class="muted">Tickets with 2+ reassignments indicate handoffs between support teams. The percentage shows reassignment hops as a share of monthly created ticket volume.</p><section class="chart-card panel full"><h3>Monthly Reassignment / Hops Trend</h3><p class="muted">Generic Tickets includes Incidents and SC Tasks only. Problems and Changes are excluded.</p><div class="chart-frame chart-stage">${reassignmentHopsLineChart(points)}</div>${reassignmentHopsTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "reassignment_hops_trend" })}</section>`;
+    }
     function renderKpiTrends() {
       return `
+        ${reassignmentHopsGroup()}
         ${mttrGroup("Incident MTTR by Priority", "incident")}
         ${mttrGroup("SC Task MTTR by Priority", "sc_task")}
         ${durationGroup("Incident Resolved Volume by Resolution Duration", "incident")}

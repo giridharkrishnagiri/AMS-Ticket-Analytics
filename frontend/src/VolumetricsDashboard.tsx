@@ -31,6 +31,7 @@ import {
   getDashboardVolumetricsIncidentBatchTrend,
   getDashboardVolumetricsKpiDurationBuckets,
   getDashboardVolumetricsKpiMttrTrends,
+  getDashboardVolumetricsKpiReassignmentHopsTrend,
   getDashboardVolumetricsPriorityDistribution,
   getDashboardVolumetricsSlaTrends,
   getDashboardVolumetricsSummary,
@@ -60,6 +61,8 @@ import type {
   DashboardVolumetricsPriorityDistribution,
   DashboardVolumetricsPriorityDistributionPoint,
   DashboardVolumetricsRankingWindow,
+  DashboardVolumetricsReassignmentHopsPoint,
+  DashboardVolumetricsReassignmentHopsTrend,
   DashboardVolumetricsRequest,
   DashboardVolumetricsSlaTrends,
   DashboardVolumetricsSplitDatum,
@@ -290,12 +293,26 @@ const emptyDurationBuckets: DashboardVolumetricsKpiDurationBuckets = {
   sc_task: [],
 };
 
+const emptyReassignmentHopsTrend: DashboardVolumetricsReassignmentHopsTrend = {
+  time_grain: "monthly",
+  date_range: {
+    from_date: "",
+    to_date: "",
+    complete_month_cutoff_applied: true,
+  },
+  points: [],
+  data_notes: [],
+  warnings: [],
+};
+
 const chartColors = {
   created: "#0f766e",
   resolved: "#2563eb",
   canceled: "#dc2626",
   backlog: "#d97706",
   average: "#7c3aed",
+  reassignment: "#0f766e",
+  reassignmentPct: "#7c3aed",
   pattern: "#0891b2",
   patternAlt: "#7c3aed",
   priority: ["#0f766e", "#2563eb", "#d97706", "#7c3aed", "#dc2626", "#64748b"],
@@ -980,6 +997,9 @@ function VolumetricsDashboard({
   const [kpiDurationBuckets, setKpiDurationBuckets] = useState<
     LoadState<DashboardVolumetricsKpiDurationBuckets>
   >(createLoadState(emptyDurationBuckets));
+  const [reassignmentHopsTrend, setReassignmentHopsTrend] = useState<
+    LoadState<DashboardVolumetricsReassignmentHopsTrend>
+  >(createLoadState(emptyReassignmentHopsTrend));
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
   const filterCountsRequestRef = useRef(0);
@@ -1193,6 +1213,7 @@ function VolumetricsDashboard({
     setDistributionSplits(createLoadState(emptyDistributionSplits, "loading"));
     setKpiMttrTrends(createLoadState(emptyKpiMttrTrends, "loading"));
     setKpiDurationBuckets(createLoadState(emptyDurationBuckets, "loading"));
+    setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend, "loading"));
 
     void getDashboardVolumetricsSummary(requestBody)
       .then((nextSummary) => {
@@ -1397,6 +1418,22 @@ function VolumetricsDashboard({
         });
       });
 
+    void getDashboardVolumetricsKpiReassignmentHopsTrend(requestBody)
+      .then((nextReassignmentHopsTrend) => {
+        setReassignmentHopsTrend({
+          status: "success",
+          data: nextReassignmentHopsTrend,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setReassignmentHopsTrend({
+          status: "error",
+          data: emptyReassignmentHopsTrend,
+          error: errorMessage(error, "Unable to load reassignment hops trend"),
+        });
+      });
+
   }, [
     createdPatternType,
     hourlyDayType,
@@ -1438,6 +1475,7 @@ function VolumetricsDashboard({
       setDistributionSplits(createLoadState(emptyDistributionSplits));
       setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
       setKpiDurationBuckets(createLoadState(emptyDurationBuckets));
+      setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend));
       setRangeInitializedProjectId("");
     }
   }, [loadedProjectId, projectId]);
@@ -1965,6 +2003,9 @@ function VolumetricsDashboard({
             mttr={kpiMttrTrends.data}
             mttrError={kpiMttrTrends.error}
             mttrStatus={kpiMttrTrends.status}
+            reassignmentHops={reassignmentHopsTrend.data}
+            reassignmentHopsError={reassignmentHopsTrend.error}
+            reassignmentHopsStatus={reassignmentHopsTrend.status}
             ticketType={ticketType}
             timeGrain={timeGrain}
             commentaryForChart={(chartKey) =>
@@ -2972,6 +3013,9 @@ function KpiTrends({
   mttr,
   mttrError,
   mttrStatus,
+  reassignmentHops,
+  reassignmentHopsError,
+  reassignmentHopsStatus,
   ticketType,
   timeGrain,
 }: {
@@ -2982,11 +3026,20 @@ function KpiTrends({
   mttr: DashboardVolumetricsKpiMttrTrends;
   mttrError: string | null;
   mttrStatus: LoadStatus;
+  reassignmentHops: DashboardVolumetricsReassignmentHopsTrend;
+  reassignmentHopsError: string | null;
+  reassignmentHopsStatus: LoadStatus;
   ticketType: VolumetricsTicketType;
   timeGrain: VolumetricsTimeGrain;
 }) {
   return (
     <>
+      <ReassignmentHopsTrendChart
+        commentary={commentaryForChart("reassignment_hops_trend")}
+        data={reassignmentHops}
+        error={reassignmentHopsError}
+        status={reassignmentHopsStatus}
+      />
       <MttrPriorityGroup
         data={mttr.incident}
         error={mttrError}
@@ -3026,6 +3079,227 @@ function KpiTrends({
         valueTicketType="sc_task"
       />
     </>
+  );
+}
+
+function ReassignmentHopsTrendChart({
+  commentary,
+  data,
+  error,
+  status,
+}: {
+  commentary: ReactNode;
+  data: DashboardVolumetricsReassignmentHopsTrend;
+  error: string | null;
+  status: LoadStatus;
+}) {
+  const title = "Reassignment / Hops Trend";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const rows = data.points.map((point) => ({
+    ...point,
+    tickets_label:
+      point.tickets_with_2_plus_reassignments > 0
+        ? String(point.tickets_with_2_plus_reassignments)
+        : null,
+    hops_pct_label:
+      point.reassignment_hops_pct_of_created !== null
+        ? formatPercent(point.reassignment_hops_pct_of_created)
+        : null,
+  }));
+  const hasRows = rows.length > 0;
+  const hasValues = rows.some(
+    (row) =>
+      row.total_created_tickets > 0 ||
+      row.tickets_with_2_plus_reassignments > 0 ||
+      row.total_reassignment_hops_ge_2 > 0
+  );
+  const chartWidth = trendChartWidth(rows.length, "monthly", plotWidth);
+  const canCopy = status !== "loading" && hasRows && hasValues;
+
+  return (
+    <section className="panel kpi-trends-section">
+      <div className="applications-chart-header">
+        <div>
+          <p className="label">KPI Trends</p>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Monthly tickets with 2+ reassignments and reassignment hops as % of created volume.
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      <p className="muted-text">
+        Tickets with 2+ reassignments indicate handoffs between support teams. The percentage
+        shows reassignment hops as a share of monthly created ticket volume.
+      </p>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No reassignment data available.</p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <>
+          <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+            <div className="applications-chart-scroll">
+              <div className="applications-chart-stage">
+                <ComposedChart
+                  data={rows}
+                  width={chartWidth}
+                  height={380}
+                  margin={{ top: 58, right: 72, bottom: 82, left: 58 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="period_label"
+                    angle={-35}
+                    height={86}
+                    interval={0}
+                    textAnchor="end"
+                    tickMargin={12}
+                  />
+                  <YAxis
+                    yAxisId="tickets"
+                    label={{
+                      value: "Tickets with 2+ reassignments",
+                      angle: -90,
+                      position: "insideLeft",
+                    }}
+                    tickFormatter={(value) => formatNumber(Number(value))}
+                  />
+                  <YAxis
+                    yAxisId="percentage"
+                    orientation="right"
+                    label={{
+                      value: "Hops % of created",
+                      angle: 90,
+                      position: "insideRight",
+                    }}
+                    tickFormatter={(value) => `${formatNumber(Number(value), 0)}%`}
+                  />
+                  <Tooltip
+                    formatter={(value, name) => {
+                      if (name === "Hops % of created") {
+                        return [formatPercent(Number(value)), name];
+                      }
+                      return [formatNumber(Number(value)), name];
+                    }}
+                  />
+                  <Legend />
+                  <Line
+                    connectNulls
+                    dataKey="tickets_with_2_plus_reassignments"
+                    dot={{ r: 3 }}
+                    name="Tickets with 2+ reassignments"
+                    stroke={chartColors.reassignment}
+                    strokeWidth={2.5}
+                    type="monotone"
+                    yAxisId="tickets"
+                  >
+                    <LabelList
+                      content={(props) =>
+                        renderMttrPointLabel({
+                          ...props,
+                          verticalOffset: -16,
+                        })
+                      }
+                      dataKey="tickets_label"
+                    />
+                  </Line>
+                  <Line
+                    connectNulls
+                    dataKey="reassignment_hops_pct_of_created"
+                    dot={{ r: 3 }}
+                    name="Hops % of created"
+                    stroke={chartColors.reassignmentPct}
+                    strokeWidth={2.5}
+                    type="monotone"
+                    yAxisId="percentage"
+                  >
+                    <LabelList
+                      content={(props) =>
+                        renderMttrPointLabel({
+                          ...props,
+                          verticalOffset: 24,
+                        })
+                      }
+                      dataKey="hops_pct_label"
+                    />
+                  </Line>
+                </ComposedChart>
+              </div>
+            </div>
+          </div>
+
+          <p className="muted-text">
+            Generic Tickets includes Incidents and SC Tasks only. Problems and Changes are
+            excluded.
+          </p>
+          <ReassignmentHopsTable points={data.points} />
+        </>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {data.data_notes.length ? (
+        <ul className="muted-text volumetrics-note-list">
+          {data.data_notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+      {data.warnings.length ? (
+        <ul className="error-text volumetrics-note-list">
+          {data.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+      {commentary}
+    </section>
+  );
+}
+
+function ReassignmentHopsTable({
+  points,
+}: {
+  points: DashboardVolumetricsReassignmentHopsPoint[];
+}) {
+  return (
+    <div className="applications-table-frame volumetrics-data-table-frame">
+      <table className="applications-table volumetrics-data-table">
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th>Total Created Tickets</th>
+            <th>Tickets with 2+ Reassignments</th>
+            <th>Total Reassignment Hops for 2+ Reassignment Tickets</th>
+            <th>% Tickets with 2+ Reassignments</th>
+            <th>% Reassignment Hops to Created Volume</th>
+          </tr>
+        </thead>
+        <tbody>
+          {points.map((point) => (
+            <tr key={point.period_key}>
+              <td>{point.period_label}</td>
+              <td>{formatNumber(point.total_created_tickets)}</td>
+              <td>{formatNumber(point.tickets_with_2_plus_reassignments)}</td>
+              <td>{formatNumber(point.total_reassignment_hops_ge_2)}</td>
+              <td>{formatPercent(point.pct_tickets_with_2_plus_reassignments)}</td>
+              <td>{formatPercent(point.reassignment_hops_pct_of_created)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

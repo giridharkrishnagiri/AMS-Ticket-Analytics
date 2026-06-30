@@ -60,6 +60,7 @@ from app.schemas.dashboard import (
     VolumetricsKpiDurationBucketsResponse,
     VolumetricsKpiMttrTrendsResponse,
     VolumetricsPriorityDistributionResponse,
+    VolumetricsReassignmentHopsTrendResponse,
     VolumetricsRequest,
     VolumetricsSlaTrendsResponse,
     VolumetricsSummaryResponse,
@@ -103,6 +104,7 @@ from app.services.dashboard import (
     volumetrics_incident_batch_trend,
     volumetrics_kpi_duration_buckets,
     volumetrics_kpi_mttr_trends,
+    volumetrics_kpi_reassignment_hops_trend,
     volumetrics_priority_distribution,
     volumetrics_sla_trends,
     volumetrics_summary,
@@ -598,6 +600,20 @@ def get_dashboard_volumetrics_kpi_duration_buckets(
 ) -> dict[str, object]:
     try:
         return volumetrics_kpi_duration_buckets(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/kpi-reassignment-hops-trend",
+    response_model=VolumetricsReassignmentHopsTrendResponse,
+)
+def get_dashboard_volumetrics_kpi_reassignment_hops_trend(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_kpi_reassignment_hops_trend(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

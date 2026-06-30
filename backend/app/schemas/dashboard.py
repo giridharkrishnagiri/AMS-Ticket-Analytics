@@ -849,3 +849,26 @@ class VolumetricsKpiDurationBucketsResponse(BaseModel):
     months: list[str]
     incident: list[VolumetricsDurationBucketRow]
     sc_task: list[VolumetricsDurationBucketRow]
+
+
+class VolumetricsReassignmentHopsDateRange(BaseModel):
+    from_date: datetime
+    to_date: datetime
+    complete_month_cutoff_applied: bool
+
+
+class VolumetricsReassignmentHopsPoint(PeriodMetricRow):
+    period_key: str
+    total_created_tickets: int
+    tickets_with_2_plus_reassignments: int
+    total_reassignment_hops_ge_2: int
+    pct_tickets_with_2_plus_reassignments: float | None
+    reassignment_hops_pct_of_created: float | None
+
+
+class VolumetricsReassignmentHopsTrendResponse(BaseModel):
+    time_grain: str
+    date_range: VolumetricsReassignmentHopsDateRange
+    points: list[VolumetricsReassignmentHopsPoint]
+    data_notes: list[str]
+    warnings: list[str]

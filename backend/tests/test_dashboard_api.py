@@ -2835,6 +2835,180 @@ def test_volumetrics_prompt17_detailed_splits_mttr_and_duration_buckets() -> Non
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_reassignment_hops_trend_counts_hops_and_filters() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        jan_specs = [
+            ("INC-HOPS-JAN-0", "INCIDENT", 0, "IT-SAP-Group A"),
+            ("INC-HOPS-JAN-1", "INCIDENT", 1, "IT-SAP-Group A"),
+            ("INC-HOPS-JAN-2", "INCIDENT", 2, "IT-SAP-Group A"),
+            ("SCTASK-HOPS-JAN-3", "SERVICE_CATALOG_TASK", 3, "IT-SAP-Group A"),
+            ("INC-HOPS-JAN-NEG", "INCIDENT", -4, "IT-NSA-Group B"),
+        ]
+        for ticket_number, ticket_type, reassignment_count, assignment_group in jan_specs:
+            ticket = add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                ticket_number,
+                ticket_type,
+                dt("2025-01-10T00:00:00"),
+                state="Resolved" if ticket_type == "INCIDENT" else "Closed",
+                resolved_at=dt("2025-01-12T00:00:00") if ticket_type == "INCIDENT" else None,
+                closed_at=dt("2025-01-12T00:00:00")
+                if ticket_type == "SERVICE_CATALOG_TASK"
+                else None,
+                assignment_group=assignment_group,
+                reassignment_count=reassignment_count,
+            )
+            ticket.functional_track = "Data"
+            ticket.ams_owner = "Owner A"
+
+        feb_incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-HOPS-FEB-4",
+            "INCIDENT",
+            dt("2025-02-10T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2025-02-11T00:00:00"),
+            assignment_group="IT-SAP-Group A",
+            reassignment_count=4,
+        )
+        feb_incident.functional_track = "Data"
+        feb_incident.ams_owner = "Owner A"
+        feb_task = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-HOPS-FEB-1",
+            "SERVICE_CATALOG_TASK",
+            dt("2025-02-12T00:00:00"),
+            state="Closed",
+            closed_at=dt("2025-02-13T00:00:00"),
+            assignment_group="IT-NSA-Group B",
+            reassignment_count=1,
+        )
+        feb_task.functional_track = "Run"
+        feb_task.ams_owner = "Owner B"
+        db.add(
+            AssessmentOutOfScopeTicket(
+                project_id=project_id,
+                upload_batch_id=batch_id,
+                ticket_number="INC-HOPS-OOS-FEB-2",
+                ticket_type="INCIDENT",
+                created_at=dt("2025-02-15T00:00:00"),
+                resolved_at=dt("2025-02-16T00:00:00"),
+                state="Resolved",
+                assignment_group="IT-SAP-OOS",
+                sap_non_sap="SAP",
+                functional_track="Out",
+                ams_owner="Owner OOS",
+                support_lead="Lead OOS",
+                reassignment_count=2,
+                out_of_scope_reason="assignment_group_not_in_application_inventory",
+            ),
+        )
+        partial_month_ticket = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-HOPS-JUN-PARTIAL",
+            "INCIDENT",
+            dt("2026-06-05T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-06-06T00:00:00"),
+            assignment_group="IT-SAP-Group A",
+            reassignment_count=9,
+        )
+        partial_month_ticket.functional_track = "Data"
+        partial_month_ticket.ams_owner = "Owner A"
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "in_scope",
+            "ticket_type": "all",
+            "time_grain": "monthly",
+            "start_datetime": "2025-01-01T00:00:00+00:00",
+            "end_datetime": "2026-06-30T23:59:59+00:00",
+            "filters": {},
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/kpi-reassignment-hops-trend",
+                json=request_body,
+            )
+            all_scope_response = client.post(
+                "/api/dashboard/volumetrics/kpi-reassignment-hops-trend",
+                json={**request_body, "scope": "all"},
+            )
+            incident_response = client.post(
+                "/api/dashboard/volumetrics/kpi-reassignment-hops-trend",
+                json={**request_body, "ticket_type": "incident"},
+            )
+            filtered_response = client.post(
+                "/api/dashboard/volumetrics/kpi-reassignment-hops-trend",
+                json={
+                    **request_body,
+                    "scope": "all",
+                    "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        rows_by_month = {row["period_key"]: row for row in payload["points"]}
+        assert payload["time_grain"] == "monthly"
+        assert payload["date_range"]["complete_month_cutoff_applied"] is True
+        assert "2026-06" not in rows_by_month
+        assert rows_by_month["2025-01"]["total_created_tickets"] == 5
+        assert rows_by_month["2025-01"]["tickets_with_2_plus_reassignments"] == 2
+        assert rows_by_month["2025-01"]["total_reassignment_hops_ge_2"] == 5
+        assert rows_by_month["2025-01"]["pct_tickets_with_2_plus_reassignments"] == 40
+        assert rows_by_month["2025-01"]["reassignment_hops_pct_of_created"] == 100
+        assert rows_by_month["2025-02"]["total_created_tickets"] == 2
+        assert rows_by_month["2025-02"]["tickets_with_2_plus_reassignments"] == 1
+        assert rows_by_month["2025-02"]["total_reassignment_hops_ge_2"] == 4
+        assert rows_by_month["2025-02"]["reassignment_hops_pct_of_created"] == 200
+        assert "Problems and Changes are excluded." in payload["data_notes"]
+        assert "normalized_payload" not in response.text
+        assert "cmdb_payload" not in response.text
+
+        assert all_scope_response.status_code == 200
+        all_scope_february = {
+            row["period_key"]: row for row in all_scope_response.json()["points"]
+        }["2025-02"]
+        assert all_scope_february["total_created_tickets"] == 3
+        assert all_scope_february["tickets_with_2_plus_reassignments"] == 2
+        assert all_scope_february["total_reassignment_hops_ge_2"] == 6
+
+        assert incident_response.status_code == 200
+        incident_january = {
+            row["period_key"]: row for row in incident_response.json()["points"]
+        }["2025-01"]
+        assert incident_january["total_created_tickets"] == 4
+        assert incident_january["tickets_with_2_plus_reassignments"] == 1
+        assert incident_january["total_reassignment_hops_ge_2"] == 2
+        assert incident_january["reassignment_hops_pct_of_created"] == 50
+
+        assert filtered_response.status_code == 200
+        filtered_february = {
+            row["period_key"]: row for row in filtered_response.json()["points"]
+        }["2025-02"]
+        assert filtered_february["total_created_tickets"] == 1
+        assert filtered_february["tickets_with_2_plus_reassignments"] == 1
+        assert filtered_february["total_reassignment_hops_ge_2"] == 4
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
@@ -3167,6 +3341,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "hosting_env_distribution_row" in document
         assert "incident_duration_buckets_row" in document
         assert "sc_task_duration_buckets_row" in document
+        assert "Reassignment / Hops Trend" in document
+        assert "reassignment_hops_trend" in document
         assert "sap_non_sap_tickets_individual" not in document
         assert "architecture_incidents_individual" not in document
         assert "install_sc_tasks_individual" not in document
@@ -3342,6 +3518,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         ] == "Latest complete 6 months"
         assert payload["volumetrics"]["kpi_trends"]["mttr"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["duration_buckets"]["rows"]
+        assert payload["volumetrics"]["kpi_trends"]["reassignment_hops"]["rows"]
         detailed_row = payload["volumetrics"]["detailed_volume_trends"]["application_rows"][0]
         assert "ticket_number" not in detailed_row
         assert "short_description" not in detailed_row
@@ -3361,6 +3538,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "short_description" not in kpi_row
         assert "caller_id" not in kpi_row
         assert "normalized_payload" not in kpi_row
+        reassignment_row = payload["volumetrics"]["kpi_trends"]["reassignment_hops"]["rows"][0]
+        assert "tickets_with_2_plus_reassignments" in reassignment_row
+        assert "total_reassignment_hops_ge_2" in reassignment_row
+        assert "ticket_number" not in reassignment_row
+        assert "short_description" not in reassignment_row
+        assert "normalized_payload" not in reassignment_row
         assert "ticket_number" not in payload["volumetrics"]["monthly_rows"][0]
         assert "business_critical" in payload["volumetrics"]["monthly_rows"][0]
         assert "normalized_payload" not in payload["volumetrics"]["monthly_rows"][0]

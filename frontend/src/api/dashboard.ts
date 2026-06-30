@@ -803,6 +803,32 @@ export type DashboardVolumetricsKpiDurationBuckets = {
   sc_task: DashboardVolumetricsDurationBucketRow[];
 };
 
+export type DashboardVolumetricsReassignmentHopsDateRange = {
+  from_date: string;
+  to_date: string;
+  complete_month_cutoff_applied: boolean;
+};
+
+export type DashboardVolumetricsReassignmentHopsPoint = {
+  period_key: string;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  total_created_tickets: number;
+  tickets_with_2_plus_reassignments: number;
+  total_reassignment_hops_ge_2: number;
+  pct_tickets_with_2_plus_reassignments: number | null;
+  reassignment_hops_pct_of_created: number | null;
+};
+
+export type DashboardVolumetricsReassignmentHopsTrend = {
+  time_grain: "monthly";
+  date_range: DashboardVolumetricsReassignmentHopsDateRange;
+  points: DashboardVolumetricsReassignmentHopsPoint[];
+  data_notes: string[];
+  warnings: string[];
+};
+
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
   for (const value of values ?? []) {
     if (value.trim()) {
@@ -1248,6 +1274,15 @@ export function getDashboardVolumetricsKpiDurationBuckets(
 ): Promise<DashboardVolumetricsKpiDurationBuckets> {
   return postVolumetricsRequest<DashboardVolumetricsKpiDurationBuckets>(
     "/dashboard/volumetrics/kpi-duration-buckets",
+    input
+  );
+}
+
+export function getDashboardVolumetricsKpiReassignmentHopsTrend(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsReassignmentHopsTrend> {
+  return postVolumetricsRequest<DashboardVolumetricsReassignmentHopsTrend>(
+    "/dashboard/volumetrics/kpi-reassignment-hops-trend",
     input
   );
 }

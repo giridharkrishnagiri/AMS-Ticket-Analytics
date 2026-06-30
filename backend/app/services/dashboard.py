@@ -1756,6 +1756,7 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         model.install_type.label("install_type"),
         model.hosting_env.label("hosting_env"),
         model.is_batch_related.label("is_batch_related"),
+        model.reassignment_count.label("reassignment_count"),
         model.business_duration_seconds.label("business_duration_seconds"),
         model.response_sla_breached.label("response_sla_breached"),
         model.resolution_sla_breached.label("resolution_sla_breached"),
@@ -4131,6 +4132,108 @@ def volumetrics_kpi_duration_buckets(db: Session, request: Any) -> dict[str, Any
             ticket_type="sc_task",
             completion_field="closed_at",
         ),
+    }
+
+
+def non_negative_reassignment_expression(source: Any) -> Any:
+    reassignment_count = func.coalesce(source.c.reassignment_count, 0)
+    return case((reassignment_count < 0, 0), else_=reassignment_count)
+
+
+def rounded_percentage(numerator: int, denominator: int) -> float | None:
+    percentage_value = percentage(numerator, denominator)
+    return round(percentage_value, 2) if percentage_value is not None else None
+
+
+def volumetrics_kpi_reassignment_hops_trend(db: Session, request: Any) -> dict[str, Any]:
+    complete_request = complete_month_clamped_request(db, request)
+    monthly_request = replace_request_value(complete_request, "time_grain", "monthly")
+    periods = build_volumetrics_periods(monthly_request)
+    source = volumetrics_source_subquery(monthly_request)
+    period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
+    reassignment_count = non_negative_reassignment_expression(source)
+    high_reassignment_condition = reassignment_count >= 2
+
+    statement = (
+        select(
+            period_expression.label("period_start"),
+            func.count(source.c.id).label("total_created_tickets"),
+            func.count(source.c.id)
+            .filter(high_reassignment_condition)
+            .label("tickets_with_2_plus_reassignments"),
+            func.sum(
+                case(
+                    (high_reassignment_condition, reassignment_count),
+                    else_=0,
+                ),
+            ).label("total_reassignment_hops_ge_2"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                monthly_request,
+                include_date_bounds=False,
+            ),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= normalize_dashboard_datetime(monthly_request.start_datetime),
+            source.c.created_at <= normalize_dashboard_datetime(monthly_request.end_datetime),
+        )
+        .group_by(period_expression)
+        .order_by(period_expression)
+    )
+    rows_by_period: dict[str, dict[str, Any]] = {}
+    for row in db.execute(statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], "monthly")
+        if period_start is None:
+            continue
+        rows_by_period[volumetrics_period_lookup_key(period_start, "monthly")] = dict(row)
+
+    points: list[dict[str, Any]] = []
+    for period in periods:
+        period_key = volumetrics_period_lookup_key(period.start, "monthly")
+        values = rows_by_period.get(period_key, {})
+        total_created = int_count(values.get("total_created_tickets"))
+        high_reassignment_tickets = int_count(
+            values.get("tickets_with_2_plus_reassignments"),
+        )
+        total_hops = int_count(values.get("total_reassignment_hops_ge_2"))
+        points.append(
+            {
+                "period_key": period_key,
+                "period_label": period.label,
+                "period_start": period.start,
+                "period_end": period.end,
+                "total_created_tickets": total_created,
+                "tickets_with_2_plus_reassignments": high_reassignment_tickets,
+                "total_reassignment_hops_ge_2": total_hops,
+                "pct_tickets_with_2_plus_reassignments": rounded_percentage(
+                    high_reassignment_tickets,
+                    total_created,
+                ),
+                "reassignment_hops_pct_of_created": rounded_percentage(
+                    total_hops,
+                    total_created,
+                ),
+            },
+        )
+
+    return {
+        "time_grain": "monthly",
+        "date_range": {
+            "from_date": monthly_request.start_datetime,
+            "to_date": monthly_request.end_datetime,
+            "complete_month_cutoff_applied": True,
+        },
+        "points": points,
+        "data_notes": [
+            "Generic Tickets includes Incidents and SC Tasks only.",
+            "Problems and Changes are excluded.",
+            "Reassignment threshold is >= 2.",
+            "Monthly grouping uses created date.",
+            "Complete-month cutoff applied.",
+        ],
+        "warnings": [],
     }
 
 
