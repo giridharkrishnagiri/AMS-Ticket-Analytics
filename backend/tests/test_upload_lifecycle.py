@@ -701,6 +701,38 @@ def test_ingested_and_normalized_batches_move_from_active_to_history() -> None:
         cleanup_client(db, client_id)
 
 
+def test_listing_upload_batches_does_not_mutate_batch_status_timestamps() -> None:
+    db, client_id, project_id = create_project_fixture()
+
+    try:
+        with TestClient(app) as client:
+            batch_id, uploaded_file_id = upload_monthly_batch(
+                client,
+                project_id,
+                "Read Only Status Batch",
+            )
+            ingest_response = client.post(f"/api/uploads/files/{uploaded_file_id}/ingest")
+            assert ingest_response.status_code == 200
+
+        batch = db.get(UploadBatch, UUID(batch_id))
+        assert batch is not None
+        original_status = batch.status
+        original_updated_at = batch.updated_at
+
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/uploads/batches",
+                params={"project_id": str(project_id), "view": "active"},
+            )
+
+        assert response.status_code == 200
+        db.refresh(batch)
+        assert batch.status == original_status
+        assert batch.updated_at == original_updated_at
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_delete_normalized_batch_is_blocked_and_archive_preserves_history() -> None:
     db, client_id, project_id = create_project_fixture()
 

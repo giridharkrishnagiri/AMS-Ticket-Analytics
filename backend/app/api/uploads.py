@@ -241,20 +241,97 @@ def build_apply_mapping_totals(
     )
 
 
-def build_upload_batch_response(db: Session, upload_batch: UploadBatch) -> UploadBatchResponse:
-    normalized_ticket_count = sync_legacy_normalized_status(db, upload_batch)
-    uploaded_file_count = get_count(
+def grouped_counts_by_upload_batch(
+    db: Session,
+    model,
+    upload_batch_ids: list[UUID],
+) -> dict[UUID, int]:
+    if not upload_batch_ids:
+        return {}
+    rows = db.execute(
+        select(model.upload_batch_id, func.count(model.id))
+        .where(model.upload_batch_id.in_(upload_batch_ids))
+        .group_by(model.upload_batch_id)
+    ).all()
+    return {row[0]: int(row[1] or 0) for row in rows}
+
+
+def upload_batch_response_counts(
+    db: Session,
+    upload_batch_ids: list[UUID],
+) -> dict[UUID, dict[str, int]]:
+    counts = {
+        upload_batch_id: {
+            "uploaded_file_count": 0,
+            "raw_row_count": 0,
+            "normalized_ticket_count": 0,
+        }
+        for upload_batch_id in upload_batch_ids
+    }
+    if not upload_batch_ids:
+        return counts
+
+    uploaded_file_counts = grouped_counts_by_upload_batch(db, UploadedFile, upload_batch_ids)
+    raw_row_counts = grouped_counts_by_upload_batch(db, TicketRawRow, upload_batch_ids)
+    ticket_counts = grouped_counts_by_upload_batch(db, Ticket, upload_batch_ids)
+    problem_counts = grouped_counts_by_upload_batch(db, AssessmentProblemRecord, upload_batch_ids)
+    out_problem_counts = grouped_counts_by_upload_batch(
         db,
-        select(func.count(UploadedFile.id)).where(
-            UploadedFile.upload_batch_id == upload_batch.id
-        ),
+        AssessmentOutOfScopeProblemRecord,
+        upload_batch_ids,
     )
-    raw_row_count = get_count(
+    change_counts = grouped_counts_by_upload_batch(db, AssessmentChangeRecord, upload_batch_ids)
+    out_change_counts = grouped_counts_by_upload_batch(
         db,
-        select(func.count(TicketRawRow.id)).where(
-            TicketRawRow.upload_batch_id == upload_batch.id
-        ),
+        AssessmentOutOfScopeChangeRecord,
+        upload_batch_ids,
     )
+
+    for upload_batch_id in upload_batch_ids:
+        counts[upload_batch_id]["uploaded_file_count"] = uploaded_file_counts.get(
+            upload_batch_id,
+            0,
+        )
+        counts[upload_batch_id]["raw_row_count"] = raw_row_counts.get(upload_batch_id, 0)
+        counts[upload_batch_id]["normalized_ticket_count"] = (
+            ticket_counts.get(upload_batch_id, 0)
+            + problem_counts.get(upload_batch_id, 0)
+            + out_problem_counts.get(upload_batch_id, 0)
+            + change_counts.get(upload_batch_id, 0)
+            + out_change_counts.get(upload_batch_id, 0)
+        )
+    return counts
+
+
+def build_upload_batch_response(
+    db: Session,
+    upload_batch: UploadBatch,
+    *,
+    counts: dict[str, int] | None = None,
+    sync_legacy_status: bool = True,
+) -> UploadBatchResponse:
+    if counts is None:
+        normalized_ticket_count = (
+            sync_legacy_normalized_status(db, upload_batch)
+            if sync_legacy_status
+            else count_normalized_tickets(db, upload_batch.id)
+        )
+        uploaded_file_count = get_count(
+            db,
+            select(func.count(UploadedFile.id)).where(
+                UploadedFile.upload_batch_id == upload_batch.id
+            ),
+        )
+        raw_row_count = get_count(
+            db,
+            select(func.count(TicketRawRow.id)).where(
+                TicketRawRow.upload_batch_id == upload_batch.id
+            ),
+        )
+    else:
+        normalized_ticket_count = counts["normalized_ticket_count"]
+        uploaded_file_count = counts["uploaded_file_count"]
+        raw_row_count = counts["raw_row_count"]
 
     return UploadBatchResponse(
         id=upload_batch.id,
@@ -1232,19 +1309,33 @@ def list_upload_batches(
     statement = select(UploadBatch).order_by(UploadBatch.created_at.desc())
     if project_id is not None:
         statement = statement.where(UploadBatch.project_id == project_id)
+    statement = statement.where(
+        UploadBatch.status != BATCH_STATUS_DELETED,
+        UploadBatch.deleted_at.is_(None),
+    )
+    if view == BATCH_VIEW_HISTORY:
+        statement = statement.where(
+            UploadBatch.status.in_({BATCH_STATUS_NORMALIZED, BATCH_STATUS_ARCHIVED})
+        )
+    elif view == BATCH_VIEW_ACTIVE:
+        statement = statement.where(
+            UploadBatch.status.not_in({BATCH_STATUS_NORMALIZED, BATCH_STATUS_ARCHIVED})
+        )
 
-    upload_batches = list(db.scalars(statement).all())
-    filtered_batches: list[UploadBatch] = []
-    for upload_batch in upload_batches:
-        if upload_batch.status not in {BATCH_STATUS_NORMALIZED, BATCH_STATUS_ARCHIVED}:
-            recalculate_upload_batch_status(db, upload_batch.id)
-        sync_legacy_normalized_status(db, upload_batch)
-        if batch_matches_view(upload_batch, view):
-            filtered_batches.append(upload_batch)
-    db.commit()
-
-    paged_batches = filtered_batches[offset : offset + limit]
-    return [build_upload_batch_response(db, upload_batch) for upload_batch in paged_batches]
+    paged_batches = list(db.scalars(statement.offset(offset).limit(limit)).all())
+    batch_counts = upload_batch_response_counts(
+        db,
+        [upload_batch.id for upload_batch in paged_batches],
+    )
+    return [
+        build_upload_batch_response(
+            db,
+            upload_batch,
+            counts=batch_counts[upload_batch.id],
+            sync_legacy_status=False,
+        )
+        for upload_batch in paged_batches
+    ]
 
 
 @router.delete("/batches/{upload_batch_id}", response_model=UploadBatchResponse)
