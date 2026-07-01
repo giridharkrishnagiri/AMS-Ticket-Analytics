@@ -391,7 +391,7 @@ def refresh_application_filter_facts(
                 'application',
                 'application_inventory_items',
                 'application',
-                COALESCE(NULLIF(btrim(i.scope_status), ''), 'unknown'),
+                COALESCE(NULLIF(btrim(i.scope_status), ''), 'out_of_scope'),
                 i.id,
                 left(NULLIF(btrim(i.business_service_ci_name), ''), 255),
                 left(NULLIF(btrim(i.functional_track), ''), 255),
@@ -481,7 +481,7 @@ def catalog_sort_key(filter_key: str, value: str) -> tuple[int, str]:
         order = ("all", "incident", "sc_task")
         return (order.index(value) if value in order else len(order), value.casefold())
     if filter_key == "application_scope":
-        order = ("in_scope", "out_of_scope", "unknown")
+        order = ("in_scope", "out_of_scope")
         return (order.index(value) if value in order else len(order), value.casefold())
     if filter_key in {"business_critical", "business_criticality"}:
         rank = {
@@ -501,7 +501,6 @@ def catalog_display_value(filter_key: str, value: str) -> str:
         return {
             "in_scope": "In Scope",
             "out_of_scope": "Out of Scope",
-            "unknown": "Unknown",
         }.get(value, value)
     return value
 

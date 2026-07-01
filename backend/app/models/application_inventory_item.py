@@ -98,7 +98,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     hosting_env: Mapped[str | None] = mapped_column(Text, nullable=True)
     global_application: Mapped[str | None] = mapped_column(Text, nullable=True)
-    scope_status: Mapped[str] = mapped_column(Text, nullable=False, default="unknown")
+    scope_status: Mapped[str] = mapped_column(Text, nullable=False, default="out_of_scope")
     lifecycle_stage_status: Mapped[str | None] = mapped_column(Text, nullable=True)
     lifecycle_current: Mapped[str | None] = mapped_column(Text, nullable=True)
     lifecycle_1_to_3_years: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -3648,8 +3648,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const functionalValues = uniqueSorted(DASHBOARD.applications.rows, "functional_track_ams_owner");
       const appScopeValues = [
         { value: "in_scope", label: "In Scope" },
-        { value: "out_of_scope", label: "Out of Scope" },
-        { value: "unknown", label: "Unknown" }
+        { value: "out_of_scope", label: "Out of Scope" }
       ].filter((item) => DASHBOARD.applications.rows.some((row) => row.scope_status === item.value));
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
       const businessCriticalValues = sortCriticalityValues(uniqueSorted(DASHBOARD.applications.rows, "biz_criticality"));

@@ -153,7 +153,7 @@ SINGLE_APPLICATION_FILTER_FIELDS = {
 }
 
 APPLICATION_CRITICALITY_ORDER = ("Very Critical", "Critical", "High", "Medium", "Low")
-APPLICATION_SCOPE_ORDER = ("in_scope", "out_of_scope", "unknown")
+APPLICATION_SCOPE_ORDER = ("in_scope", "out_of_scope")
 APPLICATION_GLOBAL_LOCAL_ORDER = ("Global", "Local")
 APPLICATION_LIFECYCLE_PLAN_ORDER = ("Invest", "Disinvest", "Maintain", "Retired")
 APPLICATION_LIFECYCLE_HORIZONS = (

@@ -269,9 +269,6 @@ function formatTableValue(row: DashboardApplicationRow, column: TableColumnKey):
     if (value === "out_of_scope") {
       return "Out of Scope";
     }
-    if (value === "unknown") {
-      return "Unknown";
-    }
   }
   if (column === "active_users") {
     return typeof value === "number" ? value.toLocaleString() : "";

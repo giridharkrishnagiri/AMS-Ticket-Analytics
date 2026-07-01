@@ -357,13 +357,13 @@ def parse_active_users(value: Any, row_number: int, result: InventoryUploadResul
 def normalize_scope_status(value: Any) -> str:
     text = text_or_none(value)
     if text is None:
-        return "unknown"
+        return "out_of_scope"
     normalized = " ".join(text.replace("-", " ").split()).casefold()
     if normalized in {"in scope", "inscope", "yes", "y", "true"}:
         return "in_scope"
     if normalized in {"out of scope", "outofscope", "no", "n", "false"}:
         return "out_of_scope"
-    return "unknown"
+    return "out_of_scope"
 
 
 def derive_inventory_scope_status(
@@ -376,11 +376,19 @@ def derive_inventory_scope_status(
     explicit_scope = text_or_none(raw_scope)
     if explicit_scope is not None:
         scope_status = normalize_scope_status(explicit_scope)
-        if scope_status == "unknown":
+        normalized_explicit_scope = " ".join(explicit_scope.replace("-", " ").split()).casefold()
+        if scope_status == "out_of_scope" and normalized_explicit_scope not in {
+            "out of scope",
+            "outofscope",
+            "no",
+            "n",
+            "false",
+        }:
             append_sample_message(
                 result.warnings,
                 "Row "
-                f"{row_number}: Application Scope value '{explicit_scope}' could not be parsed.",
+                f"{row_number}: Application Scope value '{explicit_scope}' could not be parsed; "
+                "marked out of scope.",
             )
         return scope_status
 
@@ -388,12 +396,12 @@ def derive_inventory_scope_status(
     if assignment_group_key is None:
         append_sample_message(
             result.warnings,
-            f"Row {row_number}: Application Scope could not be derived because "
+            f"Row {row_number}: Application Scope marked out of scope because "
             "assignment group is blank.",
         )
-        return "unknown"
+        return "out_of_scope"
     if active_scope_assignment_groups is None:
-        return "unknown"
+        return "out_of_scope"
     return "in_scope" if assignment_group_key in active_scope_assignment_groups else "out_of_scope"
 
 
@@ -863,7 +871,7 @@ def upload_application_inventory_file(
         append_sample_message(
             result.warnings,
             "No active In-Scope Assignment Groups reference rows were found; Application "
-            "Inventory rows without an explicit scope column will be marked unknown.",
+            "Inventory rows without an explicit in-scope match will be marked out of scope.",
         )
 
     try:

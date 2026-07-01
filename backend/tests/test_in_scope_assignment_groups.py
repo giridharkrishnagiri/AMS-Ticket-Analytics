@@ -213,6 +213,7 @@ def test_application_inventory_scope_status_derives_from_reference(
                 "Business Service CI Name,Support Group",
                 "In Scope App,AMS Scope Team",
                 "Out Scope App,External Team",
+                "Blank Scope App,",
             ]
         ),
         encoding="utf-8",
@@ -232,6 +233,7 @@ def test_application_inventory_scope_status_derives_from_reference(
 
         assert rows["In Scope App"] == "in_scope"
         assert rows["Out Scope App"] == "out_of_scope"
+        assert rows["Blank Scope App"] == "out_of_scope"
     finally:
         cleanup_client(db, client_id)
 
