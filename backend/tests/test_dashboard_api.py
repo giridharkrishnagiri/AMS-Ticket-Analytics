@@ -2701,6 +2701,20 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
 def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
+        for index in range(100):
+            ticket = add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"SCTASK-LARGE-CAT-{index}",
+                "SERVICE_CATALOG_TASK",
+                dt("2025-01-15T09:00:00"),
+                business_service_ci_name="Payroll",
+                sap_non_sap="SAP",
+            )
+            ticket.catalog_item_name = "Large Item"
+
         for index in range(3):
             ticket = add_ticket(
                 db,
@@ -2792,13 +2806,18 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
         assert response.status_code == 200
         payload = response.json()
         h1_2025 = next(period for period in payload["periods"] if period["period_key"] == "H1_2025")
-        assert h1_2025["total_sc_tasks"] == 14
-        assert h1_2025["top_10_rows"][0]["catalog_item_name"] == "Unmapped Catalog Item"
-        assert h1_2025["top_10_rows"][0]["sc_task_count"] == 3
-        assert h1_2025["top_10_rows"][0]["avg_monthly_with_pct_label"] == "0.5 (21.4%)"
+        assert h1_2025["total_sc_tasks"] == 114
+        assert h1_2025["top_10_rows"][0]["catalog_item_name"] == "Large Item"
+        assert h1_2025["top_10_rows"][0]["sc_task_count"] == 100
+        assert h1_2025["top_10_rows"][0]["avg_monthly_with_pct_label"] == "17 (87.7%)"
         assert len(h1_2025["top_10_rows"]) == 10
-        assert h1_2025["pie_rows"][-1]["catalog_item_name"] == "Others"
-        assert h1_2025["pie_rows"][-1]["sc_task_count"] == 2
+        assert [row["catalog_item_name"] for row in h1_2025["pie_rows"]] == [
+            "Large Item",
+            "Others",
+            "Unmapped Catalog Item",
+        ]
+        assert h1_2025["pie_rows"][1]["sc_task_count"] == 11
+        assert h1_2025["pie_rows"][1]["proportion_pct"] == 9.6
 
         h2_2025 = next(period for period in payload["periods"] if period["period_key"] == "H2_2025")
         assert h2_2025["total_sc_tasks"] == 6
@@ -2825,7 +2844,7 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
         all_h1 = next(
             period for period in all_payload["periods"] if period["period_key"] == "H1_2025"
         )
-        assert all_h1["total_sc_tasks"] == 15
+        assert all_h1["total_sc_tasks"] == 115
 
         assert incident_response.status_code == 200
         incident_payload = incident_response.json()

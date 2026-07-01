@@ -3946,6 +3946,39 @@ def sc_task_catalog_metric_row(
     }
 
 
+def sc_task_catalog_pie_rows(
+    raw_rows: list[dict[str, Any]],
+    total_sc_tasks: int,
+) -> list[dict[str, Any]]:
+    visible_rows: list[dict[str, Any]] = []
+    other_count = 0
+    for row in raw_rows:
+        sc_task_count = int(row["sc_task_count"])
+        proportion_pct = percentage(sc_task_count, total_sc_tasks)
+        if proportion_pct is not None and proportion_pct < 2:
+            other_count += sc_task_count
+        else:
+            visible_rows.append(row)
+
+    pie_rows = [
+        sc_task_catalog_metric_row(
+            str(row["catalog_item_name"]),
+            int(row["sc_task_count"]),
+            total_sc_tasks,
+        )
+        for row in visible_rows
+    ]
+    if other_count > 0:
+        pie_rows.append(sc_task_catalog_metric_row("Others", other_count, total_sc_tasks))
+    return sorted(
+        pie_rows,
+        key=lambda item: (
+            -int(item["sc_task_count"]),
+            str(item["catalog_item_name"]).casefold(),
+        ),
+    )
+
+
 def volumetrics_sc_task_catalog_item_proportion(
     db: Session,
     request: Any,
@@ -3956,7 +3989,7 @@ def volumetrics_sc_task_catalog_item_proportion(
     data_notes = [
         "SC Task Catalog Item Proportion uses SC Tasks only.",
         "Incidents, Problems, and Changes are excluded.",
-        "Pie charts show top 10 catalog items plus Others.",
+        "Pie charts group catalog items below 2% into Others.",
         "Average monthly volume is calculated over six months for each half-year period.",
         "Date controls do not override the fixed H1/H2 periods for this chart.",
     ]
@@ -4037,24 +4070,13 @@ def volumetrics_sc_task_catalog_item_proportion(
                 ),
                 "rank": index + 1,
                 "avg_monthly_with_pct_label": (
-                    f"{row['sc_task_count'] / 6.0:.1f} "
+                    f"{int((row['sc_task_count'] / 6.0) + 0.5)} "
                     f"({(row['sc_task_count'] / total_sc_tasks * 100):.1f}%)"
                 ),
             }
             for index, row in enumerate(top_rows)
         ]
-        pie_rows = [
-            sc_task_catalog_metric_row(
-                str(row["catalog_item_name"]),
-                int(row["sc_task_count"]),
-                total_sc_tasks,
-            )
-            for row in top_rows
-        ]
-        if len(raw_rows) > 10:
-            other_count = sum(row["sc_task_count"] for row in raw_rows[10:])
-            pie_rows.append(sc_task_catalog_metric_row("Others", other_count, total_sc_tasks))
-        period["pie_rows"] = pie_rows
+        period["pie_rows"] = sc_task_catalog_pie_rows(raw_rows, total_sc_tasks)
 
     return {"periods": periods, "data_notes": data_notes, "warnings": warnings}
 

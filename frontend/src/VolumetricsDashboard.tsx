@@ -2466,7 +2466,7 @@ function ScTaskCatalogPie({
   const { chartRef, plotWidth } = useChartFrame(chartTitle);
   const hasRows = period.pie_rows.length > 0;
   const chartWidth = Math.max(320, plotWidth - 8);
-  const outerRadius = Math.min(88, Math.max(64, Math.floor(chartWidth * 0.2)));
+  const outerRadius = Math.min(76, Math.max(58, Math.floor(chartWidth * 0.17)));
   return (
     <section className="sc-task-catalog-card">
       <h4>{period.period_label} Catalog Item Proportion</h4>
@@ -2477,13 +2477,13 @@ function ScTaskCatalogPie({
         <div className="sc-task-catalog-pie-stage" ref={chartRef}>
           <PieChart
             width={chartWidth}
-            height={340}
-            margin={{ top: 10, right: 8, bottom: 112, left: 8 }}
+            height={190}
+            margin={{ top: 10, right: 8, bottom: 8, left: 8 }}
           >
             <Pie
               data={period.pie_rows}
               cx="50%"
-              cy="42%"
+              cy="50%"
               dataKey="sc_task_count"
               isAnimationActive={false}
               minAngle={1}
@@ -2501,18 +2501,21 @@ function ScTaskCatalogPie({
               ))}
             </Pie>
             <Tooltip content={<ScTaskCatalogTooltip />} />
-            <Legend
-              align="center"
-              height={110}
-              iconSize={10}
-              verticalAlign="bottom"
-              wrapperStyle={{ fontSize: "0.72rem", fontWeight: 700, lineHeight: "1.15" }}
-              formatter={(value) => {
-                const row = period.pie_rows.find((item) => item.catalog_item_name === value);
-                return `${value} (${formatPercent(row?.proportion_pct)})`;
-              }}
-            />
           </PieChart>
+          <ol className="sc-task-catalog-legend" aria-label={`${period.period_label} legend`}>
+            {period.pie_rows.map((row, index) => (
+              <li key={`${period.period_key}-legend-${row.catalog_item_name}`}>
+                <span
+                  aria-hidden="true"
+                  className="sc-task-catalog-legend-swatch"
+                  style={{ backgroundColor: chartColors.pie[index % chartColors.pie.length] }}
+                />
+                <span>
+                  {row.catalog_item_name} ({formatPercent(row.proportion_pct)})
+                </span>
+              </li>
+            ))}
+          </ol>
         </div>
       ) : (
         <p className="muted-text chart-state-text">
@@ -2538,7 +2541,6 @@ function ScTaskCatalogTable({
               <tr>
                 <th>Rank</th>
                 <th>Catalog Item</th>
-                <th>SC Task Count</th>
                 <th>Average Monthly Volume</th>
               </tr>
             </thead>
@@ -2547,7 +2549,6 @@ function ScTaskCatalogTable({
                 <tr key={`${period.period_key}-${row.rank}-${row.catalog_item_name}`}>
                   <td>{row.rank}</td>
                   <td>{row.catalog_item_name}</td>
-                  <td>{formatNumber(row.sc_task_count)}</td>
                   <td>{row.avg_monthly_with_pct_label}</td>
                 </tr>
               ))}

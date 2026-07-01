@@ -3983,25 +3983,36 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         avg: row.count / 6,
         pct: total > 0 ? (row.count / total) * 100 : null
       }));
-      const pieRows = topRows.map((row) => ({ label: row.label, count: row.count }));
-      if (allRows.length > 10) {
-        const otherCount = allRows.slice(10).reduce((sum, row) => sum + row.count, 0);
-        pieRows.push({ label: "Others", count: otherCount });
+      const visiblePieRows = [];
+      let otherCount = 0;
+      allRows.forEach((row) => {
+        const pct = total > 0 ? (row.count / total) * 100 : null;
+        if (pct !== null && pct < 2) {
+          otherCount += row.count;
+        } else {
+          visiblePieRows.push({ label: row.label, count: row.count });
+        }
+      });
+      if (otherCount > 0) {
+        visiblePieRows.push({ label: "Others", count: otherCount });
       }
+      const pieRows = visiblePieRows.sort((left, right) =>
+        right.count - left.count || left.label.localeCompare(right.label)
+      );
       return { period, total, pieRows, topRows };
     }
     function scTaskCatalogTable(periodData) {
       if (!periodData.topRows.length) {
         return `<p class="muted" style="padding:12px">No data available for ${esc(periodData.period.label)}.</p>`;
       }
-      return `<div class="table-scroll"><table class="applications-table"><thead><tr><th>Rank</th><th>Catalog Item</th><th>SC Task Count</th><th>Average Monthly Volume</th></tr></thead><tbody>${periodData.topRows.map((row) => `<tr><td>${fmt(row.rank)}</td><td>${esc(row.label)}</td><td>${fmt(row.count)}</td><td>${row.avg.toFixed(1)} (${row.pct === null ? "N/A" : `${row.pct.toFixed(1)}%`})</td></tr>`).join("")}</tbody></table></div>`;
+      return `<div class="table-scroll"><table class="applications-table"><thead><tr><th>Rank</th><th>Catalog Item</th><th>Average Monthly Volume</th></tr></thead><tbody>${periodData.topRows.map((row) => `<tr><td>${fmt(row.rank)}</td><td>${esc(row.label)}</td><td>${Math.round(row.avg)} (${row.pct === null ? "N/A" : `${row.pct.toFixed(1)}%`})</td></tr>`).join("")}</tbody></table></div>`;
     }
     function scTaskCatalogSection() {
       if (state.volTicketType === "incident") {
         return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">SC Task Catalog Item Proportion is available for SC Tasks only. Change Ticket Type to All or SC Tasks.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
       }
       const periods = scTaskCatalogPeriodDefinitions().map(scTaskCatalogPeriodData);
-      return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows the proportion of SC Tasks by catalog item across selected half-year periods. Values are based on created SC Task volume.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage">${pieChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Average monthly volume is calculated over six months.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
+      return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows the proportion of SC Tasks by catalog item across selected half-year periods. Values are based on created SC Task volume.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage">${pieChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Catalog items below 2% are grouped into Others. Average monthly volume is calculated over six months.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
     }
     function incidentBatchTrendPoints() {
       const rows = detailedVolumeRows().filter(incidentBatchFilterMatch);

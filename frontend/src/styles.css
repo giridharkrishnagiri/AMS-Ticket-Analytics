@@ -2097,8 +2097,34 @@ h2 {
 .sc-task-catalog-pie-stage {
   width: 100%;
   min-width: 0;
-  height: 340px;
+  height: 360px;
   overflow: hidden;
+}
+
+.sc-task-catalog-legend {
+  display: grid;
+  gap: 5px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  color: #334155;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.sc-task-catalog-legend li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sc-task-catalog-legend-swatch {
+  width: 10px;
+  height: 10px;
+  margin-top: 2px;
 }
 
 .sc-task-catalog-table-grid {
