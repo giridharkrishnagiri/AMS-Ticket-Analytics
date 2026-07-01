@@ -111,6 +111,16 @@ function nextStepForReprocessStartPoint(startPoint: string): string {
   return "Next: go to Upload Center and apply the existing saved mapping for the selected files.";
 }
 
+function maintenanceActionErrorMessage(error: unknown, actionName: string): string {
+  if (error instanceof Error) {
+    if (error.message === "Not Found") {
+      return `${actionName} is not available in the running backend. Restart the backend so the latest code is loaded, then try again.`;
+    }
+    return error.message;
+  }
+  return `${actionName} failed.`;
+}
+
 function Maintenance() {
   const [projectId, setProjectId] = useState("");
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
@@ -322,9 +332,10 @@ function Maintenance() {
       }
     } catch (requestError) {
       setReferenceError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Unable to load In-Scope Assignment Groups status"
+        maintenanceActionErrorMessage(
+          requestError,
+          "In-Scope Assignment Groups status"
+        )
       );
     } finally {
       setIsLoadingReferenceStatus(false);
@@ -354,9 +365,10 @@ function Maintenance() {
       await refreshReferenceStatus(false);
     } catch (requestError) {
       setReferenceError(
-        requestError instanceof Error
-          ? requestError.message
-          : "In-Scope Assignment Groups import failed"
+        maintenanceActionErrorMessage(
+          requestError,
+          "In-Scope Assignment Groups import"
+        )
       );
     } finally {
       setIsImportingReference(false);
@@ -420,9 +432,10 @@ function Maintenance() {
       await refreshFilterCacheStatus();
     } catch (requestError) {
       setReprocessError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Operational reprocessing preparation failed"
+        maintenanceActionErrorMessage(
+          requestError,
+          "Operational reprocessing preparation"
+        )
       );
     } finally {
       setIsPreparingReprocess(false);
