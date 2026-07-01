@@ -8,7 +8,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -111,6 +111,32 @@ def get_count(db: Session, statement) -> int:
     return int(db.scalar(statement) or 0)
 
 
+def count_generic_raw_rows_with_destination(db: Session, upload_batch_id: UUID) -> int:
+    destination_exists = or_(
+        exists(
+            select(Ticket.id).where(
+                Ticket.project_id == TicketRawRow.project_id,
+                Ticket.ticket_number == TicketRawRow.raw_ticket_number,
+            )
+        ),
+        exists(
+            select(AssessmentOutOfScopeTicket.id).where(
+                AssessmentOutOfScopeTicket.project_id == TicketRawRow.project_id,
+                AssessmentOutOfScopeTicket.ticket_number == TicketRawRow.raw_ticket_number,
+            )
+        ),
+    )
+    return get_count(
+        db,
+        select(func.count(TicketRawRow.id)).where(
+            TicketRawRow.upload_batch_id == upload_batch_id,
+            TicketRawRow.raw_ticket_number.is_not(None),
+            func.trim(TicketRawRow.raw_ticket_number) != "",
+            destination_exists,
+        ),
+    )
+
+
 def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
     upload_batch = db.get(UploadBatch, upload_batch_id)
     ticket_type = (get_batch_ticket_type(db, upload_batch_id) or "").strip().upper()
@@ -209,14 +235,16 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
         ),
     )
     output_rows = in_scope_rows + out_of_scope_rows
+    mapped_raw_rows = count_generic_raw_rows_with_destination(db, upload_batch_id)
     return {
         "raw_rows": raw_rows,
         "in_scope_rows": in_scope_rows,
         "out_of_scope_rows": out_of_scope_rows,
         "blank_assignment_group_rows": blank_assignment_group_rows,
         "assignment_group_not_in_inventory_rows": assignment_group_not_in_inventory_rows,
-        "duplicate_skipped_rows": 0,
-        "failed_rows": max(raw_rows - output_rows, 0),
+        "mapped_raw_rows": mapped_raw_rows,
+        "duplicate_skipped_rows": max(mapped_raw_rows - output_rows, 0),
+        "failed_rows": max(raw_rows - mapped_raw_rows, 0),
         "output_rows": output_rows,
     }
 
@@ -1193,8 +1221,15 @@ def apply_mapping_to_upload_batches(
             continue
 
         counts = batch_output_counts(db, upload_batch.id)
+        mapped_raw_rows = counts.get("mapped_raw_rows", counts["output_rows"])
         if request.skip_already_applied and counts["output_rows"] > 0:
-            if counts["raw_rows"] == counts["output_rows"]:
+            if counts["raw_rows"] == mapped_raw_rows:
+                warnings = ["Batch already has complete mapped output and was skipped."]
+                if counts["duplicate_skipped_rows"] > 0:
+                    warnings.append(
+                        f"{counts['duplicate_skipped_rows']} duplicate/replaced row(s) "
+                        "resolve to final project output in another batch."
+                    )
                 files.append(
                     UploadBatchApplyMappingFileResponse(
                         upload_batch_id=upload_batch.id,
@@ -1210,7 +1245,7 @@ def apply_mapping_to_upload_batches(
                         ],
                         duplicate_skipped_rows=counts["duplicate_skipped_rows"],
                         failed_rows=0,
-                        warnings=["Batch already has complete mapped output and was skipped."],
+                        warnings=warnings,
                     )
                 )
             else:

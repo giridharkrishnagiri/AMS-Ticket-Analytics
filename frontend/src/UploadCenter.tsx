@@ -717,7 +717,14 @@ function TicketDetailsWorkflow({
         outOfScopeRows: apply?.out_of_scope_rows ?? normalize?.out_of_scope_inserted ?? null,
         duplicateSkippedRows:
           apply?.duplicate_skipped_rows ?? normalize?.duplicate_skipped_rows ?? null,
-        remarks: apply?.error ?? normalize?.errors?.[0] ?? ingest?.error ?? upload?.message ?? null,
+        remarks:
+          apply?.error ??
+          apply?.warnings?.[0] ??
+          normalize?.errors?.[0] ??
+          normalize?.warnings?.[0] ??
+          ingest?.error ??
+          upload?.message ??
+          null,
       };
     });
   }, [

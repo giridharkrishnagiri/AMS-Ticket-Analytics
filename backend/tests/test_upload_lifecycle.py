@@ -498,6 +498,101 @@ def test_apply_mapping_multiple_uses_selected_batches_and_skips_existing_outputs
         cleanup_client(db, client_id)
 
 
+def test_apply_mapping_multiple_treats_cross_batch_duplicate_replacement_as_applied() -> None:
+    db, client_id, project_id = create_project_fixture()
+
+    try:
+        first_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="Apply Multi Duplicate Earlier",
+            ticket_type="INCIDENT",
+            rows=[
+                {
+                    "number": "INC-APPLY-DUP",
+                    "short_description": "Earlier duplicate",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-01",
+                },
+                {
+                    "number": "INC-APPLY-UNIQUE-1",
+                    "short_description": "Earlier unique",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-01",
+                },
+            ],
+        )
+        second_batch_id = add_ingested_raw_batch(
+            db,
+            project_id,
+            batch_name="Apply Multi Duplicate Later",
+            ticket_type="INCIDENT",
+            rows=[
+                {
+                    "number": "INC-APPLY-DUP",
+                    "short_description": "Later duplicate kept",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-02",
+                },
+                {
+                    "number": "INC-APPLY-UNIQUE-2",
+                    "short_description": "Later unique",
+                    "assignment_group": "AMS Support",
+                    "business_service": "Lifecycle Service",
+                    "sys_created_on": "2026-06-02",
+                },
+            ],
+        )
+
+        with TestClient(app) as client:
+            first_response = client.post(
+                "/api/uploads/batches/apply-mapping-multiple",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "upload_batch_ids": [str(first_batch_id), str(second_batch_id)],
+                    "skip_already_applied": True,
+                },
+            )
+            second_response = client.post(
+                "/api/uploads/batches/apply-mapping-multiple",
+                json={
+                    "project_id": str(project_id),
+                    "ticket_type": "INCIDENT",
+                    "upload_batch_ids": [str(first_batch_id), str(second_batch_id)],
+                    "skip_already_applied": True,
+                },
+            )
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        payload = second_response.json()
+        assert payload["totals"]["failed"] == 0
+        assert payload["totals"]["skipped"] == 2
+        assert payload["totals"]["duplicate_skipped_rows"] == 1
+        assert {row["status"] for row in payload["files"]} == {"SKIPPED_ALREADY_APPLIED"}
+
+        earlier_row = next(
+            row for row in payload["files"] if row["upload_batch_id"] == str(first_batch_id)
+        )
+        assert earlier_row["input_rows"] == 2
+        assert earlier_row["in_scope_rows"] == 1
+        assert earlier_row["duplicate_skipped_rows"] == 1
+        assert earlier_row["failed_rows"] == 0
+        assert earlier_row["error"] is None
+        assert "duplicate/replaced" in earlier_row["warnings"][1]
+
+        final_ticket_count = db.scalar(
+            select(func.count(Ticket.id)).where(Ticket.project_id == project_id)
+        )
+        assert final_ticket_count == 3
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_apply_mapping_multiple_sc_task_catalog_fields_and_filter_cache_stale() -> None:
     db, client_id, project_id = create_project_fixture()
     kb_column = (
