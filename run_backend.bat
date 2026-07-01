@@ -16,7 +16,7 @@ if errorlevel 1 (
 )
 
 echo Checking backend port %AMS_BACKEND_PORT%...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$port=[int]'%AMS_BACKEND_PORT%'; $listener=Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if ($listener) { Write-Host ('Port {0} is already in use by process id(s): {1}' -f $port, (($listener | Select-Object -ExpandProperty OwningProcess -Unique) -join ', ')); exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$port=[int]'%AMS_BACKEND_PORT%'; $listener=$null; for ($attempt=1; $attempt -le 10; $attempt++) { $listener=Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if (-not $listener) { exit 0 }; Write-Host ('Port {0} is still in use; retrying {1}/10...' -f $port, $attempt); Start-Sleep -Seconds 1 }; $pids=$listener | Select-Object -ExpandProperty OwningProcess -Unique; Write-Host ('Port {0} is already in use by process id(s): {1}' -f $port, ($pids -join ', ')); foreach ($pid in $pids) { $proc=Get-CimInstance Win32_Process -Filter ('ProcessId=' + $pid) -ErrorAction SilentlyContinue; if ($proc) { Write-Host ('PID {0}: {1}' -f $pid, $proc.CommandLine) } else { Write-Host ('PID {0}: process details are not available; it may be exiting or orphaned.' -f $pid) } }; exit 1"
 if errorlevel 1 (
     echo Backend port %AMS_BACKEND_PORT% is already in use. Stop the existing backend or set AMS_BACKEND_PORT to another port.
     exit /b 1
