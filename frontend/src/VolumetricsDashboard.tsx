@@ -13,7 +13,6 @@ import {
   Pie,
   PieChart,
   ReferenceLine,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -2463,7 +2462,11 @@ function ScTaskCatalogPie({
 }: {
   period: DashboardVolumetricsScTaskCatalogItemPeriod;
 }) {
+  const chartTitle = `${period.period_label} Catalog Item Proportion`;
+  const { chartRef, plotWidth } = useChartFrame(chartTitle);
   const hasRows = period.pie_rows.length > 0;
+  const chartWidth = Math.max(320, plotWidth - 8);
+  const outerRadius = Math.min(88, Math.max(64, Math.floor(chartWidth * 0.2)));
   return (
     <section className="sc-task-catalog-card">
       <h4>{period.period_label} Catalog Item Proportion</h4>
@@ -2471,31 +2474,45 @@ function ScTaskCatalogPie({
         {period.from_date} to {period.to_date} · {formatNumber(period.total_sc_tasks)} SC Tasks
       </p>
       {hasRows ? (
-        <div className="sc-task-catalog-pie-stage">
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={period.pie_rows}
-                dataKey="sc_task_count"
-                nameKey="catalog_item_name"
-                outerRadius="72%"
-              >
-                {period.pie_rows.map((entry, index) => (
-                  <Cell
-                    fill={chartColors.pie[index % chartColors.pie.length]}
-                    key={`${period.period_key}-${entry.catalog_item_name}`}
-                  />
-                ))}
-              </Pie>
-              <Tooltip content={<ScTaskCatalogTooltip />} />
-              <Legend
-                formatter={(value) => {
-                  const row = period.pie_rows.find((item) => item.catalog_item_name === value);
-                  return `${value} (${formatPercent(row?.proportion_pct)})`;
-                }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+        <div className="sc-task-catalog-pie-stage" ref={chartRef}>
+          <PieChart
+            width={chartWidth}
+            height={340}
+            margin={{ top: 10, right: 8, bottom: 112, left: 8 }}
+          >
+            <Pie
+              data={period.pie_rows}
+              cx="50%"
+              cy="42%"
+              dataKey="sc_task_count"
+              isAnimationActive={false}
+              minAngle={1}
+              nameKey="catalog_item_name"
+              outerRadius={outerRadius}
+              paddingAngle={1}
+              stroke="#ffffff"
+              strokeWidth={2}
+            >
+              {period.pie_rows.map((entry, index) => (
+                <Cell
+                  fill={chartColors.pie[index % chartColors.pie.length]}
+                  key={`${period.period_key}-${entry.catalog_item_name}`}
+                />
+              ))}
+            </Pie>
+            <Tooltip content={<ScTaskCatalogTooltip />} />
+            <Legend
+              align="center"
+              height={110}
+              iconSize={10}
+              verticalAlign="bottom"
+              wrapperStyle={{ fontSize: "0.72rem", fontWeight: 700, lineHeight: "1.15" }}
+              formatter={(value) => {
+                const row = period.pie_rows.find((item) => item.catalog_item_name === value);
+                return `${value} (${formatPercent(row?.proportion_pct)})`;
+              }}
+            />
+          </PieChart>
         </div>
       ) : (
         <p className="muted-text chart-state-text">
