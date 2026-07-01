@@ -269,18 +269,21 @@ function formatBatchStatus(status: string | null | undefined): string {
     return "Not available";
   }
   const statusLabels: Record<string, string> = {
+    PENDING: "Pending",
+    STORED: "Uploaded",
     UPLOADED: "Uploaded",
-    INGESTING: "Ingesting",
+    INGESTING: "Processing ...",
     INGESTED: "Ingested",
-    NORMALIZING: "Applying Mapping",
-    NORMALIZED: "Mapping Applied",
-    NORMALIZATION_FAILED: "Mapping Failed",
+    INGESTION_FAILED: "Failed",
+    NORMALIZING: "Processing ...",
+    NORMALIZED: "Normalized",
+    NORMALIZATION_FAILED: "Failed",
     ARCHIVED: "Archived",
     DELETED: "Deleted",
     COMPLETED: "Completed",
     PARTIAL: "Partial",
     FAILED: "Failed",
-    RUNNING: "Running",
+    RUNNING: "Processing ...",
   };
   return statusLabels[status] ?? status.replace(/_/g, " ");
 }
@@ -297,6 +300,127 @@ function formatApplyStatus(status: string | null | undefined): string {
     NORMALIZED: "Mapping Applied",
   };
   return statusLabels[status] ?? formatBatchStatus(status);
+}
+
+function normalizeStatusValue(status: string | null | undefined): string {
+  return (status ?? "").trim().toUpperCase();
+}
+
+function deriveUploadStageStatus(batchStatus: string | null | undefined): string {
+  const status = normalizeStatusValue(batchStatus);
+  if (status === "DELETED") {
+    return "DELETED";
+  }
+  if (status === "ARCHIVED") {
+    return "ARCHIVED";
+  }
+  if (status === "FAILED") {
+    return "FAILED";
+  }
+  return status ? "UPLOADED" : "PENDING";
+}
+
+function deriveIngestStageStatus({
+  batchStatus,
+  ingestStatus,
+  jobStatus,
+}: {
+  batchStatus: string | null | undefined;
+  ingestStatus: string | null | undefined;
+  jobStatus: string | null | undefined;
+}): string {
+  const explicitStatus = normalizeStatusValue(ingestStatus);
+  if (explicitStatus) {
+    if (explicitStatus === "COMPLETED") {
+      return "INGESTED";
+    }
+    if (explicitStatus === "RUNNING" || explicitStatus === "INGESTING") {
+      return "INGESTING";
+    }
+    if (explicitStatus === "FAILED" || explicitStatus === "INGESTION_FAILED") {
+      return "FAILED";
+    }
+    return explicitStatus;
+  }
+
+  const currentJobStatus = normalizeStatusValue(jobStatus);
+  if (currentJobStatus === "COMPLETED") {
+    return "INGESTED";
+  }
+  if (currentJobStatus === "RUNNING" || currentJobStatus === "PENDING") {
+    return "INGESTING";
+  }
+  if (currentJobStatus === "FAILED") {
+    return "FAILED";
+  }
+
+  const status = normalizeStatusValue(batchStatus);
+  if (["INGESTED", "NORMALIZING", "NORMALIZED", "COMPLETED", "ARCHIVED"].includes(status)) {
+    return "INGESTED";
+  }
+  if (status === "INGESTING") {
+    return "INGESTING";
+  }
+  if (status === "INGESTION_FAILED") {
+    return "FAILED";
+  }
+  return "PENDING";
+}
+
+function deriveNormalizeStageStatus({
+  batchStatus,
+  normalizeStatus,
+}: {
+  batchStatus: string | null | undefined;
+  normalizeStatus: string | null | undefined;
+}): string {
+  const explicitStatus = normalizeStatusValue(normalizeStatus);
+  if (explicitStatus) {
+    if (explicitStatus === "NORMALIZED" || explicitStatus === "COMPLETED") {
+      return "NORMALIZED";
+    }
+    if (explicitStatus === "NORMALIZING" || explicitStatus === "RUNNING") {
+      return "NORMALIZING";
+    }
+    if (explicitStatus === "NORMALIZATION_FAILED" || explicitStatus === "FAILED") {
+      return "FAILED";
+    }
+    return explicitStatus;
+  }
+
+  const status = normalizeStatusValue(batchStatus);
+  if (["NORMALIZED", "COMPLETED", "ARCHIVED"].includes(status)) {
+    return "NORMALIZED";
+  }
+  if (status === "NORMALIZING") {
+    return "NORMALIZING";
+  }
+  if (status === "NORMALIZATION_FAILED") {
+    return "FAILED";
+  }
+  return "PENDING";
+}
+
+function deriveApplyStageStatus({
+  batchStatus,
+  applyStatus,
+}: {
+  batchStatus: string | null | undefined;
+  applyStatus: string | null | undefined;
+}): string {
+  const explicitStatus = normalizeStatusValue(applyStatus);
+  if (explicitStatus) {
+    return explicitStatus;
+  }
+
+  const status = normalizeStatusValue(batchStatus);
+  if (status === "ARCHIVED") {
+    return "APPLIED";
+  }
+  if (status === "NORMALIZATION_FAILED" || status === "FAILED") {
+    return "FAILED";
+  }
+  return "PENDING";
 }
 
 function safeBatchNamePart(value: string): string {
@@ -376,7 +500,7 @@ type WorkflowBatchRow = {
   inScopeRows: number | null;
   outOfScopeRows: number | null;
   duplicateSkippedRows: number | null;
-  error: string | null;
+  remarks: string | null;
 };
 
 function TicketDetailsWorkflow({
@@ -558,24 +682,26 @@ function TicketDetailsWorkflow({
       const job = jobByBatchId.get(batchId);
       const normalize = normalizeByBatchId.get(batchId);
       const apply = applyByBatchId.get(batchId);
+      const batchStatus = batch?.status ?? upload?.status ?? null;
 
       return {
         batchId,
         batchName: batch?.batch_name ?? upload?.filename ?? "Selected batch",
         filename: upload?.filename ?? (batchId === selectedBatchId ? selectedBatchFilename : null),
-        uploadStatus: upload?.status ?? batch?.status ?? "Selected",
-        ingestStatus: ingest?.status ?? job?.status ?? batch?.status ?? "Pending",
-        normalizeStatus:
-          normalize?.status ??
-          (batch?.status === "NORMALIZED" ? "Completed" : batch?.status) ??
-          "Pending",
-        applyStatus:
-          apply?.status ??
-          (batch?.status === "NORMALIZED"
-            ? "NORMALIZED"
-            : applyResult
-              ? "Not selected"
-              : "Pending"),
+        uploadStatus: deriveUploadStageStatus(batchStatus),
+        ingestStatus: deriveIngestStageStatus({
+          batchStatus,
+          ingestStatus: ingest?.status,
+          jobStatus: job?.status,
+        }),
+        normalizeStatus: deriveNormalizeStageStatus({
+          batchStatus,
+          normalizeStatus: normalize?.status,
+        }),
+        applyStatus: deriveApplyStageStatus({
+          batchStatus,
+          applyStatus: apply?.status,
+        }),
         inputRows:
           apply?.input_rows ??
           normalize?.raw_rows ??
@@ -591,7 +717,7 @@ function TicketDetailsWorkflow({
         outOfScopeRows: apply?.out_of_scope_rows ?? normalize?.out_of_scope_inserted ?? null,
         duplicateSkippedRows:
           apply?.duplicate_skipped_rows ?? normalize?.duplicate_skipped_rows ?? null,
-        error: apply?.error ?? normalize?.errors?.[0] ?? ingest?.error ?? upload?.message ?? null,
+        remarks: apply?.error ?? normalize?.errors?.[0] ?? ingest?.error ?? upload?.message ?? null,
       };
     });
   }, [
@@ -1229,7 +1355,7 @@ function TicketDetailsWorkflow({
                   <th>{usesProblemChangeWorkflow ? "Records" : "In-Scope"}</th>
                   <th>{usesProblemChangeWorkflow ? "Unmatched" : "Out-of-Scope"}</th>
                   <th>Duplicates</th>
-                  <th>Error</th>
+                  <th>Remarks</th>
                 </tr>
               </thead>
               <tbody>
@@ -1264,7 +1390,7 @@ function TicketDetailsWorkflow({
                       )}
                     </td>
                     <td>{formatNumber(row.duplicateSkippedRows)}</td>
-                    <td>{row.error ?? "-"}</td>
+                    <td>{row.remarks ?? "-"}</td>
                   </tr>
                 ))}
               </tbody>
