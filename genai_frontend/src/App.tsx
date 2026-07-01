@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   getBackendHealth,
@@ -32,6 +32,7 @@ import type {
 type AppView = "chat" | "tools" | "charts" | "admin" | "usage";
 type AdminTab = "config" | "prompts" | "safety";
 type MessageKind = "success" | "error" | "info";
+type HealthState = "unchecked" | "checking" | "healthy" | "degraded" | "offline";
 
 const providerOptions: GenAIProvider[] = ["openai", "azure", "anthropic", "ollama", "custom"];
 const responseStyleOptions: GenAIResponseStyle[] = ["concise", "standard", "detailed"];
@@ -939,27 +940,48 @@ function App() {
   const [selectedChartId, setSelectedChartId] = useState<string | null>(null);
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
 
-  useEffect(() => {
+  const runHealthCheck = useCallback(async () => {
     const controller = new AbortController();
-    getBackendHealth(controller.signal)
-      .then((nextHealth) => {
-        setHealth(nextHealth);
-        setHealthError(null);
-      })
-      .catch((error) => {
-        setHealth(null);
-        setHealthError(getErrorText(error));
-      });
-    return () => controller.abort();
+    setIsCheckingHealth(true);
+    try {
+      const nextHealth = await getBackendHealth(controller.signal);
+      setHealth(nextHealth);
+      setHealthError(null);
+    } catch (error) {
+      setHealth(null);
+      setHealthError(getErrorText(error));
+    } finally {
+      setIsCheckingHealth(false);
+    }
   }, []);
 
-  const healthState = useMemo(() => {
+  const healthState: HealthState = useMemo(() => {
+    if (isCheckingHealth) {
+      return "checking";
+    }
     if (health?.status?.toLowerCase() === "ok") {
       return "healthy";
     }
-    return healthError ? "offline" : "checking";
-  }, [health, healthError]);
+    if (health) {
+      return health.status.toLowerCase() === "error" ? "offline" : "degraded";
+    }
+    return healthError ? "offline" : "unchecked";
+  }, [health, healthError, isCheckingHealth]);
+
+  const healthLabel = useMemo(() => {
+    if (healthState === "healthy") {
+      return "Healthy";
+    }
+    if (healthState === "degraded") {
+      return "Degraded";
+    }
+    if (healthState === "offline") {
+      return "Offline";
+    }
+    return healthState === "checking" ? "Checking" : "Check health";
+  }, [healthState]);
 
   return (
     <main className="app-shell">
@@ -968,11 +990,17 @@ function App() {
           <p className="eyebrow">Experimental GenAI Workspace</p>
           <h1>AMS GenAI Analytics Workbench</h1>
         </div>
-        <div className={`health-indicator health-${healthState}`}>
+        <button
+          type="button"
+          className={`health-indicator health-${healthState}`}
+          disabled={isCheckingHealth}
+          title={healthError ?? "Run backend, database, lock, and frontend health diagnostics"}
+          onClick={() => void runHealthCheck()}
+        >
           <span aria-hidden="true" />
           <strong>Backend</strong>
-          {healthState === "healthy" ? "Healthy" : healthState === "offline" ? "Offline" : "Checking"}
-        </div>
+          {healthLabel}
+        </button>
       </header>
 
       <div className="notice-banner">

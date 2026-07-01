@@ -264,6 +264,41 @@ function formatNumber(value: number | null | undefined): string {
   return value.toLocaleString();
 }
 
+function formatBatchStatus(status: string | null | undefined): string {
+  if (!status) {
+    return "Not available";
+  }
+  const statusLabels: Record<string, string> = {
+    UPLOADED: "Uploaded",
+    INGESTING: "Ingesting",
+    INGESTED: "Ingested",
+    NORMALIZING: "Applying Mapping",
+    NORMALIZED: "Mapping Applied",
+    NORMALIZATION_FAILED: "Mapping Failed",
+    ARCHIVED: "Archived",
+    DELETED: "Deleted",
+    COMPLETED: "Completed",
+    PARTIAL: "Partial",
+    FAILED: "Failed",
+    RUNNING: "Running",
+  };
+  return statusLabels[status] ?? status.replace(/_/g, " ");
+}
+
+function formatApplyStatus(status: string | null | undefined): string {
+  if (!status) {
+    return "Pending";
+  }
+  const statusLabels: Record<string, string> = {
+    APPLIED: "Mapping Applied",
+    SKIPPED_ALREADY_APPLIED: "Already Applied",
+    FAILED_PARTIAL_OUTPUT: "Failed - Partial Output",
+    FAILED: "Failed",
+    NORMALIZED: "Mapping Applied",
+  };
+  return statusLabels[status] ?? formatBatchStatus(status);
+}
+
 function safeBatchNamePart(value: string): string {
   return value
     .replace(/\.[^.]+$/, "")
@@ -518,8 +553,17 @@ function TicketDetailsWorkflow({
         filename: upload?.filename ?? (batchId === selectedBatchId ? selectedBatchFilename : null),
         uploadStatus: upload?.status ?? batch?.status ?? "Selected",
         ingestStatus: ingest?.status ?? job?.status ?? batch?.status ?? "Pending",
-        normalizeStatus: normalize?.status ?? batch?.status ?? "Pending",
-        applyStatus: apply?.status ?? (applyResult ? "Not selected" : "Pending"),
+        normalizeStatus:
+          normalize?.status ??
+          (batch?.status === "NORMALIZED" ? "Completed" : batch?.status) ??
+          "Pending",
+        applyStatus:
+          apply?.status ??
+          (batch?.status === "NORMALIZED"
+            ? "NORMALIZED"
+            : applyResult
+              ? "Not selected"
+              : "Pending"),
         inputRows:
           apply?.input_rows ??
           normalize?.raw_rows ??
@@ -1156,10 +1200,10 @@ function TicketDetailsWorkflow({
                     ) : null}
                     <td>{row.filename ?? "-"}</td>
                     <td>{row.batchName}</td>
-                    <td>{row.uploadStatus}</td>
-                    <td>{row.ingestStatus}</td>
-                    <td>{row.normalizeStatus}</td>
-                    <td>{row.applyStatus}</td>
+                    <td>{formatBatchStatus(row.uploadStatus)}</td>
+                    <td>{formatBatchStatus(row.ingestStatus)}</td>
+                    <td>{formatBatchStatus(row.normalizeStatus)}</td>
+                    <td>{formatApplyStatus(row.applyStatus)}</td>
                     <td>{formatNumber(row.inputRows)}</td>
                     <td>{formatNumber(row.inScopeRows)}</td>
                     <td>
@@ -1948,7 +1992,7 @@ function TicketDetailsWorkflow({
                               {batch.batch_name}
                             </button>
                           </td>
-                          <td>{batch.status}</td>
+                          <td>{formatBatchStatus(batch.status)}</td>
                           <td>{batch.uploaded_file_count ?? batch.file_count}</td>
                         </tr>
                       ))}
@@ -1968,14 +2012,14 @@ function TicketDetailsWorkflow({
                       <tr>
                         <th>Batch</th>
                         <th>Status</th>
-                        <th>Tickets</th>
+                        <th>Output Rows</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredHistoricalBatches.map((batch) => (
                         <tr key={batch.id}>
                           <td>{batch.batch_name}</td>
-                          <td>{batch.status}</td>
+                          <td>{formatBatchStatus(batch.status)}</td>
                           <td>{formatNumber(batch.normalized_ticket_count)}</td>
                         </tr>
                       ))}

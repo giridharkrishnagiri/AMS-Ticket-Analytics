@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import Dashboard from "./Dashboard";
 import Maintenance from "./Maintenance";
@@ -8,7 +8,31 @@ import type { BackendHealth } from "./api/health";
 import { formatDisplayDateTime } from "./utils/dateFormat";
 
 type AppView = "dashboard" | "maintenance" | "uploads";
-type HealthState = "checking" | "healthy" | "degraded" | "offline";
+type HealthState = "unchecked" | "checking" | "healthy" | "degraded" | "offline";
+
+function formatHealthStatus(value: string | null | undefined): string {
+  if (!value) {
+    return "Not available";
+  }
+  if (value.toLowerCase() === "ok") {
+    return "Healthy";
+  }
+  return value.replace(/_/g, " ");
+}
+
+function healthClassForStatus(value: string | null | undefined): HealthState {
+  const normalized = value?.toLowerCase();
+  if (normalized === "ok" || normalized === "healthy") {
+    return "healthy";
+  }
+  if (normalized === "error" || normalized === "offline") {
+    return "offline";
+  }
+  if (normalized === "degraded" || normalized === "warning") {
+    return "degraded";
+  }
+  return "unchecked";
+}
 
 function HealthIndicator({
   healthLabel,
@@ -49,6 +73,8 @@ function HealthDetails({
   onClose: () => void;
   onRefresh: () => void;
 }) {
+  const checks = health?.checks ?? [];
+
   return (
     <section className="panel health-details-panel" aria-labelledby="health-details-heading">
       <div className="panel-heading">
@@ -84,8 +110,8 @@ function HealthDetails({
         </div>
         <div>
           <p className="label">Database</p>
-          <strong>{healthState === "offline" ? "Unknown" : "Healthy / Unknown"}</strong>
-          <span className="helper-text">No separate database probe is exposed.</span>
+          <strong>{formatHealthStatus(String(health?.database?.status ?? "Not checked"))}</strong>
+          <span className="helper-text">Connectivity, session, lock, and tablespace checks.</span>
         </div>
         <div>
           <p className="label">Service</p>
@@ -105,6 +131,27 @@ function HealthDetails({
       {health?.storage_root ? (
         <p className="muted-text summary-block mono-text">Storage root: {health.storage_root}</p>
       ) : null}
+      {checks.length > 0 ? (
+        <div className="health-check-list" aria-label="Health check results">
+          {checks.map((check) => (
+            <article
+              className={`health-check-card health-${healthClassForStatus(check.status)}`}
+              key={check.name}
+            >
+              <div>
+                <p className="label">{check.name.replace(/_/g, " ")}</p>
+                <strong>{formatHealthStatus(check.status)}</strong>
+              </div>
+              <p>{check.message}</p>
+              {check.duration_ms !== null && check.duration_ms !== undefined ? (
+                <span className="helper-text">{check.duration_ms} ms</span>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="muted-text summary-block">Click Refresh Health to run diagnostics.</p>
+      )}
       {healthError ? <p className="error-text">{healthError}</p> : null}
     </section>
   );
@@ -112,8 +159,8 @@ function HealthDetails({
 
 function App() {
   const [activeView, setActiveView] = useState<AppView>("dashboard");
-  const [healthState, setHealthState] = useState<HealthState>("checking");
-  const [healthLabel, setHealthLabel] = useState("Checking");
+  const [healthState, setHealthState] = useState<HealthState>("unchecked");
+  const [healthLabel, setHealthLabel] = useState("Not checked");
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [isHealthOpen, setIsHealthOpen] = useState(false);
@@ -126,10 +173,18 @@ function App() {
     setHealthError(null);
     try {
       const nextHealth = await getBackendHealth();
-      const isHealthy = nextHealth.status.toLowerCase() === "ok";
+      const status = nextHealth.status.toLowerCase();
       setHealth(nextHealth);
-      setHealthState(isHealthy ? "healthy" : "degraded");
-      setHealthLabel(isHealthy ? "Healthy" : "Degraded");
+      if (status === "ok") {
+        setHealthState("healthy");
+        setHealthLabel("Healthy");
+      } else if (status === "error") {
+        setHealthState("offline");
+        setHealthLabel("Offline");
+      } else {
+        setHealthState("degraded");
+        setHealthLabel("Degraded");
+      }
     } catch (requestError) {
       setHealth(null);
       setHealthState("offline");
@@ -141,10 +196,6 @@ function App() {
       setIsRefreshingHealth(false);
     }
   }, []);
-
-  useEffect(() => {
-    void refreshHealth();
-  }, [refreshHealth]);
 
   return (
     <main className="app-shell">
@@ -158,7 +209,12 @@ function App() {
             <HealthIndicator
               healthLabel={healthLabel}
               healthState={healthState}
-              onOpen={() => setIsHealthOpen(true)}
+              onOpen={() => {
+                setIsHealthOpen(true);
+                if (healthState === "unchecked") {
+                  void refreshHealth();
+                }
+              }}
             />
             <nav className="view-tabs" aria-label="Primary views">
               <button

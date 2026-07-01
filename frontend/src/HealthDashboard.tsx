@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { getBackendHealth } from "./api/health";
 import type { BackendHealth } from "./api/health";
 import { formatDisplayDateTime } from "./utils/dateFormat";
 
-type StatusState = "checking" | "online" | "offline";
+type StatusState = "unchecked" | "checking" | "online" | "degraded" | "offline";
 
 function HealthDashboard() {
   const [health, setHealth] = useState<BackendHealth | null>(null);
-  const [status, setStatus] = useState<StatusState>("checking");
+  const [status, setStatus] = useState<StatusState>("unchecked");
   const [error, setError] = useState<string | null>(null);
   const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
 
@@ -18,8 +18,9 @@ function HealthDashboard() {
 
     try {
       const backendHealth = await getBackendHealth(signal);
+      const backendStatus = backendHealth.status.toLowerCase();
       setHealth(backendHealth);
-      setStatus("online");
+      setStatus(backendStatus === "ok" ? "online" : "degraded");
       setLastCheckedAt(new Date());
     } catch (requestError) {
       if (requestError instanceof DOMException && requestError.name === "AbortError") {
@@ -33,22 +34,20 @@ function HealthDashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void loadHealth(controller.signal);
-    return () => controller.abort();
-  }, [loadHealth]);
-
   const statusText = useMemo(() => {
     if (status === "online") {
       return "Online";
+    }
+
+    if (status === "degraded") {
+      return "Degraded";
     }
 
     if (status === "offline") {
       return "Offline";
     }
 
-    return "Checking";
+    return status === "checking" ? "Checking" : "Not checked";
   }, [status]);
 
   return (
@@ -64,10 +63,14 @@ function HealthDashboard() {
           </div>
           <p className="status-message">
             {status === "online"
-              ? "FastAPI is responding to health checks."
+              ? "FastAPI and diagnostics are responding."
               : status === "offline"
                 ? "The frontend could not reach the FastAPI health endpoint."
-                : "Contacting the backend health endpoint..."}
+                : status === "degraded"
+                  ? "One or more diagnostics returned a degraded result."
+                  : status === "checking"
+                    ? "Contacting the backend health endpoint..."
+                    : "Click Run Health Check to inspect backend, database, locks, and frontends."}
           </p>
           {error ? <p className="error-text">{error}</p> : null}
         </article>
@@ -105,7 +108,7 @@ function HealthDashboard() {
 
       <div className="action-row">
         <button className="primary-button" type="button" onClick={() => void loadHealth()}>
-          Refresh
+          {status === "checking" ? "Checking..." : "Run Health Check"}
         </button>
       </div>
     </>

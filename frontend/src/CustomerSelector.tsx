@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { listProjects } from "./api/projects";
 import type { ProjectOption } from "./api/projects";
@@ -10,6 +10,28 @@ type CustomerSelectorProps = {
   label?: string;
 };
 
+let projectOptionsCache: ProjectOption[] | null = null;
+let projectOptionsRequest: Promise<ProjectOption[]> | null = null;
+
+function loadProjectOptions(): Promise<ProjectOption[]> {
+  if (projectOptionsCache) {
+    return Promise.resolve(projectOptionsCache);
+  }
+
+  if (!projectOptionsRequest) {
+    projectOptionsRequest = listProjects()
+      .then((projects) => {
+        projectOptionsCache = projects;
+        return projects;
+      })
+      .finally(() => {
+        projectOptionsRequest = null;
+      });
+  }
+
+  return projectOptionsRequest;
+}
+
 function CustomerSelector({
   projectId,
   onProjectIdChange,
@@ -19,20 +41,30 @@ function CustomerSelector({
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const projectIdRef = useRef(projectId);
+  const onProjectIdChangeRef = useRef(onProjectIdChange);
+
+  useEffect(() => {
+    projectIdRef.current = projectId;
+  }, [projectId]);
+
+  useEffect(() => {
+    onProjectIdChangeRef.current = onProjectIdChange;
+  }, [onProjectIdChange]);
 
   useEffect(() => {
     let isMounted = true;
     setIsLoading(true);
     setError(null);
 
-    listProjects()
+    loadProjectOptions()
       .then((nextProjects) => {
         if (!isMounted) {
           return;
         }
         setProjects(nextProjects);
-        if (!projectId && nextProjects.length === 1) {
-          onProjectIdChange(nextProjects[0].id);
+        if (!projectIdRef.current && nextProjects.length === 1) {
+          onProjectIdChangeRef.current(nextProjects[0].id);
         }
       })
       .catch((requestError) => {
@@ -49,7 +81,7 @@ function CustomerSelector({
     return () => {
       isMounted = false;
     };
-  }, [onProjectIdChange, projectId]);
+  }, []);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId),

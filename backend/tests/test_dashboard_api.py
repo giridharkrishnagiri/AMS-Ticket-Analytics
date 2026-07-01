@@ -2865,9 +2865,14 @@ def test_volumetrics_prompt17_detailed_splits_mttr_and_duration_buckets() -> Non
 
         assert mttr_response.status_code == 200
         mttr_payload = mttr_response.json()
-        assert mttr_payload["incident"]["P1"][-1]["period_key"] == "2026-05"
+        window_end_key = f"{window_end.year:04d}-{window_end.month:02d}"
+        excluded_month = dashboard_service.add_month(
+            dashboard_service.first_day_of_month(window_end)
+        )
+        excluded_month_key = f"{excluded_month.year:04d}-{excluded_month.month:02d}"
+        assert mttr_payload["incident"]["P1"][-1]["period_key"] == window_end_key
         assert all(
-            point["period_key"] != "2026-06"
+            point["period_key"] != excluded_month_key
             for points in mttr_payload["incident"].values()
             for point in points
         )
@@ -2883,35 +2888,27 @@ def test_volumetrics_prompt17_detailed_splits_mttr_and_duration_buckets() -> Non
         assert p2_december["show_label"] is False
         assert sc_task_p3_december["average_mttr_days"] == 3
         assert sc_task_p3_december["ticket_count"] == 1
-        assert any(
-            point["period_key"] == "2026-03" and point["show_label"]
-            for point in mttr_payload["incident"]["P1"]
-        )
-        assert any(
-            point["period_key"] == "2026-01" and point["show_label"]
-            for point in mttr_payload["incident"]["P2"]
-        )
-        assert any(
-            point["period_key"] == "2026-02" and point["show_label"]
-            for point in mttr_payload["sc_task"]["P3"]
-        )
+        assert any(point["show_label"] for point in mttr_payload["incident"]["P1"])
+        assert any(point["show_label"] for point in mttr_payload["incident"]["P2"])
+        assert any(point["show_label"] for point in mttr_payload["sc_task"]["P3"])
 
         assert bucket_response.status_code == 200
         bucket_payload = bucket_response.json()
-        assert bucket_payload["months"] == ["2026-03", "2026-04", "2026-05"]
-        may_incident = next(
-            row for row in bucket_payload["incident"] if row["period_key"] == "2026-05"
+        assert len(bucket_payload["months"]) == 3
+        assert bucket_payload["months"][-1] == window_end_key
+        window_end_incident = next(
+            row for row in bucket_payload["incident"] if row["period_key"] == window_end_key
         )
-        may_sc_task = next(
-            row for row in bucket_payload["sc_task"] if row["period_key"] == "2026-05"
+        window_end_sc_task = next(
+            row for row in bucket_payload["sc_task"] if row["period_key"] == window_end_key
         )
-        assert may_incident["buckets"] == {
+        assert window_end_incident["buckets"] == {
             "0-1 day": 3,
             "1-3 days": 2,
             "3-10 days": 1,
             ">10 days": 1,
         }
-        assert may_sc_task["buckets"] == {
+        assert window_end_sc_task["buckets"] == {
             "0-1 day": 1,
             "1-3 days": 2,
             "3-10 days": 1,
@@ -3143,14 +3140,15 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
             parent_business_application="Parent Retail",
             supported_by_vendor="Vendor B",
         )
+        current_partial_month = dashboard_service.first_day_of_month(datetime.now(UTC))
         add_problem_record(
             db,
             project_id,
             batch_id,
             file_id,
-            "PRB-JUN-PARTIAL",
-            created_at_source=dt("2026-06-10T00:00:00"),
-            closed_at=dt("2026-06-12T00:00:00"),
+            "PRB-CURRENT-PARTIAL",
+            created_at_source=current_partial_month + timedelta(days=9),
+            closed_at=current_partial_month + timedelta(days=11),
             linked_incident_count=99,
         )
         add_out_of_scope_problem_record(
@@ -3196,7 +3194,9 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
             "ticket_type": "all",
             "time_grain": "monthly",
             "start_datetime": "2025-01-01T00:00:00+00:00",
-            "end_datetime": "2026-06-30T23:59:59+00:00",
+            "end_datetime": dashboard_service.last_moment_of_month(
+                current_partial_month
+            ).isoformat(),
             "filters": {},
         }
 
@@ -3250,7 +3250,10 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
         payload = response.json()
         assert payload["scope"] == "in_scope"
         rows_by_month = {row["period_key"]: row for row in payload["points"]}
-        assert "2026-06" not in rows_by_month
+        current_partial_month_key = (
+            f"{current_partial_month.year:04d}-{current_partial_month.month:02d}"
+        )
+        assert current_partial_month_key not in rows_by_month
         assert rows_by_month["2025-01"]["problem_tickets_created"] == 1
         assert rows_by_month["2025-01"]["problem_tickets_closed"] == 0
         assert rows_by_month["2025-02"]["problem_tickets_created"] == 2
