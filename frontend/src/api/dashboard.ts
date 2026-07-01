@@ -507,7 +507,9 @@ export type DashboardVolumetricsFilters = {
   application_owner: string[];
   supported_by_vendor: string[];
   sap_non_sap: string[];
+  architecture_type: string[];
   business_critical: string[];
+  install_type: string[];
 };
 
 export type DashboardVolumetricsRequest = {
@@ -530,7 +532,9 @@ export type DashboardVolumetricsFilterValues = {
   application_owner: ApplicationFilterValue[];
   supported_by_vendor: ApplicationFilterValue[];
   sap_non_sap: ApplicationFilterValue[];
+  architecture_type: ApplicationFilterValue[];
   business_critical: ApplicationFilterValue[];
+  install_type: ApplicationFilterValue[];
   source?: string;
   duration_ms?: number | null;
 };
@@ -767,6 +771,37 @@ export type DashboardVolumetricsDistributionSplits = {
   architecture_type: DashboardVolumetricsTripleTicketTypeSplit;
   install_type: DashboardVolumetricsTripleTicketTypeSplit;
   hosting_env: DashboardVolumetricsTripleTicketTypeSplit;
+};
+
+export type DashboardVolumetricsScTaskCatalogItemRow = {
+  catalog_item_name: string;
+  sc_task_count: number;
+  avg_monthly_volume: number;
+  proportion_pct: number | null;
+};
+
+export type DashboardVolumetricsScTaskCatalogItemTopRow =
+  DashboardVolumetricsScTaskCatalogItemRow & {
+    rank: number;
+    avg_monthly_with_pct_label: string;
+  };
+
+export type DashboardVolumetricsScTaskCatalogItemPeriod = {
+  period_key: string;
+  period_label: string;
+  from_date: string;
+  to_date: string;
+  total_sc_tasks: number;
+  months_in_period: number;
+  pie_rows: DashboardVolumetricsScTaskCatalogItemRow[];
+  top_10_rows: DashboardVolumetricsScTaskCatalogItemTopRow[];
+  warnings: string[];
+};
+
+export type DashboardVolumetricsScTaskCatalogItemProportion = {
+  periods: DashboardVolumetricsScTaskCatalogItemPeriod[];
+  data_notes: string[];
+  warnings: string[];
 };
 
 export type DashboardVolumetricsKpiMttrPoint = {
@@ -1288,6 +1323,15 @@ export function getDashboardVolumetricsDistributionSplits(
 ): Promise<DashboardVolumetricsDistributionSplits> {
   return postVolumetricsRequest<DashboardVolumetricsDistributionSplits>(
     "/dashboard/volumetrics/distribution-splits",
+    input
+  );
+}
+
+export function getDashboardVolumetricsScTaskCatalogItemProportion(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsScTaskCatalogItemProportion> {
+  return postVolumetricsRequest<DashboardVolumetricsScTaskCatalogItemProportion>(
+    "/dashboard/volumetrics/sc-task-catalog-item-proportion",
     input
   );
 }

@@ -45,6 +45,7 @@ from app.services.dashboard import (
     latest_complete_month_window,
     latest_complete_window_payload,
     non_negative_reassignment_expression,
+    nonblank_text_expression,
     normalize_dashboard_datetime,
     overview_summary,
     priority_bucket_expression,
@@ -1230,6 +1231,10 @@ def build_detailed_volume_payload(
     architecture_expression = volumetrics_display_expression(source.c.architecture_type)
     install_expression = volumetrics_display_expression(source.c.install_type)
     hosting_env_expression = volumetrics_display_expression(source.c.hosting_env)
+    catalog_item_expression = func.coalesce(
+        nonblank_text_expression(source.c.catalog_item_name),
+        literal("Unmapped Catalog Item"),
+    )
     cancelled_condition = volumetrics_cancelled_expression(source)
     incident_batch_condition = (
         (source.c.ticket_type == "INCIDENT") & source.c.is_batch_related.is_(True)
@@ -1241,6 +1246,7 @@ def build_detailed_volume_payload(
             architecture_expression.label("architecture_type"),
             install_expression.label("install_type"),
             hosting_env_expression.label("hosting_env"),
+            catalog_item_expression.label("catalog_item_name"),
             period_expression.label("period_start"),
             func.count(source.c.id).label("created_count"),
             func.count(source.c.id)
@@ -1261,6 +1267,7 @@ def build_detailed_volume_payload(
             architecture_expression,
             install_expression,
             hosting_env_expression,
+            catalog_item_expression,
             period_expression,
         )
     )
@@ -1276,6 +1283,7 @@ def build_detailed_volume_payload(
                 "architecture_type": str(row["architecture_type"]),
                 "install_type": str(row["install_type"]),
                 "hosting_env": str(row["hosting_env"]),
+                "catalog_item_name": str(row["catalog_item_name"]),
                 "period_key": month_key(period_start),
                 "period_label": f"{period_start:%b-%y}",
                 "created_count": int(row["created_count"] or 0),
@@ -2324,6 +2332,39 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       justify-content: space-between;
       gap: 10px;
     }
+    .commentary-icon-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .commentary-icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      min-height: 32px;
+      padding: 0;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      color: #1e293b;
+      background: #fff;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 900;
+      line-height: 1;
+    }
+    .commentary-icon-button.primary {
+      border-color: var(--teal);
+      color: #fff;
+      background: var(--teal);
+    }
+    .commentary-box:not(.editing) .commentary-save-button,
+    .commentary-box:not(.editing) .commentary-clear-button {
+      display: none;
+    }
+    .commentary-box.editing .commentary-edit-button {
+      display: none;
+    }
     .commentary-preview {
       margin-top: 8px;
       padding: 10px 12px;
@@ -2398,9 +2439,31 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       max-width: 100%;
       max-inline-size: 100%;
     }
+    .sc-task-catalog-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      min-width: 0;
+    }
+    .sc-task-catalog-card {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid #dbe3ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .sc-task-catalog-card h4 {
+      margin: 0;
+      color: #111827;
+      font-size: 0.95rem;
+    }
     @media (max-width: 1100px) {
       .chart-grid { grid-template-columns: 1fr; }
       .chart-grid-three { grid-template-columns: 1fr; }
+      .sc-task-catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .duration-grid { grid-template-columns: 1fr; }
       #volumetrics .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -2408,7 +2471,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       .topbar, .layout { grid-template-columns: 1fr; display: grid; }
       .topbar { max-height: none; min-height: 0; }
       .dashboard-title, #export-meta { text-align: left; }
-      .summary-grid, .chart-grid, .chart-grid-three, .duration-grid, #volumetrics .summary-grid { grid-template-columns: 1fr; }
+      .summary-grid, .chart-grid, .chart-grid-three, .sc-task-catalog-grid, .duration-grid, #volumetrics .summary-grid { grid-template-columns: 1fr; }
       .overview-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .filters { position: static; max-height: none; }
       .main { overflow-y: visible; }
@@ -2638,9 +2701,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return `<section class="commentary-box" ${commentaryContextAttributes(context)}>
         <div class="commentary-header">
           <div><p class="label">Commentary / Inferences</p></div>
-          <button class="secondary-button commentary-edit-button" type="button">${hasCommentary ? "View / edit commentary" : "Add commentary / inferences"}</button>
+          <div class="commentary-icon-actions">
+            <button class="commentary-icon-button commentary-clear-button" type="button" aria-label="Clear commentary">x</button>
+            <button class="commentary-icon-button primary commentary-save-button" type="button" aria-label="Save commentary">✓</button>
+            <button class="commentary-icon-button commentary-edit-button" type="button" aria-label="Edit commentary">✎</button>
+          </div>
         </div>
-        <div class="commentary-preview">${hasCommentary ? htmlValue : `<p class="muted">No commentary saved for this filter context.</p>`}</div>
+        <div class="commentary-preview">${hasCommentary ? htmlValue : `<p class="muted">No commentary added yet.</p>`}</div>
         <div class="commentary-editor-panel">
           <div class="commentary-toolbar">
             <button type="button" data-command="bold">B</button>
@@ -2648,13 +2715,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
             <button type="button" data-command="underline">U</button>
             <button type="button" data-command="insertUnorderedList">Bullets</button>
             <button type="button" data-command="insertOrderedList">Numbered</button>
-            <button type="button" data-command="removeFormat">Clear</button>
+            <button type="button" data-command="removeFormat">Remove format</button>
           </div>
           <div class="commentary-editor" contenteditable="true" role="textbox">${htmlValue}</div>
           <div class="commentary-footer">
             <span class="commentary-status">Offline edits are saved in this browser until you download an updated HTML file.</span>
-            <button class="secondary-button commentary-cancel-button" type="button">Cancel</button>
-            <button class="primary-button commentary-save-button" type="button">Save locally</button>
           </div>
         </div>
       </section>`;
@@ -2675,19 +2740,35 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       if (!root) return;
       root.querySelectorAll(".commentary-box").forEach((box) => {
         const editButton = box.querySelector(".commentary-edit-button");
-        const cancelButton = box.querySelector(".commentary-cancel-button");
+        const clearButton = box.querySelector(".commentary-clear-button");
         const saveButton = box.querySelector(".commentary-save-button");
         const editor = box.querySelector(".commentary-editor");
         const preview = box.querySelector(".commentary-preview");
         const status = box.querySelector(".commentary-status");
-        const originalHtml = editor?.innerHTML || "";
+        function saveBox() {
+          const sanitized = sanitizeOfflineCommentary(editor?.innerHTML || "");
+          const text = (editor?.innerText || "").trim();
+          const context = contextFromCommentaryElement(box);
+          saveLocalCommentary(context, sanitized, text);
+          if (editor) editor.innerHTML = sanitized;
+          if (preview) preview.innerHTML = sanitized || `<p class="muted">No commentary added yet.</p>`;
+          if (status) status.textContent = "Saved locally.";
+          box.classList.remove("editing");
+          return true;
+        }
         editButton?.addEventListener("click", () => {
-          box.classList.toggle("editing");
+          if (window.activeOfflineCommentaryBox && window.activeOfflineCommentaryBox !== box) {
+            window.activeOfflineCommentaryBox.__saveCommentary?.();
+          }
+          window.activeOfflineCommentaryBox = box;
+          box.__saveCommentary = saveBox;
+          box.classList.add("editing");
           editor?.focus();
         });
-        cancelButton?.addEventListener("click", () => {
-          if (editor) editor.innerHTML = originalHtml;
-          box.classList.remove("editing");
+        clearButton?.addEventListener("click", () => {
+          if (editor) editor.innerHTML = "";
+          saveBox();
+          if (window.activeOfflineCommentaryBox === box) window.activeOfflineCommentaryBox = null;
         });
         box.querySelectorAll("[data-command]").forEach((button) => {
           button.addEventListener("mousedown", (event) => event.preventDefault());
@@ -2697,14 +2778,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           });
         });
         saveButton?.addEventListener("click", () => {
-          const sanitized = sanitizeOfflineCommentary(editor?.innerHTML || "");
-          const text = (editor?.innerText || "").trim();
-          const context = contextFromCommentaryElement(box);
-          saveLocalCommentary(context, sanitized, text);
-          if (editor) editor.innerHTML = sanitized;
-          if (preview) preview.innerHTML = sanitized || `<p class="muted">No commentary saved for this filter context.</p>`;
-          if (status) status.textContent = "Saved locally.";
-          box.classList.remove("editing");
+          saveBox();
+          if (window.activeOfflineCommentaryBox === box) window.activeOfflineCommentaryBox = null;
         });
       });
     }
@@ -3878,6 +3953,56 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const items = distributionItems(field, ticketType);
       return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">${splitWindowText()}</p><div class="chart-frame chart-stage">${notApplicable ? `<p class="muted" style="padding:12px">This distribution chart is not applicable for the selected ticket type.</p>` : pieChart(items)}</div></section>`;
     }
+    function scTaskCatalogPeriodDefinitions() {
+      return [
+        { key: "H1_2025", label: "H1 2025", title: "H1 2025 Catalog Item Proportion", start: "2025-01", end: "2025-06", from: "2025-01-01", to: "2025-06-30" },
+        { key: "H2_2025", label: "H2 2025", title: "H2 2025 Catalog Item Proportion", start: "2025-07", end: "2025-12", from: "2025-07-01", to: "2025-12-31" },
+        { key: "H1_2026", label: "H1 2026", title: "H1 2026 Catalog Item Proportion", start: "2026-01", end: "2026-06", from: "2026-01-01", to: "2026-06-30" }
+      ];
+    }
+    function scTaskCatalogPeriodData(period) {
+      const rows = detailedVolumeRows().filter((row) =>
+        row.ticket_type === "sc_task" &&
+        offlineFilterMatch(row) &&
+        row.period_key >= period.start &&
+        row.period_key <= period.end
+      );
+      const totals = new Map();
+      rows.forEach((row) => {
+        const label = row.catalog_item_name || "Unmapped Catalog Item";
+        totals.set(label, (totals.get(label) || 0) + Number(row.created_count || 0));
+      });
+      const allRows = [...totals.entries()]
+        .map(([label, count]) => ({ label, count }))
+        .filter((row) => row.count > 0)
+        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+      const total = allRows.reduce((sum, row) => sum + row.count, 0);
+      const topRows = allRows.slice(0, 10).map((row, index) => ({
+        ...row,
+        rank: index + 1,
+        avg: row.count / 6,
+        pct: total > 0 ? (row.count / total) * 100 : null
+      }));
+      const pieRows = topRows.map((row) => ({ label: row.label, count: row.count }));
+      if (allRows.length > 10) {
+        const otherCount = allRows.slice(10).reduce((sum, row) => sum + row.count, 0);
+        pieRows.push({ label: "Others", count: otherCount });
+      }
+      return { period, total, pieRows, topRows };
+    }
+    function scTaskCatalogTable(periodData) {
+      if (!periodData.topRows.length) {
+        return `<p class="muted" style="padding:12px">No data available for ${esc(periodData.period.label)}.</p>`;
+      }
+      return `<div class="table-scroll"><table class="applications-table"><thead><tr><th>Rank</th><th>Catalog Item</th><th>SC Task Count</th><th>Average Monthly Volume</th></tr></thead><tbody>${periodData.topRows.map((row) => `<tr><td>${fmt(row.rank)}</td><td>${esc(row.label)}</td><td>${fmt(row.count)}</td><td>${row.avg.toFixed(1)} (${row.pct === null ? "N/A" : `${row.pct.toFixed(1)}%`})</td></tr>`).join("")}</tbody></table></div>`;
+    }
+    function scTaskCatalogSection() {
+      if (state.volTicketType === "incident") {
+        return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">SC Task Catalog Item Proportion is available for SC Tasks only. Change Ticket Type to All or SC Tasks.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
+      }
+      const periods = scTaskCatalogPeriodDefinitions().map(scTaskCatalogPeriodData);
+      return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows the proportion of SC Tasks by catalog item across selected half-year periods. Values are based on created SC Task volume.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage">${pieChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Average monthly volume is calculated over six months.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
+    }
     function incidentBatchTrendPoints() {
       const rows = detailedVolumeRows().filter(incidentBatchFilterMatch);
       return DASHBOARD.volumetrics.periods.map((period) => ({
@@ -3905,6 +4030,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         <section class="chart-card panel full" data-commentary-key="batch_related_incidents_created"><h3>Batch-related Incidents Created</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
         <section class="chart-card panel full" data-commentary-key="top_incident_batch_applications"><div class="chart-title-row"><div><h3>Top Applications with Incident Batch-Related Tickets</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("batch", state.topBatchN)}</div></div><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : paretoBarLineChart(topBatch, "Average Batch Created Count", "Average Batch Canceled Count")}</div></section>
         <section class="chart-card panel full" data-commentary-key="tickets_per_user_application"><div class="chart-title-row"><div><h3>Tickets per User per Month by Application</h3><p class="muted">Calculated as latest complete 6-month average monthly ticket volume divided by Active Users.</p></div><div class="pattern-buttons">${topToggle("tickets-user", state.ticketsPerUserN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(ticketUserPoints, { title: "Tickets per User per Month by Application", legend: "Tickets per user per month", color: COLORS.purple, digits: 2, height: state.ticketsPerUserN === "20" ? 780 : 500, emptyMessage: "No applications with non-zero Active Users are available." })}</div></section>
+        ${scTaskCatalogSection()}
         <div class="chart-grid-three">
           ${distributionPieSection("Average Monthly Tickets by SAP / Non-SAP", "sap_non_sap", "all")}
           ${distributionPieSection("Average Monthly Incidents by SAP / Non-SAP", "sap_non_sap", "incident")}

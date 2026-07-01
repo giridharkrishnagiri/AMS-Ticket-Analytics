@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -487,7 +487,9 @@ class VolumetricsFilters(BaseModel):
     application_owner: list[str] = Field(default_factory=list)
     supported_by_vendor: list[str] = Field(default_factory=list)
     sap_non_sap: list[str] = Field(default_factory=list)
+    architecture_type: list[str] = Field(default_factory=list)
     business_critical: list[str] = Field(default_factory=list)
+    install_type: list[str] = Field(default_factory=list)
 
 
 class VolumetricsRequest(BaseModel):
@@ -510,7 +512,9 @@ class VolumetricsFilterValuesResponse(BaseModel):
     application_owner: list[ApplicationFilterCountValue]
     supported_by_vendor: list[ApplicationFilterCountValue]
     sap_non_sap: list[ApplicationFilterCountValue]
+    architecture_type: list[ApplicationFilterCountValue]
     business_critical: list[ApplicationFilterCountValue]
+    install_type: list[ApplicationFilterCountValue]
     source: str = "dashboard_filter_facts"
     duration_ms: int | None = None
 
@@ -815,6 +819,36 @@ class VolumetricsDistributionSplitsResponse(BaseModel):
     architecture_type: VolumetricsTripleTicketTypeSplit
     install_type: VolumetricsTripleTicketTypeSplit
     hosting_env: VolumetricsTripleTicketTypeSplit
+
+
+class VolumetricsScTaskCatalogItemRow(BaseModel):
+    catalog_item_name: str
+    sc_task_count: int
+    avg_monthly_volume: float
+    proportion_pct: float | None
+
+
+class VolumetricsScTaskCatalogItemTopRow(VolumetricsScTaskCatalogItemRow):
+    rank: int
+    avg_monthly_with_pct_label: str
+
+
+class VolumetricsScTaskCatalogItemPeriod(BaseModel):
+    period_key: str
+    period_label: str
+    from_date: date
+    to_date: date
+    total_sc_tasks: int
+    months_in_period: int
+    pie_rows: list[VolumetricsScTaskCatalogItemRow]
+    top_10_rows: list[VolumetricsScTaskCatalogItemTopRow]
+    warnings: list[str]
+
+
+class VolumetricsScTaskCatalogItemProportionResponse(BaseModel):
+    periods: list[VolumetricsScTaskCatalogItemPeriod]
+    data_notes: list[str]
+    warnings: list[str]
 
 
 class VolumetricsKpiMttrPoint(BaseModel):

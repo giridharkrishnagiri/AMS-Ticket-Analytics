@@ -179,6 +179,24 @@ def add_ticket(
     return ticket
 
 
+def volumetrics_request(
+    project_id: UUID,
+    *,
+    scope: str = "in_scope",
+    ticket_type: str = "all",
+    filters: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "project_id": str(project_id),
+        "scope": scope,
+        "ticket_type": ticket_type,
+        "time_grain": "monthly",
+        "start_datetime": "2025-01-01T00:00:00+00:00",
+        "end_datetime": "2026-06-30T23:59:59+00:00",
+        "filters": filters or {},
+    }
+
+
 def add_problem_record(
     db,
     project_id: UUID,
@@ -2680,6 +2698,145 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        for index in range(3):
+            ticket = add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"SCTASK-UNMAPPED-{index}",
+                "SERVICE_CATALOG_TASK",
+                dt("2025-01-15T09:00:00"),
+                business_service_ci_name="Payroll",
+                sap_non_sap="SAP",
+            )
+            ticket.catalog_item_name = " " if index == 0 else None
+
+        for index in range(1, 12):
+            ticket = add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"SCTASK-CAT-{index:02d}",
+                "SERVICE_CATALOG_TASK",
+                dt("2025-02-10T09:00:00"),
+                business_service_ci_name="Payroll",
+                sap_non_sap="SAP",
+            )
+            ticket.catalog_item_name = f"Item {index:02d}"
+
+        for index in range(6):
+            ticket = add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"SCTASK-H2-{index}",
+                "SERVICE_CATALOG_TASK",
+                dt("2025-08-10T09:00:00"),
+                business_service_ci_name="Payroll",
+                sap_non_sap="SAP",
+            )
+            ticket.catalog_item_name = "H2 Item"
+
+        incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-CATALOG-IGNORED",
+            "INCIDENT",
+            dt("2025-02-10T09:00:00"),
+            business_service_ci_name="Payroll",
+            sap_non_sap="SAP",
+        )
+        incident.catalog_item_name = "Incident Item"
+
+        db.add(
+            AssessmentOutOfScopeTicket(
+                project_id=project_id,
+                upload_batch_id=batch_id,
+                ticket_number="SCTASK-OOS-CATALOG",
+                ticket_type="SERVICE_CATALOG_TASK",
+                created_at=dt("2025-03-10T09:00:00"),
+                assignment_group="External",
+                catalog_item_name="Out Item",
+                sap_non_sap="SAP",
+                out_of_scope_reason="assignment_group_not_in_application_inventory",
+            ),
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/sc-task-catalog-item-proportion",
+                json=volumetrics_request(project_id),
+            )
+            out_of_scope_response = client.post(
+                "/api/dashboard/volumetrics/sc-task-catalog-item-proportion",
+                json=volumetrics_request(project_id, scope="out_of_scope"),
+            )
+            all_scope_response = client.post(
+                "/api/dashboard/volumetrics/sc-task-catalog-item-proportion",
+                json=volumetrics_request(project_id, scope="all"),
+            )
+            incident_response = client.post(
+                "/api/dashboard/volumetrics/sc-task-catalog-item-proportion",
+                json=volumetrics_request(project_id, ticket_type="incident"),
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        h1_2025 = next(period for period in payload["periods"] if period["period_key"] == "H1_2025")
+        assert h1_2025["total_sc_tasks"] == 14
+        assert h1_2025["top_10_rows"][0]["catalog_item_name"] == "Unmapped Catalog Item"
+        assert h1_2025["top_10_rows"][0]["sc_task_count"] == 3
+        assert h1_2025["top_10_rows"][0]["avg_monthly_with_pct_label"] == "0.5 (21.4%)"
+        assert len(h1_2025["top_10_rows"]) == 10
+        assert h1_2025["pie_rows"][-1]["catalog_item_name"] == "Others"
+        assert h1_2025["pie_rows"][-1]["sc_task_count"] == 2
+
+        h2_2025 = next(period for period in payload["periods"] if period["period_key"] == "H2_2025")
+        assert h2_2025["total_sc_tasks"] == 6
+        assert h2_2025["top_10_rows"][0]["catalog_item_name"] == "H2 Item"
+        assert h2_2025["top_10_rows"][0]["avg_monthly_volume"] == 1.0
+        assert h2_2025["top_10_rows"][0]["proportion_pct"] == 100.0
+
+        h1_2026 = next(period for period in payload["periods"] if period["period_key"] == "H1_2026")
+        assert h1_2026["total_sc_tasks"] == 0
+        assert "No SC Task catalog item data available" in h1_2026["warnings"][0]
+        assert "normalized_payload" not in response.text
+        assert "cmdb_payload" not in response.text
+
+        assert out_of_scope_response.status_code == 200
+        out_payload = out_of_scope_response.json()
+        out_h1 = next(
+            period for period in out_payload["periods"] if period["period_key"] == "H1_2025"
+        )
+        assert out_h1["total_sc_tasks"] == 1
+        assert out_h1["top_10_rows"][0]["catalog_item_name"] == "Out Item"
+
+        assert all_scope_response.status_code == 200
+        all_payload = all_scope_response.json()
+        all_h1 = next(
+            period for period in all_payload["periods"] if period["period_key"] == "H1_2025"
+        )
+        assert all_h1["total_sc_tasks"] == 15
+
+        assert incident_response.status_code == 200
+        incident_payload = incident_response.json()
+        assert "SC Task Catalog Item Proportion is available for SC Tasks only" in incident_payload[
+            "warnings"
+        ][0]
+        assert all(period["total_sc_tasks"] == 0 for period in incident_payload["periods"])
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_volumetrics_prompt17_detailed_splits_mttr_and_duration_buckets() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
@@ -3584,6 +3741,10 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Top Parent Business Applications by Active Users" in document
         assert "Top Applications by Active Users" not in document
         assert "Tickets per User per Month by Application" in document
+        assert "SC Task Catalog Item Proportion" in document
+        assert "H1 2025 Catalog Item Proportion" in document
+        assert "scTaskCatalogSection" in document
+        assert "volumetrics_sc_task_catalog_item_proportion" in document
         assert "Average Monthly Tickets by SAP / Non-SAP" in document
         assert "Average Monthly Incidents by SAP / Non-SAP" in document
         assert "Average Monthly SC Tasks by SAP / Non-SAP" in document
@@ -3687,7 +3848,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function safeRenderSection" in document
         assert "function renderFatalDashboardError" in document
         assert "Commentary / Inferences" in document
-        assert "Save locally" in document
+        assert "commentary-icon-button" in document
+        assert 'aria-label="Edit commentary"' in document
+        assert 'aria-label="Save commentary"' in document
+        assert 'aria-label="Clear commentary"' in document
+        assert "No commentary added yet." in document
+        assert "Save locally" not in document
         assert "Download Updated Offline Dashboard" in document
         assert "function installCommentaryEditors" in document
         assert "function downloadUpdatedOfflineDashboard" in document
@@ -3850,6 +4016,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "architecture_type" in detailed_row
         assert "install_type" in detailed_row
         assert "hosting_env" in detailed_row
+        assert "catalog_item_name" in detailed_row
         assert "business_critical" in detailed_row
         assert {
             row["split_type"]

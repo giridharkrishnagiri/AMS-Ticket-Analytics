@@ -13,6 +13,7 @@ import {
   Pie,
   PieChart,
   ReferenceLine,
+  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -34,6 +35,7 @@ import {
   getDashboardVolumetricsKpiProblemManagementTrend,
   getDashboardVolumetricsKpiReassignmentHopsTrend,
   getDashboardVolumetricsPriorityDistribution,
+  getDashboardVolumetricsScTaskCatalogItemProportion,
   getDashboardVolumetricsSlaTrends,
   getDashboardVolumetricsSummary,
   getDashboardVolumetricsTicketsPerUser,
@@ -67,6 +69,9 @@ import type {
   DashboardVolumetricsReassignmentHopsPoint,
   DashboardVolumetricsReassignmentHopsTrend,
   DashboardVolumetricsRequest,
+  DashboardVolumetricsScTaskCatalogItemPeriod,
+  DashboardVolumetricsScTaskCatalogItemProportion,
+  DashboardVolumetricsScTaskCatalogItemRow,
   DashboardVolumetricsSlaTrends,
   DashboardVolumetricsSplitDatum,
   DashboardVolumetricsSummary,
@@ -133,7 +138,9 @@ const emptyFilters: DashboardVolumetricsFilters = {
   application_owner: [],
   supported_by_vendor: [],
   sap_non_sap: [],
+  architecture_type: [],
   business_critical: [],
+  install_type: [],
 };
 
 const emptyFilterValues: DashboardVolumetricsFilterValues = {
@@ -145,7 +152,9 @@ const emptyFilterValues: DashboardVolumetricsFilterValues = {
   application_owner: [],
   supported_by_vendor: [],
   sap_non_sap: [],
+  architecture_type: [],
   business_critical: [],
+  install_type: [],
 };
 
 const emptySummary: DashboardVolumetricsSummary = {
@@ -277,6 +286,12 @@ const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
   hosting_env: emptyDistributionGroup,
 };
 
+const emptyScTaskCatalogItemProportion: DashboardVolumetricsScTaskCatalogItemProportion = {
+  periods: [],
+  data_notes: [],
+  warnings: [],
+};
+
 const emptyMttrPrioritySet: DashboardVolumetricsKpiMttrPrioritySet = {
   P1: [],
   P2: [],
@@ -339,7 +354,19 @@ const chartColors = {
   pattern: "#0891b2",
   patternAlt: "#7c3aed",
   priority: ["#0f766e", "#2563eb", "#d97706", "#7c3aed", "#dc2626", "#64748b"],
-  pie: ["#2563eb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#64748b"],
+  pie: [
+    "#2563eb",
+    "#16a34a",
+    "#d97706",
+    "#7c3aed",
+    "#dc2626",
+    "#64748b",
+    "#0891b2",
+    "#be123c",
+    "#4f46e5",
+    "#15803d",
+    "#92400e",
+  ],
 };
 
 const chartImagePadding = 18;
@@ -650,12 +677,19 @@ function volumetricsFilterValuesFromCatalog(
       filters.supported_by_vendor
     ),
     sap_non_sap: catalogSingleRows(catalog, counts, "sap_non_sap", filters.sap_non_sap),
+    architecture_type: catalogSingleRows(
+      catalog,
+      counts,
+      "architecture_type",
+      filters.architecture_type
+    ),
     business_critical: catalogSingleRows(
       catalog,
       counts,
       "business_critical",
       filters.business_critical
     ),
+    install_type: catalogSingleRows(catalog, counts, "install_type", filters.install_type),
   };
 }
 
@@ -1014,6 +1048,9 @@ function VolumetricsDashboard({
   const [distributionSplits, setDistributionSplits] = useState<
     LoadState<DashboardVolumetricsDistributionSplits>
   >(createLoadState(emptyDistributionSplits));
+  const [scTaskCatalogItemProportion, setScTaskCatalogItemProportion] = useState<
+    LoadState<DashboardVolumetricsScTaskCatalogItemProportion>
+  >(createLoadState(emptyScTaskCatalogItemProportion));
   const [kpiMttrTrends, setKpiMttrTrends] = useState<
     LoadState<DashboardVolumetricsKpiMttrTrends>
   >(createLoadState(emptyKpiMttrTrends));
@@ -1237,6 +1274,9 @@ function VolumetricsDashboard({
     setDetailedSplits(createLoadState(emptyDetailedSplits, "loading"));
     setTicketsPerUser(createLoadState(emptyTicketsPerUser, "loading"));
     setDistributionSplits(createLoadState(emptyDistributionSplits, "loading"));
+    setScTaskCatalogItemProportion(
+      createLoadState(emptyScTaskCatalogItemProportion, "loading")
+    );
     setKpiMttrTrends(createLoadState(emptyKpiMttrTrends, "loading"));
     setKpiDurationBuckets(createLoadState(emptyDurationBuckets, "loading"));
     setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend, "loading"));
@@ -1417,6 +1457,22 @@ function VolumetricsDashboard({
         });
       });
 
+    void getDashboardVolumetricsScTaskCatalogItemProportion(requestBody)
+      .then((nextScTaskCatalogItemProportion) => {
+        setScTaskCatalogItemProportion({
+          status: "success",
+          data: nextScTaskCatalogItemProportion,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setScTaskCatalogItemProportion({
+          status: "error",
+          data: emptyScTaskCatalogItemProportion,
+          error: errorMessage(error, "Unable to load SC Task catalog item proportions"),
+        });
+      });
+
     void getDashboardVolumetricsKpiMttrTrends(requestBody)
       .then((nextKpiMttrTrends) => {
         setKpiMttrTrends({ status: "success", data: nextKpiMttrTrends, error: null });
@@ -1516,6 +1572,7 @@ function VolumetricsDashboard({
       setDetailedSplits(createLoadState(emptyDetailedSplits));
       setTicketsPerUser(createLoadState(emptyTicketsPerUser));
       setDistributionSplits(createLoadState(emptyDistributionSplits));
+      setScTaskCatalogItemProportion(createLoadState(emptyScTaskCatalogItemProportion));
       setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
       setKpiDurationBuckets(createLoadState(emptyDurationBuckets));
       setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend));
@@ -2022,6 +2079,9 @@ function VolumetricsDashboard({
             onTopBatchApplicationsNChange={setTopBatchApplicationsN}
             onTicketsPerUserNChange={setTicketsPerUserN}
             ticketType={ticketType}
+            scTaskCatalogItemProportion={scTaskCatalogItemProportion.data}
+            scTaskCatalogItemProportionError={scTaskCatalogItemProportion.error}
+            scTaskCatalogItemProportionStatus={scTaskCatalogItemProportion.status}
             ticketsPerUser={ticketsPerUser.data}
             ticketsPerUserError={ticketsPerUser.error}
             ticketsPerUserN={ticketsPerUserN}
@@ -2206,6 +2266,9 @@ function DetailedVolumeTrends({
   onTopApplicationsNChange,
   onTopBatchApplicationsNChange,
   onTicketsPerUserNChange,
+  scTaskCatalogItemProportion,
+  scTaskCatalogItemProportionError,
+  scTaskCatalogItemProportionStatus,
   ticketType,
   ticketsPerUser,
   ticketsPerUserError,
@@ -2233,6 +2296,9 @@ function DetailedVolumeTrends({
   onTopApplicationsNChange: (value: TopNSelection) => void;
   onTopBatchApplicationsNChange: (value: TopNSelection) => void;
   onTicketsPerUserNChange: (value: TopNSelection) => void;
+  scTaskCatalogItemProportion: DashboardVolumetricsScTaskCatalogItemProportion;
+  scTaskCatalogItemProportionError: string | null;
+  scTaskCatalogItemProportionStatus: LoadStatus;
   ticketType: VolumetricsTicketType;
   ticketsPerUser: DashboardVolumetricsTicketsPerUser;
   ticketsPerUserError: string | null;
@@ -2352,6 +2418,14 @@ function DetailedVolumeTrends({
         }}
         window={distributionSplits.ranking_window}
       />
+
+      <ScTaskCatalogItemProportionSection
+        commentary={commentaryForChart("volumetrics_sc_task_catalog_item_proportion")}
+        data={scTaskCatalogItemProportion}
+        error={scTaskCatalogItemProportionError}
+        status={scTaskCatalogItemProportionStatus}
+        ticketType={ticketType}
+      />
     </>
   );
 }
@@ -2361,6 +2435,177 @@ function splitChartNotApplicable(
   valueTicketType: Exclude<VolumetricsTicketType, "all">
 ): boolean {
   return selectedTicketType !== "all" && selectedTicketType !== valueTicketType;
+}
+
+function ScTaskCatalogTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardVolumetricsScTaskCatalogItemRow }>;
+}) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+  const row = payload[0].payload;
+  return (
+    <div className="chart-tooltip">
+      <strong>{row.catalog_item_name}</strong>
+      <span>SC Task Count: {formatNumber(row.sc_task_count)}</span>
+      <span>Average Monthly Volume: {formatNumber(row.avg_monthly_volume, 1)}</span>
+      <span>Proportion: {formatPercent(row.proportion_pct)}</span>
+    </div>
+  );
+}
+
+function ScTaskCatalogPie({
+  period,
+}: {
+  period: DashboardVolumetricsScTaskCatalogItemPeriod;
+}) {
+  const hasRows = period.pie_rows.length > 0;
+  return (
+    <section className="sc-task-catalog-card">
+      <h4>{period.period_label} Catalog Item Proportion</h4>
+      <p className="muted-text">
+        {period.from_date} to {period.to_date} · {formatNumber(period.total_sc_tasks)} SC Tasks
+      </p>
+      {hasRows ? (
+        <div className="sc-task-catalog-pie-stage">
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={period.pie_rows}
+                dataKey="sc_task_count"
+                nameKey="catalog_item_name"
+                outerRadius="72%"
+              >
+                {period.pie_rows.map((entry, index) => (
+                  <Cell
+                    fill={chartColors.pie[index % chartColors.pie.length]}
+                    key={`${period.period_key}-${entry.catalog_item_name}`}
+                  />
+                ))}
+              </Pie>
+              <Tooltip content={<ScTaskCatalogTooltip />} />
+              <Legend
+                formatter={(value) => {
+                  const row = period.pie_rows.find((item) => item.catalog_item_name === value);
+                  return `${value} (${formatPercent(row?.proportion_pct)})`;
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <p className="muted-text chart-state-text">
+          {period.warnings[0] ?? "No data available for this period."}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ScTaskCatalogTable({
+  period,
+}: {
+  period: DashboardVolumetricsScTaskCatalogItemPeriod;
+}) {
+  return (
+    <section className="sc-task-catalog-card sc-task-catalog-table-card">
+      <h4>{period.period_label} Top Catalog Items</h4>
+      {period.top_10_rows.length ? (
+        <div className="compact-table-wrapper">
+          <table className="compact-data-table">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Catalog Item</th>
+                <th>SC Task Count</th>
+                <th>Average Monthly Volume</th>
+              </tr>
+            </thead>
+            <tbody>
+              {period.top_10_rows.map((row) => (
+                <tr key={`${period.period_key}-${row.rank}-${row.catalog_item_name}`}>
+                  <td>{row.rank}</td>
+                  <td>{row.catalog_item_name}</td>
+                  <td>{formatNumber(row.sc_task_count)}</td>
+                  <td>{row.avg_monthly_with_pct_label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="muted-text chart-state-text">
+          {period.warnings[0] ?? "No data available for this period."}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ScTaskCatalogItemProportionSection({
+  commentary,
+  data,
+  error,
+  status,
+  ticketType,
+}: {
+  commentary?: ReactNode;
+  data: DashboardVolumetricsScTaskCatalogItemProportion;
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+}) {
+  const ticketTypeNotApplicable = ticketType === "incident";
+  const warningMessage = data.warnings[0];
+  return (
+    <section className="chart-card volumetrics-chart-card sc-task-catalog-section">
+      <div className="applications-chart-header">
+        <div>
+          <h3>SC Task Catalog Item Proportion</h3>
+          <p className="muted-text">
+            Shows the proportion of SC Tasks by catalog item across selected half-year periods.
+            Values are based on created SC Task volume.
+          </p>
+        </div>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {ticketTypeNotApplicable && status !== "loading" ? (
+        <p className="muted-text chart-state-text">
+          {warningMessage ??
+            "SC Task Catalog Item Proportion is available for SC Tasks only. Change Ticket Type to All or SC Tasks."}
+        </p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && !ticketTypeNotApplicable ? (
+        <>
+          <div className="sc-task-catalog-grid">
+            {data.periods.map((period) => (
+              <ScTaskCatalogPie key={period.period_key} period={period} />
+            ))}
+          </div>
+          <div className="sc-task-catalog-grid sc-task-catalog-table-grid">
+            {data.periods.map((period) => (
+              <ScTaskCatalogTable key={`${period.period_key}-table`} period={period} />
+            ))}
+          </div>
+          {data.data_notes.length ? (
+            <ul className="chart-data-notes">
+              {data.data_notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : null}
+      {commentary}
+    </section>
+  );
 }
 
 function splitWindowText(window: DashboardVolumetricsRankingWindow): string {

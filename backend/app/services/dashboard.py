@@ -215,7 +215,9 @@ SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
     "sap_non_sap": "sap_non_sap",
+    "architecture_type": "architecture_type",
     "business_critical": "business_critical",
+    "install_type": "install_type",
 }
 
 COMBINED_VOLUMETRICS_FILTER_FIELDS = {
@@ -228,7 +230,9 @@ FACT_SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
     "sap_non_sap": "sap_non_sap",
+    "architecture_type": "architecture_type",
     "business_critical": "business_critical",
+    "install_type": "install_type",
 }
 
 FACT_COMBINED_VOLUMETRICS_FILTER_FIELDS = {
@@ -252,6 +256,27 @@ FACT_TICKET_TYPE_VALUES = {
 VOLUMETRICS_FILTER_CUSTOM_SORTS = {
     "business_critical": APPLICATION_CRITICALITY_ORDER,
 }
+
+SC_TASK_CATALOG_PERIODS = (
+    (
+        "H1_2025",
+        "H1 2025",
+        datetime(2025, 1, 1, tzinfo=UTC),
+        datetime(2025, 7, 1, tzinfo=UTC),
+    ),
+    (
+        "H2_2025",
+        "H2 2025",
+        datetime(2025, 7, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, tzinfo=UTC),
+    ),
+    (
+        "H1_2026",
+        "H1 2026",
+        datetime(2026, 1, 1, tzinfo=UTC),
+        datetime(2026, 7, 1, tzinfo=UTC),
+    ),
+)
 
 
 class TimeGrain(StrEnum):
@@ -1757,6 +1782,7 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         model.business_critical.label("business_critical"),
         model.install_type.label("install_type"),
         model.hosting_env.label("hosting_env"),
+        model.catalog_item_name.label("catalog_item_name"),
         model.is_batch_related.label("is_batch_related"),
         model.reassignment_count.label("reassignment_count"),
         model.business_duration_seconds.label("business_duration_seconds"),
@@ -2305,11 +2331,23 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
             "sap_non_sap",
             "sap_non_sap",
         ),
+        "architecture_type": volumetrics_filter_fact_value_count_rows(
+            db,
+            request,
+            "architecture_type",
+            "architecture_type",
+        ),
         "business_critical": volumetrics_filter_fact_value_count_rows(
             db,
             request,
             "business_critical",
             "business_critical",
+        ),
+        "install_type": volumetrics_filter_fact_value_count_rows(
+            db,
+            request,
+            "install_type",
+            "install_type",
         ),
         "source": "dashboard_filter_facts",
         "duration_ms": int((perf_counter() - started) * 1000),
@@ -3854,6 +3892,171 @@ def volumetrics_distribution_splits(db: Session, request: Any) -> dict[str, Any]
         "install_type": group("install_type"),
         "hosting_env": group("hosting_env"),
     }
+
+
+def sc_task_catalog_period_expression(source: Any) -> Any:
+    return case(
+        *(
+            (
+                and_(
+                    source.c.created_at >= start_datetime,
+                    source.c.created_at < end_exclusive_datetime,
+                ),
+                literal(period_key),
+            )
+            for period_key, _label, start_datetime, end_exclusive_datetime in (
+                SC_TASK_CATALOG_PERIODS
+            )
+        ),
+        else_=None,
+    )
+
+
+def sc_task_catalog_period_shells() -> list[dict[str, Any]]:
+    shells = []
+    for period_key, period_label, start_datetime, end_exclusive_datetime in SC_TASK_CATALOG_PERIODS:
+        shells.append(
+            {
+                "period_key": period_key,
+                "period_label": period_label,
+                "from_date": start_datetime.date(),
+                "to_date": (end_exclusive_datetime - timedelta(days=1)).date(),
+                "total_sc_tasks": 0,
+                "months_in_period": 6,
+                "pie_rows": [],
+                "top_10_rows": [],
+                "warnings": [],
+            },
+        )
+    return shells
+
+
+def sc_task_catalog_metric_row(
+    catalog_item_name: str,
+    sc_task_count: int,
+    total_sc_tasks: int,
+) -> dict[str, Any]:
+    avg_monthly_volume = sc_task_count / 6.0
+    proportion_pct = percentage(sc_task_count, total_sc_tasks)
+    return {
+        "catalog_item_name": catalog_item_name,
+        "sc_task_count": sc_task_count,
+        "avg_monthly_volume": round(avg_monthly_volume, 1),
+        "proportion_pct": round(proportion_pct, 1) if proportion_pct is not None else None,
+    }
+
+
+def volumetrics_sc_task_catalog_item_proportion(
+    db: Session,
+    request: Any,
+) -> dict[str, Any]:
+    normalize_volumetrics_scope(request.scope)
+    selected_ticket_type = normalize_volumetrics_ticket_type(request.ticket_type)
+    periods = sc_task_catalog_period_shells()
+    data_notes = [
+        "SC Task Catalog Item Proportion uses SC Tasks only.",
+        "Incidents, Problems, and Changes are excluded.",
+        "Pie charts show top 10 catalog items plus Others.",
+        "Average monthly volume is calculated over six months for each half-year period.",
+        "Date controls do not override the fixed H1/H2 periods for this chart.",
+    ]
+    warnings: list[str] = []
+    if selected_ticket_type == "incident":
+        warnings.append(
+            "SC Task Catalog Item Proportion is available for SC Tasks only. "
+            "Change Ticket Type to All or SC Tasks.",
+        )
+        for period in periods:
+            period["warnings"].append(warnings[0])
+        return {"periods": periods, "data_notes": data_notes, "warnings": warnings}
+
+    source = volumetrics_source_subquery(request)
+    sc_task_request = replace_request_value(request, "ticket_type", "sc_task")
+    period_expression = sc_task_catalog_period_expression(source)
+    catalog_expression = func.coalesce(
+        nonblank_text_expression(source.c.catalog_item_name),
+        literal("Unmapped Catalog Item"),
+    )
+    period_start = SC_TASK_CATALOG_PERIODS[0][2]
+    period_end_exclusive = SC_TASK_CATALOG_PERIODS[-1][3]
+    statement = (
+        select(
+            period_expression.label("period_key"),
+            catalog_expression.label("catalog_item_name"),
+            func.count(source.c.id).label("sc_task_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(
+                source,
+                sc_task_request,
+                include_date_bounds=False,
+            ),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= period_start,
+            source.c.created_at < period_end_exclusive,
+            period_expression.is_not(None),
+        )
+        .group_by(period_expression, catalog_expression)
+        .order_by(period_expression.asc(), func.count(source.c.id).desc(), catalog_expression.asc())
+    )
+
+    rows_by_period: dict[str, list[dict[str, Any]]] = {
+        period_key: [] for period_key, _label, _start, _end in SC_TASK_CATALOG_PERIODS
+    }
+    for row in db.execute(statement).mappings().all():
+        period_key = str(row["period_key"])
+        if period_key in rows_by_period:
+            rows_by_period[period_key].append(
+                {
+                    "catalog_item_name": str(row["catalog_item_name"]),
+                    "sc_task_count": int(row["sc_task_count"] or 0),
+                },
+            )
+
+    for period in periods:
+        raw_rows = sorted(
+            rows_by_period.get(period["period_key"], []),
+            key=lambda item: (-item["sc_task_count"], item["catalog_item_name"].casefold()),
+        )
+        total_sc_tasks = sum(row["sc_task_count"] for row in raw_rows)
+        period["total_sc_tasks"] = total_sc_tasks
+        if total_sc_tasks == 0:
+            period["warnings"].append(
+                f"No SC Task catalog item data available for {period['period_label']}.",
+            )
+            continue
+
+        top_rows = raw_rows[:10]
+        period["top_10_rows"] = [
+            {
+                **sc_task_catalog_metric_row(
+                    str(row["catalog_item_name"]),
+                    int(row["sc_task_count"]),
+                    total_sc_tasks,
+                ),
+                "rank": index + 1,
+                "avg_monthly_with_pct_label": (
+                    f"{row['sc_task_count'] / 6.0:.1f} "
+                    f"({(row['sc_task_count'] / total_sc_tasks * 100):.1f}%)"
+                ),
+            }
+            for index, row in enumerate(top_rows)
+        ]
+        pie_rows = [
+            sc_task_catalog_metric_row(
+                str(row["catalog_item_name"]),
+                int(row["sc_task_count"]),
+                total_sc_tasks,
+            )
+            for row in top_rows
+        ]
+        if len(raw_rows) > 10:
+            other_count = sum(row["sc_task_count"] for row in raw_rows[10:])
+            pie_rows.append(sc_task_catalog_metric_row("Others", other_count, total_sc_tasks))
+        period["pie_rows"] = pie_rows
+
+    return {"periods": periods, "data_notes": data_notes, "warnings": warnings}
 
 
 def priority_bucket_expression(source: Any) -> Any:

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 
 import { getDashboardCommentary, upsertDashboardCommentary } from "../api/dashboard";
 import type {
@@ -9,6 +10,13 @@ import type {
 type CommentaryEditorProps = DashboardCommentaryContext & {
   disabled?: boolean;
 };
+
+type ActiveCommentaryEditor = {
+  signature: string;
+  saveAndClose: () => Promise<boolean>;
+};
+
+let activeCommentaryEditor: ActiveCommentaryEditor | null = null;
 
 function normalizedContext(input: DashboardCommentaryContext): Required<DashboardCommentaryContext> {
   return {
@@ -79,7 +87,7 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
     ]
   );
   const signature = useMemo(() => contextSignature(context), [context]);
-  const [expanded, setExpanded] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [commentary, setCommentary] = useState<DashboardCommentaryRecord | null>(null);
   const [draftHtml, setDraftHtml] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("idle");
@@ -114,6 +122,9 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
 
     return () => {
       cancelled = true;
+      if (activeCommentaryEditor?.signature === signature) {
+        activeCommentaryEditor = null;
+      }
     };
   }, [context, signature]);
 
@@ -128,34 +139,87 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
     if (editorRef.current) {
       editorRef.current.innerHTML = html;
     }
-    setExpanded(false);
+    setIsEditing(false);
     setStatus("idle");
     setMessage(null);
-  }, [commentary]);
+    if (activeCommentaryEditor?.signature === signature) {
+      activeCommentaryEditor = null;
+    }
+  }, [commentary, signature]);
 
-  const saveDraft = useCallback(() => {
+  const saveDraft = useCallback(async () => {
     const html = editorRef.current?.innerHTML ?? draftHtml;
     const text = editorRef.current?.innerText ?? "";
     setStatus("saving");
     setMessage(null);
-    void upsertDashboardCommentary({
-      ...context,
-      commentary_html: emptyHtml(html) ? null : html,
-      commentary_text: text.trim() || null,
-    })
-      .then((response) => {
-        setCommentary(response.commentary);
-        setDraftHtml(response.commentary?.commentary_html ?? "");
-        setStatus("saved");
-        setMessage("Commentary saved.");
-        setExpanded(false);
-      })
-      .catch((error: unknown) => {
-        const textMessage = error instanceof Error ? error.message : "Unable to save commentary.";
-        setMessage(textMessage);
-        setStatus("error");
+    try {
+      const response = await upsertDashboardCommentary({
+        ...context,
+        commentary_html: emptyHtml(html) ? null : html,
+        commentary_text: text.trim() || null,
       });
-  }, [context, draftHtml]);
+      setCommentary(response.commentary);
+      setDraftHtml(response.commentary?.commentary_html ?? "");
+      if (editorRef.current) {
+        editorRef.current.innerHTML = response.commentary?.commentary_html ?? "";
+      }
+      setStatus("saved");
+      setMessage("Commentary saved.");
+      setIsEditing(false);
+      if (activeCommentaryEditor?.signature === signature) {
+        activeCommentaryEditor = null;
+      }
+      return true;
+    } catch (error: unknown) {
+      const textMessage = error instanceof Error ? error.message : "Unable to save commentary.";
+      setMessage(textMessage);
+      setStatus("error");
+      return false;
+    }
+  }, [context, draftHtml, signature]);
+
+  const clearCommentary = useCallback(async () => {
+    setDraftHtml("");
+    if (editorRef.current) {
+      editorRef.current.innerHTML = "";
+    }
+    return saveDraft();
+  }, [saveDraft]);
+
+  const beginEditing = useCallback(async () => {
+    if (props.disabled || status === "loading" || status === "saving") {
+      return;
+    }
+    if (activeCommentaryEditor && activeCommentaryEditor.signature !== signature) {
+      const saved = await activeCommentaryEditor.saveAndClose();
+      if (!saved) {
+        setMessage("Another commentary could not be auto-saved. Please save it first.");
+        setStatus("error");
+        return;
+      }
+    }
+    activeCommentaryEditor = {
+      signature,
+      saveAndClose: saveDraft,
+    };
+    setIsEditing(true);
+    setMessage(null);
+    window.setTimeout(() => editorRef.current?.focus(), 0);
+  }, [props.disabled, saveDraft, signature, status]);
+
+  const handleEditorKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.ctrlKey && event.key === "Enter") {
+        event.preventDefault();
+        void saveDraft();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        resetDraft();
+      }
+    },
+    [resetDraft, saveDraft]
+  );
 
   const savedAt = formatTimestamp(commentary?.updated_at);
   const hasCommentary = !emptyHtml(commentary?.commentary_html);
@@ -167,27 +231,51 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
           <p className="label">Commentary / Inferences</p>
           {savedAt ? <p className="muted-text">Last saved {savedAt}</p> : null}
         </div>
-        <button
-          className="secondary-button"
-          type="button"
-          disabled={props.disabled || status === "loading"}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {hasCommentary ? "View / edit commentary" : "Add commentary / inferences"}
-        </button>
+        {isEditing ? (
+          <div className="commentary-icon-actions">
+            <button
+              aria-label="Clear commentary"
+              className="commentary-icon-button"
+              type="button"
+              disabled={status === "saving"}
+              onClick={() => void clearCommentary()}
+            >
+              x
+            </button>
+            <button
+              aria-label="Save commentary"
+              className="commentary-icon-button primary"
+              type="button"
+              disabled={status === "saving"}
+              onClick={() => void saveDraft()}
+            >
+              ✓
+            </button>
+          </div>
+        ) : (
+          <button
+            aria-label="Edit commentary"
+            className="commentary-icon-button"
+            type="button"
+            disabled={props.disabled || status === "loading"}
+            onClick={() => void beginEditing()}
+          >
+            ✎
+          </button>
+        )}
       </div>
 
-      {!expanded && hasCommentary ? (
+      {!isEditing && hasCommentary ? (
         <div
           className="commentary-preview"
           dangerouslySetInnerHTML={{ __html: commentary?.commentary_html ?? "" }}
         />
       ) : null}
-      {!expanded && !hasCommentary && status !== "loading" ? (
-        <p className="muted-text commentary-empty">No commentary saved for this filter context.</p>
+      {!isEditing && !hasCommentary && status !== "loading" ? (
+        <p className="muted-text commentary-empty">No commentary added yet.</p>
       ) : null}
 
-      {expanded ? (
+      {isEditing ? (
         <div className="commentary-editor-panel">
           <div className="commentary-toolbar" aria-label="Rich text toolbar">
             <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => executeCommand("bold")}>
@@ -206,7 +294,7 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
               Numbered
             </button>
             <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => executeCommand("removeFormat")}>
-              Clear
+              Remove format
             </button>
           </div>
           <div
@@ -217,20 +305,8 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
             role="textbox"
             suppressContentEditableWarning
             onInput={() => setDraftHtml(editorRef.current?.innerHTML ?? "")}
+            onKeyDown={handleEditorKeyDown}
           />
-          <div className="commentary-actions">
-            <button
-              className="primary-button"
-              type="button"
-              disabled={status === "saving"}
-              onClick={saveDraft}
-            >
-              Save
-            </button>
-            <button className="secondary-button" type="button" onClick={resetDraft}>
-              Cancel
-            </button>
-          </div>
         </div>
       ) : null}
       {status === "loading" ? <p className="muted-text commentary-status">Loading commentary...</p> : null}

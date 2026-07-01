@@ -63,6 +63,7 @@ from app.schemas.dashboard import (
     VolumetricsProblemManagementTrendResponse,
     VolumetricsReassignmentHopsTrendResponse,
     VolumetricsRequest,
+    VolumetricsScTaskCatalogItemProportionResponse,
     VolumetricsSlaTrendsResponse,
     VolumetricsSummaryResponse,
     VolumetricsTicketsPerUserResponse,
@@ -108,6 +109,7 @@ from app.services.dashboard import (
     volumetrics_kpi_problem_management_trend,
     volumetrics_kpi_reassignment_hops_trend,
     volumetrics_priority_distribution,
+    volumetrics_sc_task_catalog_item_proportion,
     volumetrics_sla_trends,
     volumetrics_summary,
     volumetrics_tickets_per_user,
@@ -574,6 +576,20 @@ def get_dashboard_volumetrics_distribution_splits(
 ) -> dict[str, object]:
     try:
         return volumetrics_distribution_splits(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/sc-task-catalog-item-proportion",
+    response_model=VolumetricsScTaskCatalogItemProportionResponse,
+)
+def get_dashboard_volumetrics_sc_task_catalog_item_proportion(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_sc_task_catalog_item_proportion(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
