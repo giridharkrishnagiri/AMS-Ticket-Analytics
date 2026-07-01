@@ -82,6 +82,35 @@ function resultHasUpdates(result: OperationalDataResetResponse): boolean {
   return Object.keys(result.updated_counts ?? {}).length > 0;
 }
 
+function formatReprocessDomainLabel(domain: string): string {
+  const labels: Record<string, string> = {
+    incidents: "Incidents",
+    sc_tasks: "SC Tasks",
+    problems: "Problems",
+    changes: "Changes",
+  };
+  return labels[domain] ?? domain;
+}
+
+function formatReprocessStartPoint(startPoint: string): string {
+  const labels: Record<string, string> = {
+    resume_from_ingestion: "Resume from Ingestion",
+    resume_from_normalization: "Resume from Normalization",
+    reapply_mapping_only: "Reapply Mapping Only",
+  };
+  return labels[startPoint] ?? startPoint;
+}
+
+function nextStepForReprocessStartPoint(startPoint: string): string {
+  if (startPoint === "resume_from_ingestion") {
+    return "Next: go to Upload Center, run ingestion for the existing uploaded files, then normalize and apply mapping.";
+  }
+  if (startPoint === "resume_from_normalization") {
+    return "Next: go to Upload Center, run normalization for the existing ingested files, then apply mapping.";
+  }
+  return "Next: go to Upload Center and apply the existing saved mapping for the selected files.";
+}
+
 function Maintenance() {
   const [projectId, setProjectId] = useState("");
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
@@ -106,6 +135,8 @@ function Maintenance() {
     useState<InScopeAssignmentGroupsImportResponse | null>(null);
   const [isImportingReference, setIsImportingReference] = useState(false);
   const [isLoadingReferenceStatus, setIsLoadingReferenceStatus] = useState(false);
+  const [referenceMessage, setReferenceMessage] = useState<string | null>(null);
+  const [referenceError, setReferenceError] = useState<string | null>(null);
   const [reprocessIncidents, setReprocessIncidents] = useState(false);
   const [reprocessScTasks, setReprocessScTasks] = useState(false);
   const [reprocessProblems, setReprocessProblems] = useState(false);
@@ -116,6 +147,8 @@ function Maintenance() {
   const [reprocessResult, setReprocessResult] =
     useState<OperationalReprocessingResponse | null>(null);
   const [isPreparingReprocess, setIsPreparingReprocess] = useState(false);
+  const [reprocessMessage, setReprocessMessage] = useState<string | null>(null);
+  const [reprocessError, setReprocessError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -155,6 +188,8 @@ function Maintenance() {
     setReferenceFile(null);
     setReferenceStatus(null);
     setReferenceResult(null);
+    setReferenceMessage(null);
+    setReferenceError(null);
     setReprocessIncidents(false);
     setReprocessScTasks(false);
     setReprocessProblems(false);
@@ -162,6 +197,8 @@ function Maintenance() {
     setReprocessStartPoint("resume_from_normalization");
     setReprocessConfirmationText("");
     setReprocessResult(null);
+    setReprocessMessage(null);
+    setReprocessError(null);
     setMessage(null);
     setError(null);
   }
@@ -176,7 +213,11 @@ function Maintenance() {
       setReferenceFile(null);
       setReferenceStatus(null);
       setReferenceResult(null);
+      setReferenceMessage(null);
+      setReferenceError(null);
       setReprocessResult(null);
+      setReprocessMessage(null);
+      setReprocessError(null);
       setMessage(null);
       setError(null);
     }
@@ -262,18 +303,25 @@ function Maintenance() {
     }
   }
 
-  async function refreshReferenceStatus() {
+  async function refreshReferenceStatus(showMessage = true) {
     if (!projectId.trim()) {
-      setError("Select a customer/project first.");
+      setReferenceError("Select a customer/project first.");
       return;
     }
     setIsLoadingReferenceStatus(true);
-    setError(null);
+    setReferenceError(null);
     try {
       const status = await getInScopeAssignmentGroupsStatus(projectId.trim());
       setReferenceStatus(status);
+      if (showMessage) {
+        setReferenceMessage(
+          `Reference status loaded. Active assignment groups: ${formatNumber(
+            status.active_count
+          )}.`
+        );
+      }
     } catch (requestError) {
-      setError(
+      setReferenceError(
         requestError instanceof Error
           ? requestError.message
           : "Unable to load In-Scope Assignment Groups status"
@@ -285,25 +333,27 @@ function Maintenance() {
 
   async function handleImportReference() {
     if (!projectId.trim()) {
-      setError("Select a customer/project first.");
+      setReferenceError("Select a customer/project first.");
       return;
     }
     if (!referenceFile) {
-      setError("Choose the In-Scope Assignment Groups workbook first.");
+      setReferenceError("Choose the In-Scope Assignment Groups workbook first.");
       return;
     }
     setIsImportingReference(true);
-    setError(null);
-    setMessage(null);
+    setReferenceError(null);
+    setReferenceMessage(null);
     try {
       const result = await importInScopeAssignmentGroups(projectId.trim(), referenceFile);
       setReferenceResult(result);
-      setMessage(
-        `Imported ${formatNumber(result.imported_count)} active in-scope assignment groups.`
+      setReferenceMessage(
+        `Import completed. ${formatNumber(
+          result.imported_count
+        )} active assignment groups are now loaded for this project. Next: prepare operational reprocessing below, then resume processing in Upload Center.`
       );
-      await refreshReferenceStatus();
+      await refreshReferenceStatus(false);
     } catch (requestError) {
-      setError(
+      setReferenceError(
         requestError instanceof Error
           ? requestError.message
           : "In-Scope Assignment Groups import failed"
@@ -332,16 +382,16 @@ function Maintenance() {
 
   async function handlePrepareReprocessing() {
     if (!projectId.trim()) {
-      setError("Select a customer/project first.");
+      setReprocessError("Select a customer/project first.");
       return;
     }
     const domains = selectedReprocessDomains();
     if (domains.length === 0) {
-      setError("Select at least one operational domain to prepare.");
+      setReprocessError("Select at least one operational domain to prepare.");
       return;
     }
     if (reprocessConfirmationText !== reprocessingConfirmation) {
-      setError(`Confirmation text must match exactly: ${reprocessingConfirmation}`);
+      setReprocessError(`Confirmation text must match exactly: ${reprocessingConfirmation}`);
       return;
     }
     const confirmed = window.confirm(
@@ -352,8 +402,8 @@ function Maintenance() {
     }
 
     setIsPreparingReprocess(true);
-    setError(null);
-    setMessage(null);
+    setReprocessError(null);
+    setReprocessMessage(null);
     try {
       const result = await prepareOperationalReprocessing(
         projectId.trim(),
@@ -362,10 +412,14 @@ function Maintenance() {
         reprocessConfirmationText
       );
       setReprocessResult(result);
-      setMessage("Operational reprocessing preparation completed.");
+      setReprocessMessage(
+        `Preparation completed for ${result.domains
+          .map(formatReprocessDomainLabel)
+          .join(", ")}. ${nextStepForReprocessStartPoint(result.start_point)}`
+      );
       await refreshFilterCacheStatus();
     } catch (requestError) {
-      setError(
+      setReprocessError(
         requestError instanceof Error
           ? requestError.message
           : "Operational reprocessing preparation failed"
@@ -600,8 +654,16 @@ function Maintenance() {
             {isImportingReference ? "Importing..." : "Import In-Scope Assignment Groups"}
           </button>
         </div>
+        <div className="message-stack" role="status" aria-live="polite">
+          {referenceMessage ? <p className="success-text">{referenceMessage}</p> : null}
+          {referenceError ? <p className="error-text">{referenceError}</p> : null}
+        </div>
         {referenceResult ? (
           <div className="summary-block">
+            <p className="scope-note">
+              Import succeeded for {referenceResult.source_filename}. The reference has been
+              replaced for this project; no ticket data has been reprocessed yet.
+            </p>
             <div className="summary-grid">
               <div>
                 <p className="label">Imported</p>
@@ -627,6 +689,10 @@ function Maintenance() {
                 ))}
               </ul>
             ) : null}
+            <p className="muted-text">
+              Next step: use Operational Reprocessing below, then complete the required
+              ingestion/normalization/apply mapping step in Upload Center.
+            </p>
           </div>
         ) : null}
         {referenceStatus ? (
@@ -757,8 +823,17 @@ function Maintenance() {
             {isPreparingReprocess ? "Preparing..." : "Prepare Reprocessing"}
           </button>
         </div>
+        <div className="message-stack" role="status" aria-live="polite">
+          {reprocessMessage ? <p className="success-text">{reprocessMessage}</p> : null}
+          {reprocessError ? <p className="error-text">{reprocessError}</p> : null}
+        </div>
         {reprocessResult ? (
           <div className="summary-block">
+            <p className="scope-note">
+              Preparation succeeded for {reprocessResult.domains.map(formatReprocessDomainLabel).join(", ")}
+              {" "}using {formatReprocessStartPoint(reprocessResult.start_point)}. This did not
+              run ingestion, normalization, or apply mapping.
+            </p>
             <div className="split-grid">
               <div>
                 <p className="label">Cleared Row Counts</p>
@@ -804,6 +879,7 @@ function Maintenance() {
               </div>
             </div>
             <p className="muted-text">Preserved: {reprocessResult.preserved.join(", ")}</p>
+            <p className="muted-text">{nextStepForReprocessStartPoint(reprocessResult.start_point)}</p>
             {reprocessResult.warnings.length > 0 ? (
               <ul className="warning-list">
                 {reprocessResult.warnings.map((warning) => (
