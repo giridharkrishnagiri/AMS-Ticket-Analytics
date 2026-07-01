@@ -469,9 +469,21 @@ function TicketDetailsWorkflow({
       historicalBatches.filter((batch) => !batch.ticket_type || batch.ticket_type === ticketType),
     [historicalBatches, ticketType]
   );
+  const visibleBatches = useMemo(
+    () => [...filteredBatches, ...filteredHistoricalBatches],
+    [filteredBatches, filteredHistoricalBatches]
+  );
+  const visibleBatchIds = useMemo(
+    () => visibleBatches.map((batch) => batch.id),
+    [visibleBatches]
+  );
   const selectedBatch = useMemo(
-    () => filteredBatches.find((batch) => batch.id === selectedBatchId) ?? null,
-    [filteredBatches, selectedBatchId]
+    () => visibleBatches.find((batch) => batch.id === selectedBatchId) ?? null,
+    [selectedBatchId, visibleBatches]
+  );
+  const selectedVisibleBatches = useMemo(
+    () => visibleBatches.filter((batch) => selectedActionBatchIds.includes(batch.id)),
+    [selectedActionBatchIds, visibleBatches]
   );
   const uploadedActionBatchIds = useMemo(
     () =>
@@ -496,8 +508,8 @@ function TicketDetailsWorkflow({
     if (uploadedActionBatchIds.length > 0) {
       return uploadedActionBatchIds;
     }
-    return selectedBatchId ? [selectedBatchId] : [];
-  }, [selectedBatchId, uploadedActionBatchIds]);
+    return selectedActionBatchIds;
+  }, [selectedActionBatchIds, uploadedActionBatchIds]);
   const targetBatchKey = targetBatchIds.join("|");
   const actionBatchIds = useMemo(
     () => selectedActionBatchIds.filter((batchId) => targetBatchIds.includes(batchId)),
@@ -606,7 +618,7 @@ function TicketDetailsWorkflow({
       warnings.push("Select a customer before loading or applying a mapping.");
     }
     if (targetBatchIds.length === 0) {
-      warnings.push("Upload files or select an active batch before applying a mapping.");
+      warnings.push("Upload files or select one or more batches before applying a mapping.");
     }
     for (const field of importantFields) {
       if (!mapping[field]) {
@@ -618,22 +630,23 @@ function TicketDetailsWorkflow({
 
   const hasUploaded = isSlaUpload
     ? Boolean(slaUploadResult || slaUploadHistory.length > 0)
-    : Boolean(uploadResult || selectedBatchId);
+    : Boolean(uploadResult || selectedActionBatchIds.length > 0);
   const hasIngested = isSlaUpload
     ? hasUploaded
     : Boolean(
         ingestResult?.totals.batches_ingested ||
-          selectedBatch?.status === "INGESTED" ||
-          selectedBatch?.status === "NORMALIZED" ||
-          selectedBatch?.status === "COMPLETED" ||
+          selectedVisibleBatches.some((batch) =>
+            ["INGESTED", "NORMALIZED", "COMPLETED"].includes(batch.status)
+          ) ||
           selectedBatchFiles.some((file) => file.status === "INGESTED")
       );
   const hasNormalized = isSlaUpload
     ? hasUploaded
     : Boolean(
         normalizeResult ||
-          selectedBatch?.status === "NORMALIZED" ||
-          selectedBatch?.status === "COMPLETED"
+          selectedVisibleBatches.some((batch) =>
+            ["NORMALIZED", "COMPLETED"].includes(batch.status)
+          )
       );
   const hasMappingReady = isSlaUpload
     ? hasUploaded
@@ -644,6 +657,16 @@ function TicketDetailsWorkflow({
   const hasSummary = isSlaUpload
     ? Boolean(slaUploadResult || slaEnrichResult || slaSummary)
     : Boolean(uploadResult || ingestResult || normalizeResult || applyResult);
+  const selectedBatchCount = selectedActionBatchIds.length;
+  const allVisibleBatchesSelected =
+    visibleBatchIds.length > 0 &&
+    visibleBatchIds.every((batchId) => selectedActionBatchIds.includes(batchId));
+  const allActiveBatchesSelected =
+    filteredBatches.length > 0 &&
+    filteredBatches.every((batch) => selectedActionBatchIds.includes(batch.id));
+  const allHistoricalBatchesSelected =
+    filteredHistoricalBatches.length > 0 &&
+    filteredHistoricalBatches.every((batch) => selectedActionBatchIds.includes(batch.id));
 
   const enabledSteps: Record<WorkflowStepId, boolean> = {
     upload: true,
@@ -779,7 +802,9 @@ function TicketDetailsWorkflow({
 
   function handleSelectBatch(batchId: string) {
     setSelectedBatchId(batchId);
-    setSelectedActionBatchIds(batchId ? [batchId] : []);
+    setSelectedActionBatchIds((currentBatchIds) =>
+      currentBatchIds.length === 0 && batchId ? [batchId] : currentBatchIds
+    );
     setUploadResult(null);
     setIngestResult(null);
     setNormalizeResult(null);
@@ -787,15 +812,36 @@ function TicketDetailsWorkflow({
   }
 
   function toggleActionBatch(batchId: string) {
-    setSelectedActionBatchIds((currentBatchIds) =>
-      currentBatchIds.includes(batchId)
-        ? currentBatchIds.filter((currentBatchId) => currentBatchId !== batchId)
-        : [...currentBatchIds, batchId]
-    );
+    setSelectedActionBatchIds((currentBatchIds) => {
+      if (currentBatchIds.includes(batchId)) {
+        return currentBatchIds.filter((currentBatchId) => currentBatchId !== batchId);
+      }
+      if (!selectedBatchId) {
+        setSelectedBatchId(batchId);
+      }
+      return [...currentBatchIds, batchId];
+    });
+    setUploadResult(null);
+    setIngestResult(null);
+    setNormalizeResult(null);
+    setApplyResult(null);
   }
 
-  function setAllActionBatches(selected: boolean) {
-    setSelectedActionBatchIds(selected ? targetBatchIds : []);
+  function setAllActionBatches(selected: boolean, batchIds = visibleBatchIds) {
+    setSelectedActionBatchIds((currentBatchIds) => {
+      if (selected) {
+        return Array.from(new Set([...currentBatchIds, ...batchIds]));
+      }
+      const removeBatchIds = new Set(batchIds);
+      return currentBatchIds.filter((batchId) => !removeBatchIds.has(batchId));
+    });
+    if (selected && batchIds.length > 0 && !selectedBatchId) {
+      setSelectedBatchId(batchIds[0]);
+    }
+    setUploadResult(null);
+    setIngestResult(null);
+    setNormalizeResult(null);
+    setApplyResult(null);
   }
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
@@ -1963,11 +2009,54 @@ function TicketDetailsWorkflow({
             <div>
               <p className="label">Status History</p>
               <h2 id="batch-history-heading">Active and Historical Batches</h2>
+              <p className="muted-text">
+                Check one or more batches for the next ingest, normalize, or apply-mapping action.
+                Click a batch name to use it as the representative file for source-column preview.
+              </p>
+            </div>
+            <div className="panel-actions">
+              <label className="checkbox-row compact-checkbox-row">
+                <input
+                  checked={allVisibleBatchesSelected}
+                  disabled={visibleBatchIds.length === 0}
+                  type="checkbox"
+                  onChange={(event) =>
+                    setAllActionBatches(event.target.checked, visibleBatchIds)
+                  }
+                />
+                Select all visible
+              </label>
+              <button
+                className="secondary-button"
+                disabled={selectedBatchCount === 0}
+                type="button"
+                onClick={() => setAllActionBatches(false, visibleBatchIds)}
+              >
+                Deselect all
+              </button>
+              <span className="muted-text">{formatNumber(selectedBatchCount)} selected</span>
             </div>
           </div>
           <div className="split-grid">
             <div>
-              <p className="label">Active Batches</p>
+              <div className="workflow-file-heading">
+                <p className="label">Active Batches</p>
+                {filteredBatches.length > 0 ? (
+                  <label className="checkbox-row compact-checkbox-row">
+                    <input
+                      checked={allActiveBatchesSelected}
+                      type="checkbox"
+                      onChange={(event) =>
+                        setAllActionBatches(
+                          event.target.checked,
+                          filteredBatches.map((batch) => batch.id)
+                        )
+                      }
+                    />
+                    Select active
+                  </label>
+                ) : null}
+              </div>
               <div className="scroll-frame compact-file-frame summary-block">
                 {filteredBatches.length === 0 ? (
                   <p className="muted-text">No active batches for this upload type.</p>
@@ -1975,6 +2064,7 @@ function TicketDetailsWorkflow({
                   <table>
                     <thead>
                       <tr>
+                        <th>Select</th>
                         <th>Batch</th>
                         <th>Status</th>
                         <th>Files</th>
@@ -1985,10 +2075,21 @@ function TicketDetailsWorkflow({
                         <tr
                           className={batch.id === selectedBatchId ? "selected-row" : ""}
                           key={batch.id}
-                          onClick={() => handleSelectBatch(batch.id)}
                         >
                           <td>
-                            <button className="link-button" type="button">
+                            <input
+                              aria-label={`Select ${batch.batch_name}`}
+                              checked={selectedActionBatchIds.includes(batch.id)}
+                              type="checkbox"
+                              onChange={() => toggleActionBatch(batch.id)}
+                            />
+                          </td>
+                          <td>
+                            <button
+                              className="link-button"
+                              type="button"
+                              onClick={() => handleSelectBatch(batch.id)}
+                            >
                               {batch.batch_name}
                             </button>
                           </td>
@@ -2002,7 +2103,24 @@ function TicketDetailsWorkflow({
               </div>
             </div>
             <div>
-              <p className="label">Historical Batches</p>
+              <div className="workflow-file-heading">
+                <p className="label">Historical Batches</p>
+                {filteredHistoricalBatches.length > 0 ? (
+                  <label className="checkbox-row compact-checkbox-row">
+                    <input
+                      checked={allHistoricalBatchesSelected}
+                      type="checkbox"
+                      onChange={(event) =>
+                        setAllActionBatches(
+                          event.target.checked,
+                          filteredHistoricalBatches.map((batch) => batch.id)
+                        )
+                      }
+                    />
+                    Select historical
+                  </label>
+                ) : null}
+              </div>
               <div className="scroll-frame compact-file-frame summary-block">
                 {filteredHistoricalBatches.length === 0 ? (
                   <p className="muted-text">No historical batches for this upload type.</p>
@@ -2010,6 +2128,7 @@ function TicketDetailsWorkflow({
                   <table>
                     <thead>
                       <tr>
+                        <th>Select</th>
                         <th>Batch</th>
                         <th>Status</th>
                         <th>Output Rows</th>
@@ -2017,8 +2136,27 @@ function TicketDetailsWorkflow({
                     </thead>
                     <tbody>
                       {filteredHistoricalBatches.map((batch) => (
-                        <tr key={batch.id}>
-                          <td>{batch.batch_name}</td>
+                        <tr
+                          className={batch.id === selectedBatchId ? "selected-row" : ""}
+                          key={batch.id}
+                        >
+                          <td>
+                            <input
+                              aria-label={`Select ${batch.batch_name}`}
+                              checked={selectedActionBatchIds.includes(batch.id)}
+                              type="checkbox"
+                              onChange={() => toggleActionBatch(batch.id)}
+                            />
+                          </td>
+                          <td>
+                            <button
+                              className="link-button"
+                              type="button"
+                              onClick={() => handleSelectBatch(batch.id)}
+                            >
+                              {batch.batch_name}
+                            </button>
+                          </td>
                           <td>{formatBatchStatus(batch.status)}</td>
                           <td>{formatNumber(batch.normalized_ticket_count)}</td>
                         </tr>
