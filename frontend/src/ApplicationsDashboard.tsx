@@ -17,6 +17,7 @@ import {
 } from "recharts";
 
 import {
+  getDashboardApplicationsAssignmentGroupMapping,
   getDashboardApplicationsCharts,
   getDashboardFilterCatalog,
   getDashboardFilterCounts,
@@ -26,7 +27,11 @@ import {
   getDashboardApplicationsTopActiveUsers,
 } from "./api/dashboard";
 import type {
+  ApplicationsAssignmentGroupMappingScope,
+  ApplicationsAssignmentGroupMappingSource,
   DashboardApplicationRow,
+  DashboardApplicationsAssignmentGroupMapping,
+  DashboardApplicationsAssignmentGroupMappingRow,
   DashboardApplicationsCharts,
   DashboardApplicationsFilters,
   DashboardApplicationsFilterValues,
@@ -63,7 +68,12 @@ type ApplicationsDashboardProps = {
 type TopNSelection = 10 | 20;
 type FilterKey = keyof DashboardApplicationsFilters;
 type TableColumnKey = keyof DashboardApplicationRow;
-type ApplicationsSubTab = "overview" | "lifecycle_planning";
+type ApplicationsSubTab = "overview" | "lifecycle_planning" | "assignment_group_mapping";
+type AssignmentMappingSortKey =
+  | keyof DashboardApplicationsAssignmentGroupMappingRow
+  | "incident_count"
+  | "sc_task_count"
+  | "total_ticket_count";
 
 const emptyFilters: DashboardApplicationsFilters = {
   application_scope: [],
@@ -178,6 +188,25 @@ const emptyLifecyclePlanning: DashboardApplicationsLifecyclePlanning = {
     applications: [],
     application_count: 0,
   },
+};
+
+const emptyAssignmentGroupMapping: DashboardApplicationsAssignmentGroupMapping = {
+  source: "application_inventory",
+  scope: "in_scope",
+  functional_track: "all",
+  available_functional_tracks: [],
+  summary: {
+    mapping_count: 0,
+    assignment_group_count: 0,
+    business_service_ci_count: 0,
+    parent_business_application_count: 0,
+    incident_count: null,
+    sc_task_count: null,
+    total_ticket_count: null,
+  },
+  rows: [],
+  data_notes: [],
+  warnings: [],
 };
 
 const defaultSort: DashboardApplicationsSort = {
@@ -309,6 +338,39 @@ function formatCellValue(value: string | number | null | undefined): string {
     return value.toLocaleString();
   }
   return value === null || value === undefined ? "" : String(value);
+}
+
+function tableCellText(value: string | number | null | undefined): string {
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function csvCell(value: string | number | null | undefined): string {
+  const text = tableCellText(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  document.body.append(textArea);
+  textArea.select();
+  document.execCommand("copy");
+  textArea.remove();
+}
+
+function downloadCsv(filename: string, headers: string[], rows: Array<Array<string | number | null>>) {
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+  downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), filename);
 }
 
 function combinedFilterOptions(
@@ -792,6 +854,19 @@ function ApplicationsDashboard({
   const [lifecyclePlanning, setLifecyclePlanning] = useState<
     LoadState<DashboardApplicationsLifecyclePlanning>
   >(createLoadState(emptyLifecyclePlanning));
+  const [assignmentMappingSource, setAssignmentMappingSource] =
+    useState<ApplicationsAssignmentGroupMappingSource>("application_inventory");
+  const [assignmentMappingScope, setAssignmentMappingScope] =
+    useState<ApplicationsAssignmentGroupMappingScope>("in_scope");
+  const [assignmentMappingTrack, setAssignmentMappingTrack] = useState("all");
+  const [assignmentMappingSearch, setAssignmentMappingSearch] = useState("");
+  const [assignmentMappingSort, setAssignmentMappingSort] = useState<{
+    column: AssignmentMappingSortKey;
+    direction: "asc" | "desc";
+  }>({ column: "assignment_group", direction: "asc" });
+  const [assignmentMapping, setAssignmentMapping] = useState<
+    LoadState<DashboardApplicationsAssignmentGroupMapping>
+  >(createLoadState(emptyAssignmentGroupMapping));
   const [loadedProjectId, setLoadedProjectId] = useState("");
 
   const filterOptions = useMemo(
@@ -969,6 +1044,49 @@ function ApplicationsDashboard({
     }
   }, [requestBody, selectedLifecyclePlan]);
 
+  const loadAssignmentGroupMapping = useCallback(async () => {
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedProjectId) {
+      return;
+    }
+    setAssignmentMapping((current) => ({
+      status: "loading",
+      data: current.data,
+      error: null,
+    }));
+    try {
+      const nextMapping = await getDashboardApplicationsAssignmentGroupMapping({
+        project_id: cleanedProjectId,
+        source: assignmentMappingSource,
+        scope: assignmentMappingScope,
+        functional_track: assignmentMappingTrack,
+        search: null,
+      });
+      setAssignmentMapping({
+        status: "success",
+        data: nextMapping,
+        error: nextMapping.warnings[0] ?? null,
+      });
+      if (
+        assignmentMappingTrack !== "all" &&
+        !nextMapping.available_functional_tracks.includes(assignmentMappingTrack)
+      ) {
+        setAssignmentMappingTrack("all");
+      }
+    } catch (error) {
+      setAssignmentMapping({
+        status: "error",
+        data: emptyAssignmentGroupMapping,
+        error: errorMessage(error, "Unable to load assignment group mapping"),
+      });
+    }
+  }, [
+    assignmentMappingScope,
+    assignmentMappingSource,
+    assignmentMappingTrack,
+    projectId,
+  ]);
+
   useEffect(() => {
     if (projectId !== loadedProjectId) {
       setLoadedProjectId(projectId);
@@ -986,6 +1104,12 @@ function ApplicationsDashboard({
       setActiveSubTab("overview");
       setSelectedLifecyclePlan("Invest");
       setLifecyclePlanning(createLoadState(emptyLifecyclePlanning));
+      setAssignmentMappingSource("application_inventory");
+      setAssignmentMappingScope("in_scope");
+      setAssignmentMappingTrack("all");
+      setAssignmentMappingSearch("");
+      setAssignmentMappingSort({ column: "assignment_group", direction: "asc" });
+      setAssignmentMapping(createLoadState(emptyAssignmentGroupMapping));
     }
   }, [loadedProjectId, projectId]);
 
@@ -1045,6 +1169,17 @@ function ApplicationsDashboard({
     selectedLifecyclePlan,
   ]);
 
+  useEffect(() => {
+    if (isActive && activeSubTab === "assignment_group_mapping" && hasActiveProjectContext) {
+      void loadAssignmentGroupMapping();
+    }
+  }, [
+    activeSubTab,
+    hasActiveProjectContext,
+    isActive,
+    loadAssignmentGroupMapping,
+  ]);
+
   function updateFilter(filterName: FilterKey, values: string[]) {
     setFilters((currentFilters) => ({
       ...currentFilters,
@@ -1061,6 +1196,14 @@ function ApplicationsDashboard({
 
   function handleSort(column: TableColumnKey) {
     setSort((currentSort) => ({
+      column,
+      direction:
+        currentSort.column === column && currentSort.direction === "asc" ? "desc" : "asc",
+    }));
+  }
+
+  function handleAssignmentMappingSort(column: AssignmentMappingSortKey) {
+    setAssignmentMappingSort((currentSort) => ({
       column,
       direction:
         currentSort.column === column && currentSort.direction === "asc" ? "desc" : "asc",
@@ -1297,6 +1440,15 @@ function ApplicationsDashboard({
           >
             Lifecycle Planning
           </button>
+          <button
+            aria-selected={activeSubTab === "assignment_group_mapping"}
+            className={activeSubTab === "assignment_group_mapping" ? "active" : ""}
+            role="tab"
+            type="button"
+            onClick={() => setActiveSubTab("assignment_group_mapping")}
+          >
+            Assignment Group Mapping
+          </button>
         </div>
 
         {activeSubTab === "overview" ? (
@@ -1441,7 +1593,8 @@ function ApplicationsDashboard({
           commentary={applicationCommentary("applications_charts", "top_active_users")}
         />
           </>
-        ) : (
+        ) : null}
+        {activeSubTab === "lifecycle_planning" ? (
           <LifecyclePlanningPanel
             commentary={lifecyclePlanCommentary}
             data={lifecyclePlanning.data}
@@ -1450,9 +1603,404 @@ function ApplicationsDashboard({
             selectedPlan={selectedLifecyclePlan}
             status={lifecyclePlanning.status}
           />
-        )}
+        ) : null}
+        {activeSubTab === "assignment_group_mapping" ? (
+          <AssignmentGroupMappingPanel
+            commentary={applicationCommentary(
+              "applications_assignment_group_mapping",
+              "assignment_group_mapping",
+              "assignment_group_mapping"
+            )}
+            data={assignmentMapping.data}
+            error={assignmentMapping.error}
+            onSearchChange={setAssignmentMappingSearch}
+            onSort={handleAssignmentMappingSort}
+            onSourceChange={(value) => {
+              setAssignmentMappingSource(value);
+              setAssignmentMappingTrack("all");
+            }}
+            onScopeChange={(value) => {
+              setAssignmentMappingScope(value);
+              setAssignmentMappingTrack("all");
+            }}
+            onTrackChange={setAssignmentMappingTrack}
+            search={assignmentMappingSearch}
+            selectedSource={assignmentMappingSource}
+            selectedScope={assignmentMappingScope}
+            selectedTrack={assignmentMappingTrack}
+            sort={assignmentMappingSort}
+            status={assignmentMapping.status}
+          />
+        ) : null}
       </div>
     </section>
+  );
+}
+
+const assignmentMappingSourceOptions: Array<{
+  value: ApplicationsAssignmentGroupMappingSource;
+  label: string;
+}> = [
+  { value: "application_inventory", label: "Application Inventory" },
+  { value: "tickets", label: "Tickets Data" },
+];
+
+const assignmentMappingScopeOptions: Array<{
+  value: ApplicationsAssignmentGroupMappingScope;
+  label: string;
+}> = [
+  { value: "in_scope", label: "In-Scope" },
+  { value: "out_of_scope", label: "Out-of-Scope" },
+  { value: "all", label: "All" },
+];
+
+const assignmentMappingColumns: Array<{
+  key: AssignmentMappingSortKey;
+  label: string;
+  ticketSourceOnly?: boolean;
+}> = [
+  { key: "assignment_group", label: "Assignment Group" },
+  { key: "functional_track", label: "Functional Track" },
+  { key: "parent_business_application", label: "Parent Business Application" },
+  { key: "business_service_ci_name", label: "Business Service CI Name" },
+  { key: "scope", label: "Scope" },
+  { key: "incident_count", label: "Incident Count", ticketSourceOnly: true },
+  { key: "sc_task_count", label: "SC Task Count", ticketSourceOnly: true },
+  { key: "total_ticket_count", label: "Total Ticket Count", ticketSourceOnly: true },
+];
+
+function displayScope(value: string): string {
+  if (value === "in_scope") {
+    return "In Scope";
+  }
+  if (value === "out_of_scope") {
+    return "Out of Scope";
+  }
+  if (value === "unknown") {
+    return "Unknown";
+  }
+  return value;
+}
+
+function assignmentMappingCell(
+  row: DashboardApplicationsAssignmentGroupMappingRow,
+  key: AssignmentMappingSortKey
+): string {
+  if (key === "scope") {
+    return displayScope(row.scope);
+  }
+  const value = row[key];
+  return typeof value === "number" ? value.toLocaleString() : tableCellText(value);
+}
+
+function assignmentMappingSortValue(
+  row: DashboardApplicationsAssignmentGroupMappingRow,
+  key: AssignmentMappingSortKey
+) {
+  const value = row[key];
+  if (typeof value === "number") {
+    return value;
+  }
+  return tableCellText(value).toLowerCase();
+}
+
+function MetricCard({
+  index,
+  label,
+  primary,
+  secondary,
+}: {
+  index: number;
+  label: string;
+  primary: string;
+  secondary: string;
+}) {
+  return (
+    <div className={summaryTileToneClass(index, 4)}>
+      <p className="label">{label}</p>
+      <strong>{primary}</strong>
+      <div className="overview-ticket-details">
+        <span>{secondary}</span>
+      </div>
+    </div>
+  );
+}
+
+function AssignmentGroupMappingPanel({
+  commentary,
+  data,
+  error,
+  onSearchChange,
+  onSort,
+  onSourceChange,
+  onScopeChange,
+  onTrackChange,
+  search,
+  selectedSource,
+  selectedScope,
+  selectedTrack,
+  sort,
+  status,
+}: {
+  commentary?: ReactNode;
+  data: DashboardApplicationsAssignmentGroupMapping;
+  error: string | null;
+  onSearchChange: (value: string) => void;
+  onSort: (column: AssignmentMappingSortKey) => void;
+  onSourceChange: (value: ApplicationsAssignmentGroupMappingSource) => void;
+  onScopeChange: (value: ApplicationsAssignmentGroupMappingScope) => void;
+  onTrackChange: (value: string) => void;
+  search: string;
+  selectedSource: ApplicationsAssignmentGroupMappingSource;
+  selectedScope: ApplicationsAssignmentGroupMappingScope;
+  selectedTrack: string;
+  sort: { column: AssignmentMappingSortKey; direction: "asc" | "desc" };
+  status: LoadStatus;
+}) {
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const columns = assignmentMappingColumns.filter(
+    (column) => !column.ticketSourceOnly || selectedSource === "tickets"
+  );
+  const searchTerm = search.trim().toLowerCase();
+  const rows = useMemo(() => {
+    const visibleRows = searchTerm
+      ? data.rows.filter((row) =>
+          columns.some((column) =>
+            assignmentMappingCell(row, column.key).toLowerCase().includes(searchTerm)
+          )
+        )
+      : data.rows;
+    return [...visibleRows].sort((left, right) => {
+      const leftValue = assignmentMappingSortValue(left, sort.column);
+      const rightValue = assignmentMappingSortValue(right, sort.column);
+      const direction = sort.direction === "asc" ? 1 : -1;
+      if (typeof leftValue === "number" && typeof rightValue === "number") {
+        return (leftValue - rightValue) * direction;
+      }
+      return String(leftValue).localeCompare(String(rightValue)) * direction;
+    });
+  }, [columns, data.rows, searchTerm, sort.column, sort.direction]);
+  const tableHeaders = columns.map((column) => column.label);
+  const tableRows = rows.map((row) => columns.map((column) => assignmentMappingCell(row, column.key)));
+  const totalTicketSummary =
+    selectedSource === "tickets" ? (
+      <>
+        <MetricCard
+          index={4}
+          label="Incidents"
+          primary={formatNumber(data.summary.incident_count)}
+          secondary="Tickets source only"
+        />
+        <MetricCard
+          index={5}
+          label="SC Tasks"
+          primary={formatNumber(data.summary.sc_task_count)}
+          secondary="Tickets source only"
+        />
+        <MetricCard
+          index={6}
+          label="Total Tickets"
+          primary={formatNumber(data.summary.total_ticket_count)}
+          secondary="Incidents + SC Tasks"
+        />
+      </>
+    ) : null;
+
+  async function handleCopyTable() {
+    const tsv = [tableHeaders, ...tableRows].map((row) => row.join("\t")).join("\n");
+    try {
+      await copyTextToClipboard(tsv);
+      setCopyMessage(`Copied ${rows.length.toLocaleString()} rows to clipboard.`);
+    } catch (copyError) {
+      setCopyMessage(errorMessage(copyError, "Unable to copy table."));
+    }
+  }
+
+  function handleDownloadCsv() {
+    downloadCsv("assignment_group_mapping.csv", tableHeaders, tableRows);
+    setCopyMessage("CSV downloaded.");
+  }
+
+  return (
+    <div className="validation-stack">
+      <section className="panel validation-intro-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Applications</p>
+            <h2>{"Assignment Group \u2194 Application Mapping"}</h2>
+            <p className="muted-text">
+              Static validation view for Assignment Group mappings from Application Inventory or
+              normalized Incident and SC Task ticket data.
+            </p>
+          </div>
+        </div>
+        <div className="validation-controls">
+          <div>
+            <span className="validation-control-label">Mapping Source</span>
+            <div className="segmented-control" role="tablist" aria-label="Mapping source">
+              {assignmentMappingSourceOptions.map((option) => (
+                <button
+                  className={selectedSource === option.value ? "active" : ""}
+                  key={option.value}
+                  type="button"
+                  onClick={() => onSourceChange(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <span className="validation-control-label">Scope</span>
+            <div className="segmented-control" role="tablist" aria-label="Mapping scope">
+              {assignmentMappingScopeOptions.map((option) => (
+                <button
+                  className={selectedScope === option.value ? "active" : ""}
+                  key={option.value}
+                  type="button"
+                  onClick={() => onScopeChange(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="track-button-row" aria-label="Functional Track selector">
+          <button
+            className={selectedTrack === "all" ? "active" : ""}
+            type="button"
+            onClick={() => onTrackChange("all")}
+          >
+            All Tracks
+          </button>
+          {data.available_functional_tracks.map((track) => (
+            <button
+              className={selectedTrack === track ? "active" : ""}
+              key={track}
+              type="button"
+              onClick={() => onTrackChange(track)}
+            >
+              {track}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel validation-table-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Validation Table</p>
+            <h2>{rows.length.toLocaleString()} Assignment Group Mappings</h2>
+            <p className="muted-text">
+              Showing {rows.length.toLocaleString()} of {data.rows.length.toLocaleString()} rows.
+            </p>
+          </div>
+        </div>
+        <div className="summary-grid validation-summary-grid">
+          <MetricCard
+            index={0}
+            label="Mapping Rows"
+            primary={formatNumber(data.summary.mapping_count)}
+            secondary={selectedSource === "tickets" ? "Ticket mappings" : "Inventory mappings"}
+          />
+          <MetricCard
+            index={1}
+            label="Assignment Groups"
+            primary={formatNumber(data.summary.assignment_group_count)}
+            secondary="Distinct groups"
+          />
+          <MetricCard
+            index={2}
+            label="Business Service CIs"
+            primary={formatNumber(data.summary.business_service_ci_count)}
+            secondary="Distinct CIs"
+          />
+          <MetricCard
+            index={3}
+            label="Parent Applications"
+            primary={formatNumber(data.summary.parent_business_application_count)}
+            secondary="Distinct parents"
+          />
+          {totalTicketSummary}
+        </div>
+        <div className="validation-table-toolbar">
+          <label className="validation-search">
+            <span>Search</span>
+            <input
+              type="search"
+              value={search}
+              placeholder="Search assignment group, application, or track"
+              onChange={(event) => onSearchChange(event.target.value)}
+            />
+          </label>
+          <div className="validation-actions">
+            <button className="secondary-button" type="button" onClick={handleCopyTable}>
+              Copy Table
+            </button>
+            <button className="secondary-button" type="button" onClick={handleDownloadCsv}>
+              Download CSV
+            </button>
+          </div>
+        </div>
+        {status === "loading" ? <p className="muted-text chart-state-text">Loading mappings...</p> : null}
+        {status === "error" ? <p className="error-text">{error}</p> : null}
+        {data.warnings.length > 0 ? <p className="error-text">{data.warnings[0]}</p> : null}
+        {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+        <div className="applications-table-frame validation-table-frame">
+          <table className="applications-table validation-table">
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th key={column.key}>
+                    <button
+                      className="table-sort-button"
+                      type="button"
+                      onClick={() => onSort(column.key)}
+                    >
+                      {column.label}
+                      {sort.column === column.key ? (
+                        <span>{sort.direction === "asc" ? " ▲" : " ▼"}</span>
+                      ) : null}
+                    </button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {status !== "loading" && rows.length === 0 ? (
+                <tr>
+                  <td colSpan={columns.length}>No mappings match the selected controls.</td>
+                </tr>
+              ) : (
+                rows.map((row, index) => (
+                  <tr key={`${row.assignment_group}-${row.business_service_ci_name}-${index}`}>
+                    {columns.map((column) => (
+                      <td
+                        className={
+                          column.key.endsWith("_count") || column.key === "total_ticket_count"
+                            ? "numeric-cell"
+                            : undefined
+                        }
+                        key={column.key}
+                      >
+                        {assignmentMappingCell(row, column.key)}
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        {data.data_notes.map((note) => (
+          <p className="muted-text validation-note" key={note}>
+            {note}
+          </p>
+        ))}
+        {commentary}
+      </section>
+    </div>
   );
 }
 

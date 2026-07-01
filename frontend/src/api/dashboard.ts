@@ -498,6 +498,49 @@ export type DashboardApplicationsLifecyclePlanning = {
   };
 };
 
+export type ApplicationsAssignmentGroupMappingSource = "application_inventory" | "tickets";
+export type ApplicationsAssignmentGroupMappingScope = "in_scope" | "out_of_scope" | "all";
+
+export type DashboardApplicationsAssignmentGroupMappingRequest = {
+  project_id: string;
+  source: ApplicationsAssignmentGroupMappingSource;
+  scope: ApplicationsAssignmentGroupMappingScope;
+  functional_track: string;
+  search?: string | null;
+};
+
+export type DashboardApplicationsAssignmentGroupMappingSummary = {
+  mapping_count: number;
+  assignment_group_count: number;
+  business_service_ci_count: number;
+  parent_business_application_count: number;
+  incident_count: number | null;
+  sc_task_count: number | null;
+  total_ticket_count: number | null;
+};
+
+export type DashboardApplicationsAssignmentGroupMappingRow = {
+  assignment_group: string;
+  functional_track: string;
+  parent_business_application: string;
+  business_service_ci_name: string;
+  scope: string;
+  incident_count: number | null;
+  sc_task_count: number | null;
+  total_ticket_count: number | null;
+};
+
+export type DashboardApplicationsAssignmentGroupMapping = {
+  source: ApplicationsAssignmentGroupMappingSource;
+  scope: ApplicationsAssignmentGroupMappingScope;
+  functional_track: string;
+  available_functional_tracks: string[];
+  summary: DashboardApplicationsAssignmentGroupMappingSummary;
+  rows: DashboardApplicationsAssignmentGroupMappingRow[];
+  data_notes: string[];
+  warnings: string[];
+};
+
 export type VolumetricsScope = "in_scope" | "out_of_scope" | "all";
 export type VolumetricsTicketType = "all" | "incident" | "sc_task";
 export type VolumetricsTimeGrain = "monthly" | "weekly";
@@ -899,6 +942,53 @@ export type DashboardVolumetricsProblemManagementTrend = {
   warnings: string[];
 };
 
+export type DashboardVolumetricsAssignmentGroupRequest = {
+  project_id: string;
+  scope: VolumetricsScope;
+  functional_track: string;
+  from_month: string;
+  to_month: string;
+};
+
+export type DashboardVolumetricsAssignmentGroupMonth = {
+  month: string;
+  month_key: string;
+  month_label: string;
+};
+
+export type DashboardVolumetricsAssignmentGroupMonthMetrics = {
+  created: number;
+  resolved: number;
+  cancelled: number;
+};
+
+export type DashboardVolumetricsAssignmentGroupRow = {
+  assignment_group: string;
+  functional_track: string;
+  months: Record<string, DashboardVolumetricsAssignmentGroupMonthMetrics>;
+  totals: DashboardVolumetricsAssignmentGroupMonthMetrics;
+};
+
+export type DashboardVolumetricsAssignmentGroupTable = {
+  title: string;
+  rows: DashboardVolumetricsAssignmentGroupRow[];
+  grand_totals: DashboardVolumetricsAssignmentGroupMonthMetrics;
+};
+
+export type DashboardVolumetricsAssignmentGroupVolumetrics = {
+  scope: VolumetricsScope;
+  functional_track: string;
+  months: DashboardVolumetricsAssignmentGroupMonth[];
+  tables: {
+    incidents: DashboardVolumetricsAssignmentGroupTable;
+    sc_tasks: DashboardVolumetricsAssignmentGroupTable;
+    overall: DashboardVolumetricsAssignmentGroupTable;
+  };
+  available_functional_tracks: string[];
+  data_notes: string[];
+  warnings: string[];
+};
+
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
   for (const value of values ?? []) {
     if (value.trim()) {
@@ -1133,6 +1223,19 @@ export function getDashboardApplicationsLifecyclePlanning(
       ...input,
       selected_plan: selectedPlan,
     } as DashboardApplicationsRequest & { selected_plan: DashboardApplicationsLifecyclePlan }
+  );
+}
+
+export function getDashboardApplicationsAssignmentGroupMapping(
+  input: DashboardApplicationsAssignmentGroupMappingRequest
+): Promise<DashboardApplicationsAssignmentGroupMapping> {
+  return requestJson<DashboardApplicationsAssignmentGroupMapping>(
+    "/dashboard/applications/assignment-group-mapping",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }
   );
 }
 
@@ -1372,6 +1475,19 @@ export function getDashboardVolumetricsKpiProblemManagementTrend(
   return postVolumetricsRequest<DashboardVolumetricsProblemManagementTrend>(
     "/dashboard/volumetrics/kpi-problem-management-trend",
     input
+  );
+}
+
+export function getDashboardVolumetricsAssignmentGroupVolumetrics(
+  input: DashboardVolumetricsAssignmentGroupRequest
+): Promise<DashboardVolumetricsAssignmentGroupVolumetrics> {
+  return requestJson<DashboardVolumetricsAssignmentGroupVolumetrics>(
+    "/dashboard/volumetrics/assignment-group-volumetrics",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }
   );
 }
 

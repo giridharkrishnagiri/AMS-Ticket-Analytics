@@ -33,6 +33,7 @@ import {
   getDashboardVolumetricsKpiMttrTrends,
   getDashboardVolumetricsKpiProblemManagementTrend,
   getDashboardVolumetricsKpiReassignmentHopsTrend,
+  getDashboardVolumetricsAssignmentGroupVolumetrics,
   getDashboardVolumetricsPriorityDistribution,
   getDashboardVolumetricsScTaskCatalogItemProportion,
   getDashboardVolumetricsSlaTrends,
@@ -60,6 +61,10 @@ import type {
   DashboardVolumetricsKpiMttrPoint,
   DashboardVolumetricsKpiMttrPrioritySet,
   DashboardVolumetricsKpiMttrTrends,
+  DashboardVolumetricsAssignmentGroupMonth,
+  DashboardVolumetricsAssignmentGroupMonthMetrics,
+  DashboardVolumetricsAssignmentGroupTable,
+  DashboardVolumetricsAssignmentGroupVolumetrics,
   DashboardVolumetricsProblemManagementPoint,
   DashboardVolumetricsProblemManagementTrend,
   DashboardVolumetricsPriorityDistribution,
@@ -112,7 +117,8 @@ type VolumetricsSubTab =
   | "overall_sla"
   | "detailed_volume"
   | "kpi"
-  | "category";
+  | "category"
+  | "assignment_group_volumetrics";
 type PriorityDistributionView = "graph" | "table";
 type TopNSelection = 10 | 20;
 
@@ -122,6 +128,7 @@ const subTabCommentaryKeys: Record<VolumetricsSubTab, string> = {
   detailed_volume: "detailed_volume_trends",
   kpi: "kpi_trends",
   category: "category_wise_trends",
+  assignment_group_volumetrics: "assignment_group_volumetrics",
 };
 
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -339,6 +346,32 @@ const emptyProblemManagementTrend: DashboardVolumetricsProblemManagementTrend = 
   warnings: [],
 };
 
+const emptyAssignmentGroupMetrics: DashboardVolumetricsAssignmentGroupMonthMetrics = {
+  created: 0,
+  resolved: 0,
+  cancelled: 0,
+};
+
+const emptyAssignmentGroupTable: DashboardVolumetricsAssignmentGroupTable = {
+  title: "",
+  rows: [],
+  grand_totals: emptyAssignmentGroupMetrics,
+};
+
+const emptyAssignmentGroupVolumetrics: DashboardVolumetricsAssignmentGroupVolumetrics = {
+  scope: "in_scope",
+  functional_track: "all",
+  months: [],
+  tables: {
+    incidents: { ...emptyAssignmentGroupTable, title: "Incidents" },
+    sc_tasks: { ...emptyAssignmentGroupTable, title: "SC Tasks" },
+    overall: { ...emptyAssignmentGroupTable, title: "Overall" },
+  },
+  available_functional_tracks: [],
+  data_notes: [],
+  warnings: [],
+};
+
 const chartColors = {
   created: "#0f766e",
   resolved: "#2563eb",
@@ -392,6 +425,39 @@ function formatNumber(value: number | null | undefined, maximumFractionDigits = 
     return "N/A";
   }
   return value.toLocaleString(undefined, { maximumFractionDigits });
+}
+
+function tableCellText(value: string | number | null | undefined): string {
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function csvCell(value: string | number | null | undefined): string {
+  const text = tableCellText(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  document.body.append(textArea);
+  textArea.select();
+  document.execCommand("copy");
+  textArea.remove();
+}
+
+function downloadCsv(filename: string, headers: string[], rows: Array<Array<string | number | null>>) {
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+  downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), filename);
 }
 
 function formatRoundedNumber(value: number | null | undefined): string {
@@ -987,6 +1053,7 @@ function VolumetricsDashboard({
   const [ticketType, setTicketType] = useState<VolumetricsTicketType>("all");
   const [timeGrain, setTimeGrain] = useState<VolumetricsTimeGrain>("monthly");
   const [agreementMode, setAgreementMode] = useState<VolumetricsAgreementMode>("sla");
+  const [assignmentGroupVolumetricsTrack, setAssignmentGroupVolumetricsTrack] = useState("all");
   const [startMonth, setStartMonth] = useState(defaultStartMonth);
   const [endMonth, setEndMonth] = useState(defaultEndMonth);
   const [startWeek, setStartWeek] = useState(() => defaultWeeklyRange().start);
@@ -1062,6 +1129,9 @@ function VolumetricsDashboard({
   const [problemManagementTrend, setProblemManagementTrend] = useState<
     LoadState<DashboardVolumetricsProblemManagementTrend>
   >(createLoadState(emptyProblemManagementTrend));
+  const [assignmentGroupVolumetrics, setAssignmentGroupVolumetrics] = useState<
+    LoadState<DashboardVolumetricsAssignmentGroupVolumetrics>
+  >(createLoadState(emptyAssignmentGroupVolumetrics));
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
   const filterCountsRequestRef = useRef(0);
@@ -1541,12 +1611,51 @@ function VolumetricsDashboard({
     topBatchApplicationsN,
   ]);
 
+  const loadAssignmentGroupVolumetrics = useCallback(async () => {
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedProjectId) {
+      return;
+    }
+    setAssignmentGroupVolumetrics((current) => ({
+      status: "loading",
+      data: current.data,
+      error: null,
+    }));
+    try {
+      const nextVolumetrics = await getDashboardVolumetricsAssignmentGroupVolumetrics({
+        project_id: cleanedProjectId,
+        scope,
+        functional_track: assignmentGroupVolumetricsTrack,
+        from_month: "2025-12",
+        to_month: "2026-05",
+      });
+      setAssignmentGroupVolumetrics({
+        status: "success",
+        data: nextVolumetrics,
+        error: nextVolumetrics.warnings[0] ?? null,
+      });
+      if (
+        assignmentGroupVolumetricsTrack !== "all" &&
+        !nextVolumetrics.available_functional_tracks.includes(assignmentGroupVolumetricsTrack)
+      ) {
+        setAssignmentGroupVolumetricsTrack("all");
+      }
+    } catch (error) {
+      setAssignmentGroupVolumetrics({
+        status: "error",
+        data: emptyAssignmentGroupVolumetrics,
+        error: errorMessage(error, "Unable to load Assignment Group-wise Volumetrics"),
+      });
+    }
+  }, [assignmentGroupVolumetricsTrack, projectId, scope]);
+
   useEffect(() => {
     if (projectId !== loadedProjectId) {
       filterCountsRequestRef.current = 0;
       setLoadedProjectId(projectId);
       setScope("in_scope");
       setTicketType("all");
+      setAssignmentGroupVolumetricsTrack("all");
       setFilters(emptyFilters);
       setActiveSubTab("overall_volume");
       setHourlyDayType("weekdays");
@@ -1576,6 +1685,7 @@ function VolumetricsDashboard({
       setKpiDurationBuckets(createLoadState(emptyDurationBuckets));
       setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend));
       setProblemManagementTrend(createLoadState(emptyProblemManagementTrend));
+      setAssignmentGroupVolumetrics(createLoadState(emptyAssignmentGroupVolumetrics));
       setRangeInitializedProjectId("");
     }
   }, [loadedProjectId, projectId]);
@@ -1641,6 +1751,17 @@ function VolumetricsDashboard({
   ]);
 
   useEffect(() => {
+    if (isActive && activeSubTab === "assignment_group_volumetrics" && hasActiveProjectContext) {
+      void loadAssignmentGroupVolumetrics();
+    }
+  }, [
+    activeSubTab,
+    hasActiveProjectContext,
+    isActive,
+    loadAssignmentGroupVolumetrics,
+  ]);
+
+  useEffect(() => {
     if (isActive && hasActiveProjectContext && hasFilterCacheContext && !filterCatalog) {
       void loadVolumetricsFilterCatalog();
     }
@@ -1700,6 +1821,7 @@ function VolumetricsDashboard({
   function resetFilters() {
     setScope("in_scope");
     setTicketType("all");
+    setAssignmentGroupVolumetricsTrack("all");
     setFilters(emptyFilters);
   }
 
@@ -1723,6 +1845,8 @@ function VolumetricsDashboard({
   const canceledMetricLabel = cancellationMetricLabel(ticketType);
   const agreementModeLabel = agreementMode === "ola" ? "OLA" : "SLA";
   const commentaryFunctional = commentaryFunctionalContext(filters.functional_track_ams_owner);
+  const isAssignmentGroupVolumetricsSubTab =
+    activeSubTab === "assignment_group_volumetrics";
   const volumetricsCommentary = (
     subTab: VolumetricsSubTab,
     sectionKey: string,
@@ -1771,55 +1895,66 @@ function VolumetricsDashboard({
             selectionMode="single"
             onChange={(values) => setScope((values[0] as VolumetricsScope) ?? "in_scope")}
           />
-          <ExcelMultiSelectFilter
-            label="Ticket Type"
-            options={filterOptions.ticket_type}
-            selectedValues={[ticketType]}
-            selectionMode="single"
-            onChange={(values) => setTicketType((values[0] as VolumetricsTicketType) ?? "all")}
-          />
-          <ExcelMultiSelectFilter
-            label="Functional Track - AMS Owner"
-            options={filterOptions.functional_track_ams_owner}
-            selectedValues={filters.functional_track_ams_owner}
-            onChange={(values) => updateFilter("functional_track_ams_owner", values)}
-          />
-          <ExcelMultiSelectFilter
-            label="SAP / Non-SAP"
-            options={filterOptions.sap_non_sap}
-            selectedValues={filters.sap_non_sap}
-            onChange={(values) => updateFilter("sap_non_sap", values)}
-          />
-          <ExcelMultiSelectFilter
-            label="Business Criticality"
-            options={filterOptions.business_critical}
-            selectedValues={filters.business_critical}
-            onChange={(values) => updateFilter("business_critical", values)}
-          />
-          <ExcelMultiSelectFilter
-            label="Assignment Group - Support Lead"
-            options={filterOptions.assignment_group_support_lead}
-            selectedValues={filters.assignment_group_support_lead}
-            onChange={(values) => updateFilter("assignment_group_support_lead", values)}
-          />
-          <ExcelMultiSelectFilter
-            label="Parent Business Application"
-            options={filterOptions.parent_application_name}
-            selectedValues={filters.parent_application_name}
-            onChange={(values) => updateFilter("parent_application_name", values)}
-          />
-          <ExcelMultiSelectFilter
-            label="Application Owner"
-            options={filterOptions.application_owner}
-            selectedValues={filters.application_owner}
-            onChange={(values) => updateFilter("application_owner", values)}
-          />
-          <ExcelMultiSelectFilter
-            label="Supported by Vendor"
-            options={filterOptions.supported_by_vendor}
-            selectedValues={filters.supported_by_vendor}
-            onChange={(values) => updateFilter("supported_by_vendor", values)}
-          />
+          {isAssignmentGroupVolumetricsSubTab ? (
+            <p className="muted-text">
+              Assignment Group Volumetrics uses only Scope here. Choose Functional Track inside
+              the validation table section.
+            </p>
+          ) : (
+            <>
+              <ExcelMultiSelectFilter
+                label="Ticket Type"
+                options={filterOptions.ticket_type}
+                selectedValues={[ticketType]}
+                selectionMode="single"
+                onChange={(values) =>
+                  setTicketType((values[0] as VolumetricsTicketType) ?? "all")
+                }
+              />
+              <ExcelMultiSelectFilter
+                label="Functional Track - AMS Owner"
+                options={filterOptions.functional_track_ams_owner}
+                selectedValues={filters.functional_track_ams_owner}
+                onChange={(values) => updateFilter("functional_track_ams_owner", values)}
+              />
+              <ExcelMultiSelectFilter
+                label="SAP / Non-SAP"
+                options={filterOptions.sap_non_sap}
+                selectedValues={filters.sap_non_sap}
+                onChange={(values) => updateFilter("sap_non_sap", values)}
+              />
+              <ExcelMultiSelectFilter
+                label="Business Criticality"
+                options={filterOptions.business_critical}
+                selectedValues={filters.business_critical}
+                onChange={(values) => updateFilter("business_critical", values)}
+              />
+              <ExcelMultiSelectFilter
+                label="Assignment Group - Support Lead"
+                options={filterOptions.assignment_group_support_lead}
+                selectedValues={filters.assignment_group_support_lead}
+                onChange={(values) => updateFilter("assignment_group_support_lead", values)}
+              />
+              <ExcelMultiSelectFilter
+                label="Parent Business Application"
+                options={filterOptions.parent_application_name}
+                selectedValues={filters.parent_application_name}
+                onChange={(values) => updateFilter("parent_application_name", values)}
+              />
+              <ExcelMultiSelectFilter
+                label="Application Owner"
+                options={filterOptions.application_owner}
+                selectedValues={filters.application_owner}
+                onChange={(values) => updateFilter("application_owner", values)}
+              />
+              <ExcelMultiSelectFilter
+                label="Supported by Vendor"
+                options={filterOptions.supported_by_vendor}
+                selectedValues={filters.supported_by_vendor}
+                onChange={(values) => updateFilter("supported_by_vendor", values)}
+              />
+            </>
+          )}
         </div>
       </aside>
 
@@ -2125,6 +2260,20 @@ function VolumetricsDashboard({
             commentary={volumetricsCommentary("category", "category_wise_trends")}
           />
         ) : null}
+        {activeSubTab === "assignment_group_volumetrics" ? (
+          <AssignmentGroupVolumetricsPanel
+            commentary={volumetricsCommentary(
+              "assignment_group_volumetrics",
+              "volumetrics_assignment_group_volumetrics",
+              "assignment_group_volumetrics"
+            )}
+            data={assignmentGroupVolumetrics.data}
+            error={assignmentGroupVolumetrics.error}
+            onTrackChange={setAssignmentGroupVolumetricsTrack}
+            selectedTrack={assignmentGroupVolumetricsTrack}
+            status={assignmentGroupVolumetrics.status}
+          />
+        ) : null}
       </div>
     </section>
   );
@@ -2177,6 +2326,7 @@ const volumetricsSubTabs: Array<{ value: VolumetricsSubTab; label: string }> = [
   { value: "detailed_volume", label: "Detailed Volume Trends" },
   { value: "kpi", label: "KPI Trends" },
   { value: "category", label: "Category-wise Trends" },
+  { value: "assignment_group_volumetrics", label: "Assignment Group Volumetrics" },
 ];
 
 function VolumetricsSubTabs({
@@ -2200,6 +2350,380 @@ function VolumetricsSubTabs({
         </button>
       ))}
     </div>
+  );
+}
+
+const assignmentGroupMetricLabels: Array<{
+  key: keyof DashboardVolumetricsAssignmentGroupMonthMetrics;
+  label: string;
+}> = [
+  { key: "created", label: "Created" },
+  { key: "resolved", label: "Resolved" },
+  { key: "cancelled", label: "Cancelled" },
+];
+
+function AssignmentGroupVolumetricsPanel({
+  commentary,
+  data,
+  error,
+  onTrackChange,
+  selectedTrack,
+  status,
+}: {
+  commentary?: ReactNode;
+  data: DashboardVolumetricsAssignmentGroupVolumetrics;
+  error: string | null;
+  onTrackChange: (value: string) => void;
+  selectedTrack: string;
+  status: LoadStatus;
+}) {
+  const [search, setSearch] = useState("");
+  const monthRangeLabel =
+    data.months.length > 0
+      ? `${data.months[0].month_label} to ${data.months[data.months.length - 1].month_label}`
+      : "Dec-25 to May-26";
+
+  return (
+    <div className="validation-stack">
+      <section className="panel validation-intro-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Volumetrics &amp; SLA</p>
+            <h2>Assignment Group-wise Volumetrics</h2>
+            <p className="muted-text">
+              Monthly created, resolved, and cancelled generic ticket volumes by Assignment Group.
+              This validation view includes Incidents and SC Tasks only.
+            </p>
+          </div>
+          <span className="volumetrics-selected-range">{monthRangeLabel}</span>
+        </div>
+        <div className="validation-table-toolbar">
+          <label className="validation-search">
+            <span>Search Assignment Group</span>
+            <input
+              type="search"
+              value={search}
+              placeholder="Search assignment group"
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="track-button-row" aria-label="Functional Track selector">
+          <button
+            className={selectedTrack === "all" ? "active" : ""}
+            type="button"
+            onClick={() => onTrackChange("all")}
+          >
+            All Tracks
+          </button>
+          {data.available_functional_tracks.map((track) => (
+            <button
+              className={selectedTrack === track ? "active" : ""}
+              key={track}
+              type="button"
+              onClick={() => onTrackChange(track)}
+            >
+              {track}
+            </button>
+          ))}
+        </div>
+        {status === "loading" ? (
+          <p className="muted-text chart-state-text">Loading assignment group volumetrics...</p>
+        ) : null}
+        {status === "error" ? <p className="error-text">{error}</p> : null}
+        {data.warnings.length > 0 ? <p className="error-text">{data.warnings[0]}</p> : null}
+        {data.data_notes.map((note) => (
+          <p className="muted-text validation-note" key={note}>
+            {note}
+          </p>
+        ))}
+        {commentary}
+      </section>
+
+      <AssignmentGroupVolumetricsTable
+        months={data.months}
+        search={search}
+        status={status}
+        table={data.tables.incidents}
+      />
+      <AssignmentGroupVolumetricsTable
+        months={data.months}
+        search={search}
+        status={status}
+        table={data.tables.sc_tasks}
+      />
+      <AssignmentGroupVolumetricsTable
+        months={data.months}
+        search={search}
+        status={status}
+        table={data.tables.overall}
+      />
+    </div>
+  );
+}
+
+function metricsForMonth(
+  row: { months: Record<string, DashboardVolumetricsAssignmentGroupMonthMetrics> },
+  month: DashboardVolumetricsAssignmentGroupMonth
+): DashboardVolumetricsAssignmentGroupMonthMetrics {
+  return row.months[month.month_key] ?? emptyAssignmentGroupMetrics;
+}
+
+function summedMetrics(
+  rows: Array<{ months: Record<string, DashboardVolumetricsAssignmentGroupMonthMetrics> }>,
+  month: DashboardVolumetricsAssignmentGroupMonth
+): DashboardVolumetricsAssignmentGroupMonthMetrics {
+  return rows.reduce(
+    (totals, row) => {
+      const metrics = metricsForMonth(row, month);
+      return {
+        created: totals.created + metrics.created,
+        resolved: totals.resolved + metrics.resolved,
+        cancelled: totals.cancelled + metrics.cancelled,
+      };
+    },
+    { ...emptyAssignmentGroupMetrics }
+  );
+}
+
+function totalMetrics(
+  rows: Array<{ totals: DashboardVolumetricsAssignmentGroupMonthMetrics }>
+): DashboardVolumetricsAssignmentGroupMonthMetrics {
+  return rows.reduce(
+    (totals, row) => ({
+      created: totals.created + row.totals.created,
+      resolved: totals.resolved + row.totals.resolved,
+      cancelled: totals.cancelled + row.totals.cancelled,
+    }),
+    { ...emptyAssignmentGroupMetrics }
+  );
+}
+
+function assignmentGroupVolumetricsHeaders(
+  months: DashboardVolumetricsAssignmentGroupMonth[]
+): string[] {
+  return [
+    "Assignment Group",
+    ...months.flatMap((month) =>
+      assignmentGroupMetricLabels.map((metric) => `${month.month_label} ${metric.label}`)
+    ),
+    "Total Created",
+    "Total Resolved",
+    "Total Cancelled",
+  ];
+}
+
+function assignmentGroupVolumetricsExportRows(
+  rows: DashboardVolumetricsAssignmentGroupTable["rows"],
+  months: DashboardVolumetricsAssignmentGroupMonth[]
+): Array<Array<string | number>> {
+  const visibleRows = rows.map((row) => [
+    row.assignment_group,
+    ...months.flatMap((month) => {
+      const metrics = metricsForMonth(row, month);
+      return assignmentGroupMetricLabels.map((metric) => metrics[metric.key]);
+    }),
+    row.totals.created,
+    row.totals.resolved,
+    row.totals.cancelled,
+  ]);
+  const totals = totalMetrics(rows);
+  return [
+    ...visibleRows,
+    [
+      "Grand Total",
+      ...months.flatMap((month) => {
+        const metrics = summedMetrics(rows, month);
+        return assignmentGroupMetricLabels.map((metric) => metrics[metric.key]);
+      }),
+      totals.created,
+      totals.resolved,
+      totals.cancelled,
+    ],
+  ];
+}
+
+function AssignmentGroupVolumetricsTable({
+  months,
+  search,
+  status,
+  table,
+}: {
+  months: DashboardVolumetricsAssignmentGroupMonth[];
+  search: string;
+  status: LoadStatus;
+  table: DashboardVolumetricsAssignmentGroupTable;
+}) {
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const searchTerm = search.trim().toLowerCase();
+  const rows = useMemo(
+    () =>
+      searchTerm
+        ? table.rows.filter((row) => row.assignment_group.toLowerCase().includes(searchTerm))
+        : table.rows,
+    [searchTerm, table.rows]
+  );
+  const grandTotals = totalMetrics(rows);
+  const headers = assignmentGroupVolumetricsHeaders(months);
+  const exportRows = assignmentGroupVolumetricsExportRows(rows, months);
+
+  async function handleCopyTable() {
+    const tsv = [headers, ...exportRows].map((row) => row.join("\t")).join("\n");
+    try {
+      await copyTextToClipboard(tsv);
+      setCopyMessage(`Copied ${rows.length.toLocaleString()} ${table.title} rows.`);
+    } catch (copyError) {
+      setCopyMessage(errorMessage(copyError, "Unable to copy table."));
+    }
+  }
+
+  function handleDownloadCsv() {
+    downloadCsv(
+      `${table.title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_assignment_group_volumetrics.csv`,
+      headers,
+      exportRows
+    );
+    setCopyMessage("CSV downloaded.");
+  }
+
+  return (
+    <section className="panel validation-table-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="label">Assignment Group Volumetrics</p>
+          <h2>{table.title}</h2>
+          <p className="muted-text">
+            Showing {rows.length.toLocaleString()} of {table.rows.length.toLocaleString()} Assignment
+            Groups.
+          </p>
+        </div>
+        <div className="validation-actions">
+          <button
+            className="secondary-button"
+            disabled={status === "loading" || months.length === 0}
+            type="button"
+            onClick={handleCopyTable}
+          >
+            Copy Table
+          </button>
+          <button
+            className="secondary-button"
+            disabled={status === "loading" || months.length === 0}
+            type="button"
+            onClick={handleDownloadCsv}
+          >
+            Download CSV
+          </button>
+        </div>
+      </div>
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      <div className="applications-table-frame validation-table-frame volumetrics-validation-frame">
+        <table className="applications-table validation-table assignment-group-volumetrics-table">
+          <thead>
+            <tr>
+              <th className="assignment-group-column" rowSpan={2} scope="col">
+                Assignment Group
+              </th>
+              {months.map((month, monthIndex) => (
+                <th
+                  className={`month-group-header month-group-${monthIndex % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right`}
+                  colSpan={3}
+                  key={month.month_key}
+                  scope="colgroup"
+                >
+                  {month.month_label}
+                </th>
+              ))}
+              <th className="month-group-header total-cell month-boundary-left" colSpan={3}>
+                Total
+              </th>
+            </tr>
+            <tr>
+              {months.flatMap((month, monthIndex) =>
+                assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                  <th
+                    className={`month-subheader month-group-${monthIndex % 2 === 0 ? "a" : "b"} metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === assignmentGroupMetricLabels.length - 1 ? "month-boundary-right" : ""}`}
+                    key={`${month.month_key}-${metric.key}`}
+                    scope="col"
+                  >
+                    {metric.label}
+                  </th>
+                ))
+              )}
+              {assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                <th
+                  className={`month-subheader total-cell metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""}`}
+                  key={`total-${metric.key}`}
+                  scope="col"
+                >
+                  {metric.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {status !== "loading" && rows.length === 0 ? (
+              <tr>
+                <td colSpan={1 + months.length * 3 + 3}>No Assignment Groups match the selected controls.</td>
+              </tr>
+            ) : (
+              rows.map((row) => (
+                <tr key={`${table.title}-${row.assignment_group}-${row.functional_track}`}>
+                  <th className="assignment-group-column" scope="row">
+                    {row.assignment_group}
+                  </th>
+                  {months.flatMap((month, monthIndex) => {
+                    const metrics = metricsForMonth(row, month);
+                    return assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                      <td
+                        className={`numeric-cell month-group-${monthIndex % 2 === 0 ? "a" : "b"} metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === assignmentGroupMetricLabels.length - 1 ? "month-boundary-right" : ""}`}
+                        key={`${row.assignment_group}-${month.month_key}-${metric.key}`}
+                      >
+                        {formatNumber(metrics[metric.key])}
+                      </td>
+                    ));
+                  })}
+                  {assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                    <td
+                      className={`numeric-cell total-cell metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""}`}
+                      key={`${row.assignment_group}-total-${metric.key}`}
+                    >
+                      {formatNumber(row.totals[metric.key])}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+            {rows.length > 0 ? (
+              <tr className="pivot-total-row">
+                <th className="assignment-group-column" scope="row">
+                  Grand Total
+                </th>
+                {months.flatMap((month, monthIndex) => {
+                  const metrics = summedMetrics(rows, month);
+                  return assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                    <td
+                      className={`numeric-cell total-cell month-group-${monthIndex % 2 === 0 ? "a" : "b"} metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === assignmentGroupMetricLabels.length - 1 ? "month-boundary-right" : ""}`}
+                      key={`grand-${month.month_key}-${metric.key}`}
+                    >
+                      {formatNumber(metrics[metric.key])}
+                    </td>
+                  ));
+                })}
+                {assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                  <td
+                    className={`numeric-cell total-cell metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""}`}
+                    key={`grand-total-${metric.key}`}
+                  >
+                    {formatNumber(grandTotals[metric.key])}
+                  </td>
+                ))}
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

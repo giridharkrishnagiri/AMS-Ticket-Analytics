@@ -1698,6 +1698,207 @@ h2 {
   text-transform: uppercase;
 }
 
+.validation-stack {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.validation-intro-panel,
+.validation-table-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.validation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+}
+
+.validation-control-label,
+.validation-search span {
+  display: block;
+  margin-bottom: 5px;
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.track-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.track-button-row button {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  color: #334155;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.track-button-row button.active {
+  border-color: #0f766e;
+  color: #ffffff;
+  background: #0f766e;
+}
+
+.validation-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.validation-table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.validation-search {
+  display: grid;
+  min-width: min(100%, 360px);
+}
+
+.validation-search input {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #0f172a;
+  background: #ffffff;
+  font: inherit;
+}
+
+.validation-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.validation-table-frame {
+  max-height: 520px;
+}
+
+.validation-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.validation-table th,
+.validation-table td {
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  vertical-align: top;
+}
+
+.validation-table th:last-child,
+.validation-table td:last-child {
+  border-right: 0;
+}
+
+.validation-note {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.volumetrics-validation-frame {
+  max-height: 620px;
+}
+
+.assignment-group-volumetrics-table {
+  min-width: 1740px;
+  font-size: 0.78rem;
+}
+
+.assignment-group-volumetrics-table .assignment-group-column {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  min-width: 260px;
+  max-width: 340px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border-right: 2px solid #94a3b8;
+  background: #ffffff;
+  text-align: left;
+}
+
+.assignment-group-volumetrics-table thead .assignment-group-column {
+  z-index: 5;
+  background: #f8fafc;
+}
+
+.month-group-header {
+  text-align: center;
+  font-weight: 900;
+}
+
+.month-subheader {
+  text-align: center;
+}
+
+.month-group-a {
+  background-color: #f8fafc;
+}
+
+.month-group-b {
+  background-color: #eef6ff;
+}
+
+.assignment-group-volumetrics-table td.month-group-a.metric-created,
+.assignment-group-volumetrics-table th.month-group-a.metric-created {
+  background-color: #f3f8f6;
+}
+
+.assignment-group-volumetrics-table td.month-group-a.metric-resolved,
+.assignment-group-volumetrics-table th.month-group-a.metric-resolved {
+  background-color: #f4f7fb;
+}
+
+.assignment-group-volumetrics-table td.month-group-a.metric-cancelled,
+.assignment-group-volumetrics-table th.month-group-a.metric-cancelled {
+  background-color: #fff7ed;
+}
+
+.assignment-group-volumetrics-table td.month-group-b.metric-created,
+.assignment-group-volumetrics-table th.month-group-b.metric-created {
+  background-color: #eaf8f2;
+}
+
+.assignment-group-volumetrics-table td.month-group-b.metric-resolved,
+.assignment-group-volumetrics-table th.month-group-b.metric-resolved {
+  background-color: #eaf2ff;
+}
+
+.assignment-group-volumetrics-table td.month-group-b.metric-cancelled,
+.assignment-group-volumetrics-table th.month-group-b.metric-cancelled {
+  background-color: #fff1e1;
+}
+
+.month-boundary-left {
+  border-left: 2px solid #94a3b8 !important;
+}
+
+.month-boundary-right {
+  border-right: 2px solid #94a3b8 !important;
+}
+
+.assignment-group-volumetrics-table .total-cell {
+  background-color: #f1f5f9;
+  font-weight: 900;
+}
+
 .applications-chart-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

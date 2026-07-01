@@ -7,7 +7,7 @@ import calendar
 import html
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -34,6 +34,7 @@ from app.services.dashboard import (
     VOLUMETRICS_SCOPE_LABELS,
     VOLUMETRICS_TICKET_TYPE_LABELS,
     application_display_expression,
+    applications_assignment_group_mapping,
     applications_charts,
     applications_summary,
     build_volumetrics_periods,
@@ -51,6 +52,7 @@ from app.services.dashboard import (
     priority_bucket_expression,
     priority_sort_key,
     ranking_window_payload,
+    volumetrics_assignment_group_volumetrics,
     volumetrics_base_conditions,
     volumetrics_cancelled_expression,
     volumetrics_data_range,
@@ -75,7 +77,7 @@ MONDELEZ_LOGO_FILENAMES = ("MDLZlogo_smr.webp", "MDLZlogo.webp")
 
 
 def json_default(value: Any) -> str:
-    if isinstance(value, datetime):
+    if isinstance(value, datetime | date):
         return value.isoformat()
     if isinstance(value, UUID):
         return str(value)
@@ -265,6 +267,52 @@ def build_applications_payload(db: Session, project_id: UUID) -> dict[str, Any]:
         "rows": application_export_rows(db, project_id),
         "summary": applications_summary(db, request),
         "charts": applications_charts(db, request),
+        "assignment_group_mapping": build_assignment_group_mapping_payload(db, project_id),
+    }
+
+
+def assignment_group_mapping_request(
+    project_id: UUID,
+    *,
+    source: str,
+    scope: str = "all",
+    functional_track: str = "all",
+) -> Any:
+    return SimpleNamespace(
+        project_id=project_id,
+        source=source,
+        scope=scope,
+        functional_track=functional_track,
+        search=None,
+    )
+
+
+def build_assignment_group_mapping_payload(db: Session, project_id: UUID) -> dict[str, Any]:
+    return {
+        "application_inventory": applications_assignment_group_mapping(
+            db,
+            assignment_group_mapping_request(project_id, source="application_inventory"),
+        ),
+        "tickets": applications_assignment_group_mapping(
+            db,
+            assignment_group_mapping_request(project_id, source="tickets"),
+        ),
+    }
+
+
+def build_assignment_group_volumetrics_payload(db: Session, project_id: UUID) -> dict[str, Any]:
+    return {
+        scope: volumetrics_assignment_group_volumetrics(
+            db,
+            SimpleNamespace(
+                project_id=project_id,
+                scope=scope,
+                functional_track="all",
+                from_month="2025-12",
+                to_month="2026-05",
+            ),
+        )
+        for scope in ("in_scope", "out_of_scope", "all")
     }
 
 
@@ -1539,6 +1587,7 @@ def build_volumetrics_payload(
                 "detailed_volume_trends",
                 "kpi_trends",
                 "category_wise_trends",
+                "assignment_group_volumetrics",
             ],
             "overall_volume_trends": {
                 "created_resolved_by_hour": {"rows": [], "denominators": {}},
@@ -1561,6 +1610,7 @@ def build_volumetrics_payload(
             "placeholders": {
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
             },
+            "assignment_group_volumetrics": {},
             "complete_month_from": None,
             "complete_month_to": None,
         }
@@ -1578,6 +1628,7 @@ def build_volumetrics_payload(
                 "detailed_volume_trends",
                 "kpi_trends",
                 "category_wise_trends",
+                "assignment_group_volumetrics",
             ],
             "overall_volume_trends": {
                 "created_resolved_by_hour": {"rows": [], "denominators": {}},
@@ -1600,6 +1651,7 @@ def build_volumetrics_payload(
             "placeholders": {
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
             },
+            "assignment_group_volumetrics": {},
             "complete_month_from": None,
             "complete_month_to": None,
         }
@@ -1631,6 +1683,7 @@ def build_volumetrics_payload(
             "detailed_volume_trends",
             "kpi_trends",
             "category_wise_trends",
+            "assignment_group_volumetrics",
         ],
         "overall_volume_trends": {
             "created_resolved_by_hour": build_hourly_created_resolved_payload(
@@ -1672,6 +1725,10 @@ def build_volumetrics_payload(
         "placeholders": {
             "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
         },
+        "assignment_group_volumetrics": build_assignment_group_volumetrics_payload(
+            db,
+            project_id,
+        ),
         "complete_month_from": start_datetime,
         "complete_month_to": end_datetime,
     }
@@ -2187,6 +2244,72 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       min-width: 1800px;
       border-collapse: collapse;
     }
+    .validation-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0;
+    }
+    .validation-actions {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0;
+    }
+    .validation-actions button,
+    .validation-toolbar button {
+      min-height: 30px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #fff;
+      color: #334155;
+      cursor: pointer;
+      font-weight: 900;
+    }
+    .validation-toolbar button.active {
+      border-color: var(--teal);
+      background: var(--teal);
+      color: #fff;
+    }
+    .validation-table-frame {
+      max-height: 560px;
+    }
+    .validation-table th,
+    .validation-table td {
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .assignment-volumetrics-table {
+      min-width: 1740px;
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+    .assignment-volumetrics-table .assignment-group-column {
+      position: sticky;
+      left: 0;
+      z-index: 3;
+      min-width: 250px;
+      max-width: 340px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      border-right: 2px solid #94a3b8;
+      background: #fff;
+      text-align: left;
+    }
+    .assignment-volumetrics-table thead .assignment-group-column {
+      z-index: 5;
+      background: var(--panel);
+    }
+    .month-group-a { background: #f8fafc; }
+    .month-group-b { background: #eef6ff; }
+    .metric-created { background-color: #f3f8f6; }
+    .metric-resolved { background-color: #f4f7fb; }
+    .metric-cancelled { background-color: #fff7ed; }
+    .month-boundary-left { border-left: 2px solid #94a3b8 !important; }
+    .month-boundary-right { border-right: 2px solid #94a3b8 !important; }
     .lifecycle-detail-table {
       min-width: 2500px;
     }
@@ -2537,6 +2660,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     const state = {
       tab: "overview",
       appSubTab: "overview",
+      appMappingSource: "application_inventory",
+      appMappingScope: "in_scope",
+      appMappingTrack: "all",
       appFunctional: "all",
       appScope: "all",
       appSap: "all",
@@ -2547,6 +2673,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       volFunctional: "all",
       volSap: "all",
       volBusinessCritical: "all",
+      volAssignmentTrack: "all",
       pattern: "day_of_month",
       volSubTab: "overall_volume_trends",
       hourlyDayType: "weekdays",
@@ -3639,6 +3766,57 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         return `<td>${esc(field === "active_users" && value !== null && value !== undefined ? fmt(value) : (value ?? ""))}</td>`;
       }).join("")}</tr>`).join("")}</tbody></table>`;
     }
+    function tableToTsv(table) {
+      return [...table.querySelectorAll("tr")].map((tr) =>
+        [...tr.children].map((cell) => String(cell.textContent || "").trim()).join("\\t")
+      ).join("\\n");
+    }
+    function installTableCopyButtons(root) {
+      root.querySelectorAll("[data-copy-table]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const table = document.getElementById(button.dataset.copyTable);
+          const status = button.closest(".validation-actions")?.querySelector(".copy-chart-status");
+          if (!table) return;
+          try {
+            await navigator.clipboard.writeText(tableToTsv(table));
+            if (status) status.textContent = "Copied table.";
+          } catch (error) {
+            if (status) status.textContent = "Copy failed. Select the table and copy manually.";
+          }
+        });
+      });
+    }
+    function renderAssignmentGroupMapping() {
+      const payload = DASHBOARD.applications.assignment_group_mapping?.[state.appMappingSource] || { rows: [], summary: {}, available_functional_tracks: [] };
+      const rows = (payload.rows || []).filter((row) =>
+        (state.appMappingScope === "all" || row.scope === state.appMappingScope) &&
+        (state.appMappingTrack === "all" || row.functional_track === state.appMappingTrack)
+      );
+      const tracks = [...new Set((payload.rows || [])
+        .filter((row) => state.appMappingScope === "all" || row.scope === state.appMappingScope)
+        .map((row) => row.functional_track || "Unmapped Functional Track"))].sort((a, b) => a.localeCompare(b));
+      const sourceButtons = [
+        ["application_inventory", "Application Inventory"],
+        ["tickets", "Tickets Data"]
+      ].map(([value, label]) => `<button type="button" data-app-mapping-source="${value}" class="${state.appMappingSource === value ? "active" : ""}">${label}</button>`).join("");
+      const scopeButtons = [
+        ["in_scope", "In-Scope"],
+        ["out_of_scope", "Out-of-Scope"],
+        ["all", "All"]
+      ].map(([value, label]) => `<button type="button" data-app-mapping-scope="${value}" class="${state.appMappingScope === value ? "active" : ""}">${label}</button>`).join("");
+      const trackButtons = [`<button type="button" data-app-mapping-track="all" class="${state.appMappingTrack === "all" ? "active" : ""}">All Tracks</button>`, ...tracks.map((track) => `<button type="button" data-app-mapping-track="${esc(track)}" class="${state.appMappingTrack === track ? "active" : ""}">${esc(track)}</button>`)].join("");
+      const countHeaders = state.appMappingSource === "tickets" ? "<th>Incident Count</th><th>SC Task Count</th><th>Total Ticket Count</th>" : "";
+      const countCells = (row) => state.appMappingSource === "tickets" ? `<td class="numeric-cell">${fmt(row.incident_count || 0)}</td><td class="numeric-cell">${fmt(row.sc_task_count || 0)}</td><td class="numeric-cell">${fmt(row.total_ticket_count || 0)}</td>` : "";
+      return `<section class="panel full"><p class="label">Applications</p><h2>Assignment Group ↔ Application Mapping</h2><p class="muted">Static validation table for Assignment Group mappings from Application Inventory or normalized Incident and SC Task data.</p>
+        <div class="validation-toolbar">${sourceButtons}</div>
+        <div class="validation-toolbar">${scopeButtons}</div>
+        <div class="validation-toolbar">${trackButtons}</div>
+        <p class="muted">Showing ${fmt(rows.length)} Assignment Group mappings.</p>
+        <div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-mapping">Copy Table</button><span class="copy-chart-status"></span></div>
+        <div class="table-frame validation-table-frame"><table id="offline-app-assignment-mapping" class="applications-table validation-table"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>Parent Business Application</th><th>Business Service CI Name</th><th>Scope</th>${countHeaders}</tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td><td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("")}</tbody></table></div>
+        ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "assignment_group_mapping", section_key: "applications_assignment_group_mapping", chart_key: "assignment_group_mapping", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: "all" })}
+      </section>`;
+    }
     function renderApplications() {
       const rows = filteredApplications();
       const topActiveUsers = topActiveUsersPoints(rows);
@@ -3656,8 +3834,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const technicalCount = rows.filter((row) => ["technical", "technical application"].includes(String(row.app_type).toLowerCase())).length;
       const criticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "critical").length;
       const veryCriticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "very critical").length;
-      const applicationsSubtabs = ["overview", "lifecycle_planning"].map((tab) => {
-        const label = tab === "overview" ? "Overview" : "Lifecycle Planning";
+      const applicationsSubtabs = ["overview", "lifecycle_planning", "assignment_group_mapping"].map((tab) => {
+        const label = tab === "overview"
+          ? "Overview"
+          : tab === "lifecycle_planning"
+            ? "Lifecycle Planning"
+            : "Assignment Group Mapping";
         return `<button type="button" data-app-subtab="${tab}" class="${state.appSubTab === tab ? "active" : ""}">${label}</button>`;
       }).join("");
       const overviewMarkup = `
@@ -3697,7 +3879,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         </aside>
         <section class="main main-content">
           <div class="pattern-buttons application-subtabs">${applicationsSubtabs}</div>
-          ${state.appSubTab === "overview" ? overviewMarkup : lifecycleMarkup}
+          ${state.appSubTab === "overview" ? overviewMarkup : state.appSubTab === "lifecycle_planning" ? lifecycleMarkup : renderAssignmentGroupMapping()}
         </section>
       </div>`;
       document.getElementById("app-scope").addEventListener("change", (event) => { state.appScope = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
@@ -3713,9 +3895,19 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll("[data-lifecycle-plan]").forEach((button) => {
         button.addEventListener("click", () => { state.lifecyclePlan = button.dataset.lifecyclePlan; safeRenderSection("applications", "Applications", renderApplications); });
       });
+      document.querySelectorAll("[data-app-mapping-source]").forEach((button) => {
+        button.addEventListener("click", () => { state.appMappingSource = button.dataset.appMappingSource; state.appMappingTrack = "all"; safeRenderSection("applications", "Applications", renderApplications); });
+      });
+      document.querySelectorAll("[data-app-mapping-scope]").forEach((button) => {
+        button.addEventListener("click", () => { state.appMappingScope = button.dataset.appMappingScope; state.appMappingTrack = "all"; safeRenderSection("applications", "Applications", renderApplications); });
+      });
+      document.querySelectorAll("[data-app-mapping-track]").forEach((button) => {
+        button.addEventListener("click", () => { state.appMappingTrack = button.dataset.appMappingTrack; safeRenderSection("applications", "Applications", renderApplications); });
+      });
       attachDefaultCommentaries(document.getElementById("applications"), { dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_charts", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional });
       installCommentaryEditors(document.getElementById("applications"));
       installChartCopyButtons(document.getElementById("applications"));
+      installTableCopyButtons(document.getElementById("applications"));
     }
     function applicationTable(rows) {
       const columns = ["business_service_ci_name", "scope_status", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "lifecycle_stage_status", "lifecycle_current", "lifecycle_1_to_3_years", "lifecycle_3_to_5_years", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
@@ -3802,8 +3994,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll("[data-top-tickets-user]").forEach((button) => {
         button.addEventListener("click", () => { state.ticketsPerUserN = button.dataset.topTicketsUser; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
+      document.querySelectorAll("[data-vol-assignment-track]").forEach((button) => {
+        button.addEventListener("click", () => { state.volAssignmentTrack = button.dataset.volAssignmentTrack; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
+      });
       attachDefaultCommentaries(document.getElementById("volumetrics"), currentVolumetricsCommentaryContext());
       installChartCopyButtons(document.getElementById("volumetrics"));
+      installTableCopyButtons(document.getElementById("volumetrics"));
     }
     function volSubTabs() {
       const labels = {
@@ -3811,14 +4007,56 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         overall_sla_trends: "Overall SLA Trends",
         detailed_volume_trends: "Detailed Volume Trends",
         kpi_trends: "KPI Trends",
-        category_wise_trends: "Category-wise Trends"
+        category_wise_trends: "Category-wise Trends",
+        assignment_group_volumetrics: "Assignment Group Volumetrics"
       };
       return Object.entries(labels).map(([value, label]) => `<button type="button" data-vol-subtab="${esc(value)}" class="${state.volSubTab === value ? "active" : ""}">${esc(label)}</button>`).join("");
+    }
+    function assignmentVolumetricsPayload() {
+      return DASHBOARD.volumetrics.assignment_group_volumetrics?.[state.volScope] ||
+        DASHBOARD.volumetrics.assignment_group_volumetrics?.in_scope ||
+        { months: [], tables: { incidents: { rows: [] }, sc_tasks: { rows: [] }, overall: { rows: [] } }, available_functional_tracks: [] };
+    }
+    function assignmentVolumetricsRows(table) {
+      const rows = table?.rows || [];
+      return state.volAssignmentTrack === "all"
+        ? rows
+        : rows.filter((row) => row.functional_track === state.volAssignmentTrack);
+    }
+    const ASSIGNMENT_METRICS = [
+      ["created", "Created"],
+      ["resolved", "Resolved"],
+      ["cancelled", "Cancelled"]
+    ];
+    function assignmentMetric(row, month, key) {
+      return Number(row.months?.[month.month_key]?.[key] || 0);
+    }
+    function assignmentMonthTotals(rows, month, key) {
+      return rows.reduce((total, row) => total + assignmentMetric(row, month, key), 0);
+    }
+    function assignmentGrandTotal(rows, key) {
+      return rows.reduce((total, row) => total + Number(row.totals?.[key] || 0), 0);
+    }
+    function assignmentVolumetricsTable(table, months, tableKey) {
+      const rows = assignmentVolumetricsRows(table);
+      const tableId = `offline-assignment-vol-${tableKey}`;
+      const header1 = `<tr><th class="assignment-group-column" rowspan="2">Assignment Group</th>${months.map((month, index) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right" colspan="3">${esc(month.month_label)}</th>`).join("")}<th class="month-boundary-left" colspan="3">Total</th></tr>`;
+      const header2 = `<tr>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${label}</th>`)).join("")}${ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${label}</th>`).join("")}</tr>`;
+      const bodyRows = rows.map((row) => `<tr><th class="assignment-group-column">${esc(row.assignment_group)}</th>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMetric(row, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(row.totals?.[key] || 0)}</td>`).join("")}</tr>`).join("");
+      const totalRow = `<tr class="pivot-total-row"><th class="assignment-group-column">Grand Total</th>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMonthTotals(rows, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(assignmentGrandTotal(rows, key))}</td>`).join("")}</tr>`;
+      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><span class="copy-chart-status"></span></div></div><div class="table-frame validation-table-frame"><table id="${tableId}" class="applications-table validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? bodyRows + totalRow : `<tr><td colspan="${1 + months.length * 3 + 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></section>`;
+    }
+    function renderAssignmentGroupVolumetrics() {
+      const payload = assignmentVolumetricsPayload();
+      const tracks = payload.available_functional_tracks || [];
+      const trackButtons = [`<button type="button" data-vol-assignment-track="all" class="${state.volAssignmentTrack === "all" ? "active" : ""}">All Tracks</button>`, ...tracks.map((track) => `<button type="button" data-vol-assignment-track="${esc(track)}" class="${state.volAssignmentTrack === track ? "active" : ""}">${esc(track)}</button>`)].join("");
+      return `<section class="panel full"><p class="label">Volumetrics &amp; SLA</p><h2>Assignment Group-wise Volumetrics</h2><p class="muted">Monthly created, resolved, and cancelled generic ticket volumes by Assignment Group for Dec-25 through May-26. Problems and Changes are excluded.</p><div class="validation-toolbar">${trackButtons}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "assignment_group_volumetrics" })}</section>${assignmentVolumetricsTable(payload.tables?.incidents, payload.months || [], "incidents")}${assignmentVolumetricsTable(payload.tables?.sc_tasks, payload.months || [], "sc-tasks")}${assignmentVolumetricsTable(payload.tables?.overall, payload.months || [], "overall")}`;
     }
     function renderVolumetricsSubTab(periods) {
       if (state.volSubTab === "overall_sla_trends") return renderSlaTrends();
       if (state.volSubTab === "detailed_volume_trends") return renderDetailedVolumeTrends();
       if (state.volSubTab === "kpi_trends") return renderKpiTrends();
+      if (state.volSubTab === "assignment_group_volumetrics") return renderAssignmentGroupVolumetrics();
       if (state.volSubTab === "category_wise_trends") return placeholder("Category-wise Trends");
       return renderOverallVolume(periods);
     }

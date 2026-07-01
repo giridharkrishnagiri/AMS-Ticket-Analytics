@@ -283,6 +283,14 @@ SC_TASK_CATALOG_PERIODS = (
     ),
 )
 
+ASSIGNMENT_GROUP_VOLUMETRICS_DEFAULT_MONTHS = ("2025-12", "2026-05")
+ASSIGNMENT_GROUP_MAPPING_SOURCES = {"application_inventory", "tickets"}
+ASSIGNMENT_GROUP_MAPPING_SCOPES = {"in_scope", "out_of_scope", "all"}
+UNMAPPED_ASSIGNMENT_GROUP_LABEL = "Unmapped Assignment Group"
+UNMAPPED_FUNCTIONAL_TRACK_LABEL = "Unmapped Functional Track"
+UNMAPPED_PARENT_APPLICATION_LABEL = "Unmapped Parent Business Application"
+UNMAPPED_BUSINESS_SERVICE_CI_LABEL = "Unmapped Business Service CI"
+
 
 class TimeGrain(StrEnum):
     DAILY = "DAILY"
@@ -1688,6 +1696,618 @@ def applications_lifecycle_planning(db: Session, request: Any) -> dict[str, Any]
             "applications": applications,
             "application_count": len(applications),
         },
+    }
+
+
+def validation_display_expression(expression: Any, label: str) -> Any:
+    return func.coalesce(nonblank_text_expression(expression), literal(label))
+
+
+def normalize_assignment_mapping_source(value: str | None) -> str:
+    normalized = (value or "application_inventory").strip().lower()
+    if normalized not in ASSIGNMENT_GROUP_MAPPING_SOURCES:
+        raise ValueError("Mapping source must be application_inventory or tickets")
+    return normalized
+
+
+def normalize_assignment_mapping_scope(value: str | None) -> str:
+    normalized = (value or "in_scope").strip().lower()
+    if normalized not in ASSIGNMENT_GROUP_MAPPING_SCOPES:
+        raise ValueError("Scope must be in_scope, out_of_scope, or all")
+    return normalized
+
+
+def normalize_assignment_mapping_track(value: str | None) -> str:
+    normalized = (value or "all").strip()
+    return normalized if normalized else "all"
+
+
+def assignment_mapping_search_condition(search: str | None, expressions: list[Any]) -> Any | None:
+    search_value = (search or "").strip()
+    if not search_value:
+        return None
+    pattern = f"%{search_value.lower()}%"
+    return or_(*[func.lower(expression).like(pattern) for expression in expressions])
+
+
+def application_inventory_scope_expression() -> Any:
+    scope = normalized_text_expression(ApplicationInventoryItem.scope_status)
+    return case(
+        (scope == "in_scope", literal("in_scope")),
+        (scope == "out_of_scope", literal("out_of_scope")),
+        else_=literal("unknown"),
+    )
+
+
+def application_inventory_mapping_conditions(request: Any, scope_expression: Any) -> list[Any]:
+    scope = normalize_assignment_mapping_scope(request.scope)
+    conditions: list[Any] = [ApplicationInventoryItem.project_id == request.project_id]
+    if scope != "all":
+        conditions.append(scope_expression == scope)
+    return conditions
+
+
+def application_assignment_mapping_tracks(db: Session, request: Any) -> list[str]:
+    source = normalize_assignment_mapping_source(request.source)
+    scope = normalize_assignment_mapping_scope(request.scope)
+    if source == "application_inventory":
+        scope_expression = application_inventory_scope_expression()
+        track_expression = validation_display_expression(
+            ApplicationInventoryItem.functional_track,
+            UNMAPPED_FUNCTIONAL_TRACK_LABEL,
+        )
+        statement = (
+            select(track_expression.label("functional_track"))
+            .where(*application_inventory_mapping_conditions(request, scope_expression))
+            .group_by(track_expression)
+            .order_by(track_expression.asc())
+        )
+    else:
+        ticket_source = volumetrics_source_subquery(request, scope_override=scope)
+        track_expression = validation_display_expression(
+            ticket_source.c.functional_track,
+            UNMAPPED_FUNCTIONAL_TRACK_LABEL,
+        )
+        statement = (
+            select(track_expression.label("functional_track"))
+            .select_from(ticket_source)
+            .where(ticket_source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values()))
+            .group_by(track_expression)
+            .order_by(track_expression.asc())
+        )
+    return [str(row["functional_track"]) for row in db.execute(statement).mappings().all()]
+
+
+def applications_assignment_group_mapping(db: Session, request: Any) -> dict[str, Any]:
+    source = normalize_assignment_mapping_source(request.source)
+    scope = normalize_assignment_mapping_scope(request.scope)
+    functional_track = normalize_assignment_mapping_track(request.functional_track)
+    if source == "application_inventory":
+        return applications_assignment_group_mapping_from_inventory(
+            db,
+            request,
+            scope,
+            functional_track,
+        )
+    return applications_assignment_group_mapping_from_tickets(
+        db,
+        request,
+        scope,
+        functional_track,
+    )
+
+
+def applications_assignment_group_mapping_from_inventory(
+    db: Session,
+    request: Any,
+    scope: str,
+    functional_track: str,
+) -> dict[str, Any]:
+    scope_expression = application_inventory_scope_expression()
+    assignment_expression = validation_display_expression(
+        ApplicationInventoryItem.assignment_group,
+        UNMAPPED_ASSIGNMENT_GROUP_LABEL,
+    )
+    track_expression = validation_display_expression(
+        ApplicationInventoryItem.functional_track,
+        UNMAPPED_FUNCTIONAL_TRACK_LABEL,
+    )
+    parent_expression = validation_display_expression(
+        ApplicationInventoryItem.parent_application_name,
+        UNMAPPED_PARENT_APPLICATION_LABEL,
+    )
+    business_service_expression = validation_display_expression(
+        ApplicationInventoryItem.business_service_ci_name,
+        UNMAPPED_BUSINESS_SERVICE_CI_LABEL,
+    )
+    conditions = application_inventory_mapping_conditions(request, scope_expression)
+    if functional_track != "all":
+        conditions.append(track_expression == functional_track)
+    search_condition = assignment_mapping_search_condition(
+        request.search,
+        [
+            assignment_expression,
+            track_expression,
+            parent_expression,
+            business_service_expression,
+            scope_expression,
+        ],
+    )
+    if search_condition is not None:
+        conditions.append(search_condition)
+
+    statement = (
+        select(
+            assignment_expression.label("assignment_group"),
+            track_expression.label("functional_track"),
+            parent_expression.label("parent_business_application"),
+            business_service_expression.label("business_service_ci_name"),
+            scope_expression.label("scope"),
+            func.count(ApplicationInventoryItem.id).label("row_count"),
+        )
+        .where(*conditions)
+        .group_by(
+            assignment_expression,
+            track_expression,
+            parent_expression,
+            business_service_expression,
+            scope_expression,
+        )
+        .order_by(
+            assignment_expression.asc(),
+            parent_expression.asc(),
+            business_service_expression.asc(),
+        )
+    )
+    rows = [
+        {
+            "assignment_group": row["assignment_group"],
+            "functional_track": row["functional_track"],
+            "parent_business_application": row["parent_business_application"],
+            "business_service_ci_name": row["business_service_ci_name"],
+            "scope": row["scope"],
+            "incident_count": None,
+            "sc_task_count": None,
+            "total_ticket_count": None,
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return {
+        "source": "application_inventory",
+        "scope": scope,
+        "functional_track": functional_track,
+        "available_functional_tracks": application_assignment_mapping_tracks(db, request),
+        "summary": assignment_group_mapping_summary(rows),
+        "rows": rows,
+        "data_notes": [
+            "Application Inventory source shows configured assignment group to application "
+            "mapping.",
+            "Application Inventory remains the source for application attributes.",
+        ],
+        "warnings": [],
+    }
+
+
+def applications_assignment_group_mapping_from_tickets(
+    db: Session,
+    request: Any,
+    scope: str,
+    functional_track: str,
+) -> dict[str, Any]:
+    source = volumetrics_source_subquery(request, scope_override=scope)
+    assignment_expression = validation_display_expression(
+        source.c.assignment_group,
+        UNMAPPED_ASSIGNMENT_GROUP_LABEL,
+    )
+    track_expression = validation_display_expression(
+        source.c.functional_track,
+        UNMAPPED_FUNCTIONAL_TRACK_LABEL,
+    )
+    parent_expression = validation_display_expression(
+        source.c.parent_application_name,
+        UNMAPPED_PARENT_APPLICATION_LABEL,
+    )
+    business_service_expression = validation_display_expression(
+        source.c.business_service_ci_name,
+        UNMAPPED_BUSINESS_SERVICE_CI_LABEL,
+    )
+    conditions: list[Any] = [source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values())]
+    if functional_track != "all":
+        conditions.append(track_expression == functional_track)
+    search_condition = assignment_mapping_search_condition(
+        request.search,
+        [
+            assignment_expression,
+            track_expression,
+            parent_expression,
+            business_service_expression,
+            source.c.scope,
+        ],
+    )
+    if search_condition is not None:
+        conditions.append(search_condition)
+
+    incident_count = func.count(source.c.id).filter(source.c.ticket_type == "INCIDENT")
+    sc_task_count = func.count(source.c.id).filter(
+        source.c.ticket_type == "SERVICE_CATALOG_TASK",
+    )
+    statement = (
+        select(
+            assignment_expression.label("assignment_group"),
+            track_expression.label("functional_track"),
+            parent_expression.label("parent_business_application"),
+            business_service_expression.label("business_service_ci_name"),
+            source.c.scope.label("scope"),
+            incident_count.label("incident_count"),
+            sc_task_count.label("sc_task_count"),
+            func.count(source.c.id).label("total_ticket_count"),
+        )
+        .select_from(source)
+        .where(*conditions)
+        .group_by(
+            assignment_expression,
+            track_expression,
+            parent_expression,
+            business_service_expression,
+            source.c.scope,
+        )
+        .order_by(func.count(source.c.id).desc(), assignment_expression.asc())
+    )
+    rows = [
+        {
+            "assignment_group": row["assignment_group"],
+            "functional_track": row["functional_track"],
+            "parent_business_application": row["parent_business_application"],
+            "business_service_ci_name": row["business_service_ci_name"],
+            "scope": row["scope"],
+            "incident_count": int_count(row["incident_count"]),
+            "sc_task_count": int_count(row["sc_task_count"]),
+            "total_ticket_count": int_count(row["total_ticket_count"]),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return {
+        "source": "tickets",
+        "scope": scope,
+        "functional_track": functional_track,
+        "available_functional_tracks": application_assignment_mapping_tracks(db, request),
+        "summary": assignment_group_mapping_summary(rows),
+        "rows": rows,
+        "data_notes": [
+            "Tickets Data source shows distinct mappings found in normalized Incident and "
+            "SC Task records.",
+            "Generic Tickets includes Incidents and SC Tasks only.",
+            "Problems and Changes are excluded.",
+        ],
+        "warnings": [],
+    }
+
+
+def assignment_group_mapping_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    incident_counts = [row.get("incident_count") for row in rows]
+    has_ticket_counts = any(value is not None for value in incident_counts)
+    incident_total = (
+        sum(int_count(row.get("incident_count")) for row in rows) if has_ticket_counts else None
+    )
+    sc_task_total = (
+        sum(int_count(row.get("sc_task_count")) for row in rows) if has_ticket_counts else None
+    )
+    return {
+        "mapping_count": len(rows),
+        "assignment_group_count": len({row["assignment_group"] for row in rows}),
+        "business_service_ci_count": len({row["business_service_ci_name"] for row in rows}),
+        "parent_business_application_count": len(
+            {row["parent_business_application"] for row in rows},
+        ),
+        "incident_count": incident_total,
+        "sc_task_count": sc_task_total,
+        "total_ticket_count": (
+            incident_total + sc_task_total
+            if incident_total is not None and sc_task_total is not None
+            else None
+        ),
+    }
+
+
+def parse_month_key(value: str, *, field_name: str) -> date:
+    try:
+        year_text, month_text = value.split("-", 1)
+        year = int(year_text)
+        month = int(month_text)
+        if month < 1 or month > 12:
+            raise ValueError
+        return date(year, month, 1)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must use YYYY-MM format") from exc
+
+
+def month_key_date_range(from_month: str, to_month: str) -> list[date]:
+    start = parse_month_key(from_month, field_name="from_month")
+    end = parse_month_key(to_month, field_name="to_month")
+    if end < start:
+        raise ValueError("to_month must be greater than or equal to from_month")
+    months: list[date] = []
+    current = start
+    while current <= end:
+        months.append(current)
+        if len(months) > 24:
+            raise ValueError("Month range cannot exceed 24 months")
+        current = (
+            date(current.year + 1, 1, 1)
+            if current.month == 12
+            else date(current.year, current.month + 1, 1)
+        )
+    return months
+
+
+def month_label(month_start: date) -> str:
+    return f"{month_start:%b}-{month_start:%y}"
+
+
+def month_key(month_start: date) -> str:
+    return f"{month_start:%Y-%m}"
+
+
+def next_month_start(month_start: date) -> date:
+    return (
+        date(month_start.year + 1, 1, 1)
+        if month_start.month == 12
+        else date(month_start.year, month_start.month + 1, 1)
+    )
+
+
+def volumetrics_assignment_group_available_tracks(db: Session, request: Any) -> list[str]:
+    source = volumetrics_source_subquery(request, scope_override=request.scope)
+    track_expression = validation_display_expression(
+        source.c.functional_track,
+        UNMAPPED_FUNCTIONAL_TRACK_LABEL,
+    )
+    statement = (
+        select(track_expression.label("functional_track"))
+        .select_from(source)
+        .where(source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values()))
+        .group_by(track_expression)
+        .order_by(track_expression.asc())
+    )
+    return [str(row["functional_track"]) for row in db.execute(statement).mappings().all()]
+
+
+def assignment_group_volumetrics_category_expression(source: Any) -> Any:
+    return case(
+        (source.c.ticket_type == "INCIDENT", literal("incidents")),
+        (source.c.ticket_type == "SERVICE_CATALOG_TASK", literal("sc_tasks")),
+        else_=literal("other"),
+    )
+
+
+def assignment_group_volumetrics_event_rows(
+    db: Session,
+    source: Any,
+    *,
+    date_expression: Any,
+    event_name: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+    functional_track: str,
+    extra_conditions: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    assignment_expression = validation_display_expression(
+        source.c.assignment_group,
+        UNMAPPED_ASSIGNMENT_GROUP_LABEL,
+    )
+    track_expression = validation_display_expression(
+        source.c.functional_track,
+        UNMAPPED_FUNCTIONAL_TRACK_LABEL,
+    )
+    category_expression = assignment_group_volumetrics_category_expression(source)
+    month_expression = func.to_char(func.date_trunc("month", date_expression), "YYYY-MM")
+    conditions: list[Any] = [
+        source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values()),
+        date_expression.is_not(None),
+        date_expression >= start_datetime,
+        date_expression < end_datetime,
+    ]
+    if functional_track != "all":
+        conditions.append(track_expression == functional_track)
+    if extra_conditions:
+        conditions.extend(extra_conditions)
+
+    statement = (
+        select(
+            category_expression.label("ticket_category"),
+            assignment_expression.label("assignment_group"),
+            track_expression.label("functional_track"),
+            month_expression.label("month_key"),
+            func.count(source.c.id).label("ticket_count"),
+        )
+        .select_from(source)
+        .where(*conditions)
+        .group_by(category_expression, assignment_expression, track_expression, month_expression)
+    )
+    return [
+        {
+            "ticket_category": row["ticket_category"],
+            "assignment_group": row["assignment_group"],
+            "functional_track": row["functional_track"],
+            "month_key": row["month_key"],
+            event_name: int_count(row["ticket_count"]),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+
+
+def blank_month_metrics(months: list[date]) -> dict[str, dict[str, int]]:
+    return {
+        month_key(month): {"created": 0, "resolved": 0, "cancelled": 0}
+        for month in months
+    }
+
+
+def add_assignment_group_volumetrics_event(
+    store: dict[tuple[str, str, str], dict[str, Any]],
+    row: dict[str, Any],
+    months: list[date],
+    event_name: str,
+) -> None:
+    key = (
+        row["ticket_category"],
+        row["assignment_group"],
+        row["functional_track"],
+    )
+    entry = store.setdefault(
+        key,
+        {
+            "assignment_group": row["assignment_group"],
+            "functional_track": row["functional_track"],
+            "months": blank_month_metrics(months),
+        },
+    )
+    if row["month_key"] in entry["months"]:
+        entry["months"][row["month_key"]][event_name] += int_count(row[event_name])
+
+
+def build_assignment_group_volumetrics_table(
+    title: str,
+    rows: list[dict[str, Any]],
+    months: list[date],
+) -> dict[str, Any]:
+    output_rows: list[dict[str, Any]] = []
+    for row in rows:
+        totals = {
+            "created": sum(row["months"][month_key(month)]["created"] for month in months),
+            "resolved": sum(row["months"][month_key(month)]["resolved"] for month in months),
+            "cancelled": sum(row["months"][month_key(month)]["cancelled"] for month in months),
+        }
+        output_rows.append(
+            {
+                "assignment_group": row["assignment_group"],
+                "functional_track": row["functional_track"],
+                "months": row["months"],
+                "totals": totals,
+            },
+        )
+    output_rows.sort(
+        key=lambda item: (
+            -int_count(item["totals"]["created"]),
+            str(item["assignment_group"]).casefold(),
+            str(item["functional_track"]).casefold(),
+        ),
+    )
+    return {
+        "title": title,
+        "rows": output_rows,
+        "grand_totals": {
+            "created": sum(int_count(row["totals"]["created"]) for row in output_rows),
+            "resolved": sum(int_count(row["totals"]["resolved"]) for row in output_rows),
+            "cancelled": sum(int_count(row["totals"]["cancelled"]) for row in output_rows),
+        },
+    }
+
+
+def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[str, Any]:
+    scope = normalize_volumetrics_scope(request.scope)
+    functional_track = normalize_assignment_mapping_track(request.functional_track)
+    months = month_key_date_range(request.from_month, request.to_month)
+    start_datetime = datetime.combine(months[0], time.min, tzinfo=UTC)
+    end_datetime = datetime.combine(next_month_start(months[-1]), time.min, tzinfo=UTC)
+    source = volumetrics_source_subquery(request, scope_override=scope)
+    cancelled_condition = volumetrics_cancelled_state_expression(source.c)
+    resolved_date_expression = source.c.completion_at
+    cancelled_date_expression = func.coalesce(
+        source.c.closed_at,
+        source.c.resolved_at,
+        source.c.completion_at,
+    )
+
+    store: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in assignment_group_volumetrics_event_rows(
+        db,
+        source,
+        date_expression=source.c.created_at,
+        event_name="created",
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        functional_track=functional_track,
+    ):
+        add_assignment_group_volumetrics_event(store, row, months, "created")
+    for row in assignment_group_volumetrics_event_rows(
+        db,
+        source,
+        date_expression=resolved_date_expression,
+        event_name="resolved",
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        functional_track=functional_track,
+        extra_conditions=[~cancelled_condition],
+    ):
+        add_assignment_group_volumetrics_event(store, row, months, "resolved")
+    for row in assignment_group_volumetrics_event_rows(
+        db,
+        source,
+        date_expression=cancelled_date_expression,
+        event_name="cancelled",
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        functional_track=functional_track,
+        extra_conditions=[cancelled_condition],
+    ):
+        add_assignment_group_volumetrics_event(store, row, months, "cancelled")
+
+    incident_rows = [row for key, row in store.items() if key[0] == "incidents"]
+    sc_task_rows = [row for key, row in store.items() if key[0] == "sc_tasks"]
+    overall_by_assignment: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in incident_rows + sc_task_rows:
+        key = (row["assignment_group"], row["functional_track"])
+        overall_row = overall_by_assignment.setdefault(
+            key,
+            {
+                "assignment_group": row["assignment_group"],
+                "functional_track": row["functional_track"],
+                "months": blank_month_metrics(months),
+            },
+        )
+        for current_month in months:
+            current_key = month_key(current_month)
+            for metric in ("created", "resolved", "cancelled"):
+                overall_row["months"][current_key][metric] += row["months"][current_key][metric]
+
+    return {
+        "scope": scope,
+        "functional_track": functional_track,
+        "months": [
+            {
+                "month": current_month,
+                "month_key": month_key(current_month),
+                "month_label": month_label(current_month),
+            }
+            for current_month in months
+        ],
+        "tables": {
+            "incidents": build_assignment_group_volumetrics_table(
+                "Incidents",
+                incident_rows,
+                months,
+            ),
+            "sc_tasks": build_assignment_group_volumetrics_table(
+                "SC Tasks",
+                sc_task_rows,
+                months,
+            ),
+            "overall": build_assignment_group_volumetrics_table(
+                "Overall",
+                list(overall_by_assignment.values()),
+                months,
+            ),
+        },
+        "available_functional_tracks": volumetrics_assignment_group_available_tracks(db, request),
+        "data_notes": [
+            "Assignment Group-wise Volumetrics includes Incidents and SC Tasks only.",
+            "Problems and Changes are excluded.",
+            "Created counts use created_at month.",
+            "Resolved counts use normalized completion date and exclude cancelled states.",
+            "Cancelled counts use cancelled/closed-incomplete state with closed/resolved date.",
+        ],
+        "warnings": [],
     }
 
 

@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.dashboard import (
+    ApplicationsAssignmentGroupMappingRequest,
+    ApplicationsAssignmentGroupMappingResponse,
     ApplicationsChartsResponse,
     ApplicationsDataRequest,
     ApplicationsFilterValueCountsResponse,
@@ -45,6 +47,8 @@ from app.schemas.dashboard import (
     ReopenTrendRow,
     SlaTrendRow,
     TechnicalFunctionalBreakdownResponse,
+    VolumetricsAssignmentGroupRequest,
+    VolumetricsAssignmentGroupResponse,
     VolumetricsBacklogResponse,
     VolumetricsCreatedPatternRequest,
     VolumetricsCreatedPatternResponse,
@@ -75,6 +79,7 @@ from app.services.dashboard import (
     DashboardFilters,
     DateFilterBasis,
     TimeGrain,
+    applications_assignment_group_mapping,
     applications_charts,
     applications_filter_value_counts,
     applications_filter_values,
@@ -94,6 +99,7 @@ from app.services.dashboard import (
     reopen_trend,
     sla_trend,
     technical_functional_breakdown,
+    volumetrics_assignment_group_volumetrics,
     volumetrics_backlog,
     volumetrics_created_pattern,
     volumetrics_created_resolved_backlog,
@@ -366,6 +372,20 @@ def get_dashboard_applications_top_active_users(
 
 
 @router.post(
+    "/applications/assignment-group-mapping",
+    response_model=ApplicationsAssignmentGroupMappingResponse,
+)
+def get_dashboard_applications_assignment_group_mapping(
+    request: ApplicationsAssignmentGroupMappingRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return applications_assignment_group_mapping(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
     "/volumetrics/filter-values",
     response_model=VolumetricsFilterValuesResponse,
 )
@@ -375,6 +395,20 @@ def get_dashboard_volumetrics_filter_values(
 ) -> dict[str, object]:
     try:
         return volumetrics_filter_value_counts(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/assignment-group-volumetrics",
+    response_model=VolumetricsAssignmentGroupResponse,
+)
+def get_dashboard_volumetrics_assignment_group_volumetrics(
+    request: VolumetricsAssignmentGroupRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_assignment_group_volumetrics(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

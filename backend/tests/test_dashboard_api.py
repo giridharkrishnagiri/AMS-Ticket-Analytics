@@ -127,6 +127,10 @@ def add_ticket(
     sap_non_sap: str | None = None,
     short_description: str | None = None,
     business_service_ci_name: str | None = None,
+    parent_application_name: str | None = None,
+    functional_track: str | None = None,
+    ams_owner: str | None = None,
+    support_lead: str | None = None,
     architecture_type: str | None = None,
     business_critical: str | None = None,
     install_type: str | None = None,
@@ -163,6 +167,10 @@ def add_ticket(
         hosting_env=hosting_env,
         application=application,
         business_service_ci_name=business_service_ci_name,
+        parent_application_name=parent_application_name,
+        functional_track=functional_track,
+        ams_owner=ams_owner,
+        support_lead=support_lead,
         sla_breached=sla_breached,
         is_batch_related=derive_is_batch_related(ticket_type, resolved_short_description),
         reopen_count=reopen_count,
@@ -174,6 +182,45 @@ def add_ticket(
         is_technical=is_technical,
         technical_functional_type=technical_functional_type,
         normalized_payload={"raw_payload_json": raw_payload or {}},
+    )
+    db.add(ticket)
+    return ticket
+
+
+def add_out_of_scope_ticket(
+    db,
+    project_id: UUID,
+    upload_batch_id: UUID,
+    number: str,
+    ticket_type: str,
+    created_at: datetime | None,
+    *,
+    state: str | None = "Open",
+    resolved_at: datetime | None = None,
+    closed_at: datetime | None = None,
+    assignment_group: str | None = "AMS-OOS",
+    business_service_ci_name: str | None = None,
+    parent_application_name: str | None = None,
+    functional_track: str | None = None,
+) -> AssessmentOutOfScopeTicket:
+    ticket = AssessmentOutOfScopeTicket(
+        project_id=project_id,
+        upload_batch_id=upload_batch_id,
+        ticket_number=number,
+        ticket_type=ticket_type,
+        month_key="2026-01",
+        created_at=created_at,
+        resolved_at=resolved_at,
+        closed_at=closed_at,
+        short_description=f"{number} title",
+        state=state,
+        assignment_group=assignment_group,
+        business_service_ci_name=business_service_ci_name,
+        parent_application_name=parent_application_name,
+        functional_track=functional_track,
+        sap_non_sap=derive_sap_non_sap(assignment_group),
+        is_batch_related=derive_is_batch_related(ticket_type, f"{number} title"),
+        out_of_scope_reason="assignment_group_not_in_reference",
     )
     db.add(ticket)
     return ticket
@@ -299,6 +346,7 @@ def add_inventory_item(
     lifecycle_current: str | None = None,
     lifecycle_1_to_3_years: str | None = None,
     lifecycle_3_to_5_years: str | None = None,
+    scope_status: str = "in_scope",
     cmdb_payload: dict[str, object] | None = None,
 ) -> ApplicationInventoryItem:
     payload = cmdb_payload or {}
@@ -334,6 +382,7 @@ def add_inventory_item(
         active_users=active_users,
         hosting_env=hosting_env,
         global_application=global_application,
+        scope_status=scope_status,
         lifecycle_stage_status=lifecycle_stage_status,
         lifecycle_current=lifecycle_current,
         lifecycle_1_to_3_years=lifecycle_1_to_3_years,
@@ -365,6 +414,284 @@ def add_raw_row(
     )
     db.add(raw_row)
     return raw_row
+
+
+def test_applications_assignment_group_mapping_application_inventory_source() -> None:
+    db, client_id, project_id, _, _, _ = create_dashboard_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "Finance Service",
+            supported_by_vendor="Vendor A",
+            functional_track="Finance",
+            ams_owner="Owner A",
+            assignment_group="AG-FIN",
+            application_owner="App Owner A",
+            parent_application_name="Finance Parent",
+            scope_status="in_scope",
+            cmdb_payload={"secret": "hidden"},
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Supply Service",
+            supported_by_vendor="Vendor B",
+            functional_track="Supply Chain",
+            ams_owner="Owner B",
+            assignment_group="AG-SUP",
+            application_owner="App Owner B",
+            parent_application_name="Supply Parent",
+            scope_status="out_of_scope",
+            cmdb_payload={"cmdb_payload": "hidden"},
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/applications/assignment-group-mapping",
+                json={
+                    "project_id": str(project_id),
+                    "source": "application_inventory",
+                    "scope": "in_scope",
+                    "functional_track": "all",
+                    "search": None,
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["summary"]["mapping_count"] == 1
+        assert payload["available_functional_tracks"] == ["Finance"]
+        assert payload["rows"][0] == {
+            "assignment_group": "AG-FIN",
+            "functional_track": "Finance",
+            "parent_business_application": "Finance Parent",
+            "business_service_ci_name": "Finance Service",
+            "scope": "in_scope",
+            "incident_count": None,
+            "sc_task_count": None,
+            "total_ticket_count": None,
+        }
+        serialized = json.dumps(payload)
+        assert "cmdb_payload" not in serialized
+        assert "normalized_payload" not in serialized
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_applications_assignment_group_mapping_tickets_source_counts_generic_tickets_only() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        for number, ticket_type in [
+            ("INC-MAP-1", "INCIDENT"),
+            ("SCT-MAP-1", "SERVICE_CATALOG_TASK"),
+            ("CHG-MAP-1", "CHANGE"),
+        ]:
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                number,
+                ticket_type,
+                dt("2026-01-02T00:00:00"),
+                assignment_group="AG-FIN",
+                functional_track="Finance",
+                parent_application_name="Finance Parent",
+                business_service_ci_name="Finance Service",
+                raw_payload={"normalized_payload": "hidden"},
+            )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-MAP-OOS",
+            "INCIDENT",
+            dt("2026-01-03T00:00:00"),
+            assignment_group="AG-OOS",
+            functional_track="External",
+            parent_application_name="External Parent",
+            business_service_ci_name="External Service",
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            in_scope_response = client.post(
+                "/api/dashboard/applications/assignment-group-mapping",
+                json={
+                    "project_id": str(project_id),
+                    "source": "tickets",
+                    "scope": "in_scope",
+                    "functional_track": "Finance",
+                    "search": None,
+                },
+            )
+            all_scope_response = client.post(
+                "/api/dashboard/applications/assignment-group-mapping",
+                json={
+                    "project_id": str(project_id),
+                    "source": "tickets",
+                    "scope": "all",
+                    "functional_track": "all",
+                    "search": None,
+                },
+            )
+
+        assert in_scope_response.status_code == 200
+        in_scope_payload = in_scope_response.json()
+        assert in_scope_payload["summary"]["mapping_count"] == 1
+        assert in_scope_payload["summary"]["incident_count"] == 1
+        assert in_scope_payload["summary"]["sc_task_count"] == 1
+        assert in_scope_payload["summary"]["total_ticket_count"] == 2
+        assert in_scope_payload["rows"][0]["total_ticket_count"] == 2
+        assert in_scope_payload["rows"][0]["incident_count"] == 1
+        assert in_scope_payload["rows"][0]["sc_task_count"] == 1
+        assert "CHANGE" not in json.dumps(in_scope_payload)
+
+        assert all_scope_response.status_code == 200
+        all_scope_payload = all_scope_response.json()
+        assert all_scope_payload["summary"]["mapping_count"] == 2
+        assert all_scope_payload["summary"]["incident_count"] == 2
+        assert all_scope_payload["summary"]["sc_task_count"] == 1
+        serialized = json.dumps(all_scope_payload)
+        assert "cmdb_payload" not in serialized
+        assert "normalized_payload" not in serialized
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-VOL-1",
+            "INCIDENT",
+            dt("2025-12-05T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-07T00:00:00"),
+            assignment_group="AG-FIN",
+            functional_track="Finance",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-VOL-2",
+            "INCIDENT",
+            dt("2025-12-10T00:00:00"),
+            state="Cancelled",
+            closed_at=dt("2026-02-11T00:00:00"),
+            assignment_group="AG-FIN",
+            functional_track="Finance",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCT-VOL-1",
+            "SERVICE_CATALOG_TASK",
+            dt("2025-12-12T00:00:00"),
+            state="Closed Complete",
+            closed_at=dt("2025-12-20T00:00:00"),
+            assignment_group="AG-FIN",
+            functional_track="Finance",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-VOL-1",
+            "PROBLEM",
+            dt("2025-12-15T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2025-12-21T00:00:00"),
+            assignment_group="AG-FIN",
+            functional_track="Finance",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-VOL-OOS",
+            "INCIDENT",
+            dt("2026-03-01T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-03-03T00:00:00"),
+            assignment_group="AG-OOS",
+            functional_track="External",
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/assignment-group-volumetrics",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "in_scope",
+                    "functional_track": "Finance",
+                    "from_month": "2025-12",
+                    "to_month": "2026-05",
+                },
+            )
+            oos_response = client.post(
+                "/api/dashboard/volumetrics/assignment-group-volumetrics",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "out_of_scope",
+                    "functional_track": "all",
+                    "from_month": "2025-12",
+                    "to_month": "2026-05",
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert [month["month_key"] for month in payload["months"]] == [
+            "2025-12",
+            "2026-01",
+            "2026-02",
+            "2026-03",
+            "2026-04",
+            "2026-05",
+        ]
+        incident_row = payload["tables"]["incidents"]["rows"][0]
+        assert incident_row["assignment_group"] == "AG-FIN"
+        assert incident_row["months"]["2025-12"]["created"] == 2
+        assert incident_row["months"]["2026-01"]["resolved"] == 1
+        assert incident_row["months"]["2026-02"]["cancelled"] == 1
+        assert incident_row["totals"] == {"created": 2, "resolved": 1, "cancelled": 1}
+
+        sc_task_row = payload["tables"]["sc_tasks"]["rows"][0]
+        assert sc_task_row["months"]["2025-12"] == {
+            "created": 1,
+            "resolved": 1,
+            "cancelled": 0,
+        }
+        overall_row = payload["tables"]["overall"]["rows"][0]
+        assert overall_row["totals"] == {"created": 3, "resolved": 2, "cancelled": 1}
+        serialized = json.dumps(payload)
+        assert "PROBLEM" not in serialized
+        assert "cmdb_payload" not in serialized
+        assert "normalized_payload" not in serialized
+
+        assert oos_response.status_code == 200
+        oos_payload = oos_response.json()
+        assert oos_payload["tables"]["incidents"]["rows"][0]["assignment_group"] == "AG-OOS"
+        assert oos_payload["tables"]["incidents"]["rows"][0]["months"]["2026-03"] == {
+            "created": 1,
+            "resolved": 1,
+            "cancelled": 0,
+        }
+    finally:
+        cleanup_client(db, client_id)
 
 
 def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -> None:
@@ -4009,6 +4336,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             "detailed_volume_trends",
             "kpi_trends",
             "category_wise_trends",
+            "assignment_group_volumetrics",
         ]
         assert payload["volumetrics"]["created_patterns"]["rows"]
         assert payload["volumetrics"]["overall_volume_trends"][

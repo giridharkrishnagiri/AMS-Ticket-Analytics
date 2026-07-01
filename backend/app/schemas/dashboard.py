@@ -484,6 +484,46 @@ class ApplicationsLifecyclePlanningResponse(BaseModel):
     selected_plan: ApplicationsLifecyclePlanningSelectedPlan
 
 
+class ApplicationsAssignmentGroupMappingRequest(BaseModel):
+    project_id: UUID
+    source: str = "application_inventory"
+    scope: str = "in_scope"
+    functional_track: str = "all"
+    search: str | None = None
+
+
+class ApplicationsAssignmentGroupMappingSummary(BaseModel):
+    mapping_count: int
+    assignment_group_count: int
+    business_service_ci_count: int
+    parent_business_application_count: int
+    incident_count: int | None = None
+    sc_task_count: int | None = None
+    total_ticket_count: int | None = None
+
+
+class ApplicationsAssignmentGroupMappingRow(BaseModel):
+    assignment_group: str
+    functional_track: str
+    parent_business_application: str
+    business_service_ci_name: str
+    scope: str
+    incident_count: int | None = None
+    sc_task_count: int | None = None
+    total_ticket_count: int | None = None
+
+
+class ApplicationsAssignmentGroupMappingResponse(BaseModel):
+    source: str
+    scope: str
+    functional_track: str
+    available_functional_tracks: list[str]
+    summary: ApplicationsAssignmentGroupMappingSummary
+    rows: list[ApplicationsAssignmentGroupMappingRow]
+    data_notes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class VolumetricsFilters(BaseModel):
     functional_track_ams_owner: list[str] = Field(default_factory=list)
     assignment_group_support_lead: list[str] = Field(default_factory=list)
@@ -576,6 +616,49 @@ class VolumetricsCreatedResolvedCanceledRow(PeriodMetricRow):
 class VolumetricsCreatedResolvedCanceledResponse(BaseModel):
     time_grain: str
     points: list[VolumetricsCreatedResolvedCanceledRow]
+
+
+class VolumetricsAssignmentGroupRequest(BaseModel):
+    project_id: UUID
+    scope: str = "in_scope"
+    functional_track: str = "all"
+    from_month: str = "2025-12"
+    to_month: str = "2026-05"
+
+
+class VolumetricsAssignmentGroupMonth(BaseModel):
+    month: date
+    month_key: str
+    month_label: str
+
+
+class VolumetricsAssignmentGroupMonthMetrics(BaseModel):
+    created: int
+    resolved: int
+    cancelled: int
+
+
+class VolumetricsAssignmentGroupRow(BaseModel):
+    assignment_group: str
+    functional_track: str
+    months: dict[str, VolumetricsAssignmentGroupMonthMetrics]
+    totals: VolumetricsAssignmentGroupMonthMetrics
+
+
+class VolumetricsAssignmentGroupTable(BaseModel):
+    title: str
+    rows: list[VolumetricsAssignmentGroupRow]
+    grand_totals: VolumetricsAssignmentGroupMonthMetrics
+
+
+class VolumetricsAssignmentGroupResponse(BaseModel):
+    scope: str
+    functional_track: str
+    months: list[VolumetricsAssignmentGroupMonth]
+    tables: dict[str, VolumetricsAssignmentGroupTable]
+    available_functional_tracks: list[str]
+    data_notes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class VolumetricsBacklogRow(PeriodMetricRow):
