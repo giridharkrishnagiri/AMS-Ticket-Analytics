@@ -91,6 +91,10 @@ APPLY_STATUS_ALREADY_APPLIED = "SKIPPED_ALREADY_APPLIED"
 APPLY_STATUS_PARTIAL_OUTPUT = "FAILED_PARTIAL_OUTPUT"
 APPLY_STATUS_FAILED = "FAILED"
 GENERIC_FILTER_FACT_TICKET_TYPES = {"INCIDENT", "SERVICE_CATALOG_TASK"}
+ASSIGNMENT_GROUP_SCOPE_MISS_REASONS = {
+    "assignment_group_not_in_application_inventory",
+    "assignment_group_not_in_scope_reference",
+}
 
 
 def get_batch_ticket_type(db: Session, upload_batch_id: UUID) -> str | None:
@@ -142,8 +146,7 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
             db,
             select(func.count(out_model.id)).where(
                 out_model.upload_batch_id == upload_batch_id,
-                out_model.out_of_scope_reason
-                == "assignment_group_not_in_application_inventory",
+                out_model.out_of_scope_reason.in_(ASSIGNMENT_GROUP_SCOPE_MISS_REASONS),
             ),
         )
         unmatched_rows = get_count(
@@ -200,8 +203,9 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
         db,
         select(func.count(AssessmentOutOfScopeTicket.id)).where(
             AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id,
-            AssessmentOutOfScopeTicket.out_of_scope_reason
-            == "assignment_group_not_in_application_inventory",
+            AssessmentOutOfScopeTicket.out_of_scope_reason.in_(
+                ASSIGNMENT_GROUP_SCOPE_MISS_REASONS
+            ),
         ),
     )
     output_rows = in_scope_rows + out_of_scope_rows

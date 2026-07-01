@@ -57,6 +57,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_application_inventory_project_sap_non_sap", "project_id", "sap_non_sap"),
         Index("ix_application_inventory_project_hosting_env", "project_id", "hosting_env"),
         Index("ix_application_inventory_project_global", "project_id", "global_application"),
+        Index("ix_application_inventory_project_scope_status", "project_id", "scope_status"),
         Index(
             "ix_application_inventory_project_lifecycle_stage_status",
             "project_id",
@@ -97,6 +98,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     hosting_env: Mapped[str | None] = mapped_column(Text, nullable=True)
     global_application: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope_status: Mapped[str] = mapped_column(Text, nullable=False, default="unknown")
     lifecycle_stage_status: Mapped[str | None] = mapped_column(Text, nullable=True)
     lifecycle_current: Mapped[str | None] = mapped_column(Text, nullable=True)
     lifecycle_1_to_3_years: Mapped[str | None] = mapped_column(Text, nullable=True)

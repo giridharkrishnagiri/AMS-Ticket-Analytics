@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.models.client import Client
     from app.models.dashboard_aggregate import DashboardAggregate
     from app.models.export_job import ExportJob
+    from app.models.in_scope_assignment_group import InScopeAssignmentGroup
     from app.models.incident_sla_row import IncidentSlaRow
     from app.models.incident_sla_upload import IncidentSlaUpload
     from app.models.source_column_mapping import SourceColumnMapping
@@ -57,6 +58,10 @@ class Project(UuidPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
     )
     application_inventory_items: Mapped[list[ApplicationInventoryItem]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    in_scope_assignment_groups: Mapped[list[InScopeAssignmentGroup]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )

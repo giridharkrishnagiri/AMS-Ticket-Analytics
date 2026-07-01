@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -42,6 +44,73 @@ class DashboardFilterFactsRefreshResponse(BaseModel):
     in_scope_rows: int
     out_of_scope_rows: int
     duration_ms: int
+
+
+class InScopeAssignmentGroupPreviewRowResponse(BaseModel):
+    assignment_group: str
+    functional_track: str | None = None
+    source_row_number: int | None = None
+
+
+class InScopeAssignmentGroupsImportResponse(BaseModel):
+    project_id: UUID
+    source_filename: str
+    total_rows: int
+    imported_count: int
+    skipped_count: int
+    duplicate_count: int
+    warning_count: int
+    error_count: int
+    warnings: list[str]
+    errors: list[str]
+    preview_rows: list[InScopeAssignmentGroupPreviewRowResponse]
+
+
+class InScopeAssignmentGroupsStatusResponse(BaseModel):
+    project_id: UUID
+    active_count: int
+    last_imported_at: datetime | None = None
+    preview_rows: list[InScopeAssignmentGroupPreviewRowResponse]
+
+
+class InScopeAssignmentGroupRowResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    assignment_group: str
+    assignment_group_key: str
+    functional_track: str | None = None
+    source_filename: str | None = None
+    source_row_number: int | None = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+OperationalReprocessDomain = Literal["incidents", "sc_tasks", "problems", "changes"]
+OperationalReprocessStartPoint = Literal[
+    "resume_from_ingestion",
+    "resume_from_normalization",
+    "reapply_mapping_only",
+]
+
+
+class OperationalReprocessingRequest(BaseModel):
+    project_id: UUID
+    domains: list[OperationalReprocessDomain]
+    start_point: OperationalReprocessStartPoint
+    confirmation: str
+
+
+class OperationalReprocessingResponse(BaseModel):
+    project_id: UUID
+    domains: list[str]
+    start_point: str
+    cleared_counts: dict[str, int]
+    updated_counts: dict[str, int]
+    preserved: list[str]
+    warnings: list[str]
 
 
 class ProjectDeleteRequest(BaseModel):

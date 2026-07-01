@@ -255,6 +255,7 @@ class ApplicationCombinedFilterCountValue(ApplicationCombinedFilterValue):
 
 
 class ApplicationsFilterValuesResponse(BaseModel):
+    application_scope: list[str]
     functional_track_ams_owner: list[ApplicationCombinedFilterValue]
     assignment_group_owner: list[ApplicationCombinedFilterValue]
     parent_application_name: list[str]
@@ -271,6 +272,7 @@ class ApplicationsFilterValuesResponse(BaseModel):
 
 
 class ApplicationsFilters(BaseModel):
+    application_scope: list[str] = Field(default_factory=list)
     functional_track_ams_owner: list[str] = Field(default_factory=list)
     assignment_group_owner: list[str] = Field(default_factory=list)
     parent_application_name: list[str] = Field(default_factory=list)
@@ -292,6 +294,7 @@ class ApplicationsFilterValuesRequest(BaseModel):
 
 
 class ApplicationsFilterValueCountsResponse(BaseModel):
+    application_scope: list[ApplicationFilterCountValue]
     functional_track_ams_owner: list[ApplicationCombinedFilterCountValue]
     assignment_group_owner: list[ApplicationCombinedFilterCountValue]
     parent_application_name: list[ApplicationFilterCountValue]
@@ -344,6 +347,7 @@ class ApplicationsSummaryResponse(BaseModel):
 
 class ApplicationsListRow(BaseModel):
     business_service_ci_name: str
+    scope_status: str
     parent_application_name: str
     assignment_group: str
     sap_non_sap: str

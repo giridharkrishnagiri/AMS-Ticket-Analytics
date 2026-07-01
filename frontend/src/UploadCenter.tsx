@@ -1450,7 +1450,7 @@ function TicketDetailsWorkflow({
             {usesProblemChangeWorkflow ? (
               <>
                 <MetricCard
-                  label="Unmatched Inventory"
+                  label="Not in Scope Reference"
                   value={formatNumber(
                     normalizeResult.totals.assignment_group_not_in_inventory_rows
                   )}
@@ -1690,7 +1690,7 @@ function TicketDetailsWorkflow({
             {usesProblemChangeWorkflow ? (
               <>
                 <MetricCard
-                  label="Unmatched Inventory"
+                  label="Not in Scope Reference"
                   value={formatNumber(applyResult.totals.assignment_group_not_in_inventory_rows)}
                 />
                 <MetricCard
@@ -1846,7 +1846,7 @@ function TicketDetailsWorkflow({
             value={formatNumber(applyResult?.totals.blank_assignment_group_rows)}
           />
           <MetricCard
-            label="Not in Application Inventory"
+            label="Not in Scope Reference"
             value={formatNumber(applyResult?.totals.assignment_group_not_in_inventory_rows)}
           />
           <MetricCard label="Vendor Populated" value="Covered" helper="Derived during mapping/enrichment." />

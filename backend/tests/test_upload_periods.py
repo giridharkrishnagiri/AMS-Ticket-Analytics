@@ -6,7 +6,8 @@ from sqlalchemy import delete, select
 
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import ApplicationInventoryItem, Client, Project, Ticket
+from app.models import ApplicationInventoryItem, Client, InScopeAssignmentGroup, Project, Ticket
+from app.services.in_scope_assignment_groups import normalize_assignment_group_key
 from app.services.mapping import apply_mapping_to_batch
 
 
@@ -38,6 +39,18 @@ def create_project_fixture():
             active=True,
             source_filename="period-inventory.xlsx",
             source_row_number=1,
+        )
+    )
+    db.add(
+        InScopeAssignmentGroup(
+            client_id=client.id,
+            project_id=project.id,
+            assignment_group="AMS Support",
+            assignment_group_key=normalize_assignment_group_key("AMS Support") or "",
+            functional_track="Functional Track",
+            source_filename="in-scope-assignment-groups.xlsx",
+            source_row_number=1,
+            is_active=True,
         )
     )
     db.commit()

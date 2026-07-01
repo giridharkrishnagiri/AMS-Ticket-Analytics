@@ -34,6 +34,43 @@ export type DashboardFilterCacheRefreshResponse = {
   duration_ms: number;
 };
 
+export type InScopeAssignmentGroupPreviewRow = {
+  assignment_group: string;
+  functional_track: string | null;
+  source_row_number: number | null;
+};
+
+export type InScopeAssignmentGroupsImportResponse = {
+  project_id: string;
+  source_filename: string;
+  total_rows: number;
+  imported_count: number;
+  skipped_count: number;
+  duplicate_count: number;
+  warning_count: number;
+  error_count: number;
+  warnings: string[];
+  errors: string[];
+  preview_rows: InScopeAssignmentGroupPreviewRow[];
+};
+
+export type InScopeAssignmentGroupsStatusResponse = {
+  project_id: string;
+  active_count: number;
+  last_imported_at: string | null;
+  preview_rows: InScopeAssignmentGroupPreviewRow[];
+};
+
+export type OperationalReprocessingResponse = {
+  project_id: string;
+  domains: string[];
+  start_point: string;
+  cleared_counts: Record<string, number>;
+  updated_counts: Record<string, number>;
+  preserved: string[];
+  warnings: string[];
+};
+
 export function resetOperationalData(
   confirmation: string
 ): Promise<OperationalDataResetResponse> {
@@ -68,6 +105,52 @@ export function resetProjectOperationalData(
       reset_incident_sla: options.resetIncidentSla,
     }),
   });
+}
+
+export function importInScopeAssignmentGroups(
+  projectId: string,
+  file: File
+): Promise<InScopeAssignmentGroupsImportResponse> {
+  const body = new FormData();
+  body.append("project_id", projectId);
+  body.append("file", file);
+  return requestJson<InScopeAssignmentGroupsImportResponse>(
+    "/admin/in-scope-assignment-groups/import",
+    {
+      method: "POST",
+      body,
+    }
+  );
+}
+
+export function getInScopeAssignmentGroupsStatus(
+  projectId: string
+): Promise<InScopeAssignmentGroupsStatusResponse> {
+  const query = new URLSearchParams({ project_id: projectId.trim() });
+  return requestJson<InScopeAssignmentGroupsStatusResponse>(
+    `/admin/in-scope-assignment-groups/status?${query.toString()}`
+  );
+}
+
+export function prepareOperationalReprocessing(
+  projectId: string,
+  domains: string[],
+  startPoint: string,
+  confirmation: string
+): Promise<OperationalReprocessingResponse> {
+  return requestJson<OperationalReprocessingResponse>(
+    "/admin/projects/prepare-operational-reprocessing",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_id: projectId,
+        domains,
+        start_point: startPoint,
+        confirmation,
+      }),
+    }
+  );
 }
 
 export function deleteProjectAndRelatedData(

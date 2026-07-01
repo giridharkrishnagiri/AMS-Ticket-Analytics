@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session
 
 from app.models import ApplicationInventoryItem, AssessmentOutOfScopeTicket, Project, Ticket
 from app.services.application_metrics import recompute_application_ticket_user_metrics
+from app.services.in_scope_assignment_groups import (
+    active_assignment_group_keys,
+    normalize_assignment_group_key,
+)
 from app.services.ingestion import (
     CSV_ENCODING_CANDIDATES,
     INGESTION_BATCH_SIZE,
@@ -58,6 +62,16 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "supported_by_vendor": ("Supported By Vendor", "Support vendor", "Vendor"),
     "hosting_env": ("Hosting Env", "Hosting Environment", "hosting_env"),
     "global_application": ("Global", "Global Application", "global_application"),
+    "scope_status": (
+        "Scope",
+        "Application Scope",
+        "In Scope",
+        "In-Scope",
+        "In Scope / Out of Scope",
+        "InScope",
+        "Scope Status",
+        "AMS Scope",
+    ),
     "lifecycle_stage_status": (
         "Life Cycle Stage Status",
         "Lifecycle Stage Status",
@@ -340,11 +354,56 @@ def parse_active_users(value: Any, row_number: int, result: InventoryUploadResul
     return None
 
 
+def normalize_scope_status(value: Any) -> str:
+    text = text_or_none(value)
+    if text is None:
+        return "unknown"
+    normalized = " ".join(text.replace("-", " ").split()).casefold()
+    if normalized in {"in scope", "inscope", "yes", "y", "true"}:
+        return "in_scope"
+    if normalized in {"out of scope", "outofscope", "no", "n", "false"}:
+        return "out_of_scope"
+    return "unknown"
+
+
+def derive_inventory_scope_status(
+    raw_scope: Any,
+    assignment_group: str | None,
+    active_scope_assignment_groups: set[str] | None,
+    row_number: int,
+    result: InventoryUploadResult,
+) -> str:
+    explicit_scope = text_or_none(raw_scope)
+    if explicit_scope is not None:
+        scope_status = normalize_scope_status(explicit_scope)
+        if scope_status == "unknown":
+            append_sample_message(
+                result.warnings,
+                "Row "
+                f"{row_number}: Application Scope value '{explicit_scope}' could not be parsed.",
+            )
+        return scope_status
+
+    assignment_group_key = normalize_assignment_group_key(assignment_group)
+    if assignment_group_key is None:
+        append_sample_message(
+            result.warnings,
+            f"Row {row_number}: Application Scope could not be derived because "
+            "assignment group is blank.",
+        )
+        return "unknown"
+    if active_scope_assignment_groups is None:
+        return "unknown"
+    return "in_scope" if assignment_group_key in active_scope_assignment_groups else "out_of_scope"
+
+
 def clean_inventory_values(
     project_id: UUID,
     source_filename: str,
     parsed_row: ParsedSourceRow,
     result: InventoryUploadResult,
+    *,
+    active_scope_assignment_groups: set[str] | None = None,
 ) -> dict[str, Any] | None:
     assignment_group = text_or_none(get_raw_value(parsed_row.raw_data, "assignment_group"))
     values: dict[str, Any] = {
@@ -374,6 +433,13 @@ def clean_inventory_values(
         "hosting_env": text_or_none(get_raw_value(parsed_row.raw_data, "hosting_env")),
         "global_application": text_or_none(
             get_raw_value(parsed_row.raw_data, "global_application")
+        ),
+        "scope_status": derive_inventory_scope_status(
+            get_raw_value(parsed_row.raw_data, "scope_status"),
+            assignment_group,
+            active_scope_assignment_groups,
+            parsed_row.row_number,
+            result,
         ),
         "lifecycle_stage_status": text_or_none(
             get_raw_value(parsed_row.raw_data, "lifecycle_stage_status")
@@ -792,11 +858,24 @@ def upload_application_inventory_file(
 ) -> InventoryUploadResult:
     ensure_project_exists(db, project_id)
     result = InventoryUploadResult(project_id=project_id)
+    scope_assignment_groups = active_assignment_group_keys(db, project_id)
+    if not scope_assignment_groups:
+        append_sample_message(
+            result.warnings,
+            "No active In-Scope Assignment Groups reference rows were found; Application "
+            "Inventory rows without an explicit scope column will be marked unknown.",
+        )
 
     try:
         for parsed_row in iter_inventory_file_rows(path, result):
             result.total_rows += 1
-            values = clean_inventory_values(project_id, source_filename, parsed_row, result)
+            values = clean_inventory_values(
+                project_id,
+                source_filename,
+                parsed_row,
+                result,
+                active_scope_assignment_groups=scope_assignment_groups,
+            )
             if values is None:
                 continue
 

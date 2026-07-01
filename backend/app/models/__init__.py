@@ -18,6 +18,7 @@ from app.models.genai import (
     GenAIToolRun,
     GenAIUsageLog,
 )
+from app.models.in_scope_assignment_group import InScopeAssignmentGroup
 from app.models.incident_sla_row import IncidentSlaRow
 from app.models.incident_sla_upload import IncidentSlaUpload
 from app.models.ingestion_job import IngestionJob
@@ -54,6 +55,7 @@ __all__ = [
     "GenAIToolRun",
     "GenAIUsageLog",
     "IngestionJob",
+    "InScopeAssignmentGroup",
     "IncidentSlaRow",
     "IncidentSlaUpload",
     "Project",

@@ -4,12 +4,18 @@ import {
   deleteClientAndRelatedData,
   deleteProjectAndRelatedData,
   getDashboardFilterCacheStatus,
+  getInScopeAssignmentGroupsStatus,
+  importInScopeAssignmentGroups,
+  prepareOperationalReprocessing,
   refreshDashboardFilterCache,
   resetProjectOperationalData,
 } from "./api/admin";
 import type {
   DashboardFilterCacheStatusItem,
+  InScopeAssignmentGroupsImportResponse,
+  InScopeAssignmentGroupsStatusResponse,
   OperationalDataResetResponse,
+  OperationalReprocessingResponse,
 } from "./api/admin";
 import { getScopeSummary } from "./api/applicationInventory";
 import type { ScopeSummary, ScopeSummaryValueCount } from "./api/applicationInventory";
@@ -18,10 +24,15 @@ import CustomerSelector from "./CustomerSelector";
 
 type ResetMode = "selected-data" | "project-data" | "customer-data";
 type FilterCacheArea = "applications" | "volumetrics" | "all";
+type ReprocessStartPoint =
+  | "resume_from_ingestion"
+  | "resume_from_normalization"
+  | "reapply_mapping_only";
 
 const selectedDataConfirmation = "RESET OPERATIONAL DATA";
 const projectDataConfirmation = "RESET PROJECT DATA";
 const customerDataConfirmation = "RESET CUSTOMER DATA";
+const reprocessingConfirmation = "PREPARE REPROCESSING";
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -88,6 +99,23 @@ function Maintenance() {
   const [isRefreshingCache, setIsRefreshingCache] = useState(false);
   const [cacheStatus, setCacheStatus] = useState<DashboardFilterCacheStatusItem[]>([]);
   const [cacheMessage, setCacheMessage] = useState<string | null>(null);
+  const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const [referenceStatus, setReferenceStatus] =
+    useState<InScopeAssignmentGroupsStatusResponse | null>(null);
+  const [referenceResult, setReferenceResult] =
+    useState<InScopeAssignmentGroupsImportResponse | null>(null);
+  const [isImportingReference, setIsImportingReference] = useState(false);
+  const [isLoadingReferenceStatus, setIsLoadingReferenceStatus] = useState(false);
+  const [reprocessIncidents, setReprocessIncidents] = useState(false);
+  const [reprocessScTasks, setReprocessScTasks] = useState(false);
+  const [reprocessProblems, setReprocessProblems] = useState(false);
+  const [reprocessChanges, setReprocessChanges] = useState(false);
+  const [reprocessStartPoint, setReprocessStartPoint] =
+    useState<ReprocessStartPoint>("resume_from_normalization");
+  const [reprocessConfirmationText, setReprocessConfirmationText] = useState("");
+  const [reprocessResult, setReprocessResult] =
+    useState<OperationalReprocessingResponse | null>(null);
+  const [isPreparingReprocess, setIsPreparingReprocess] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -104,6 +132,13 @@ function Maintenance() {
     confirmation === requiredConfirmation &&
     !isRunning &&
     (resetMode !== "selected-data" || hasSelectedResetCategory);
+  const hasSelectedReprocessDomain =
+    reprocessIncidents || reprocessScTasks || reprocessProblems || reprocessChanges;
+  const canPrepareReprocessing =
+    Boolean(projectId.trim()) &&
+    hasSelectedReprocessDomain &&
+    reprocessConfirmationText === reprocessingConfirmation &&
+    !isPreparingReprocess;
 
   function clearMaintenanceForm() {
     setResetMode("selected-data");
@@ -117,6 +152,16 @@ function Maintenance() {
     setScopeSummary(null);
     setCacheStatus([]);
     setCacheMessage(null);
+    setReferenceFile(null);
+    setReferenceStatus(null);
+    setReferenceResult(null);
+    setReprocessIncidents(false);
+    setReprocessScTasks(false);
+    setReprocessProblems(false);
+    setReprocessChanges(false);
+    setReprocessStartPoint("resume_from_normalization");
+    setReprocessConfirmationText("");
+    setReprocessResult(null);
     setMessage(null);
     setError(null);
   }
@@ -128,6 +173,10 @@ function Maintenance() {
       setScopeSummary(null);
       setCacheStatus([]);
       setCacheMessage(null);
+      setReferenceFile(null);
+      setReferenceStatus(null);
+      setReferenceResult(null);
+      setReprocessResult(null);
       setMessage(null);
       setError(null);
     }
@@ -210,6 +259,119 @@ function Maintenance() {
       );
     } finally {
       setIsRefreshingCache(false);
+    }
+  }
+
+  async function refreshReferenceStatus() {
+    if (!projectId.trim()) {
+      setError("Select a customer/project first.");
+      return;
+    }
+    setIsLoadingReferenceStatus(true);
+    setError(null);
+    try {
+      const status = await getInScopeAssignmentGroupsStatus(projectId.trim());
+      setReferenceStatus(status);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to load In-Scope Assignment Groups status"
+      );
+    } finally {
+      setIsLoadingReferenceStatus(false);
+    }
+  }
+
+  async function handleImportReference() {
+    if (!projectId.trim()) {
+      setError("Select a customer/project first.");
+      return;
+    }
+    if (!referenceFile) {
+      setError("Choose the In-Scope Assignment Groups workbook first.");
+      return;
+    }
+    setIsImportingReference(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await importInScopeAssignmentGroups(projectId.trim(), referenceFile);
+      setReferenceResult(result);
+      setMessage(
+        `Imported ${formatNumber(result.imported_count)} active in-scope assignment groups.`
+      );
+      await refreshReferenceStatus();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "In-Scope Assignment Groups import failed"
+      );
+    } finally {
+      setIsImportingReference(false);
+    }
+  }
+
+  function selectedReprocessDomains() {
+    const domains: string[] = [];
+    if (reprocessIncidents) {
+      domains.push("incidents");
+    }
+    if (reprocessScTasks) {
+      domains.push("sc_tasks");
+    }
+    if (reprocessProblems) {
+      domains.push("problems");
+    }
+    if (reprocessChanges) {
+      domains.push("changes");
+    }
+    return domains;
+  }
+
+  async function handlePrepareReprocessing() {
+    if (!projectId.trim()) {
+      setError("Select a customer/project first.");
+      return;
+    }
+    const domains = selectedReprocessDomains();
+    if (domains.length === 0) {
+      setError("Select at least one operational domain to prepare.");
+      return;
+    }
+    if (reprocessConfirmationText !== reprocessingConfirmation) {
+      setError(`Confirmation text must match exactly: ${reprocessingConfirmation}`);
+      return;
+    }
+    const confirmed = window.confirm(
+      "This will clear downstream outputs for the selected domains but preserve raw uploaded files. Continue?"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsPreparingReprocess(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await prepareOperationalReprocessing(
+        projectId.trim(),
+        domains,
+        reprocessStartPoint,
+        reprocessConfirmationText
+      );
+      setReprocessResult(result);
+      setMessage("Operational reprocessing preparation completed.");
+      await refreshFilterCacheStatus();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Operational reprocessing preparation failed"
+      );
+    } finally {
+      setIsPreparingReprocess(false);
     }
   }
 
@@ -388,6 +550,269 @@ function Maintenance() {
           </div>
         ) : null}
         {cacheMessage ? <p className="success-text">{cacheMessage}</p> : null}
+      </div>
+
+      <div className="panel maintenance-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Reference Data</p>
+            <h2>In-Scope Assignment Groups Reference</h2>
+          </div>
+          <div className="panel-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!projectId.trim() || isLoadingReferenceStatus}
+              onClick={() => void refreshReferenceStatus()}
+            >
+              {isLoadingReferenceStatus ? "Loading..." : "Show Reference Status"}
+            </button>
+          </div>
+        </div>
+        <div className="warning-list">
+          <p>
+            Import the workbook with columns <strong>Assigment Groups</strong> and{" "}
+            <strong>Track</strong>. This replaces the active in-scope assignment group
+            reference for the selected project and marks dashboard filter cache stale.
+          </p>
+          <p>
+            Importing this reference does not reprocess uploaded ticket data. Use Operational
+            Reprocessing below, then complete processing in Upload Center.
+          </p>
+        </div>
+        <div className="form-grid summary-block">
+          <label>
+            <span>Reference workbook</span>
+            <input
+              type="file"
+              accept=".xlsx,.csv"
+              onChange={(event) => setReferenceFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+        </div>
+        <div className="action-row">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={!projectId.trim() || !referenceFile || isImportingReference}
+            onClick={() => void handleImportReference()}
+          >
+            {isImportingReference ? "Importing..." : "Import In-Scope Assignment Groups"}
+          </button>
+        </div>
+        {referenceResult ? (
+          <div className="summary-block">
+            <div className="summary-grid">
+              <div>
+                <p className="label">Imported</p>
+                <strong>{formatNumber(referenceResult.imported_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Skipped Rows</p>
+                <strong>{formatNumber(referenceResult.skipped_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Duplicate Rows</p>
+                <strong>{formatNumber(referenceResult.duplicate_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Warnings</p>
+                <strong>{formatNumber(referenceResult.warning_count)}</strong>
+              </div>
+            </div>
+            {referenceResult.warnings.length > 0 ? (
+              <ul className="warning-list">
+                {referenceResult.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+        {referenceStatus ? (
+          <div className="summary-block">
+            <p className="label">Active Reference Rows</p>
+            <strong>{formatNumber(referenceStatus.active_count)}</strong>
+            <p className="muted-text">
+              Last imported: {referenceStatus.last_imported_at ?? "Not available"}
+            </p>
+            <div className="table-scroll">
+              <table className="details-table">
+                <thead>
+                  <tr>
+                    <th>Assignment Group</th>
+                    <th>Track</th>
+                    <th>Source Row</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {referenceStatus.preview_rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={3}>No active reference rows found.</td>
+                    </tr>
+                  ) : (
+                    referenceStatus.preview_rows.map((row) => (
+                      <tr key={`${row.assignment_group}-${row.source_row_number ?? ""}`}>
+                        <td>{row.assignment_group}</td>
+                        <td>{row.functional_track ?? ""}</td>
+                        <td>{row.source_row_number ?? ""}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="panel maintenance-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Operational Reprocessing</p>
+            <h2>Prepare Existing Uploads for Resume</h2>
+          </div>
+        </div>
+        <div className="warning-list">
+          <p>
+            This prepares selected domains for reprocessing and preserves raw uploaded files.
+            It does not run ingestion, normalization, or apply mapping.
+          </p>
+          <p>
+            After preparing, go to Upload Center and resume the needed processing step for the
+            selected batches.
+          </p>
+        </div>
+        <div className="summary-block">
+          <p className="label">Domains</p>
+          <div className="checkbox-grid">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={reprocessIncidents}
+                onChange={(event) => setReprocessIncidents(event.target.checked)}
+              />
+              <span>Incidents</span>
+            </label>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={reprocessScTasks}
+                onChange={(event) => setReprocessScTasks(event.target.checked)}
+              />
+              <span>SC Tasks</span>
+            </label>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={reprocessProblems}
+                onChange={(event) => setReprocessProblems(event.target.checked)}
+              />
+              <span>Problems</span>
+            </label>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={reprocessChanges}
+                onChange={(event) => setReprocessChanges(event.target.checked)}
+              />
+              <span>Changes</span>
+            </label>
+          </div>
+        </div>
+        <div className="form-grid summary-block">
+          <label>
+            <span>Restart point</span>
+            <select
+              value={reprocessStartPoint}
+              onChange={(event) =>
+                setReprocessStartPoint(event.target.value as ReprocessStartPoint)
+              }
+            >
+              <option value="resume_from_ingestion">Resume from Ingestion</option>
+              <option value="resume_from_normalization">Resume from Normalization</option>
+              <option value="reapply_mapping_only">Reapply Mapping Only</option>
+            </select>
+            <span className="helper-text">
+              The action clears only downstream stages needed for the selected restart point.
+            </span>
+          </label>
+          <label>
+            <span>Confirmation</span>
+            <input
+              value={reprocessConfirmationText}
+              onChange={(event) => setReprocessConfirmationText(event.target.value)}
+              placeholder={reprocessingConfirmation}
+            />
+            <span className="helper-text">Required text: {reprocessingConfirmation}</span>
+          </label>
+        </div>
+        <div className="action-row">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={!canPrepareReprocessing}
+            onClick={() => void handlePrepareReprocessing()}
+          >
+            {isPreparingReprocess ? "Preparing..." : "Prepare Reprocessing"}
+          </button>
+        </div>
+        {reprocessResult ? (
+          <div className="summary-block">
+            <div className="split-grid">
+              <div>
+                <p className="label">Cleared Row Counts</p>
+                <div className="scroll-frame compact-file-frame">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Table</th>
+                        <th>Rows Cleared</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(reprocessResult.cleared_counts).map(([name, count]) => (
+                        <tr key={name}>
+                          <td>{name}</td>
+                          <td>{formatNumber(count)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div>
+                <p className="label">Stage Status Updates</p>
+                <div className="scroll-frame compact-file-frame">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Category</th>
+                        <th>Rows Updated</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(reprocessResult.updated_counts).map(([name, count]) => (
+                        <tr key={name}>
+                          <td>{name}</td>
+                          <td>{formatNumber(count)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <p className="muted-text">Preserved: {reprocessResult.preserved.join(", ")}</p>
+            {reprocessResult.warnings.length > 0 ? (
+              <ul className="warning-list">
+                {reprocessResult.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="panel maintenance-panel">

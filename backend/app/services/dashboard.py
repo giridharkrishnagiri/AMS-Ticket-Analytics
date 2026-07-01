@@ -52,6 +52,7 @@ DIRECT_APPLICATION_FIELDS = {
     "sap_non_sap": ApplicationInventoryItem.sap_non_sap,
     "hosting_env": ApplicationInventoryItem.hosting_env,
     "global_application": ApplicationInventoryItem.global_application,
+    "scope_status": ApplicationInventoryItem.scope_status,
     "lifecycle_stage_status": ApplicationInventoryItem.lifecycle_stage_status,
     "lifecycle_current": ApplicationInventoryItem.lifecycle_current,
     "lifecycle_1_to_3_years": ApplicationInventoryItem.lifecycle_1_to_3_years,
@@ -95,6 +96,7 @@ CMDB_APPLICATION_FIELDS = {
 
 APPLICATION_LIST_FIELDS = (
     "business_service_ci_name",
+    "scope_status",
     "parent_application_name",
     "assignment_group",
     "sap_non_sap",
@@ -137,6 +139,7 @@ APPLICATION_LIST_FIELDS = (
 )
 
 SINGLE_APPLICATION_FILTER_FIELDS = {
+    "application_scope": "scope_status",
     "parent_application_name": "parent_application_name",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -150,6 +153,7 @@ SINGLE_APPLICATION_FILTER_FIELDS = {
 }
 
 APPLICATION_CRITICALITY_ORDER = ("Very Critical", "Critical", "High", "Medium", "Low")
+APPLICATION_SCOPE_ORDER = ("in_scope", "out_of_scope", "unknown")
 APPLICATION_GLOBAL_LOCAL_ORDER = ("Global", "Local")
 APPLICATION_LIFECYCLE_PLAN_ORDER = ("Invest", "Disinvest", "Maintain", "Retired")
 APPLICATION_LIFECYCLE_HORIZONS = (
@@ -165,6 +169,7 @@ COMBINED_APPLICATION_FILTER_FIELDS = {
 }
 
 APPLICATION_FILTER_CUSTOM_SORTS = {
+    "application_scope": APPLICATION_SCOPE_ORDER,
     "business_critical": (BLANK_LABEL, "Very Critical", "Critical", "High", "Medium", "Low"),
     "install_status": (
         BLANK_LABEL,
@@ -911,6 +916,12 @@ def distinct_combined_application_filter_values(
 
 def applications_filter_values(db: Session, project_id: UUID) -> dict[str, Any]:
     return {
+        "application_scope": distinct_application_filter_values(
+            db,
+            project_id,
+            "scope_status",
+            filter_name="application_scope",
+        ),
         "functional_track_ams_owner": distinct_combined_application_filter_values(
             db,
             project_id,
@@ -1129,6 +1140,12 @@ def combined_application_filter_value_count_rows(
 
 def applications_filter_value_counts(db: Session, request: Any) -> dict[str, Any]:
     return {
+        "application_scope": application_filter_value_count_rows(
+            db,
+            request,
+            "application_scope",
+            "scope_status",
+        ),
         "functional_track_ams_owner": combined_application_filter_value_count_rows(
             db,
             request,

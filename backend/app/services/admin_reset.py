@@ -41,6 +41,7 @@ PROJECT_DELETE_CONFIRMATION = "DELETE PROJECT"
 PROJECT_DATA_RESET_CONFIRMATION = "RESET PROJECT DATA"
 CLIENT_DELETE_CONFIRMATION = "DELETE CLIENT"
 CUSTOMER_DATA_RESET_CONFIRMATION = "RESET CUSTOMER DATA"
+PREPARE_REPROCESSING_CONFIRMATION = "PREPARE REPROCESSING"
 PRESERVED_TABLES = [
     "clients",
     "projects",
@@ -65,6 +66,17 @@ class OperationalResetResult:
     reset_changes: bool | None = None
     reset_incident_sla: bool | None = None
     incident_sla_reset_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class OperationalReprocessingPrepareResult:
+    project_id: UUID
+    domains: list[str]
+    start_point: str
+    cleared_counts: dict[str, int]
+    updated_counts: dict[str, int]
+    preserved: list[str]
+    warnings: list[str]
 
 
 SLA_ENRICHMENT_FIELDS = (
@@ -489,6 +501,302 @@ def clear_project_problem_change_operational_data(
     if upload_batch_ids:
         db.execute(delete(UploadBatch).where(UploadBatch.id.in_(upload_batch_ids)))
     return deleted_counts
+
+
+def count_dashboard_aggregate_rows(
+    db: Session,
+    project_id: UUID,
+    ticket_types: list[str],
+) -> int:
+    if not ticket_types:
+        return 0
+    return int(
+        db.scalar(
+            select(func.count(DashboardAggregate.id)).where(
+                DashboardAggregate.project_id == project_id,
+                DashboardAggregate.ticket_type.in_(ticket_types),
+            )
+        )
+        or 0
+    )
+
+
+def clear_generic_ticket_applied_rows(
+    db: Session,
+    project_id: UUID,
+    ticket_types: list[str],
+) -> dict[str, int]:
+    if not ticket_types:
+        return {}
+    cleared_counts = {
+        "dashboard_aggregates": count_dashboard_aggregate_rows(db, project_id, ticket_types),
+        "tickets": count_ticket_type_rows(db, Ticket, project_id, ticket_types),
+        "assessment_out_of_scope_tickets": count_ticket_type_rows(
+            db,
+            AssessmentOutOfScopeTicket,
+            project_id,
+            ticket_types,
+        ),
+    }
+    db.execute(
+        delete(DashboardAggregate).where(
+            DashboardAggregate.project_id == project_id,
+            DashboardAggregate.ticket_type.in_(ticket_types),
+        )
+    )
+    db.execute(
+        delete(Ticket).where(Ticket.project_id == project_id, Ticket.ticket_type.in_(ticket_types))
+    )
+    db.execute(
+        delete(AssessmentOutOfScopeTicket).where(
+            AssessmentOutOfScopeTicket.project_id == project_id,
+            AssessmentOutOfScopeTicket.ticket_type.in_(ticket_types),
+        )
+    )
+    return cleared_counts
+
+
+def clear_problem_change_applied_rows(
+    db: Session,
+    project_id: UUID,
+    domain: str,
+) -> dict[str, int]:
+    if domain == "problems":
+        table_name = "assessment_problem_records"
+        model = AssessmentProblemRecord
+        out_table_name = "assessment_out_of_scope_problem_records"
+        out_model = AssessmentOutOfScopeProblemRecord
+    elif domain == "changes":
+        table_name = "assessment_change_records"
+        model = AssessmentChangeRecord
+        out_table_name = "assessment_out_of_scope_change_records"
+        out_model = AssessmentOutOfScopeChangeRecord
+    else:
+        return {}
+    cleared_counts = {
+        table_name: count_project_rows(db, model, [project_id]),
+        out_table_name: count_project_rows(db, out_model, [project_id]),
+    }
+    db.execute(delete(model).where(model.project_id == project_id))
+    db.execute(delete(out_model).where(out_model.project_id == project_id))
+    return cleared_counts
+
+
+def ticket_types_for_reprocessing_domains(domains: list[str]) -> list[str]:
+    ticket_types: list[str] = []
+    if "incidents" in domains:
+        ticket_types.append("INCIDENT")
+    if "sc_tasks" in domains:
+        ticket_types.append("SERVICE_CATALOG_TASK")
+    if "problems" in domains:
+        ticket_types.append("PROBLEM")
+    if "changes" in domains:
+        ticket_types.append("CHANGE")
+    return ticket_types
+
+
+def generic_ticket_types_for_reprocessing_domains(domains: list[str]) -> list[str]:
+    ticket_types: list[str] = []
+    if "incidents" in domains:
+        ticket_types.append("INCIDENT")
+    if "sc_tasks" in domains:
+        ticket_types.append("SERVICE_CATALOG_TASK")
+    return ticket_types
+
+
+def selected_uploaded_file_ids(
+    db: Session,
+    project_id: UUID,
+    ticket_types: list[str],
+) -> list[UUID]:
+    if not ticket_types:
+        return []
+    return list(
+        db.scalars(
+            select(UploadedFile.id).where(
+                UploadedFile.project_id == project_id,
+                UploadedFile.ticket_type.in_(ticket_types),
+            )
+        )
+    )
+
+
+def selected_upload_batch_ids(
+    db: Session,
+    project_id: UUID,
+    ticket_types: list[str],
+) -> list[UUID]:
+    if not ticket_types:
+        return []
+    return list(
+        db.scalars(
+            select(UploadedFile.upload_batch_id)
+            .where(
+                UploadedFile.project_id == project_id,
+                UploadedFile.ticket_type.in_(ticket_types),
+            )
+            .distinct()
+        )
+    )
+
+
+def clear_raw_rows_for_ticket_types(
+    db: Session,
+    project_id: UUID,
+    ticket_types: list[str],
+) -> int:
+    if not ticket_types:
+        return 0
+    count = count_ticket_type_rows(db, TicketRawRow, project_id, ticket_types)
+    db.execute(
+        delete(TicketRawRow).where(
+            TicketRawRow.project_id == project_id,
+            TicketRawRow.ticket_type.in_(ticket_types),
+        )
+    )
+    return count
+
+
+def reset_reprocessing_stage_statuses(
+    db: Session,
+    *,
+    uploaded_file_ids: list[UUID],
+    upload_batch_ids: list[UUID],
+    start_point: str,
+) -> dict[str, int]:
+    if start_point == "resume_from_ingestion":
+        file_status = "STORED"
+        batch_status = "UPLOADED"
+    else:
+        file_status = "INGESTED"
+        batch_status = "INGESTED"
+
+    updated_counts: dict[str, int] = {}
+    if uploaded_file_ids:
+        result = db.execute(
+            update(UploadedFile)
+            .where(UploadedFile.id.in_(uploaded_file_ids))
+            .values(status=file_status, error_message=None)
+        )
+        updated_counts["uploaded_files"] = int(result.rowcount or 0)
+    else:
+        updated_counts["uploaded_files"] = 0
+
+    if upload_batch_ids:
+        result = db.execute(
+            update(UploadBatch)
+            .where(UploadBatch.id.in_(upload_batch_ids))
+            .values(
+                status=batch_status,
+                started_at=None,
+                completed_at=None,
+                normalized_at=None,
+                archived_at=None,
+                deleted_at=None,
+            )
+        )
+        updated_counts["upload_batches"] = int(result.rowcount or 0)
+    else:
+        updated_counts["upload_batches"] = 0
+    return updated_counts
+
+
+def prepare_operational_reprocessing(
+    db: Session,
+    project_id: UUID,
+    domains: list[str],
+    start_point: str,
+    confirmation: str,
+) -> OperationalReprocessingPrepareResult:
+    if confirmation != PREPARE_REPROCESSING_CONFIRMATION:
+        raise AdminResetError("Confirmation text must exactly match PREPARE REPROCESSING.")
+    if db.get(Project, project_id) is None:
+        raise AdminResetError(f"Project {project_id} was not found.")
+    normalized_domains = list(dict.fromkeys(domain.strip().lower() for domain in domains))
+    allowed_domains = {"incidents", "sc_tasks", "problems", "changes"}
+    unsupported_domains = sorted(set(normalized_domains) - allowed_domains)
+    if unsupported_domains:
+        raise AdminResetError(
+            "Unsupported reprocessing domain(s): " + ", ".join(unsupported_domains) + "."
+        )
+    if not normalized_domains:
+        raise AdminResetError("Select at least one operational domain to prepare.")
+    if start_point not in {
+        "resume_from_ingestion",
+        "resume_from_normalization",
+        "reapply_mapping_only",
+    }:
+        raise AdminResetError("Unsupported operational reprocessing start point.")
+
+    ticket_types = ticket_types_for_reprocessing_domains(normalized_domains)
+    generic_ticket_types = generic_ticket_types_for_reprocessing_domains(normalized_domains)
+    uploaded_file_ids = selected_uploaded_file_ids(db, project_id, ticket_types)
+    upload_batch_ids = selected_upload_batch_ids(db, project_id, ticket_types)
+    cleared_counts: dict[str, int] = {}
+    updated_counts: dict[str, int] = {}
+    warnings: list[str] = []
+
+    try:
+        if generic_ticket_types:
+            cleared_counts.update(
+                clear_generic_ticket_applied_rows(db, project_id, generic_ticket_types)
+            )
+        if "problems" in normalized_domains:
+            cleared_counts.update(clear_problem_change_applied_rows(db, project_id, "problems"))
+        if "changes" in normalized_domains:
+            cleared_counts.update(clear_problem_change_applied_rows(db, project_id, "changes"))
+
+        if start_point == "resume_from_ingestion":
+            cleared_counts["ticket_raw_rows"] = clear_raw_rows_for_ticket_types(
+                db,
+                project_id,
+                ticket_types,
+            )
+            cleared_counts["ingestion_jobs"] = count_ingestion_jobs_for_file_or_batch_ids(
+                db,
+                uploaded_file_ids,
+                upload_batch_ids,
+            )
+            delete_ingestion_jobs_for_file_or_batch_ids(db, uploaded_file_ids, upload_batch_ids)
+        else:
+            cleared_counts["ticket_raw_rows"] = 0
+            cleared_counts["ingestion_jobs"] = 0
+            warnings.append(
+                "This application does not maintain a separate normalized staging table; "
+                "raw ingested rows and saved mappings were preserved, and applied output "
+                "rows were cleared for re-application.",
+            )
+
+        updated_counts.update(
+            reset_reprocessing_stage_statuses(
+                db,
+                uploaded_file_ids=uploaded_file_ids,
+                upload_batch_ids=upload_batch_ids,
+                start_point=start_point,
+            )
+        )
+        mark_filter_caches_stale(db, project_id)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise AdminResetError(f"Operational reprocessing preparation failed: {exc}") from exc
+
+    return OperationalReprocessingPrepareResult(
+        project_id=project_id,
+        domains=normalized_domains,
+        start_point=start_point,
+        cleared_counts=cleared_counts,
+        updated_counts=updated_counts,
+        preserved=[
+            "uploaded_files",
+            "upload file storage",
+            "source_column_mappings",
+            "application_inventory_items",
+            "projects",
+            "clients",
+        ],
+        warnings=warnings,
+    )
 
 
 def clear_project_operational_tables(

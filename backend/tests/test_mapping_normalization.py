@@ -15,6 +15,7 @@ from app.models import (
     AssessmentProblemRecord,
     Client,
     IngestionJob,
+    InScopeAssignmentGroup,
     Project,
     Ticket,
     TicketRawRow,
@@ -195,6 +196,19 @@ def add_application_inventory_scope(
     assignment_group: str = IN_SCOPE_ASSIGNMENT_GROUP,
     business_service: str = IN_SCOPE_BUSINESS_SERVICE,
 ) -> None:
+    client_id = db.scalar(select(Project.client_id).where(Project.id == project_id))
+    db.add(
+        InScopeAssignmentGroup(
+            client_id=client_id,
+            project_id=project_id,
+            assignment_group=assignment_group,
+            assignment_group_key=assignment_group.strip().lower(),
+            functional_track="Mapping Track",
+            source_filename="mapping-scope-reference.xlsx",
+            source_row_number=1,
+            is_active=True,
+        )
+    )
     db.add(
         ApplicationInventoryItem(
             project_id=project_id,
@@ -1658,13 +1672,13 @@ def test_problem_and_change_mapping_splits_out_of_scope_records_by_assignment_gr
         assert in_scope_problem is not None
         assert out_of_scope_problem is not None
         assert out_of_scope_problem.out_of_scope_reason == (
-            "assignment_group_not_in_application_inventory"
+            "assignment_group_not_in_scope_reference"
         )
         assert out_of_scope_problem.application_inventory_match_status == "matched"
         assert in_scope_change is not None
         assert out_of_scope_change is not None
         assert out_of_scope_change.out_of_scope_reason == (
-            "assignment_group_not_in_application_inventory"
+            "assignment_group_not_in_scope_reference"
         )
         assert out_of_scope_change.application_inventory_match_status == "matched"
         assert db.scalar(select(func.count(Ticket.id)).where(Ticket.project_id == project_id)) == 0

@@ -30,6 +30,7 @@ DASHBOARD_FILTER_AREAS = ("applications", "volumetrics")
 FILTER_CACHE_STATUSES = {"missing", "refreshing", "ready", "failed", "stale"}
 
 APPLICATION_FILTER_KEYS = (
+    "application_scope",
     "functional_track_ams_owner",
     "assignment_group_owner",
     "parent_application_name",
@@ -64,6 +65,7 @@ VOLUMETRICS_FILTER_KEYS = (
 )
 
 APPLICATION_FACT_FIELDS = {
+    "application_scope": "scope",
     "functional_track_ams_owner": "functional_track_ams_owner",
     "assignment_group_owner": "assignment_group_support_owner",
     "parent_application_name": "parent_business_application",
@@ -389,7 +391,7 @@ def refresh_application_filter_facts(
                 'application',
                 'application_inventory_items',
                 'application',
-                'all',
+                COALESCE(NULLIF(btrim(i.scope_status), ''), 'unknown'),
                 i.id,
                 left(NULLIF(btrim(i.business_service_ci_name), ''), 255),
                 left(NULLIF(btrim(i.functional_track), ''), 255),
@@ -450,6 +452,8 @@ def fact_lifecycle_status_stage_expression() -> Any:
 def fact_filter_expression(dashboard_area: str, filter_key: str) -> Any:
     if dashboard_area == "applications" and filter_key == "lifecycle_status_stage":
         return fact_lifecycle_status_stage_expression()
+    if dashboard_area == "applications" and filter_key == "application_scope":
+        return DashboardFilterFact.scope
     if dashboard_area == "volumetrics" and filter_key == "scope":
         return DashboardFilterFact.scope
     if dashboard_area == "volumetrics" and filter_key == "ticket_type":
@@ -476,6 +480,9 @@ def catalog_sort_key(filter_key: str, value: str) -> tuple[int, str]:
     if filter_key == "ticket_type":
         order = ("all", "incident", "sc_task")
         return (order.index(value) if value in order else len(order), value.casefold())
+    if filter_key == "application_scope":
+        order = ("in_scope", "out_of_scope", "unknown")
+        return (order.index(value) if value in order else len(order), value.casefold())
     if filter_key in {"business_critical", "business_criticality"}:
         rank = {
             label.casefold(): index
@@ -490,6 +497,12 @@ def catalog_display_value(filter_key: str, value: str) -> str:
         return VOLUMETRICS_SCOPE_LABELS.get(value, value)
     if filter_key == "ticket_type":
         return VOLUMETRICS_TICKET_TYPE_LABELS.get(value, value)
+    if filter_key == "application_scope":
+        return {
+            "in_scope": "In Scope",
+            "out_of_scope": "Out of Scope",
+            "unknown": "Unknown",
+        }.get(value, value)
     return value
 
 

@@ -15,6 +15,7 @@ export type ApplicationInventoryItem = {
   supported_by_vendor: string | null;
   hosting_env: string | null;
   global_application: string | null;
+  scope_status: string;
   lifecycle_stage_status: string | null;
   lifecycle_current: string | null;
   lifecycle_1_to_3_years: string | null;

@@ -20,6 +20,7 @@ class ApplicationInventoryItemUpdateRequest(BaseModel):
     supported_by_vendor: str | None = None
     hosting_env: str | None = None
     global_application: str | None = None
+    scope_status: str | None = None
     lifecycle_stage_status: str | None = None
     lifecycle_current: str | None = None
     lifecycle_1_to_3_years: str | None = None
@@ -46,6 +47,7 @@ class ApplicationInventoryItemResponse(BaseModel):
     supported_by_vendor: str | None
     hosting_env: str | None
     global_application: str | None
+    scope_status: str
     lifecycle_stage_status: str | None
     lifecycle_current: str | None
     lifecycle_1_to_3_years: str | None

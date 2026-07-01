@@ -11,6 +11,7 @@ from app.models import (
     AssessmentOutOfScopeTicket,
     Client,
     DashboardFilterCacheStatus,
+    InScopeAssignmentGroup,
     Project,
     Ticket,
     TicketRawRow,
@@ -37,6 +38,18 @@ def create_project_fixture():
     )
     db.add(project)
     db.flush()
+    db.add(
+        InScopeAssignmentGroup(
+            client_id=client.id,
+            project_id=project.id,
+            assignment_group="AMS Support",
+            assignment_group_key="ams support",
+            functional_track="Lifecycle Track",
+            source_filename="lifecycle-scope-reference.xlsx",
+            source_row_number=1,
+            is_active=True,
+        )
+    )
     db.add(
         ApplicationInventoryItem(
             project_id=project.id,

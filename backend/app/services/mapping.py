@@ -26,6 +26,7 @@ from app.models import (
     UploadedFile,
 )
 from app.services.batch_classification import derive_is_batch_related
+from app.services.in_scope_assignment_groups import active_assignment_group_keys
 from app.services.ingestion import INGESTION_BATCH_SIZE, normalize_source_column_name
 from app.services.sap_classification import derive_sap_non_sap
 from app.services.upload_lifecycle import (
@@ -45,6 +46,7 @@ APPLY_SCOPE_TICKET_TYPE = "TICKET_TYPE"
 PROBLEM_TICKET_TYPE = "PROBLEM"
 CHANGE_TICKET_TYPE = "CHANGE"
 PROBLEM_CHANGE_TICKET_TYPES = {PROBLEM_TICKET_TYPE, CHANGE_TICKET_TYPE}
+OUT_OF_SCOPE_SCOPE_REFERENCE_DESTINATION = "OUT_OF_SCOPE_ASSIGNMENT_GROUP_NOT_IN_SCOPE_REFERENCE"
 INCIDENT_NUMBER_PATTERN = re.compile(r"\bINC[0-9][A-Z0-9-]*\b", flags=re.IGNORECASE)
 CMDB_ARCHITECTURE_TYPE_KEYS = ("Architecture type", "Architecture Type")
 CMDB_BUSINESS_CRITICAL_KEYS = (
@@ -1160,7 +1162,10 @@ def parse_sla_breached_value(
 
 def normalize_match_key(value: Any) -> str | None:
     text = text_or_none(value)
-    return text.lower() if text is not None else None
+    if text is None:
+        return None
+    normalized = re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip().casefold()
+    return normalized or None
 
 
 def get_raw_vendor_value(
@@ -1370,7 +1375,7 @@ def operational_record_scope_reason(
     if assignment_group_key is None:
         return "blank_assignment_group"
     if assignment_group_key not in active_assignment_groups:
-        return "assignment_group_not_in_application_inventory"
+        return "assignment_group_not_in_scope_reference"
     return ""
 
 
@@ -1980,11 +1985,12 @@ def apply_problem_or_change_mapping_to_batch(
         db.flush()
 
     inventory_items = load_active_inventory_items(db, upload_batch.project_id)
-    active_assignment_groups = {
-        normalize_match_key(item.assignment_group)
-        for item in inventory_items
-        if normalize_match_key(item.assignment_group) is not None
-    }
+    active_assignment_groups = active_assignment_group_keys(db, upload_batch.project_id)
+    if not active_assignment_groups:
+        warnings.append(
+            "No active In-Scope Assignment Groups reference rows were found for this project; "
+            "records with non-blank assignment groups will be classified as out of scope.",
+        )
     existing_fingerprint_statement = select(model.row_fingerprint).where(
         model.project_id == upload_batch.project_id,
         model.upload_batch_id != upload_batch.id,
@@ -2069,7 +2075,7 @@ def apply_problem_or_change_mapping_to_batch(
     if out_of_scope_record_count:
         warnings.append(
             f"{out_of_scope_record_count} {record_label} row(s) were classified as "
-            "out of scope by Application Inventory assignment group."
+            "out of scope by the In-Scope Assignment Groups reference."
         )
 
     if total_raw_rows > 0 and failed_row_count == 0:
@@ -2147,11 +2153,13 @@ def apply_mapping_to_batch(
             db.flush()
 
         inventory_items = load_active_inventory_items(db, upload_batch.project_id)
-        active_assignment_groups = {
-            normalize_match_key(item.assignment_group)
-            for item in inventory_items
-            if normalize_match_key(item.assignment_group) is not None
-        }
+        active_assignment_groups = active_assignment_group_keys(db, upload_batch.project_id)
+        if not active_assignment_groups:
+            warnings.append(
+                "No active In-Scope Assignment Groups reference rows were found for this "
+                "project; tickets with non-blank assignment groups will be classified as "
+                "out of scope.",
+            )
 
         raw_row_statement = (
             select(TicketRawRow)
@@ -2176,7 +2184,7 @@ def apply_mapping_to_batch(
                     elif previous_destination == "OUT_OF_SCOPE_BLANK_ASSIGNMENT_GROUP":
                         out_of_scope_ticket_count -= 1
                         blank_assignment_group_count -= 1
-                    elif previous_destination == "OUT_OF_SCOPE_ASSIGNMENT_GROUP_NOT_IN_INVENTORY":
+                    elif previous_destination == OUT_OF_SCOPE_SCOPE_REFERENCE_DESTINATION:
                         out_of_scope_ticket_count -= 1
                         assignment_group_not_in_inventory_count -= 1
 
@@ -2226,7 +2234,7 @@ def apply_mapping_to_batch(
                     out_of_scope_reason = "blank_assignment_group"
                     blank_assignment_group_count += 1
                 elif assignment_group_key not in active_assignment_groups:
-                    out_of_scope_reason = "assignment_group_not_in_application_inventory"
+                    out_of_scope_reason = "assignment_group_not_in_scope_reference"
                     assignment_group_not_in_inventory_count += 1
                 else:
                     out_of_scope_reason = ""
@@ -2239,9 +2247,9 @@ def apply_mapping_to_batch(
                             ticket.ticket_number
                         ] = "OUT_OF_SCOPE_BLANK_ASSIGNMENT_GROUP"
                     else:
-                        seen_ticket_destinations[
-                            ticket.ticket_number
-                        ] = "OUT_OF_SCOPE_ASSIGNMENT_GROUP_NOT_IN_INVENTORY"
+                        seen_ticket_destinations[ticket.ticket_number] = (
+                            OUT_OF_SCOPE_SCOPE_REFERENCE_DESTINATION
+                        )
                 else:
                     db.add(ticket)
                     normalized_ticket_count += 1

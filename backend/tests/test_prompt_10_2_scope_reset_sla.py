@@ -19,6 +19,7 @@ from app.models import (
     IncidentSlaRow,
     IncidentSlaUpload,
     IngestionJob,
+    InScopeAssignmentGroup,
     Project,
     SourceColumnMapping,
     Ticket,
@@ -26,6 +27,7 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
+from app.services.in_scope_assignment_groups import normalize_assignment_group_key
 from app.services.mapping import apply_mapping_to_batch
 
 
@@ -168,6 +170,29 @@ def add_inventory(
     db.add(item)
     db.flush()
     return item
+
+
+def add_scope_reference(
+    db,
+    project_id: UUID,
+    assignment_group: str,
+    *,
+    functional_track: str = "Functional Track",
+) -> None:
+    project = db.get(Project, project_id)
+    db.add(
+        InScopeAssignmentGroup(
+            client_id=project.client_id if project is not None else None,
+            project_id=project_id,
+            assignment_group=assignment_group,
+            assignment_group_key=normalize_assignment_group_key(assignment_group) or "",
+            functional_track=functional_track,
+            source_filename="in-scope-assignment-groups.xlsx",
+            source_row_number=1,
+            is_active=True,
+        )
+    )
+    db.flush()
 
 
 def add_raw_row(
@@ -337,6 +362,7 @@ def test_scope_split_and_vendor_derivation_use_application_inventory_only() -> N
             active=False,
             row_number=2,
         )
+        add_scope_reference(db, project_id, "AMS In Scope")
         db.add(
             ApplicationDimension(
                 project_id=project_id,
@@ -447,7 +473,7 @@ def test_scope_split_and_vendor_derivation_use_application_inventory_only() -> N
         }
         assert set(out_tickets) == {"INC-OUT", "INC-BLANK", "INC-INACTIVE"}
         assert out_tickets["INC-OUT"].out_of_scope_reason == (
-            "assignment_group_not_in_application_inventory"
+            "assignment_group_not_in_scope_reference"
         )
         assert out_tickets["INC-BLANK"].out_of_scope_reason == "blank_assignment_group"
         assert out_tickets["INC-OUT"].derived_vendor == "HCLTech"
@@ -466,6 +492,7 @@ def test_service_catalog_vendor_maps_from_u_vendor() -> None:
             business_service="Request Service",
             vendor="HCLTech",
         )
+        add_scope_reference(db, project_id, "AMS In Scope")
         add_raw_row(
             db,
             project_id,

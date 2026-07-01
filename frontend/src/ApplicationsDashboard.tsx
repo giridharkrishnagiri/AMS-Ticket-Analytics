@@ -66,6 +66,7 @@ type TableColumnKey = keyof DashboardApplicationRow;
 type ApplicationsSubTab = "overview" | "lifecycle_planning";
 
 const emptyFilters: DashboardApplicationsFilters = {
+  application_scope: [],
   functional_track_ams_owner: [],
   assignment_group_owner: [],
   parent_application_name: [],
@@ -82,6 +83,7 @@ const emptyFilters: DashboardApplicationsFilters = {
 };
 
 const emptyFilterValues: DashboardApplicationsFilterValues = {
+  application_scope: [],
   functional_track_ams_owner: [],
   assignment_group_owner: [],
   parent_application_name: [],
@@ -185,6 +187,7 @@ const defaultSort: DashboardApplicationsSort = {
 
 const tableColumns: Array<{ key: TableColumnKey; label: string }> = [
   { key: "business_service_ci_name", label: "Business Service CI Name (Application)" },
+  { key: "scope_status", label: "Application Scope" },
   { key: "parent_application_name", label: "Parent Business Application" },
   { key: "assignment_group", label: "Assignment Group" },
   { key: "sap_non_sap", label: "SAP / Non-SAP" },
@@ -259,6 +262,17 @@ function formatNumber(value: number | null | undefined): string {
 
 function formatTableValue(row: DashboardApplicationRow, column: TableColumnKey): string {
   const value = row[column];
+  if (column === "scope_status") {
+    if (value === "in_scope") {
+      return "In Scope";
+    }
+    if (value === "out_of_scope") {
+      return "Out of Scope";
+    }
+    if (value === "unknown") {
+      return "Unknown";
+    }
+  }
   if (column === "active_users") {
     return typeof value === "number" ? value.toLocaleString() : "";
   }
@@ -394,6 +408,12 @@ function applicationFilterValuesFromCatalog(
   selectedFilters: DashboardApplicationsFilters
 ): DashboardApplicationsFilterValues {
   return {
+    application_scope: catalogSingleRows(
+      catalog,
+      counts,
+      "application_scope",
+      selectedFilters.application_scope
+    ),
     functional_track_ams_owner: catalogCombinedRows(
       catalog,
       counts,
@@ -779,6 +799,7 @@ function ApplicationsDashboard({
 
   const filterOptions = useMemo(
     () => ({
+      application_scope: singleFilterOptions(filterValues.data.application_scope),
       functional_track_ams_owner: combinedFilterOptions(
         filterValues.data.functional_track_ams_owner
       ),
@@ -1172,6 +1193,12 @@ function ApplicationsDashboard({
         ) : null}
 
         <div className="applications-filter-stack">
+          <ExcelMultiSelectFilter
+            label="Application Scope"
+            options={filterOptions.application_scope}
+            selectedValues={filters.application_scope}
+            onChange={(values) => updateFilter("application_scope", values)}
+          />
           <ExcelMultiSelectFilter
             label="Functional Track - AMS Owner"
             options={filterOptions.functional_track_ams_owner}

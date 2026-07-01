@@ -241,6 +241,7 @@ export type DashboardFilterCountsResponse = {
 };
 
 export type DashboardApplicationsFilterValues = {
+  application_scope: ApplicationFilterValue[];
   functional_track_ams_owner: ApplicationCombinedFilterValue[];
   assignment_group_owner: ApplicationCombinedFilterValue[];
   parent_application_name: ApplicationFilterValue[];
@@ -257,6 +258,7 @@ export type DashboardApplicationsFilterValues = {
 };
 
 export type DashboardApplicationsFilters = {
+  application_scope: string[];
   functional_track_ams_owner: string[];
   assignment_group_owner: string[];
   parent_application_name: string[];
@@ -306,6 +308,7 @@ export type DashboardApplicationsSummary = {
 
 export type DashboardApplicationRow = {
   business_service_ci_name: string;
+  scope_status: string;
   parent_application_name: string;
   assignment_group: string;
   sap_non_sap: string;

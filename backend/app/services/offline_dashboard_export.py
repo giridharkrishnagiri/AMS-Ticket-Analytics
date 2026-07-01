@@ -184,6 +184,7 @@ def monthly_request(project_id: UUID, start_datetime: datetime, end_datetime: da
         start_datetime=start_datetime,
         end_datetime=end_datetime,
         filters=SimpleNamespace(
+            application_scope=[],
             functional_track_ams_owner=[],
             assignment_group_support_lead=[],
             parent_application_name=[],
@@ -2537,6 +2538,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       tab: "overview",
       appSubTab: "overview",
       appFunctional: "all",
+      appScope: "all",
       appSap: "all",
       appBusinessCritical: "all",
       lifecyclePlan: "Invest",
@@ -3373,6 +3375,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function filteredApplications() {
       return DASHBOARD.applications.rows.filter((row) =>
+        (state.appScope === "all" || row.scope_status === state.appScope) &&
         (state.appFunctional === "all" || row.functional_track_ams_owner === state.appFunctional) &&
         (state.appSap === "all" || row.sap_non_sap === state.appSap) &&
         (state.appBusinessCritical === "all" || row.biz_criticality === state.appBusinessCritical)
@@ -3643,6 +3646,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const criticalityPivot = criticalityHostingPivot(rows);
       const lifecycleData = lifecyclePlanningData(rows, state.lifecyclePlan);
       const functionalValues = uniqueSorted(DASHBOARD.applications.rows, "functional_track_ams_owner");
+      const appScopeValues = [
+        { value: "in_scope", label: "In Scope" },
+        { value: "out_of_scope", label: "Out of Scope" },
+        { value: "unknown", label: "Unknown" }
+      ].filter((item) => DASHBOARD.applications.rows.some((row) => row.scope_status === item.value));
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
       const businessCriticalValues = sortCriticalityValues(uniqueSorted(DASHBOARD.applications.rows, "biz_criticality"));
       const businessCount = rows.filter((row) => ["business", "business application"].includes(String(row.app_type).toLowerCase())).length;
@@ -3683,6 +3691,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.getElementById("applications").innerHTML = `<div class="layout dashboard-layout">
         <aside class="filters filter-pane panel">
           <p class="label">Filters</p><h2>Applications</h2>
+          ${renderSelect("app-scope", "Application Scope", [{ value: "all", label: "All" }, ...appScopeValues], state.appScope)}
           ${renderSelect("app-functional", "Functional Track / AMS Owner", [{ value: "all", label: "All" }, ...functionalValues.map((value) => ({ value, label: value }))], state.appFunctional)}
           ${renderSelect("app-sap", "SAP / Non-SAP", [{ value: "all", label: "All" }, ...sapValues.map((value) => ({ value, label: value }))], state.appSap)}
           ${renderSelect("app-business-critical", "Business Criticality", [{ value: "all", label: "All" }, ...businessCriticalValues.map((value) => ({ value, label: value }))], state.appBusinessCritical)}
@@ -3692,6 +3701,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${state.appSubTab === "overview" ? overviewMarkup : lifecycleMarkup}
         </section>
       </div>`;
+      document.getElementById("app-scope").addEventListener("change", (event) => { state.appScope = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.getElementById("app-sap").addEventListener("change", (event) => { state.appSap = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.getElementById("app-business-critical").addEventListener("change", (event) => { state.appBusinessCritical = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
@@ -3709,7 +3719,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       installChartCopyButtons(document.getElementById("applications"));
     }
     function applicationTable(rows) {
-      const columns = ["business_service_ci_name", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "lifecycle_stage_status", "lifecycle_current", "lifecycle_1_to_3_years", "lifecycle_3_to_5_years", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
+      const columns = ["business_service_ci_name", "scope_status", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "lifecycle_stage_status", "lifecycle_current", "lifecycle_1_to_3_years", "lifecycle_3_to_5_years", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
       return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(column === "active_users" && row[column] !== null && row[column] !== undefined ? fmt(row[column]) : (row[column] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function filteredVolumetricsRows() {
