@@ -200,11 +200,13 @@ const emptyAssignmentGroupMapping: DashboardApplicationsAssignmentGroupMapping =
     assignment_group_count: 0,
     business_service_ci_count: 0,
     parent_business_application_count: 0,
+    basis_security_mapping_count: 0,
     incident_count: null,
     sc_task_count: null,
     total_ticket_count: null,
   },
   rows: [],
+  basis_security_rows: [],
   data_notes: [],
   warnings: [],
 };
@@ -1661,6 +1663,8 @@ const assignmentMappingColumns: Array<{
 }> = [
   { key: "assignment_group", label: "Assignment Group" },
   { key: "functional_track", label: "Functional Track" },
+  { key: "ams_owner", label: "AMS Owner" },
+  { key: "support_lead", label: "Support Lead" },
   { key: "parent_business_application", label: "Parent Business Application" },
   { key: "business_service_ci_name", label: "Business Service CI Name" },
   { key: "scope", label: "Scope" },
@@ -1780,8 +1784,27 @@ function AssignmentGroupMappingPanel({
       return String(leftValue).localeCompare(String(rightValue)) * direction;
     });
   }, [columns, data.rows, searchTerm, sort.column, sort.direction]);
+  const basisSecurityRows = useMemo(() => {
+    const visibleRows = searchTerm
+      ? data.basis_security_rows.filter((row) =>
+          columns.some((column) =>
+            assignmentMappingCell(row, column.key).toLowerCase().includes(searchTerm)
+          )
+        )
+      : data.basis_security_rows;
+    return [...visibleRows].sort((left, right) => {
+      const leftValue = assignmentMappingSortValue(left, sort.column);
+      const rightValue = assignmentMappingSortValue(right, sort.column);
+      const direction = sort.direction === "asc" ? 1 : -1;
+      if (typeof leftValue === "number" && typeof rightValue === "number") {
+        return (leftValue - rightValue) * direction;
+      }
+      return String(leftValue).localeCompare(String(rightValue)) * direction;
+    });
+  }, [columns, data.basis_security_rows, searchTerm, sort.column, sort.direction]);
   const tableHeaders = columns.map((column) => column.label);
-  const tableRows = rows.map((row) => columns.map((column) => assignmentMappingCell(row, column.key)));
+  const tableRowsFor = (sourceRows: DashboardApplicationsAssignmentGroupMappingRow[]) =>
+    sourceRows.map((row) => columns.map((column) => assignmentMappingCell(row, column.key)));
   const totalTicketSummary =
     selectedSource === "tickets" ? (
       <>
@@ -1806,19 +1829,79 @@ function AssignmentGroupMappingPanel({
       </>
     ) : null;
 
-  async function handleCopyTable() {
-    const tsv = [tableHeaders, ...tableRows].map((row) => row.join("\t")).join("\n");
+  async function handleCopyTable(
+    sourceRows: DashboardApplicationsAssignmentGroupMappingRow[],
+    label: string
+  ) {
+    const tsv = [tableHeaders, ...tableRowsFor(sourceRows)].map((row) => row.join("\t")).join("\n");
     try {
       await copyTextToClipboard(tsv);
-      setCopyMessage(`Copied ${rows.length.toLocaleString()} rows to clipboard.`);
+      setCopyMessage(`Copied ${sourceRows.length.toLocaleString()} ${label} rows to clipboard.`);
     } catch (copyError) {
       setCopyMessage(errorMessage(copyError, "Unable to copy table."));
     }
   }
 
-  function handleDownloadCsv() {
-    downloadCsv("assignment_group_mapping.csv", tableHeaders, tableRows);
+  function handleDownloadCsv(
+    filename: string,
+    sourceRows: DashboardApplicationsAssignmentGroupMappingRow[]
+  ) {
+    downloadCsv(filename, tableHeaders, tableRowsFor(sourceRows));
     setCopyMessage("CSV downloaded.");
+  }
+
+  function renderMappingTable(
+    sourceRows: DashboardApplicationsAssignmentGroupMappingRow[],
+    emptyMessage: string
+  ) {
+    return (
+      <div className="applications-table-frame validation-table-frame">
+        <table className="applications-table validation-table">
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th key={column.key}>
+                  <button
+                    className="table-sort-button"
+                    type="button"
+                    onClick={() => onSort(column.key)}
+                  >
+                    {column.label}
+                    {sort.column === column.key ? (
+                      <span>{sort.direction === "asc" ? " ▲" : " ▼"}</span>
+                    ) : null}
+                  </button>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {status !== "loading" && sourceRows.length === 0 ? (
+              <tr>
+                <td colSpan={columns.length}>{emptyMessage}</td>
+              </tr>
+            ) : (
+              sourceRows.map((row, index) => (
+                <tr key={`${row.assignment_group}-${row.business_service_ci_name}-${index}`}>
+                  {columns.map((column) => (
+                    <td
+                      className={
+                        column.key.endsWith("_count") || column.key === "total_ticket_count"
+                          ? "numeric-cell"
+                          : undefined
+                      }
+                      key={column.key}
+                    >
+                      {assignmentMappingCell(row, column.key)}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    );
   }
 
   return (
@@ -1922,6 +2005,12 @@ function AssignmentGroupMappingPanel({
             primary={formatNumber(data.summary.parent_business_application_count)}
             secondary="Distinct parents"
           />
+          <MetricCard
+            index={4}
+            label="BASIS / SECURITY"
+            primary={formatNumber(data.summary.basis_security_mapping_count)}
+            secondary="Shown separately"
+          />
           {totalTicketSummary}
         </div>
         <div className="validation-table-toolbar">
@@ -1935,10 +2024,18 @@ function AssignmentGroupMappingPanel({
             />
           </label>
           <div className="validation-actions">
-            <button className="secondary-button" type="button" onClick={handleCopyTable}>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => handleCopyTable(rows, "mapping")}
+            >
               Copy Table
             </button>
-            <button className="secondary-button" type="button" onClick={handleDownloadCsv}>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => handleDownloadCsv("assignment_group_mapping.csv", rows)}
+            >
               Download CSV
             </button>
           </div>
@@ -1993,6 +2090,44 @@ function AssignmentGroupMappingPanel({
             </tbody>
           </table>
         </div>
+        {basisSecurityRows.length > 0 || data.basis_security_rows.length > 0 ? (
+          <section className="validation-subsection">
+            <div className="panel-heading">
+              <div>
+                <p className="label">Confirmed Out-of-Scope</p>
+                <h3>BASIS and SECURITY Assignment Group Mapping</h3>
+                <p className="muted-text">
+                  Confirmed out-of-scope assignment groups containing "Basis" or "Security".
+                </p>
+              </div>
+              <div className="validation-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => handleCopyTable(basisSecurityRows, "BASIS/SECURITY mapping")}
+                >
+                  Copy Table
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() =>
+                    handleDownloadCsv(
+                      "basis_security_assignment_group_mapping.csv",
+                      basisSecurityRows
+                    )
+                  }
+                >
+                  Download CSV
+                </button>
+              </div>
+            </div>
+            {renderMappingTable(
+              basisSecurityRows,
+              "No BASIS or SECURITY assignment groups found for the selected scope and filters."
+            )}
+          </section>
+        ) : null}
         {data.data_notes.map((note) => (
           <p className="muted-text validation-note" key={note}>
             {note}

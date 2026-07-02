@@ -2283,7 +2283,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       vertical-align: top;
     }
     .assignment-volumetrics-table {
-      min-width: 1740px;
+      min-width: 2140px;
       border-collapse: separate;
       border-spacing: 0;
     }
@@ -2302,6 +2302,22 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     .assignment-volumetrics-table thead .assignment-group-column {
       z-index: 5;
       background: var(--panel);
+    }
+    .assignment-volumetrics-table .reference-column {
+      min-width: 140px;
+      max-width: 220px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      background: #fff;
+      text-align: left;
+    }
+    .assignment-volumetrics-table thead .reference-column {
+      background: var(--panel);
+    }
+    .validation-subsection {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
     }
     .month-group-a { background: #f8fafc; }
     .month-group-b { background: #eef6ff; }
@@ -3787,12 +3803,17 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
     }
     function renderAssignmentGroupMapping() {
-      const payload = DASHBOARD.applications.assignment_group_mapping?.[state.appMappingSource] || { rows: [], summary: {}, available_functional_tracks: [] };
+      const payload = DASHBOARD.applications.assignment_group_mapping?.[state.appMappingSource] || { rows: [], basis_security_rows: [], summary: {}, available_functional_tracks: [] };
       const rows = (payload.rows || []).filter((row) =>
         (state.appMappingScope === "all" || row.scope === state.appMappingScope) &&
         (state.appMappingTrack === "all" || row.functional_track === state.appMappingTrack)
       );
-      const tracks = [...new Set((payload.rows || [])
+      const basisRows = (payload.basis_security_rows || []).filter((row) =>
+        (state.appMappingScope === "all" || row.scope === state.appMappingScope) &&
+        (state.appMappingTrack === "all" || row.functional_track === state.appMappingTrack)
+      );
+      const allMappingRows = [...(payload.rows || []), ...(payload.basis_security_rows || [])];
+      const tracks = [...new Set(allMappingRows
         .filter((row) => state.appMappingScope === "all" || row.scope === state.appMappingScope)
         .map((row) => row.functional_track || "Unmapped Functional Track"))].sort((a, b) => a.localeCompare(b));
       const sourceButtons = [
@@ -3807,13 +3828,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const trackButtons = [`<button type="button" data-app-mapping-track="all" class="${state.appMappingTrack === "all" ? "active" : ""}">All Tracks</button>`, ...tracks.map((track) => `<button type="button" data-app-mapping-track="${esc(track)}" class="${state.appMappingTrack === track ? "active" : ""}">${esc(track)}</button>`)].join("");
       const countHeaders = state.appMappingSource === "tickets" ? "<th>Incident Count</th><th>SC Task Count</th><th>Total Ticket Count</th>" : "";
       const countCells = (row) => state.appMappingSource === "tickets" ? `<td class="numeric-cell">${fmt(row.incident_count || 0)}</td><td class="numeric-cell">${fmt(row.sc_task_count || 0)}</td><td class="numeric-cell">${fmt(row.total_ticket_count || 0)}</td>` : "";
+      const mappingTable = (tableRows, tableId, emptyMessage) => `<div class="table-frame validation-table-frame"><table id="${tableId}" class="applications-table validation-table"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>AMS Owner</th><th>Support Lead</th><th>Parent Business Application</th><th>Business Service CI Name</th><th>Scope</th>${countHeaders}</tr></thead><tbody>${tableRows.length ? tableRows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.ams_owner)}</td><td>${esc(row.support_lead)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td><td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("") : `<tr><td colspan="${7 + (state.appMappingSource === "tickets" ? 3 : 0)}">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>`;
+      const basisSection = basisRows.length ? `<section class="validation-subsection"><div class="chart-title-row"><div><p class="label">Confirmed Out-of-Scope</p><h3>BASIS and SECURITY Assignment Group Mapping</h3><p class="muted">Confirmed out-of-scope assignment groups containing "Basis" or "Security".</p></div><div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-basis-security">Copy Table</button><span class="copy-chart-status"></span></div></div>${mappingTable(basisRows, "offline-app-assignment-basis-security", "No BASIS or SECURITY assignment groups found for the selected scope and filters.")}</section>` : "";
       return `<section class="panel full"><p class="label">Applications</p><h2>Assignment Group ↔ Application Mapping</h2><p class="muted">Static validation table for Assignment Group mappings from Application Inventory or normalized Incident and SC Task data.</p>
         <div class="validation-toolbar">${sourceButtons}</div>
         <div class="validation-toolbar">${scopeButtons}</div>
         <div class="validation-toolbar">${trackButtons}</div>
         <p class="muted">Showing ${fmt(rows.length)} Assignment Group mappings.</p>
         <div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-mapping">Copy Table</button><span class="copy-chart-status"></span></div>
-        <div class="table-frame validation-table-frame"><table id="offline-app-assignment-mapping" class="applications-table validation-table"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>Parent Business Application</th><th>Business Service CI Name</th><th>Scope</th>${countHeaders}</tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td><td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("")}</tbody></table></div>
+        ${mappingTable(rows, "offline-app-assignment-mapping", "No mappings match the selected controls.")}
+        ${basisSection}
         ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "assignment_group_mapping", section_key: "applications_assignment_group_mapping", chart_key: "assignment_group_mapping", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: "all" })}
       </section>`;
     }
@@ -4040,17 +4064,23 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function assignmentVolumetricsTable(table, months, tableKey) {
       const rows = assignmentVolumetricsRows(table);
       const tableId = `offline-assignment-vol-${tableKey}`;
-      const header1 = `<tr><th class="assignment-group-column" rowspan="2">Assignment Group</th>${months.map((month, index) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right" colspan="3">${esc(month.month_label)}</th>`).join("")}<th class="month-boundary-left" colspan="3">Total</th></tr>`;
+      const header1 = `<tr><th class="assignment-group-column" rowspan="2">Assignment Group</th><th class="reference-column" rowspan="2">Functional Track</th><th class="reference-column" rowspan="2">AMS Owner</th><th class="reference-column" rowspan="2">Support Lead</th>${months.map((month, index) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right" colspan="3">${esc(month.month_label)}</th>`).join("")}<th class="month-boundary-left" colspan="3">Total</th></tr>`;
       const header2 = `<tr>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${label}</th>`)).join("")}${ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${label}</th>`).join("")}</tr>`;
-      const bodyRows = rows.map((row) => `<tr><th class="assignment-group-column">${esc(row.assignment_group)}</th>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMetric(row, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(row.totals?.[key] || 0)}</td>`).join("")}</tr>`).join("");
-      const totalRow = `<tr class="pivot-total-row"><th class="assignment-group-column">Grand Total</th>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMonthTotals(rows, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(assignmentGrandTotal(rows, key))}</td>`).join("")}</tr>`;
-      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><span class="copy-chart-status"></span></div></div><div class="table-frame validation-table-frame"><table id="${tableId}" class="applications-table validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? bodyRows + totalRow : `<tr><td colspan="${1 + months.length * 3 + 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></section>`;
+      const bodyRows = rows.map((row) => `<tr><th class="assignment-group-column">${esc(row.assignment_group)}</th><td class="reference-column">${esc(row.functional_track)}</td><td class="reference-column">${esc(row.ams_owner)}</td><td class="reference-column">${esc(row.support_lead)}</td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMetric(row, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(row.totals?.[key] || 0)}</td>`).join("")}</tr>`).join("");
+      const totalRow = `<tr class="pivot-total-row"><th class="assignment-group-column">Grand Total</th><td class="reference-column"></td><td class="reference-column"></td><td class="reference-column"></td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMonthTotals(rows, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(assignmentGrandTotal(rows, key))}</td>`).join("")}</tr>`;
+      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><span class="copy-chart-status"></span></div></div><div class="table-frame validation-table-frame"><table id="${tableId}" class="applications-table validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? bodyRows + totalRow : `<tr><td colspan="${4 + months.length * 3 + 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></section>`;
     }
     function renderAssignmentGroupVolumetrics() {
       const payload = assignmentVolumetricsPayload();
       const tracks = payload.available_functional_tracks || [];
       const trackButtons = [`<button type="button" data-vol-assignment-track="all" class="${state.volAssignmentTrack === "all" ? "active" : ""}">All Tracks</button>`, ...tracks.map((track) => `<button type="button" data-vol-assignment-track="${esc(track)}" class="${state.volAssignmentTrack === track ? "active" : ""}">${esc(track)}</button>`)].join("");
-      return `<section class="panel full"><p class="label">Volumetrics &amp; SLA</p><h2>Assignment Group-wise Volumetrics</h2><p class="muted">Monthly created, resolved, and cancelled generic ticket volumes by Assignment Group for Dec-25 through May-26. Problems and Changes are excluded.</p><div class="validation-toolbar">${trackButtons}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "assignment_group_volumetrics" })}</section>${assignmentVolumetricsTable(payload.tables?.incidents, payload.months || [], "incidents")}${assignmentVolumetricsTable(payload.tables?.sc_tasks, payload.months || [], "sc-tasks")}${assignmentVolumetricsTable(payload.tables?.overall, payload.months || [], "overall")}`;
+      const basisTables = [
+        ["basis-security-incidents", payload.tables?.basis_security_incidents],
+        ["basis-security-sc-tasks", payload.tables?.basis_security_sc_tasks],
+        ["basis-security-overall", payload.tables?.basis_security_overall]
+      ].filter(([, table]) => (table?.rows || []).length > 0);
+      const basisSection = basisTables.length ? `<section class="panel full"><p class="label">Confirmed Out-of-Scope</p><h2>BASIS and SECURITY Assignment Group Volumetrics</h2><p class="muted">Confirmed out-of-scope BASIS/SECURITY assignment groups shown separately for validation.</p></section>${basisTables.map(([key, table]) => assignmentVolumetricsTable(table, payload.months || [], key)).join("")}` : "";
+      return `<section class="panel full"><p class="label">Volumetrics &amp; SLA</p><h2>Assignment Group-wise Volumetrics</h2><p class="muted">Monthly created, resolved, and cancelled generic ticket volumes by Assignment Group for Dec-25 through May-26. Problems and Changes are excluded.</p><div class="validation-toolbar">${trackButtons}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "assignment_group_volumetrics" })}</section>${assignmentVolumetricsTable(payload.tables?.incidents, payload.months || [], "incidents")}${assignmentVolumetricsTable(payload.tables?.sc_tasks, payload.months || [], "sc-tasks")}${assignmentVolumetricsTable(payload.tables?.overall, payload.months || [], "overall")}${basisSection}`;
     }
     function renderVolumetricsSubTab(periods) {
       if (state.volSubTab === "overall_sla_trends") return renderSlaTrends();

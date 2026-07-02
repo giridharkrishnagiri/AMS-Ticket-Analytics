@@ -497,6 +497,7 @@ class ApplicationsAssignmentGroupMappingSummary(BaseModel):
     assignment_group_count: int
     business_service_ci_count: int
     parent_business_application_count: int
+    basis_security_mapping_count: int = 0
     incident_count: int | None = None
     sc_task_count: int | None = None
     total_ticket_count: int | None = None
@@ -505,6 +506,8 @@ class ApplicationsAssignmentGroupMappingSummary(BaseModel):
 class ApplicationsAssignmentGroupMappingRow(BaseModel):
     assignment_group: str
     functional_track: str
+    ams_owner: str
+    support_lead: str
     parent_business_application: str
     business_service_ci_name: str
     scope: str
@@ -520,6 +523,7 @@ class ApplicationsAssignmentGroupMappingResponse(BaseModel):
     available_functional_tracks: list[str]
     summary: ApplicationsAssignmentGroupMappingSummary
     rows: list[ApplicationsAssignmentGroupMappingRow]
+    basis_security_rows: list[ApplicationsAssignmentGroupMappingRow] = Field(default_factory=list)
     data_notes: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -641,6 +645,8 @@ class VolumetricsAssignmentGroupMonthMetrics(BaseModel):
 class VolumetricsAssignmentGroupRow(BaseModel):
     assignment_group: str
     functional_track: str
+    ams_owner: str
+    support_lead: str
     months: dict[str, VolumetricsAssignmentGroupMonthMetrics]
     totals: VolumetricsAssignmentGroupMonthMetrics
 

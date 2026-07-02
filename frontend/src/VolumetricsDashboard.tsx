@@ -366,6 +366,18 @@ const emptyAssignmentGroupVolumetrics: DashboardVolumetricsAssignmentGroupVolume
     incidents: { ...emptyAssignmentGroupTable, title: "Incidents" },
     sc_tasks: { ...emptyAssignmentGroupTable, title: "SC Tasks" },
     overall: { ...emptyAssignmentGroupTable, title: "Overall" },
+    basis_security_incidents: {
+      ...emptyAssignmentGroupTable,
+      title: "BASIS/SECURITY Incidents",
+    },
+    basis_security_sc_tasks: {
+      ...emptyAssignmentGroupTable,
+      title: "BASIS/SECURITY SC Tasks",
+    },
+    basis_security_overall: {
+      ...emptyAssignmentGroupTable,
+      title: "BASIS/SECURITY Overall",
+    },
   },
   available_functional_tracks: [],
   data_notes: [],
@@ -2382,6 +2394,14 @@ function AssignmentGroupVolumetricsPanel({
     data.months.length > 0
       ? `${data.months[0].month_label} to ${data.months[data.months.length - 1].month_label}`
       : "Dec-25 to May-26";
+  const basisSecurityIncidents = data.tables.basis_security_incidents;
+  const basisSecurityScTasks = data.tables.basis_security_sc_tasks;
+  const basisSecurityOverall = data.tables.basis_security_overall;
+  const hasBasisSecurityRows = [
+    basisSecurityIncidents,
+    basisSecurityScTasks,
+    basisSecurityOverall,
+  ].some((table) => (table?.rows.length ?? 0) > 0);
 
   return (
     <div className="validation-stack">
@@ -2458,6 +2478,39 @@ function AssignmentGroupVolumetricsPanel({
         status={status}
         table={data.tables.overall}
       />
+      {hasBasisSecurityRows ? (
+        <section className="panel validation-intro-panel">
+          <p className="label">Confirmed Out-of-Scope</p>
+          <h2>BASIS and SECURITY Assignment Group Volumetrics</h2>
+          <p className="muted-text">
+            Confirmed out-of-scope BASIS/SECURITY assignment groups shown separately for validation.
+          </p>
+        </section>
+      ) : null}
+      {basisSecurityIncidents && basisSecurityIncidents.rows.length > 0 ? (
+        <AssignmentGroupVolumetricsTable
+          months={data.months}
+          search={search}
+          status={status}
+          table={basisSecurityIncidents}
+        />
+      ) : null}
+      {basisSecurityScTasks && basisSecurityScTasks.rows.length > 0 ? (
+        <AssignmentGroupVolumetricsTable
+          months={data.months}
+          search={search}
+          status={status}
+          table={basisSecurityScTasks}
+        />
+      ) : null}
+      {basisSecurityOverall && basisSecurityOverall.rows.length > 0 ? (
+        <AssignmentGroupVolumetricsTable
+          months={data.months}
+          search={search}
+          status={status}
+          table={basisSecurityOverall}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2504,6 +2557,9 @@ function assignmentGroupVolumetricsHeaders(
 ): string[] {
   return [
     "Assignment Group",
+    "Functional Track",
+    "AMS Owner",
+    "Support Lead",
     ...months.flatMap((month) =>
       assignmentGroupMetricLabels.map((metric) => `${month.month_label} ${metric.label}`)
     ),
@@ -2519,6 +2575,9 @@ function assignmentGroupVolumetricsExportRows(
 ): Array<Array<string | number>> {
   const visibleRows = rows.map((row) => [
     row.assignment_group,
+    row.functional_track,
+    row.ams_owner,
+    row.support_lead,
     ...months.flatMap((month) => {
       const metrics = metricsForMonth(row, month);
       return assignmentGroupMetricLabels.map((metric) => metrics[metric.key]);
@@ -2532,6 +2591,9 @@ function assignmentGroupVolumetricsExportRows(
     ...visibleRows,
     [
       "Grand Total",
+      "",
+      "",
+      "",
       ...months.flatMap((month) => {
         const metrics = summedMetrics(rows, month);
         return assignmentGroupMetricLabels.map((metric) => metrics[metric.key]);
@@ -2559,7 +2621,11 @@ function AssignmentGroupVolumetricsTable({
   const rows = useMemo(
     () =>
       searchTerm
-        ? table.rows.filter((row) => row.assignment_group.toLowerCase().includes(searchTerm))
+        ? table.rows.filter((row) =>
+            [row.assignment_group, row.functional_track, row.ams_owner, row.support_lead].some(
+              (value) => value.toLowerCase().includes(searchTerm)
+            )
+          )
         : table.rows,
     [searchTerm, table.rows]
   );
@@ -2624,6 +2690,15 @@ function AssignmentGroupVolumetricsTable({
               <th className="assignment-group-column" rowSpan={2} scope="col">
                 Assignment Group
               </th>
+              <th className="reference-column" rowSpan={2} scope="col">
+                Functional Track
+              </th>
+              <th className="reference-column" rowSpan={2} scope="col">
+                AMS Owner
+              </th>
+              <th className="reference-column" rowSpan={2} scope="col">
+                Support Lead
+              </th>
               {months.map((month, monthIndex) => (
                 <th
                   className={`month-group-header month-group-${monthIndex % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right`}
@@ -2664,7 +2739,9 @@ function AssignmentGroupVolumetricsTable({
           <tbody>
             {status !== "loading" && rows.length === 0 ? (
               <tr>
-                <td colSpan={1 + months.length * 3 + 3}>No Assignment Groups match the selected controls.</td>
+                <td colSpan={4 + months.length * 3 + 3}>
+                  No Assignment Groups match the selected controls.
+                </td>
               </tr>
             ) : (
               rows.map((row) => (
@@ -2672,6 +2749,9 @@ function AssignmentGroupVolumetricsTable({
                   <th className="assignment-group-column" scope="row">
                     {row.assignment_group}
                   </th>
+                  <td className="reference-column">{row.functional_track}</td>
+                  <td className="reference-column">{row.ams_owner}</td>
+                  <td className="reference-column">{row.support_lead}</td>
                   {months.flatMap((month, monthIndex) => {
                     const metrics = metricsForMonth(row, month);
                     return assignmentGroupMetricLabels.map((metric, metricIndex) => (
@@ -2699,6 +2779,9 @@ function AssignmentGroupVolumetricsTable({
                 <th className="assignment-group-column" scope="row">
                   Grand Total
                 </th>
+                <td className="reference-column"></td>
+                <td className="reference-column"></td>
+                <td className="reference-column"></td>
                 {months.flatMap((month, monthIndex) => {
                   const metrics = summedMetrics(rows, month);
                   return assignmentGroupMetricLabels.map((metric, metricIndex) => (

@@ -24,6 +24,11 @@ from app.models import (
     Ticket,
     TicketRawRow,
 )
+from app.services.dashboard_assignment_groups import (
+    basis_security_assignment_group_condition,
+    is_basis_security_assignment_group,
+    normalized_assignment_group_expression,
+)
 from app.services.dashboard_filter_facts import ensure_dashboard_filter_facts
 
 SECONDS_PER_DAY = 86400
@@ -290,6 +295,8 @@ UNMAPPED_ASSIGNMENT_GROUP_LABEL = "Unmapped Assignment Group"
 UNMAPPED_FUNCTIONAL_TRACK_LABEL = "Unmapped Functional Track"
 UNMAPPED_PARENT_APPLICATION_LABEL = "Unmapped Parent Business Application"
 UNMAPPED_BUSINESS_SERVICE_CI_LABEL = "Unmapped Business Service CI"
+REFERENCE_MISSING_LABEL = "-"
+MULTIPLE_REFERENCE_LABEL = "Multiple"
 
 
 class TimeGrain(StrEnum):
@@ -1703,6 +1710,112 @@ def validation_display_expression(expression: Any, label: str) -> Any:
     return func.coalesce(nonblank_text_expression(expression), literal(label))
 
 
+def reference_display_expression(expression: Any) -> Any:
+    return validation_display_expression(expression, REFERENCE_MISSING_LABEL)
+
+
+def display_reference_value(values: set[str], fallback: str | None = None) -> str:
+    clean_values = {
+        str(value).strip()
+        for value in values
+        if value and str(value).strip() and str(value).strip() != REFERENCE_MISSING_LABEL
+    }
+    if len(clean_values) == 1:
+        return next(iter(clean_values))
+    if len(clean_values) > 1:
+        return MULTIPLE_REFERENCE_LABEL
+    return fallback or REFERENCE_MISSING_LABEL
+
+
+def inventory_assignment_group_reference_map(
+    db: Session,
+    project_id: UUID,
+) -> dict[tuple[str, str], dict[str, str]]:
+    assignment_key_expression = normalized_assignment_group_expression(
+        ApplicationInventoryItem.assignment_group,
+    )
+    scope_expression = application_inventory_scope_expression()
+    statement = (
+        select(
+            assignment_key_expression.label("assignment_group_key"),
+            scope_expression.label("scope"),
+            reference_display_expression(ApplicationInventoryItem.functional_track).label(
+                "functional_track",
+            ),
+            reference_display_expression(ApplicationInventoryItem.ams_owner).label("ams_owner"),
+            reference_display_expression(ApplicationInventoryItem.support_lead).label(
+                "support_lead",
+            ),
+        )
+        .where(
+            ApplicationInventoryItem.project_id == project_id,
+            assignment_key_expression != "",
+        )
+        .group_by(
+            assignment_key_expression,
+            scope_expression,
+            ApplicationInventoryItem.functional_track,
+            ApplicationInventoryItem.ams_owner,
+            ApplicationInventoryItem.support_lead,
+        )
+    )
+    grouped: dict[tuple[str, str], dict[str, set[str]]] = {}
+    for row in db.execute(statement).mappings().all():
+        key = (str(row["scope"]), str(row["assignment_group_key"]))
+        entry = grouped.setdefault(
+            key,
+            {"functional_track": set(), "ams_owner": set(), "support_lead": set()},
+        )
+        entry["functional_track"].add(str(row["functional_track"] or ""))
+        entry["ams_owner"].add(str(row["ams_owner"] or ""))
+        entry["support_lead"].add(str(row["support_lead"] or ""))
+
+    return {
+        key: {
+            "functional_track": display_reference_value(values["functional_track"]),
+            "ams_owner": display_reference_value(values["ams_owner"]),
+            "support_lead": display_reference_value(values["support_lead"]),
+        }
+        for key, values in grouped.items()
+    }
+
+
+def assignment_group_reference_for_row(
+    row: dict[str, Any],
+    reference_map: dict[tuple[str, str], dict[str, str]],
+) -> dict[str, str]:
+    scope = str(row.get("scope") or "in_scope")
+    assignment_key = str(row.get("assignment_group_key") or "")
+    fallback = reference_map.get((scope, assignment_key), {})
+    return {
+        "functional_track": display_reference_value(
+            {str(row.get("functional_track") or "")},
+            fallback.get("functional_track"),
+        ),
+        "ams_owner": display_reference_value(
+            {str(row.get("ams_owner") or "")},
+            fallback.get("ams_owner"),
+        ),
+        "support_lead": display_reference_value(
+            {str(row.get("support_lead") or "")},
+            fallback.get("support_lead"),
+        ),
+    }
+
+
+def assignment_group_mapping_with_basis_split(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    regular_rows: list[dict[str, Any]] = []
+    basis_security_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if is_basis_security_assignment_group(row.get("assignment_group")):
+            basis_security_rows.append(row)
+        else:
+            regular_rows.append(row)
+    return regular_rows, basis_security_rows
+
+
 def normalize_assignment_mapping_source(value: str | None) -> str:
     normalized = (value or "application_inventory").strip().lower()
     if normalized not in ASSIGNMENT_GROUP_MAPPING_SOURCES:
@@ -1808,10 +1921,16 @@ def applications_assignment_group_mapping_from_inventory(
         ApplicationInventoryItem.assignment_group,
         UNMAPPED_ASSIGNMENT_GROUP_LABEL,
     )
-    track_expression = validation_display_expression(
+    assignment_key_expression = normalized_assignment_group_expression(
+        ApplicationInventoryItem.assignment_group,
+    )
+    filter_track_expression = validation_display_expression(
         ApplicationInventoryItem.functional_track,
         UNMAPPED_FUNCTIONAL_TRACK_LABEL,
     )
+    track_expression = reference_display_expression(ApplicationInventoryItem.functional_track)
+    ams_owner_expression = reference_display_expression(ApplicationInventoryItem.ams_owner)
+    support_lead_expression = reference_display_expression(ApplicationInventoryItem.support_lead)
     parent_expression = validation_display_expression(
         ApplicationInventoryItem.parent_application_name,
         UNMAPPED_PARENT_APPLICATION_LABEL,
@@ -1822,7 +1941,7 @@ def applications_assignment_group_mapping_from_inventory(
     )
     conditions = application_inventory_mapping_conditions(request, scope_expression)
     if functional_track != "all":
-        conditions.append(track_expression == functional_track)
+        conditions.append(filter_track_expression == functional_track)
     search_condition = assignment_mapping_search_condition(
         request.search,
         [
@@ -1839,7 +1958,10 @@ def applications_assignment_group_mapping_from_inventory(
     statement = (
         select(
             assignment_expression.label("assignment_group"),
+            assignment_key_expression.label("assignment_group_key"),
             track_expression.label("functional_track"),
+            ams_owner_expression.label("ams_owner"),
+            support_lead_expression.label("support_lead"),
             parent_expression.label("parent_business_application"),
             business_service_expression.label("business_service_ci_name"),
             scope_expression.label("scope"),
@@ -1848,7 +1970,10 @@ def applications_assignment_group_mapping_from_inventory(
         .where(*conditions)
         .group_by(
             assignment_expression,
+            assignment_key_expression,
             track_expression,
+            ams_owner_expression,
+            support_lead_expression,
             parent_expression,
             business_service_expression,
             scope_expression,
@@ -1862,7 +1987,10 @@ def applications_assignment_group_mapping_from_inventory(
     rows = [
         {
             "assignment_group": row["assignment_group"],
+            "assignment_group_key": row["assignment_group_key"],
             "functional_track": row["functional_track"],
+            "ams_owner": row["ams_owner"],
+            "support_lead": row["support_lead"],
             "parent_business_application": row["parent_business_application"],
             "business_service_ci_name": row["business_service_ci_name"],
             "scope": row["scope"],
@@ -1872,17 +2000,25 @@ def applications_assignment_group_mapping_from_inventory(
         }
         for row in db.execute(statement).mappings().all()
     ]
+    rows, basis_security_rows = assignment_group_mapping_with_basis_split(rows)
+    summary = assignment_group_mapping_summary(rows)
+    summary["basis_security_mapping_count"] = len(basis_security_rows)
     return {
         "source": "application_inventory",
         "scope": scope,
         "functional_track": functional_track,
         "available_functional_tracks": application_assignment_mapping_tracks(db, request),
-        "summary": assignment_group_mapping_summary(rows),
+        "summary": summary,
         "rows": rows,
+        "basis_security_rows": basis_security_rows,
         "data_notes": [
             "Application Inventory source shows configured assignment group to application "
             "mapping.",
             "Application Inventory remains the source for application attributes.",
+            "BASIS and SECURITY assignment groups are confirmed out-of-scope and shown "
+            "separately when present.",
+            "BASIS/SECURITY classification uses a case-insensitive contains match on "
+            "assignment group name.",
         ],
         "warnings": [],
     }
@@ -1899,10 +2035,14 @@ def applications_assignment_group_mapping_from_tickets(
         source.c.assignment_group,
         UNMAPPED_ASSIGNMENT_GROUP_LABEL,
     )
-    track_expression = validation_display_expression(
+    assignment_key_expression = normalized_assignment_group_expression(source.c.assignment_group)
+    filter_track_expression = validation_display_expression(
         source.c.functional_track,
         UNMAPPED_FUNCTIONAL_TRACK_LABEL,
     )
+    track_expression = reference_display_expression(source.c.functional_track)
+    ams_owner_expression = reference_display_expression(source.c.ams_owner)
+    support_lead_expression = reference_display_expression(source.c.support_lead)
     parent_expression = validation_display_expression(
         source.c.parent_application_name,
         UNMAPPED_PARENT_APPLICATION_LABEL,
@@ -1913,7 +2053,7 @@ def applications_assignment_group_mapping_from_tickets(
     )
     conditions: list[Any] = [source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values())]
     if functional_track != "all":
-        conditions.append(track_expression == functional_track)
+        conditions.append(filter_track_expression == functional_track)
     search_condition = assignment_mapping_search_condition(
         request.search,
         [
@@ -1934,7 +2074,10 @@ def applications_assignment_group_mapping_from_tickets(
     statement = (
         select(
             assignment_expression.label("assignment_group"),
+            assignment_key_expression.label("assignment_group_key"),
             track_expression.label("functional_track"),
+            ams_owner_expression.label("ams_owner"),
+            support_lead_expression.label("support_lead"),
             parent_expression.label("parent_business_application"),
             business_service_expression.label("business_service_ci_name"),
             source.c.scope.label("scope"),
@@ -1946,17 +2089,22 @@ def applications_assignment_group_mapping_from_tickets(
         .where(*conditions)
         .group_by(
             assignment_expression,
+            assignment_key_expression,
             track_expression,
+            ams_owner_expression,
+            support_lead_expression,
             parent_expression,
             business_service_expression,
             source.c.scope,
         )
         .order_by(func.count(source.c.id).desc(), assignment_expression.asc())
     )
+    reference_map = inventory_assignment_group_reference_map(db, request.project_id)
     rows = [
         {
             "assignment_group": row["assignment_group"],
-            "functional_track": row["functional_track"],
+            "assignment_group_key": row["assignment_group_key"],
+            **assignment_group_reference_for_row(row, reference_map),
             "parent_business_application": row["parent_business_application"],
             "business_service_ci_name": row["business_service_ci_name"],
             "scope": row["scope"],
@@ -1966,18 +2114,26 @@ def applications_assignment_group_mapping_from_tickets(
         }
         for row in db.execute(statement).mappings().all()
     ]
+    rows, basis_security_rows = assignment_group_mapping_with_basis_split(rows)
+    summary = assignment_group_mapping_summary(rows)
+    summary["basis_security_mapping_count"] = len(basis_security_rows)
     return {
         "source": "tickets",
         "scope": scope,
         "functional_track": functional_track,
         "available_functional_tracks": application_assignment_mapping_tracks(db, request),
-        "summary": assignment_group_mapping_summary(rows),
+        "summary": summary,
         "rows": rows,
+        "basis_security_rows": basis_security_rows,
         "data_notes": [
             "Tickets Data source shows distinct mappings found in normalized Incident and "
             "SC Task records.",
             "Generic Tickets includes Incidents and SC Tasks only.",
             "Problems and Changes are excluded.",
+            "BASIS and SECURITY assignment groups are confirmed out-of-scope and shown "
+            "separately when present.",
+            "BASIS/SECURITY classification uses a case-insensitive contains match on "
+            "assignment group name.",
         ],
         "warnings": [],
     }
@@ -2006,6 +2162,7 @@ def assignment_group_mapping_summary(rows: list[dict[str, Any]]) -> dict[str, An
             if incident_total is not None and sc_task_total is not None
             else None
         ),
+        "basis_security_mapping_count": 0,
     }
 
 
@@ -2095,12 +2252,20 @@ def assignment_group_volumetrics_event_rows(
         source.c.assignment_group,
         UNMAPPED_ASSIGNMENT_GROUP_LABEL,
     )
-    track_expression = validation_display_expression(
+    assignment_key_expression = normalized_assignment_group_expression(source.c.assignment_group)
+    filter_track_expression = validation_display_expression(
         source.c.functional_track,
         UNMAPPED_FUNCTIONAL_TRACK_LABEL,
     )
+    track_expression = reference_display_expression(source.c.functional_track)
+    ams_owner_expression = reference_display_expression(source.c.ams_owner)
+    support_lead_expression = reference_display_expression(source.c.support_lead)
     category_expression = assignment_group_volumetrics_category_expression(source)
     month_expression = func.to_char(func.date_trunc("month", date_expression), "YYYY-MM")
+    basis_security_expression = case(
+        (basis_security_assignment_group_condition(source.c.assignment_group), literal(True)),
+        else_=literal(False),
+    )
     conditions: list[Any] = [
         source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values()),
         date_expression.is_not(None),
@@ -2108,27 +2273,47 @@ def assignment_group_volumetrics_event_rows(
         date_expression < end_datetime,
     ]
     if functional_track != "all":
-        conditions.append(track_expression == functional_track)
+        conditions.append(filter_track_expression == functional_track)
     if extra_conditions:
         conditions.extend(extra_conditions)
 
     statement = (
         select(
             category_expression.label("ticket_category"),
+            source.c.scope.label("scope"),
             assignment_expression.label("assignment_group"),
+            assignment_key_expression.label("assignment_group_key"),
             track_expression.label("functional_track"),
+            ams_owner_expression.label("ams_owner"),
+            support_lead_expression.label("support_lead"),
+            basis_security_expression.label("basis_security"),
             month_expression.label("month_key"),
             func.count(source.c.id).label("ticket_count"),
         )
         .select_from(source)
         .where(*conditions)
-        .group_by(category_expression, assignment_expression, track_expression, month_expression)
+        .group_by(
+            category_expression,
+            source.c.scope,
+            assignment_expression,
+            assignment_key_expression,
+            track_expression,
+            ams_owner_expression,
+            support_lead_expression,
+            basis_security_expression,
+            month_expression,
+        )
     )
     return [
         {
             "ticket_category": row["ticket_category"],
+            "scope": row["scope"],
             "assignment_group": row["assignment_group"],
+            "assignment_group_key": row["assignment_group_key"],
             "functional_track": row["functional_track"],
+            "ams_owner": row["ams_owner"],
+            "support_lead": row["support_lead"],
+            "basis_security": bool(row["basis_security"]),
             "month_key": row["month_key"],
             event_name: int_count(row["ticket_count"]),
         }
@@ -2144,24 +2329,33 @@ def blank_month_metrics(months: list[date]) -> dict[str, dict[str, int]]:
 
 
 def add_assignment_group_volumetrics_event(
-    store: dict[tuple[str, str, str], dict[str, Any]],
+    store: dict[tuple[str, bool, str], dict[str, Any]],
     row: dict[str, Any],
     months: list[date],
     event_name: str,
 ) -> None:
     key = (
         row["ticket_category"],
+        row["basis_security"],
         row["assignment_group"],
-        row["functional_track"],
     )
     entry = store.setdefault(
         key,
         {
             "assignment_group": row["assignment_group"],
-            "functional_track": row["functional_track"],
+            "assignment_group_key": row["assignment_group_key"],
+            "scopes": set(),
+            "functional_track_values": set(),
+            "ams_owner_values": set(),
+            "support_lead_values": set(),
+            "basis_security": row["basis_security"],
             "months": blank_month_metrics(months),
         },
     )
+    entry["scopes"].add(row["scope"])
+    entry["functional_track_values"].add(row["functional_track"])
+    entry["ams_owner_values"].add(row["ams_owner"])
+    entry["support_lead_values"].add(row["support_lead"])
     if row["month_key"] in entry["months"]:
         entry["months"][row["month_key"]][event_name] += int_count(row[event_name])
 
@@ -2170,9 +2364,13 @@ def build_assignment_group_volumetrics_table(
     title: str,
     rows: list[dict[str, Any]],
     months: list[date],
+    reference_map: dict[tuple[str, str], dict[str, str]],
 ) -> dict[str, Any]:
     output_rows: list[dict[str, Any]] = []
     for row in rows:
+        scopes = row.get("scopes") or set()
+        fallback_scope = next(iter(scopes)) if len(scopes) == 1 else ""
+        fallback = reference_map.get((fallback_scope, row.get("assignment_group_key", "")), {})
         totals = {
             "created": sum(row["months"][month_key(month)]["created"] for month in months),
             "resolved": sum(row["months"][month_key(month)]["resolved"] for month in months),
@@ -2181,7 +2379,18 @@ def build_assignment_group_volumetrics_table(
         output_rows.append(
             {
                 "assignment_group": row["assignment_group"],
-                "functional_track": row["functional_track"],
+                "functional_track": display_reference_value(
+                    row.get("functional_track_values", set()),
+                    fallback.get("functional_track"),
+                ),
+                "ams_owner": display_reference_value(
+                    row.get("ams_owner_values", set()),
+                    fallback.get("ams_owner"),
+                ),
+                "support_lead": display_reference_value(
+                    row.get("support_lead_values", set()),
+                    fallback.get("support_lead"),
+                ),
                 "months": row["months"],
                 "totals": totals,
             },
@@ -2191,6 +2400,8 @@ def build_assignment_group_volumetrics_table(
             -int_count(item["totals"]["created"]),
             str(item["assignment_group"]).casefold(),
             str(item["functional_track"]).casefold(),
+            str(item["ams_owner"]).casefold(),
+            str(item["support_lead"]).casefold(),
         ),
     )
     return {
@@ -2219,7 +2430,8 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
         source.c.completion_at,
     )
 
-    store: dict[tuple[str, str, str], dict[str, Any]] = {}
+    reference_map = inventory_assignment_group_reference_map(db, request.project_id)
+    store: dict[tuple[str, bool, str], dict[str, Any]] = {}
     for row in assignment_group_volumetrics_event_rows(
         db,
         source,
@@ -2253,19 +2465,59 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
     ):
         add_assignment_group_volumetrics_event(store, row, months, "cancelled")
 
-    incident_rows = [row for key, row in store.items() if key[0] == "incidents"]
-    sc_task_rows = [row for key, row in store.items() if key[0] == "sc_tasks"]
-    overall_by_assignment: dict[tuple[str, str], dict[str, Any]] = {}
+    incident_rows = [row for key, row in store.items() if key[0] == "incidents" and not key[1]]
+    sc_task_rows = [row for key, row in store.items() if key[0] == "sc_tasks" and not key[1]]
+    basis_incident_rows = [
+        row for key, row in store.items() if key[0] == "incidents" and key[1]
+    ]
+    basis_sc_task_rows = [
+        row for key, row in store.items() if key[0] == "sc_tasks" and key[1]
+    ]
+    overall_by_assignment: dict[tuple[bool, str], dict[str, Any]] = {}
     for row in incident_rows + sc_task_rows:
-        key = (row["assignment_group"], row["functional_track"])
+        key = (False, row["assignment_group"])
         overall_row = overall_by_assignment.setdefault(
             key,
             {
                 "assignment_group": row["assignment_group"],
-                "functional_track": row["functional_track"],
+                "assignment_group_key": row["assignment_group_key"],
+                "scopes": set(),
+                "functional_track_values": set(),
+                "ams_owner_values": set(),
+                "support_lead_values": set(),
+                "basis_security": False,
                 "months": blank_month_metrics(months),
             },
         )
+        overall_row["scopes"].update(row.get("scopes", set()))
+        overall_row["functional_track_values"].update(row.get("functional_track_values", set()))
+        overall_row["ams_owner_values"].update(row.get("ams_owner_values", set()))
+        overall_row["support_lead_values"].update(row.get("support_lead_values", set()))
+        for current_month in months:
+            current_key = month_key(current_month)
+            for metric in ("created", "resolved", "cancelled"):
+                overall_row["months"][current_key][metric] += row["months"][current_key][metric]
+
+    basis_overall_by_assignment: dict[tuple[bool, str], dict[str, Any]] = {}
+    for row in basis_incident_rows + basis_sc_task_rows:
+        key = (True, row["assignment_group"])
+        overall_row = basis_overall_by_assignment.setdefault(
+            key,
+            {
+                "assignment_group": row["assignment_group"],
+                "assignment_group_key": row["assignment_group_key"],
+                "scopes": set(),
+                "functional_track_values": set(),
+                "ams_owner_values": set(),
+                "support_lead_values": set(),
+                "basis_security": True,
+                "months": blank_month_metrics(months),
+            },
+        )
+        overall_row["scopes"].update(row.get("scopes", set()))
+        overall_row["functional_track_values"].update(row.get("functional_track_values", set()))
+        overall_row["ams_owner_values"].update(row.get("ams_owner_values", set()))
+        overall_row["support_lead_values"].update(row.get("support_lead_values", set()))
         for current_month in months:
             current_key = month_key(current_month)
             for metric in ("created", "resolved", "cancelled"):
@@ -2287,16 +2539,37 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
                 "Incidents",
                 incident_rows,
                 months,
+                reference_map,
             ),
             "sc_tasks": build_assignment_group_volumetrics_table(
                 "SC Tasks",
                 sc_task_rows,
                 months,
+                reference_map,
             ),
             "overall": build_assignment_group_volumetrics_table(
                 "Overall",
                 list(overall_by_assignment.values()),
                 months,
+                reference_map,
+            ),
+            "basis_security_incidents": build_assignment_group_volumetrics_table(
+                "BASIS/SECURITY Incidents",
+                basis_incident_rows,
+                months,
+                reference_map,
+            ),
+            "basis_security_sc_tasks": build_assignment_group_volumetrics_table(
+                "BASIS/SECURITY SC Tasks",
+                basis_sc_task_rows,
+                months,
+                reference_map,
+            ),
+            "basis_security_overall": build_assignment_group_volumetrics_table(
+                "BASIS/SECURITY Overall",
+                list(basis_overall_by_assignment.values()),
+                months,
+                reference_map,
             ),
         },
         "available_functional_tracks": volumetrics_assignment_group_available_tracks(db, request),
@@ -2306,6 +2579,8 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
             "Created counts use created_at month.",
             "Resolved counts use normalized completion date and exclude cancelled states.",
             "Cancelled counts use cancelled/closed-incomplete state with closed/resolved date.",
+            "BASIS and SECURITY assignment groups are confirmed out-of-scope and shown "
+            "separately when present.",
         ],
         "warnings": [],
     }

@@ -514,6 +514,7 @@ export type DashboardApplicationsAssignmentGroupMappingSummary = {
   assignment_group_count: number;
   business_service_ci_count: number;
   parent_business_application_count: number;
+  basis_security_mapping_count: number;
   incident_count: number | null;
   sc_task_count: number | null;
   total_ticket_count: number | null;
@@ -522,6 +523,8 @@ export type DashboardApplicationsAssignmentGroupMappingSummary = {
 export type DashboardApplicationsAssignmentGroupMappingRow = {
   assignment_group: string;
   functional_track: string;
+  ams_owner: string;
+  support_lead: string;
   parent_business_application: string;
   business_service_ci_name: string;
   scope: string;
@@ -537,6 +540,7 @@ export type DashboardApplicationsAssignmentGroupMapping = {
   available_functional_tracks: string[];
   summary: DashboardApplicationsAssignmentGroupMappingSummary;
   rows: DashboardApplicationsAssignmentGroupMappingRow[];
+  basis_security_rows: DashboardApplicationsAssignmentGroupMappingRow[];
   data_notes: string[];
   warnings: string[];
 };
@@ -965,6 +969,8 @@ export type DashboardVolumetricsAssignmentGroupMonthMetrics = {
 export type DashboardVolumetricsAssignmentGroupRow = {
   assignment_group: string;
   functional_track: string;
+  ams_owner: string;
+  support_lead: string;
   months: Record<string, DashboardVolumetricsAssignmentGroupMonthMetrics>;
   totals: DashboardVolumetricsAssignmentGroupMonthMetrics;
 };
@@ -983,6 +989,9 @@ export type DashboardVolumetricsAssignmentGroupVolumetrics = {
     incidents: DashboardVolumetricsAssignmentGroupTable;
     sc_tasks: DashboardVolumetricsAssignmentGroupTable;
     overall: DashboardVolumetricsAssignmentGroupTable;
+    basis_security_incidents?: DashboardVolumetricsAssignmentGroupTable;
+    basis_security_sc_tasks?: DashboardVolumetricsAssignmentGroupTable;
+    basis_security_overall?: DashboardVolumetricsAssignmentGroupTable;
   };
   available_functional_tracks: string[];
   data_notes: string[];

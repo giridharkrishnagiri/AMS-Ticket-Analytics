@@ -1812,12 +1812,18 @@ h2 {
   font-size: 0.8rem;
 }
 
+.validation-subsection {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #cbd5e1;
+}
+
 .volumetrics-validation-frame {
   max-height: 620px;
 }
 
 .assignment-group-volumetrics-table {
-  min-width: 1740px;
+  min-width: 2140px;
   font-size: 0.78rem;
 }
 
@@ -1836,6 +1842,19 @@ h2 {
 
 .assignment-group-volumetrics-table thead .assignment-group-column {
   z-index: 5;
+  background: #f8fafc;
+}
+
+.assignment-group-volumetrics-table .reference-column {
+  min-width: 140px;
+  max-width: 220px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  background: #ffffff;
+  text-align: left;
+}
+
+.assignment-group-volumetrics-table thead .reference-column {
   background: #f8fafc;
 }
 

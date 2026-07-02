@@ -202,6 +202,8 @@ def add_out_of_scope_ticket(
     business_service_ci_name: str | None = None,
     parent_application_name: str | None = None,
     functional_track: str | None = None,
+    ams_owner: str | None = None,
+    support_lead: str | None = None,
 ) -> AssessmentOutOfScopeTicket:
     ticket = AssessmentOutOfScopeTicket(
         project_id=project_id,
@@ -218,6 +220,8 @@ def add_out_of_scope_ticket(
         business_service_ci_name=business_service_ci_name,
         parent_application_name=parent_application_name,
         functional_track=functional_track,
+        ams_owner=ams_owner,
+        support_lead=support_lead,
         sap_non_sap=derive_sap_non_sap(assignment_group),
         is_batch_related=derive_is_batch_related(ticket_type, f"{number} title"),
         out_of_scope_reason="assignment_group_not_in_reference",
@@ -338,6 +342,7 @@ def add_inventory_item(
     assignment_group: str,
     application_owner: str,
     parent_application_name: str,
+    support_lead: str | None = "Support Lead A",
     active: bool | None = True,
     active_users: int | None = None,
     hosting_env: str | None = None,
@@ -377,6 +382,7 @@ def add_inventory_item(
         assignment_group=assignment_group,
         sap_non_sap=derive_sap_non_sap(assignment_group),
         application_owner=application_owner,
+        support_lead=support_lead,
         parent_application_name=parent_application_name,
         active=active,
         active_users=active_users,
@@ -466,6 +472,8 @@ def test_applications_assignment_group_mapping_application_inventory_source() ->
         assert payload["rows"][0] == {
             "assignment_group": "AG-FIN",
             "functional_track": "Finance",
+            "ams_owner": "Owner A",
+            "support_lead": "Support Lead A",
             "parent_business_application": "Finance Parent",
             "business_service_ci_name": "Finance Service",
             "scope": "in_scope",
@@ -473,6 +481,8 @@ def test_applications_assignment_group_mapping_application_inventory_source() ->
             "sc_task_count": None,
             "total_ticket_count": None,
         }
+        assert payload["basis_security_rows"] == []
+        assert payload["summary"]["basis_security_mapping_count"] == 0
         serialized = json.dumps(payload)
         assert "cmdb_payload" not in serialized
         assert "normalized_payload" not in serialized
@@ -514,6 +524,31 @@ def test_applications_assignment_group_mapping_tickets_source_counts_generic_tic
             parent_application_name="External Parent",
             business_service_ci_name="External Service",
         )
+        add_inventory_item(
+            db,
+            project_id,
+            "Basis Inventory Service",
+            supported_by_vendor="Vendor Basis",
+            functional_track="Basis Track",
+            ams_owner="Basis Owner",
+            support_lead="Basis Lead",
+            assignment_group="IT-SAP-Global-Basis",
+            application_owner="Basis App Owner",
+            parent_application_name="Basis Parent",
+            scope_status="out_of_scope",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-MAP-BASIS",
+            "INCIDENT",
+            dt("2026-01-03T00:00:00"),
+            assignment_group="IT-SAP-Global-Basis",
+            functional_track=None,
+            parent_application_name=None,
+            business_service_ci_name=None,
+        )
         db.commit()
 
         with TestClient(app) as client:
@@ -547,6 +582,10 @@ def test_applications_assignment_group_mapping_tickets_source_counts_generic_tic
         assert in_scope_payload["rows"][0]["total_ticket_count"] == 2
         assert in_scope_payload["rows"][0]["incident_count"] == 1
         assert in_scope_payload["rows"][0]["sc_task_count"] == 1
+        assert in_scope_payload["rows"][0]["functional_track"] == "Finance"
+        assert in_scope_payload["rows"][0]["ams_owner"] == "-"
+        assert in_scope_payload["rows"][0]["support_lead"] == "-"
+        assert in_scope_payload["basis_security_rows"] == []
         assert "CHANGE" not in json.dumps(in_scope_payload)
 
         assert all_scope_response.status_code == 200
@@ -554,6 +593,14 @@ def test_applications_assignment_group_mapping_tickets_source_counts_generic_tic
         assert all_scope_payload["summary"]["mapping_count"] == 2
         assert all_scope_payload["summary"]["incident_count"] == 2
         assert all_scope_payload["summary"]["sc_task_count"] == 1
+        assert all_scope_payload["summary"]["basis_security_mapping_count"] == 1
+        assert (
+            all_scope_payload["basis_security_rows"][0]["assignment_group"]
+            == "IT-SAP-Global-Basis"
+        )
+        assert all_scope_payload["basis_security_rows"][0]["functional_track"] == "Basis Track"
+        assert all_scope_payload["basis_security_rows"][0]["ams_owner"] == "Basis Owner"
+        assert all_scope_payload["basis_security_rows"][0]["support_lead"] == "Basis Lead"
         serialized = json.dumps(all_scope_payload)
         assert "cmdb_payload" not in serialized
         assert "normalized_payload" not in serialized
@@ -628,6 +675,41 @@ def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> N
             assignment_group="AG-OOS",
             functional_track="External",
         )
+        add_inventory_item(
+            db,
+            project_id,
+            "Security Inventory Service",
+            supported_by_vendor="Vendor Security",
+            functional_track="Security Track",
+            ams_owner="Security Owner",
+            support_lead="Security Lead",
+            assignment_group="IT-SAP-MEU-Security",
+            application_owner="Security App Owner",
+            parent_application_name="Security Parent",
+            scope_status="out_of_scope",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-VOL-SEC",
+            "INCIDENT",
+            dt("2025-12-01T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2025-12-02T00:00:00"),
+            assignment_group="IT-SAP-MEU-Security",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "SCT-VOL-SEC",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-01T00:00:00"),
+            state="Closed Complete",
+            closed_at=dt("2026-01-02T00:00:00"),
+            assignment_group="IT-SAP-MEU-Security",
+        )
         db.commit()
 
         with TestClient(app) as client:
@@ -690,6 +772,27 @@ def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> N
             "resolved": 1,
             "cancelled": 0,
         }
+        assert [
+            row["assignment_group"] for row in oos_payload["tables"]["incidents"]["rows"]
+        ] == ["AG-OOS"]
+        basis_incident = oos_payload["tables"]["basis_security_incidents"]["rows"][0]
+        assert basis_incident["assignment_group"] == "IT-SAP-MEU-Security"
+        assert basis_incident["functional_track"] == "Security Track"
+        assert basis_incident["ams_owner"] == "Security Owner"
+        assert basis_incident["support_lead"] == "Security Lead"
+        assert basis_incident["months"]["2025-12"] == {
+            "created": 1,
+            "resolved": 1,
+            "cancelled": 0,
+        }
+        basis_sc_task = oos_payload["tables"]["basis_security_sc_tasks"]["rows"][0]
+        assert basis_sc_task["months"]["2026-01"] == {
+            "created": 1,
+            "resolved": 1,
+            "cancelled": 0,
+        }
+        basis_overall = oos_payload["tables"]["basis_security_overall"]["rows"][0]
+        assert basis_overall["totals"] == {"created": 2, "resolved": 2, "cancelled": 0}
     finally:
         cleanup_client(db, client_id)
 
