@@ -24,6 +24,10 @@ from app.models import (
     Ticket,
     TicketRawRow,
 )
+from app.services.assignment_group_master_reference import (
+    active_assignment_group_master_manager_map,
+    assignment_group_master_reference_status,
+)
 from app.services.dashboard_assignment_groups import (
     basis_security_assignment_group_condition,
     is_basis_security_assignment_group,
@@ -1783,10 +1787,17 @@ def inventory_assignment_group_reference_map(
 def assignment_group_reference_for_row(
     row: dict[str, Any],
     reference_map: dict[tuple[str, str], dict[str, str]],
+    master_manager_map: dict[str, str] | None = None,
 ) -> dict[str, str]:
     scope = str(row.get("scope") or "in_scope")
     assignment_key = str(row.get("assignment_group_key") or "")
     fallback = reference_map.get((scope, assignment_key), {})
+    app_inventory_support_lead = fallback.get("support_lead")
+    support_lead_fallback = (
+        app_inventory_support_lead
+        if app_inventory_support_lead and app_inventory_support_lead != REFERENCE_MISSING_LABEL
+        else (master_manager_map or {}).get(assignment_key)
+    )
     return {
         "functional_track": display_reference_value(
             {str(row.get("functional_track") or "")},
@@ -1798,7 +1809,7 @@ def assignment_group_reference_for_row(
         ),
         "support_lead": display_reference_value(
             {str(row.get("support_lead") or "")},
-            fallback.get("support_lead"),
+            support_lead_fallback,
         ),
     }
 
@@ -2100,11 +2111,12 @@ def applications_assignment_group_mapping_from_tickets(
         .order_by(func.count(source.c.id).desc(), assignment_expression.asc())
     )
     reference_map = inventory_assignment_group_reference_map(db, request.project_id)
+    master_manager_map = active_assignment_group_master_manager_map(db, request.project_id)
     rows = [
         {
             "assignment_group": row["assignment_group"],
             "assignment_group_key": row["assignment_group_key"],
-            **assignment_group_reference_for_row(row, reference_map),
+            **assignment_group_reference_for_row(row, reference_map, master_manager_map),
             "parent_business_application": row["parent_business_application"],
             "business_service_ci_name": row["business_service_ci_name"],
             "scope": row["scope"],
@@ -2365,12 +2377,20 @@ def build_assignment_group_volumetrics_table(
     rows: list[dict[str, Any]],
     months: list[date],
     reference_map: dict[tuple[str, str], dict[str, str]],
+    master_manager_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     output_rows: list[dict[str, Any]] = []
     for row in rows:
         scopes = row.get("scopes") or set()
         fallback_scope = next(iter(scopes)) if len(scopes) == 1 else ""
         fallback = reference_map.get((fallback_scope, row.get("assignment_group_key", "")), {})
+        assignment_key = str(row.get("assignment_group_key", ""))
+        app_inventory_support_lead = fallback.get("support_lead")
+        support_lead_fallback = (
+            app_inventory_support_lead
+            if app_inventory_support_lead and app_inventory_support_lead != REFERENCE_MISSING_LABEL
+            else (master_manager_map or {}).get(assignment_key)
+        )
         totals = {
             "created": sum(row["months"][month_key(month)]["created"] for month in months),
             "resolved": sum(row["months"][month_key(month)]["resolved"] for month in months),
@@ -2389,7 +2409,7 @@ def build_assignment_group_volumetrics_table(
                 ),
                 "support_lead": display_reference_value(
                     row.get("support_lead_values", set()),
-                    fallback.get("support_lead"),
+                    support_lead_fallback,
                 ),
                 "months": row["months"],
                 "totals": totals,
@@ -2431,6 +2451,8 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
     )
 
     reference_map = inventory_assignment_group_reference_map(db, request.project_id)
+    master_reference_status = assignment_group_master_reference_status(db, request.project_id)
+    master_manager_map = active_assignment_group_master_manager_map(db, request.project_id)
     store: dict[tuple[str, bool, str], dict[str, Any]] = {}
     for row in assignment_group_volumetrics_event_rows(
         db,
@@ -2523,6 +2545,27 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
             for metric in ("created", "resolved", "cancelled"):
                 overall_row["months"][current_key][metric] += row["months"][current_key][metric]
 
+    data_notes = [
+        "Assignment Group-wise Volumetrics includes Incidents and SC Tasks only.",
+        "Problems and Changes are excluded.",
+        "Created counts use created_at month.",
+        "Resolved counts use normalized completion date and exclude cancelled states.",
+        "Cancelled counts use cancelled/closed-incomplete state with closed/resolved date.",
+        "BASIS and SECURITY assignment groups are confirmed out-of-scope and shown "
+        "separately when present.",
+    ]
+    warnings: list[str] = []
+    if master_reference_status.active_count > 0:
+        data_notes.append(
+            "Support Lead may be populated from the ServiceNow master assignment group "
+            "reference Manager field when not available in Application Inventory.",
+        )
+    else:
+        warnings.append(
+            "Assignment Group master reference has not been imported; Support Lead fallback "
+            "is unavailable.",
+        )
+
     return {
         "scope": scope,
         "functional_track": functional_track,
@@ -2540,49 +2583,47 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
                 incident_rows,
                 months,
                 reference_map,
+                master_manager_map,
             ),
             "sc_tasks": build_assignment_group_volumetrics_table(
                 "SC Tasks",
                 sc_task_rows,
                 months,
                 reference_map,
+                master_manager_map,
             ),
             "overall": build_assignment_group_volumetrics_table(
                 "Overall",
                 list(overall_by_assignment.values()),
                 months,
                 reference_map,
+                master_manager_map,
             ),
             "basis_security_incidents": build_assignment_group_volumetrics_table(
                 "BASIS/SECURITY Incidents",
                 basis_incident_rows,
                 months,
                 reference_map,
+                master_manager_map,
             ),
             "basis_security_sc_tasks": build_assignment_group_volumetrics_table(
                 "BASIS/SECURITY SC Tasks",
                 basis_sc_task_rows,
                 months,
                 reference_map,
+                master_manager_map,
             ),
             "basis_security_overall": build_assignment_group_volumetrics_table(
                 "BASIS/SECURITY Overall",
                 list(basis_overall_by_assignment.values()),
                 months,
                 reference_map,
+                master_manager_map,
             ),
         },
         "available_functional_tracks": volumetrics_assignment_group_available_tracks(db, request),
-        "data_notes": [
-            "Assignment Group-wise Volumetrics includes Incidents and SC Tasks only.",
-            "Problems and Changes are excluded.",
-            "Created counts use created_at month.",
-            "Resolved counts use normalized completion date and exclude cancelled states.",
-            "Cancelled counts use cancelled/closed-incomplete state with closed/resolved date.",
-            "BASIS and SECURITY assignment groups are confirmed out-of-scope and shown "
-            "separately when present.",
-        ],
-        "warnings": [],
+        "data_notes": data_notes,
+        "warnings": warnings,
     }
 
 

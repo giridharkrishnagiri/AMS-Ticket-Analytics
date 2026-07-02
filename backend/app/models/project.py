@@ -13,6 +13,7 @@ from app.models.mixins import TimestampMixin, UuidPrimaryKeyMixin
 if TYPE_CHECKING:
     from app.models.application_dimension import ApplicationDimension
     from app.models.application_inventory_item import ApplicationInventoryItem
+    from app.models.assignment_group_master_reference import AssignmentGroupMasterReference
     from app.models.client import Client
     from app.models.dashboard_aggregate import DashboardAggregate
     from app.models.export_job import ExportJob
@@ -64,6 +65,12 @@ class Project(UuidPrimaryKeyMixin, TimestampMixin, Base):
     in_scope_assignment_groups: Mapped[list[InScopeAssignmentGroup]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
+    )
+    assignment_group_master_references: Mapped[list[AssignmentGroupMasterReference]] = (
+        relationship(
+            back_populates="project",
+            cascade="all, delete-orphan",
+        )
     )
     tickets: Mapped[list[Ticket]] = relationship(back_populates="project")
     incident_sla_rows: Mapped[list[IncidentSlaRow]] = relationship(

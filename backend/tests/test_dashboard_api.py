@@ -18,6 +18,7 @@ from app.models import (
     AssessmentOutOfScopeProblemRecord,
     AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
+    AssignmentGroupMasterReference,
     Client,
     DashboardCommentary,
     DashboardFilterFact,
@@ -398,6 +399,32 @@ def add_inventory_item(
     )
     db.add(item)
     return item
+
+
+def add_master_reference(
+    db,
+    project_id: UUID,
+    assignment_group: str,
+    *,
+    manager_name: str | None,
+    description: str | None = None,
+) -> AssignmentGroupMasterReference:
+    project = db.get(Project, project_id)
+    assert project is not None
+    reference = AssignmentGroupMasterReference(
+        client_id=project.client_id,
+        project_id=project_id,
+        assignment_group=assignment_group,
+        assignment_group_key=assignment_group.strip().casefold(),
+        description=description,
+        manager_name=manager_name,
+        source_filename="master.xlsx",
+        source_sheet_name="Master",
+        source_row_number=2,
+        is_active=True,
+    )
+    db.add(reference)
+    return reference
 
 
 def add_raw_row(
@@ -793,6 +820,194 @@ def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> N
         }
         basis_overall = oos_payload["tables"]["basis_security_overall"]["rows"][0]
         assert basis_overall["totals"] == {"created": 2, "resolved": 2, "cancelled": 0}
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_assignment_group_volumetrics_support_lead_uses_master_reference_fallback() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-SUPPORT-TICKET",
+            "INCIDENT",
+            dt("2025-12-05T00:00:00"),
+            assignment_group="AG-TICKET",
+            functional_track="Ticket Track",
+            ams_owner="Ticket Owner",
+            support_lead="Ticket Lead",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-SUPPORT-INV",
+            "INCIDENT",
+            dt("2025-12-06T00:00:00"),
+            assignment_group="AG-INV",
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Inventory Fallback Service",
+            supported_by_vendor="Vendor A",
+            functional_track="Inventory Track",
+            ams_owner="Inventory Owner",
+            support_lead="Inventory Lead",
+            assignment_group="AG-INV",
+            application_owner="App Owner",
+            parent_application_name="Parent App",
+            scope_status="in_scope",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-SUPPORT-MASTER",
+            "INCIDENT",
+            dt("2025-12-07T00:00:00"),
+            assignment_group="AG-MASTER",
+        )
+        add_master_reference(db, project_id, "AG-MASTER", manager_name="Master Manager")
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-SUPPORT-MISSING",
+            "INCIDENT",
+            dt("2025-12-08T00:00:00"),
+            assignment_group="AG-MISSING",
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/assignment-group-volumetrics",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "in_scope",
+                    "functional_track": "all",
+                    "from_month": "2025-12",
+                    "to_month": "2026-05",
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        rows = {
+            row["assignment_group"]: row
+            for row in payload["tables"]["incidents"]["rows"]
+        }
+        assert rows["AG-TICKET"]["support_lead"] == "Ticket Lead"
+        assert rows["AG-TICKET"]["functional_track"] == "Ticket Track"
+        assert rows["AG-TICKET"]["ams_owner"] == "Ticket Owner"
+
+        assert rows["AG-INV"]["support_lead"] == "Inventory Lead"
+        assert rows["AG-INV"]["functional_track"] == "Inventory Track"
+        assert rows["AG-INV"]["ams_owner"] == "Inventory Owner"
+
+        assert rows["AG-MASTER"]["support_lead"] == "Master Manager"
+        assert rows["AG-MASTER"]["functional_track"] == "-"
+        assert rows["AG-MASTER"]["ams_owner"] == "-"
+
+        assert rows["AG-MISSING"]["support_lead"] == "-"
+        assert any("ServiceNow master assignment group" in note for note in payload["data_notes"])
+        assert payload["warnings"] == []
+        serialized = json.dumps(payload)
+        assert "cmdb_payload" not in serialized
+        assert "normalized_payload" not in serialized
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_basis_security_volumetrics_support_lead_uses_master_reference_fallback() -> None:
+    db, client_id, project_id, batch_id, _, _ = create_dashboard_project()
+    try:
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-BASIS-MASTER",
+            "INCIDENT",
+            dt("2025-12-01T00:00:00"),
+            assignment_group="IT-SAP-Global-Basis",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "SCT-SEC-BLANK",
+            "SERVICE_CATALOG_TASK",
+            dt("2025-12-02T00:00:00"),
+            assignment_group="IT-NSA-Global-Security360",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-PLAIN-MASTER",
+            "INCIDENT",
+            dt("2025-12-03T00:00:00"),
+            assignment_group="Plain External Group",
+        )
+        add_master_reference(
+            db,
+            project_id,
+            "IT-SAP-Global-Basis",
+            manager_name="Basis Manager",
+        )
+        add_master_reference(
+            db,
+            project_id,
+            "IT-NSA-Global-Security360",
+            manager_name=None,
+        )
+        add_master_reference(
+            db,
+            project_id,
+            "Plain External Group",
+            manager_name="Plain Manager",
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/assignment-group-volumetrics",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "out_of_scope",
+                    "functional_track": "all",
+                    "from_month": "2025-12",
+                    "to_month": "2026-05",
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        regular_incident_rows = {
+            row["assignment_group"]: row
+            for row in payload["tables"]["incidents"]["rows"]
+        }
+        basis_incident_rows = {
+            row["assignment_group"]: row
+            for row in payload["tables"]["basis_security_incidents"]["rows"]
+        }
+        basis_sc_task_rows = {
+            row["assignment_group"]: row
+            for row in payload["tables"]["basis_security_sc_tasks"]["rows"]
+        }
+
+        assert "Plain External Group" in regular_incident_rows
+        assert regular_incident_rows["Plain External Group"]["support_lead"] == "Plain Manager"
+        assert "Plain External Group" not in basis_incident_rows
+        assert basis_incident_rows["IT-SAP-Global-Basis"]["support_lead"] == "Basis Manager"
+        assert basis_sc_task_rows["IT-NSA-Global-Security360"]["support_lead"] == "-"
     finally:
         cleanup_client(db, client_id)
 

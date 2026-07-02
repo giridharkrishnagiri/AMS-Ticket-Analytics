@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.admin import (
+    AssignmentGroupMasterImportResponse,
+    AssignmentGroupMasterPreviewRowResponse,
+    AssignmentGroupMasterRowResponse,
+    AssignmentGroupMasterStatusResponse,
     ClientDeleteRequest,
     DashboardFilterFactsRefreshRequest,
     DashboardFilterFactsRefreshResponse,
@@ -32,6 +36,12 @@ from app.services.admin_reset import (
     prepare_operational_reprocessing,
     reset_operational_data,
     reset_project_operational_data,
+)
+from app.services.assignment_group_master_reference import (
+    AssignmentGroupMasterReferenceError,
+    assignment_group_master_reference_status,
+    import_assignment_group_master_reference,
+    list_assignment_group_master_references,
 )
 from app.services.dashboard_filter_cache import mark_filter_caches_stale
 from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
@@ -60,6 +70,16 @@ def reference_preview_response(row) -> InScopeAssignmentGroupPreviewRowResponse:
     return InScopeAssignmentGroupPreviewRowResponse(
         assignment_group=row.assignment_group,
         functional_track=row.functional_track,
+        source_row_number=row.source_row_number,
+    )
+
+
+def master_reference_preview_response(row) -> AssignmentGroupMasterPreviewRowResponse:
+    return AssignmentGroupMasterPreviewRowResponse(
+        assignment_group=row.assignment_group,
+        description=row.description,
+        manager_name=row.manager_name,
+        source_sheet_name=row.source_sheet_name,
         source_row_number=row.source_row_number,
     )
 
@@ -218,6 +238,95 @@ def get_in_scope_assignment_groups(
 ) -> list[InScopeAssignmentGroupRowResponse]:
     try:
         return list_in_scope_assignment_groups(db, project_id, limit=limit, offset=offset)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/assignment-group-master-reference/import",
+    response_model=AssignmentGroupMasterImportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_import_assignment_group_master_reference(
+    project_id: Annotated[UUID, Form(...)],
+    file: Annotated[UploadFile, File(...)],
+    db: DbSession,
+) -> AssignmentGroupMasterImportResponse:
+    filename = file.filename or "assignment-group-master-reference"
+    extension = Path(filename).suffix.lower()
+    if extension not in {".xlsx", ".csv"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assignment Group Master Reference import supports XLSX and CSV files.",
+        )
+
+    temp_path = await copy_upload_to_temp_file(file)
+    try:
+        result = import_assignment_group_master_reference(db, project_id, temp_path, filename)
+        db.commit()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AssignmentGroupMasterReferenceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    finally:
+        temp_path.unlink(missing_ok=True)
+        await file.close()
+
+    return AssignmentGroupMasterImportResponse(
+        project_id=result.project_id,
+        source_filename=result.source_filename,
+        total_rows=result.total_rows,
+        imported_count=result.imported_count,
+        manager_populated_count=result.manager_populated_count,
+        skipped_count=result.skipped_count,
+        duplicate_count=result.duplicate_count,
+        warning_count=result.warning_count,
+        error_count=result.error_count,
+        warnings=result.warnings,
+        errors=result.errors,
+        preview_rows=[master_reference_preview_response(row) for row in result.preview_rows],
+    )
+
+
+@router.get(
+    "/assignment-group-master-reference/status",
+    response_model=AssignmentGroupMasterStatusResponse,
+)
+def get_assignment_group_master_reference_status(
+    project_id: Annotated[UUID, Query(...)],
+    db: DbSession,
+) -> AssignmentGroupMasterStatusResponse:
+    try:
+        summary = assignment_group_master_reference_status(db, project_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return AssignmentGroupMasterStatusResponse(
+        project_id=summary.project_id,
+        active_count=summary.active_count,
+        manager_populated_count=summary.manager_populated_count,
+        last_imported_at=summary.last_imported_at,
+        last_imported_filename=summary.last_imported_filename,
+        preview_rows=[master_reference_preview_response(row) for row in summary.preview_rows],
+    )
+
+
+@router.get(
+    "/assignment-group-master-reference",
+    response_model=list[AssignmentGroupMasterRowResponse],
+)
+def get_assignment_group_master_reference(
+    project_id: Annotated[UUID, Query(...)],
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[AssignmentGroupMasterRowResponse]:
+    try:
+        return list_assignment_group_master_references(
+            db,
+            project_id,
+            limit=limit,
+            offset=offset,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

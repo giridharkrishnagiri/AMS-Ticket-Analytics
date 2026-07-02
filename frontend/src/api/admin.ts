@@ -61,6 +61,38 @@ export type InScopeAssignmentGroupsStatusResponse = {
   preview_rows: InScopeAssignmentGroupPreviewRow[];
 };
 
+export type AssignmentGroupMasterPreviewRow = {
+  assignment_group: string;
+  description: string | null;
+  manager_name: string | null;
+  source_sheet_name: string | null;
+  source_row_number: number | null;
+};
+
+export type AssignmentGroupMasterImportResponse = {
+  project_id: string;
+  source_filename: string;
+  total_rows: number;
+  imported_count: number;
+  manager_populated_count: number;
+  skipped_count: number;
+  duplicate_count: number;
+  warning_count: number;
+  error_count: number;
+  warnings: string[];
+  errors: string[];
+  preview_rows: AssignmentGroupMasterPreviewRow[];
+};
+
+export type AssignmentGroupMasterStatusResponse = {
+  project_id: string;
+  active_count: number;
+  manager_populated_count: number;
+  last_imported_at: string | null;
+  last_imported_filename: string | null;
+  preview_rows: AssignmentGroupMasterPreviewRow[];
+};
+
 export type OperationalReprocessingResponse = {
   project_id: string;
   domains: string[];
@@ -129,6 +161,31 @@ export function getInScopeAssignmentGroupsStatus(
   const query = new URLSearchParams({ project_id: projectId.trim() });
   return requestJson<InScopeAssignmentGroupsStatusResponse>(
     `/admin/in-scope-assignment-groups/status?${query.toString()}`
+  );
+}
+
+export function importAssignmentGroupMasterReference(
+  projectId: string,
+  file: File
+): Promise<AssignmentGroupMasterImportResponse> {
+  const body = new FormData();
+  body.append("project_id", projectId);
+  body.append("file", file);
+  return requestJson<AssignmentGroupMasterImportResponse>(
+    "/admin/assignment-group-master-reference/import",
+    {
+      method: "POST",
+      body,
+    }
+  );
+}
+
+export function getAssignmentGroupMasterReferenceStatus(
+  projectId: string
+): Promise<AssignmentGroupMasterStatusResponse> {
+  const query = new URLSearchParams({ project_id: projectId.trim() });
+  return requestJson<AssignmentGroupMasterStatusResponse>(
+    `/admin/assignment-group-master-reference/status?${query.toString()}`
   );
 }
 

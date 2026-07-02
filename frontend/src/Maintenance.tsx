@@ -3,8 +3,10 @@ import { useState } from "react";
 import {
   deleteClientAndRelatedData,
   deleteProjectAndRelatedData,
+  getAssignmentGroupMasterReferenceStatus,
   getDashboardFilterCacheStatus,
   getInScopeAssignmentGroupsStatus,
+  importAssignmentGroupMasterReference,
   importInScopeAssignmentGroups,
   prepareOperationalReprocessing,
   refreshDashboardFilterCache,
@@ -12,6 +14,8 @@ import {
 } from "./api/admin";
 import type {
   DashboardFilterCacheStatusItem,
+  AssignmentGroupMasterImportResponse,
+  AssignmentGroupMasterStatusResponse,
   InScopeAssignmentGroupsImportResponse,
   InScopeAssignmentGroupsStatusResponse,
   OperationalDataResetResponse,
@@ -147,6 +151,15 @@ function Maintenance() {
   const [isLoadingReferenceStatus, setIsLoadingReferenceStatus] = useState(false);
   const [referenceMessage, setReferenceMessage] = useState<string | null>(null);
   const [referenceError, setReferenceError] = useState<string | null>(null);
+  const [masterReferenceFile, setMasterReferenceFile] = useState<File | null>(null);
+  const [masterReferenceStatus, setMasterReferenceStatus] =
+    useState<AssignmentGroupMasterStatusResponse | null>(null);
+  const [masterReferenceResult, setMasterReferenceResult] =
+    useState<AssignmentGroupMasterImportResponse | null>(null);
+  const [isImportingMasterReference, setIsImportingMasterReference] = useState(false);
+  const [isLoadingMasterReferenceStatus, setIsLoadingMasterReferenceStatus] = useState(false);
+  const [masterReferenceMessage, setMasterReferenceMessage] = useState<string | null>(null);
+  const [masterReferenceError, setMasterReferenceError] = useState<string | null>(null);
   const [reprocessIncidents, setReprocessIncidents] = useState(false);
   const [reprocessScTasks, setReprocessScTasks] = useState(false);
   const [reprocessProblems, setReprocessProblems] = useState(false);
@@ -200,6 +213,11 @@ function Maintenance() {
     setReferenceResult(null);
     setReferenceMessage(null);
     setReferenceError(null);
+    setMasterReferenceFile(null);
+    setMasterReferenceStatus(null);
+    setMasterReferenceResult(null);
+    setMasterReferenceMessage(null);
+    setMasterReferenceError(null);
     setReprocessIncidents(false);
     setReprocessScTasks(false);
     setReprocessProblems(false);
@@ -225,6 +243,11 @@ function Maintenance() {
       setReferenceResult(null);
       setReferenceMessage(null);
       setReferenceError(null);
+      setMasterReferenceFile(null);
+      setMasterReferenceStatus(null);
+      setMasterReferenceResult(null);
+      setMasterReferenceMessage(null);
+      setMasterReferenceError(null);
       setReprocessResult(null);
       setReprocessMessage(null);
       setReprocessError(null);
@@ -372,6 +395,73 @@ function Maintenance() {
       );
     } finally {
       setIsImportingReference(false);
+    }
+  }
+
+  async function refreshMasterReferenceStatus(showMessage = true) {
+    if (!projectId.trim()) {
+      setMasterReferenceError("Select a customer/project first.");
+      return;
+    }
+    setIsLoadingMasterReferenceStatus(true);
+    setMasterReferenceError(null);
+    try {
+      const status = await getAssignmentGroupMasterReferenceStatus(projectId.trim());
+      setMasterReferenceStatus(status);
+      if (showMessage) {
+        setMasterReferenceMessage(
+          `Master reference status loaded. Active assignment groups: ${formatNumber(
+            status.active_count
+          )}; rows with Manager: ${formatNumber(status.manager_populated_count)}.`
+        );
+      }
+    } catch (requestError) {
+      setMasterReferenceError(
+        maintenanceActionErrorMessage(
+          requestError,
+          "Assignment Group Master Reference status"
+        )
+      );
+    } finally {
+      setIsLoadingMasterReferenceStatus(false);
+    }
+  }
+
+  async function handleImportMasterReference() {
+    if (!projectId.trim()) {
+      setMasterReferenceError("Select a customer/project first.");
+      return;
+    }
+    if (!masterReferenceFile) {
+      setMasterReferenceError("Choose the Assignment Group Master Reference workbook first.");
+      return;
+    }
+    setIsImportingMasterReference(true);
+    setMasterReferenceError(null);
+    setMasterReferenceMessage(null);
+    try {
+      const result = await importAssignmentGroupMasterReference(
+        projectId.trim(),
+        masterReferenceFile
+      );
+      setMasterReferenceResult(result);
+      setMasterReferenceMessage(
+        `Import completed. ${formatNumber(
+          result.imported_count
+        )} active assignment groups are now loaded. ${formatNumber(
+          result.manager_populated_count
+        )} rows have Manager populated for Support Lead fallback. Next: refresh Volumetrics > Assignment Group Volumetrics to see fallback values.`
+      );
+      await refreshMasterReferenceStatus(false);
+    } catch (requestError) {
+      setMasterReferenceError(
+        maintenanceActionErrorMessage(
+          requestError,
+          "Assignment Group Master Reference import"
+        )
+      );
+    } finally {
+      setIsImportingMasterReference(false);
     }
   }
 
@@ -536,6 +626,156 @@ function Maintenance() {
             <span>{selectedProject?.name ?? "Choose a customer/project before resetting data."}</span>
           </div>
         </div>
+      </div>
+
+      <div className="panel maintenance-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Reference Data</p>
+            <h2>Assignment Group Master Reference</h2>
+          </div>
+          <div className="panel-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!projectId.trim() || isLoadingMasterReferenceStatus}
+              onClick={() => void refreshMasterReferenceStatus()}
+            >
+              {isLoadingMasterReferenceStatus ? "Loading..." : "Show Master Reference Status"}
+            </button>
+          </div>
+        </div>
+        <div className="warning-list">
+          <p>
+            Import the ServiceNow master assignment group list with sheet{" "}
+            <strong>Master</strong> and columns <strong>Name</strong>,{" "}
+            <strong>Description</strong>, and <strong>Manager</strong>.
+          </p>
+          <p>
+            This master list is used only to populate Support Lead from the Manager column
+            when Support Lead is not available from Application Inventory. It does not
+            control in-scope or out-of-scope classification.
+          </p>
+        </div>
+        <div className="form-grid summary-block">
+          <label>
+            <span>Master reference workbook</span>
+            <input
+              type="file"
+              accept=".xlsx,.csv"
+              onChange={(event) => setMasterReferenceFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+        </div>
+        <div className="action-row">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={
+              !projectId.trim() || !masterReferenceFile || isImportingMasterReference
+            }
+            onClick={() => void handleImportMasterReference()}
+          >
+            {isImportingMasterReference ? "Importing..." : "Import Master Assignment Groups"}
+          </button>
+        </div>
+        <div className="message-stack" role="status" aria-live="polite">
+          {masterReferenceMessage ? (
+            <p className="success-text">{masterReferenceMessage}</p>
+          ) : null}
+          {masterReferenceError ? <p className="error-text">{masterReferenceError}</p> : null}
+        </div>
+        {masterReferenceResult ? (
+          <div className="summary-block">
+            <p className="scope-note">
+              Import succeeded for {masterReferenceResult.source_filename}. This reference
+              updates only Support Lead fallback in Assignment Group Volumetrics; ticket scope
+              classification is unchanged.
+            </p>
+            <div className="summary-grid">
+              <div>
+                <p className="label">Imported</p>
+                <strong>{formatNumber(masterReferenceResult.imported_count)}</strong>
+              </div>
+              <div>
+                <p className="label">With Manager</p>
+                <strong>{formatNumber(masterReferenceResult.manager_populated_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Skipped Rows</p>
+                <strong>{formatNumber(masterReferenceResult.skipped_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Duplicate Rows</p>
+                <strong>{formatNumber(masterReferenceResult.duplicate_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Warnings</p>
+                <strong>{formatNumber(masterReferenceResult.warning_count)}</strong>
+              </div>
+            </div>
+            {masterReferenceResult.warnings.length > 0 ? (
+              <ul className="warning-list">
+                {masterReferenceResult.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="muted-text">
+              Next step: refresh Volumetrics &amp; SLA &gt; Assignment Group Volumetrics to
+              see Manager values used as Support Lead fallback where Application Inventory
+              does not provide Support Lead.
+            </p>
+          </div>
+        ) : null}
+        {masterReferenceStatus ? (
+          <div className="summary-block">
+            <div className="summary-grid">
+              <div>
+                <p className="label">Active Reference Rows</p>
+                <strong>{formatNumber(masterReferenceStatus.active_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Rows with Manager</p>
+                <strong>{formatNumber(masterReferenceStatus.manager_populated_count)}</strong>
+              </div>
+            </div>
+            <p className="muted-text">
+              Last imported: {masterReferenceStatus.last_imported_at ?? "Not available"}
+              {masterReferenceStatus.last_imported_filename
+                ? ` from ${masterReferenceStatus.last_imported_filename}`
+                : ""}
+            </p>
+            <div className="table-scroll">
+              <table className="details-table">
+                <thead>
+                  <tr>
+                    <th>Assignment Group</th>
+                    <th>Manager</th>
+                    <th>Description</th>
+                    <th>Source Row</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {masterReferenceStatus.preview_rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={4}>No active master reference rows found.</td>
+                    </tr>
+                  ) : (
+                    masterReferenceStatus.preview_rows.map((row) => (
+                      <tr key={`${row.assignment_group}-${row.source_row_number ?? ""}`}>
+                        <td>{row.assignment_group}</td>
+                        <td>{row.manager_name ?? ""}</td>
+                        <td>{row.description ?? ""}</td>
+                        <td>{row.source_row_number ?? ""}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="panel maintenance-panel">

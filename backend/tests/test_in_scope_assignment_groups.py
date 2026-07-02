@@ -11,6 +11,7 @@ from app.db.session import SessionLocal
 from app.models import (
     ApplicationInventoryItem,
     AssessmentOutOfScopeTicket,
+    AssignmentGroupMasterReference,
     Client,
     InScopeAssignmentGroup,
     Project,
@@ -179,6 +180,22 @@ def test_incident_scope_uses_reference_not_application_inventory(tmp_path: Path)
                 assignment_group="Inventory Support",
                 business_service_ci_name="Inventory Service",
                 active=True,
+            )
+        )
+        project = db.get(Project, project_id)
+        assert project is not None
+        db.add(
+            AssignmentGroupMasterReference(
+                client_id=project.client_id,
+                project_id=project_id,
+                assignment_group="Inventory Support",
+                assignment_group_key="inventory support",
+                description="Present in ServiceNow master list",
+                manager_name="Master Manager",
+                source_filename="master.xlsx",
+                source_sheet_name="Master",
+                source_row_number=2,
+                is_active=True,
             )
         )
         db.commit()

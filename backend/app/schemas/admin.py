@@ -88,6 +88,55 @@ class InScopeAssignmentGroupRowResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AssignmentGroupMasterPreviewRowResponse(BaseModel):
+    assignment_group: str
+    description: str | None = None
+    manager_name: str | None = None
+    source_sheet_name: str | None = None
+    source_row_number: int | None = None
+
+
+class AssignmentGroupMasterImportResponse(BaseModel):
+    project_id: UUID
+    source_filename: str
+    total_rows: int
+    imported_count: int
+    manager_populated_count: int
+    skipped_count: int
+    duplicate_count: int
+    warning_count: int
+    error_count: int
+    warnings: list[str]
+    errors: list[str]
+    preview_rows: list[AssignmentGroupMasterPreviewRowResponse]
+
+
+class AssignmentGroupMasterStatusResponse(BaseModel):
+    project_id: UUID
+    active_count: int
+    manager_populated_count: int
+    last_imported_at: datetime | None = None
+    last_imported_filename: str | None = None
+    preview_rows: list[AssignmentGroupMasterPreviewRowResponse]
+
+
+class AssignmentGroupMasterRowResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    assignment_group: str
+    assignment_group_key: str
+    description: str | None = None
+    manager_name: str | None = None
+    source_filename: str | None = None
+    source_sheet_name: str | None = None
+    source_row_number: int | None = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 OperationalReprocessDomain = Literal["incidents", "sc_tasks", "problems", "changes"]
 OperationalReprocessStartPoint = Literal[
     "resume_from_ingestion",
