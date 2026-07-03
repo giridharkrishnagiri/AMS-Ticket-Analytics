@@ -2351,13 +2351,20 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       background: #f1f5f9;
     }
     .assignment-volumetrics-frame {
+      display: block;
       width: 100%;
+      inline-size: min(100%, calc(100vw - 320px));
       max-width: 100%;
+      max-inline-size: min(100%, calc(100vw - 320px));
       min-width: 0;
-      overflow-x: auto;
-      overflow-y: auto;
+      min-inline-size: 0;
+      height: 560px;
+      max-height: 62vh;
+      overflow-x: scroll !important;
+      overflow-y: scroll !important;
       scrollbar-gutter: stable both-edges;
-      overscroll-behavior-x: contain;
+      overscroll-behavior: contain;
+      touch-action: pan-x pan-y;
     }
     .assignment-volumetrics-scroll {
       width: 100%;
@@ -2714,6 +2721,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       .duration-grid { grid-template-columns: 1fr; }
       #volumetrics .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .offline-validation-scroll {
+        inline-size: 100%;
+        max-inline-size: 100%;
+      }
+      .assignment-volumetrics-frame {
         inline-size: 100%;
         max-inline-size: 100%;
       }
