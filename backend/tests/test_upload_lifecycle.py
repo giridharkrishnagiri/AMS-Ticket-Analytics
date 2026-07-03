@@ -58,6 +58,7 @@ def create_project_fixture():
             assignment_group="AMS Support",
             business_service_ci_name="Lifecycle Service",
             supported_by_vendor="HCLTech",
+            scope_status="in_scope",
             active=True,
             source_filename="lifecycle-inventory.xlsx",
             source_row_number=1,

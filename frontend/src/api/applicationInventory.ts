@@ -8,7 +8,7 @@ export type ApplicationInventoryItem = {
   assignment_group: string | null;
   assignment_group_owner: string | null;
   application_owner: string | null;
-  business_service_ci_name: string;
+  business_service_ci_name: string | null;
   support_lead: string | null;
   functional_track: string | null;
   ams_owner: string | null;
@@ -24,6 +24,7 @@ export type ApplicationInventoryItem = {
   active_users: number | null;
   cmdb_payload: Record<string, unknown> | null;
   source_filename: string | null;
+  source_sheet_name: string | null;
   source_row_number: number | null;
   created_at: string;
   updated_at: string;

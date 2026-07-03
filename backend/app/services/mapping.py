@@ -26,7 +26,6 @@ from app.models import (
     UploadedFile,
 )
 from app.services.batch_classification import derive_is_batch_related
-from app.services.in_scope_assignment_groups import active_assignment_group_keys
 from app.services.ingestion import INGESTION_BATCH_SIZE, normalize_source_column_name
 from app.services.sap_classification import derive_sap_non_sap
 from app.services.upload_lifecycle import (
@@ -1205,6 +1204,22 @@ def load_active_inventory_items(
     return list(db.scalars(statement).all())
 
 
+def active_inventory_in_scope_assignment_group_keys(
+    db: Session,
+    project_id: UUID,
+) -> set[str]:
+    statement = select(ApplicationInventoryItem.assignment_group).where(
+        ApplicationInventoryItem.project_id == project_id,
+        ApplicationInventoryItem.scope_status == "in_scope",
+        ApplicationInventoryItem.assignment_group.is_not(None),
+    )
+    return {
+        key
+        for assignment_group in db.scalars(statement).all()
+        if (key := normalize_match_key(assignment_group)) is not None
+    }
+
+
 def inventory_sort_key_for_values(
     inventory_item: ApplicationInventoryItem,
     *,
@@ -1985,11 +2000,15 @@ def apply_problem_or_change_mapping_to_batch(
         db.flush()
 
     inventory_items = load_active_inventory_items(db, upload_batch.project_id)
-    active_assignment_groups = active_assignment_group_keys(db, upload_batch.project_id)
+    active_assignment_groups = active_inventory_in_scope_assignment_group_keys(
+        db,
+        upload_batch.project_id,
+    )
     if not active_assignment_groups:
         warnings.append(
-            "No active In-Scope Assignment Groups reference rows were found for this project; "
-            "records with non-blank assignment groups will be classified as out of scope.",
+            "No active CMDB/Application Inventory in-scope assignment groups were found for "
+            "this project; records with non-blank assignment groups will be classified as "
+            "out of scope.",
         )
     existing_fingerprint_statement = select(model.row_fingerprint).where(
         model.project_id == upload_batch.project_id,
@@ -2075,7 +2094,8 @@ def apply_problem_or_change_mapping_to_batch(
     if out_of_scope_record_count:
         warnings.append(
             f"{out_of_scope_record_count} {record_label} row(s) were classified as "
-            "out of scope by the In-Scope Assignment Groups reference."
+            "out of scope by the CMDB/Application Inventory in-scope assignment group "
+            "reference."
         )
 
     if total_raw_rows > 0 and failed_row_count == 0:
@@ -2153,12 +2173,15 @@ def apply_mapping_to_batch(
             db.flush()
 
         inventory_items = load_active_inventory_items(db, upload_batch.project_id)
-        active_assignment_groups = active_assignment_group_keys(db, upload_batch.project_id)
+        active_assignment_groups = active_inventory_in_scope_assignment_group_keys(
+            db,
+            upload_batch.project_id,
+        )
         if not active_assignment_groups:
             warnings.append(
-                "No active In-Scope Assignment Groups reference rows were found for this "
-                "project; tickets with non-blank assignment groups will be classified as "
-                "out of scope.",
+                "No active CMDB/Application Inventory in-scope assignment groups were found "
+                "for this project; tickets with non-blank assignment groups will be "
+                "classified as out of scope.",
             )
 
         raw_row_statement = (

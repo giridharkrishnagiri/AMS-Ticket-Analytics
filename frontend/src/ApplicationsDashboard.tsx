@@ -207,6 +207,7 @@ const emptyAssignmentGroupMapping: DashboardApplicationsAssignmentGroupMapping =
   },
   rows: [],
   basis_security_rows: [],
+  volume_period: null,
   data_notes: [],
   warnings: [],
 };
@@ -1659,6 +1660,7 @@ const assignmentMappingScopeOptions: Array<{
 const assignmentMappingColumns: Array<{
   key: AssignmentMappingSortKey;
   label: string;
+  inventorySourceOnly?: boolean;
   ticketSourceOnly?: boolean;
 }> = [
   { key: "assignment_group", label: "Assignment Group" },
@@ -1667,10 +1669,20 @@ const assignmentMappingColumns: Array<{
   { key: "support_lead", label: "Support Lead" },
   { key: "parent_business_application", label: "Parent Business Application" },
   { key: "business_service_ci_name", label: "Business Service CI Name" },
+  { key: "application_number", label: "Application Number", inventorySourceOnly: true },
+  { key: "application_owner", label: "Application Owner", inventorySourceOnly: true },
+  { key: "supported_by_vendor", label: "Supported By Vendor", inventorySourceOnly: true },
   { key: "scope", label: "Scope" },
   { key: "incident_count", label: "Incident Count", ticketSourceOnly: true },
   { key: "sc_task_count", label: "SC Task Count", ticketSourceOnly: true },
   { key: "total_ticket_count", label: "Total Ticket Count", ticketSourceOnly: true },
+  { key: "avg_monthly_incidents", label: "Avg Monthly Incidents", ticketSourceOnly: true },
+  { key: "avg_monthly_sc_tasks", label: "Avg Monthly SC Tasks", ticketSourceOnly: true },
+  {
+    key: "avg_monthly_total_tickets",
+    label: "Avg Monthly Total Tickets",
+    ticketSourceOnly: true,
+  },
 ];
 
 function displayScope(value: string): string {
@@ -1679,9 +1691,6 @@ function displayScope(value: string): string {
   }
   if (value === "out_of_scope") {
     return "Out of Scope";
-  }
-  if (value === "unknown") {
-    return "Unknown";
   }
   return value;
 }
@@ -1763,7 +1772,9 @@ function AssignmentGroupMappingPanel({
 }) {
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const columns = assignmentMappingColumns.filter(
-    (column) => !column.ticketSourceOnly || selectedSource === "tickets"
+    (column) =>
+      (!column.ticketSourceOnly || selectedSource === "tickets") &&
+      (!column.inventorySourceOnly || selectedSource === "application_inventory")
   );
   const searchTerm = search.trim().toLowerCase();
   const rows = useMemo(() => {
@@ -1886,7 +1897,9 @@ function AssignmentGroupMappingPanel({
                   {columns.map((column) => (
                     <td
                       className={
-                        column.key.endsWith("_count") || column.key === "total_ticket_count"
+                        column.key.endsWith("_count") ||
+                        column.key === "total_ticket_count" ||
+                        column.key.startsWith("avg_monthly_")
                           ? "numeric-cell"
                           : undefined
                       }
@@ -1978,6 +1991,11 @@ function AssignmentGroupMappingPanel({
             <p className="muted-text">
               Showing {rows.length.toLocaleString()} of {data.rows.length.toLocaleString()} rows.
             </p>
+            {selectedSource === "tickets" && data.volume_period ? (
+              <p className="muted-text">
+                Average monthly volumes are based on {data.volume_period.label}.
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="summary-grid validation-summary-grid">
@@ -2075,7 +2093,9 @@ function AssignmentGroupMappingPanel({
                     {columns.map((column) => (
                       <td
                         className={
-                          column.key.endsWith("_count") || column.key === "total_ticket_count"
+                          column.key.endsWith("_count") ||
+                          column.key === "total_ticket_count" ||
+                          column.key.startsWith("avg_monthly_")
                             ? "numeric-cell"
                             : undefined
                         }

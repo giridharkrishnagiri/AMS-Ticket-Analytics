@@ -164,6 +164,7 @@ def post_refresh_dashboard_filter_facts(
     "/in-scope-assignment-groups/import",
     response_model=InScopeAssignmentGroupsImportResponse,
     status_code=status.HTTP_201_CREATED,
+    deprecated=True,
 )
 async def post_import_in_scope_assignment_groups(
     project_id: Annotated[UUID, Form(...)],
@@ -209,6 +210,7 @@ async def post_import_in_scope_assignment_groups(
 @router.get(
     "/in-scope-assignment-groups/status",
     response_model=InScopeAssignmentGroupsStatusResponse,
+    deprecated=True,
 )
 def get_in_scope_assignment_groups_status(
     project_id: Annotated[UUID, Query(...)],
@@ -229,6 +231,7 @@ def get_in_scope_assignment_groups_status(
 @router.get(
     "/in-scope-assignment-groups",
     response_model=list[InScopeAssignmentGroupRowResponse],
+    deprecated=True,
 )
 def get_in_scope_assignment_groups(
     project_id: Annotated[UUID, Query(...)],

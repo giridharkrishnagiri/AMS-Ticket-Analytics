@@ -14,10 +14,6 @@ from sqlalchemy.orm import Session
 
 from app.models import ApplicationInventoryItem, AssessmentOutOfScopeTicket, Project, Ticket
 from app.services.application_metrics import recompute_application_ticket_user_metrics
-from app.services.in_scope_assignment_groups import (
-    active_assignment_group_keys,
-    normalize_assignment_group_key,
-)
 from app.services.ingestion import (
     CSV_ENCODING_CANDIDATES,
     INGESTION_BATCH_SIZE,
@@ -35,30 +31,62 @@ MAX_MESSAGE_SAMPLES = 50
 TOP_UNMATCHED_LIMIT = 25
 UNMATCHED_SAMPLE_LIMIT = 5
 TARGET_WORKSHEET_NAME = "Group-App-BizService"
+TARGET_WORKSHEET_NAMES = ("Group-App-BizService-Inscope", "Group-App-BizService")
 CMDB_BLANK_MARKERS = {"#N/A"}
 
 CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "application_number_apm": (
         "Application Number (APM)",
         "Application Number",
+        "APM",
+        "App Number",
+        "Application ID",
         "application_number_apm",
     ),
     "parent_application_name": (
         "Parent Business Application",
+        "Parent Business App",
         "Parent Application",
         "Parent Application Name",
+        "parent_business_application",
     ),
-    "assignment_group": ("Support group name", "Support Group", "Assignment Group"),
+    "assignment_group": (
+        "Support group name",
+        "Support Group Name",
+        "Support group",
+        "Support Group",
+        "Assignment Group",
+        "Assignment group",
+        "Assignment Groups",
+        "Assigment Groups",
+        "Group",
+        "Name",
+    ),
     "assignment_group_owner": (
         "Support group's owner",
         "Support group owner",
         "Assignment Group Owner",
     ),
     "application_owner": ("Application Owner",),
-    "business_service_ci_name": ("Business Service CI Name", "Business Service"),
-    "support_lead": ("Support Lead (Managed by)", "Support Lead", "Managed By"),
-    "functional_track": ("Functional Track",),
-    "ams_owner": ("AMS Owner",),
+    "business_service_ci_name": (
+        "Business Service CI Name",
+        "Business Service",
+        "Business Service CI",
+        "Application",
+        "Application Name",
+        "business_service_ci_name",
+    ),
+    "support_lead": (
+        "Support Lead (Managed by)",
+        "Support Lead",
+        "Managed by",
+        "Managed By",
+        "Manager",
+        "Group Manager",
+        "Assignment Group Manager",
+    ),
+    "functional_track": ("Functional Track", "Track", "functional_track"),
+    "ams_owner": ("AMS Owner", "AMS owner", "ams_owner"),
     "supported_by_vendor": ("Supported By Vendor", "Support vendor", "Vendor"),
     "hosting_env": ("Hosting Env", "Hosting Environment", "hosting_env"),
     "global_application": ("Global", "Global Application", "global_application"),
@@ -366,43 +394,12 @@ def normalize_scope_status(value: Any) -> str:
     return "out_of_scope"
 
 
-def derive_inventory_scope_status(
-    raw_scope: Any,
-    assignment_group: str | None,
-    active_scope_assignment_groups: set[str] | None,
-    row_number: int,
-    result: InventoryUploadResult,
-) -> str:
+def derive_inventory_scope_status(raw_scope: Any) -> str:
     explicit_scope = text_or_none(raw_scope)
     if explicit_scope is not None:
         scope_status = normalize_scope_status(explicit_scope)
-        normalized_explicit_scope = " ".join(explicit_scope.replace("-", " ").split()).casefold()
-        if scope_status == "out_of_scope" and normalized_explicit_scope not in {
-            "out of scope",
-            "outofscope",
-            "no",
-            "n",
-            "false",
-        }:
-            append_sample_message(
-                result.warnings,
-                "Row "
-                f"{row_number}: Application Scope value '{explicit_scope}' could not be parsed; "
-                "marked out of scope.",
-            )
         return scope_status
-
-    assignment_group_key = normalize_assignment_group_key(assignment_group)
-    if assignment_group_key is None:
-        append_sample_message(
-            result.warnings,
-            f"Row {row_number}: Application Scope marked out of scope because "
-            "assignment group is blank.",
-        )
-        return "out_of_scope"
-    if active_scope_assignment_groups is None:
-        return "out_of_scope"
-    return "in_scope" if assignment_group_key in active_scope_assignment_groups else "out_of_scope"
+    return "in_scope"
 
 
 def clean_inventory_values(
@@ -410,10 +407,11 @@ def clean_inventory_values(
     source_filename: str,
     parsed_row: ParsedSourceRow,
     result: InventoryUploadResult,
-    *,
-    active_scope_assignment_groups: set[str] | None = None,
 ) -> dict[str, Any] | None:
     assignment_group = text_or_none(get_raw_value(parsed_row.raw_data, "assignment_group"))
+    business_service_ci_name = text_or_none(
+        get_raw_value(parsed_row.raw_data, "business_service_ci_name")
+    )
     values: dict[str, Any] = {
         "project_id": project_id,
         "application_number_apm": text_or_none(
@@ -429,9 +427,7 @@ def clean_inventory_values(
         "application_owner": text_or_none(
             get_raw_value(parsed_row.raw_data, "application_owner")
         ),
-        "business_service_ci_name": text_or_none(
-            get_raw_value(parsed_row.raw_data, "business_service_ci_name")
-        ),
+        "business_service_ci_name": business_service_ci_name or "",
         "support_lead": text_or_none(get_raw_value(parsed_row.raw_data, "support_lead")),
         "functional_track": text_or_none(get_raw_value(parsed_row.raw_data, "functional_track")),
         "ams_owner": text_or_none(get_raw_value(parsed_row.raw_data, "ams_owner")),
@@ -442,13 +438,7 @@ def clean_inventory_values(
         "global_application": text_or_none(
             get_raw_value(parsed_row.raw_data, "global_application")
         ),
-        "scope_status": derive_inventory_scope_status(
-            get_raw_value(parsed_row.raw_data, "scope_status"),
-            assignment_group,
-            active_scope_assignment_groups,
-            parsed_row.row_number,
-            result,
-        ),
+        "scope_status": "in_scope",
         "lifecycle_stage_status": text_or_none(
             get_raw_value(parsed_row.raw_data, "lifecycle_stage_status")
         ),
@@ -474,14 +464,26 @@ def clean_inventory_values(
         ),
         "cmdb_payload": build_cmdb_payload(parsed_row.raw_data),
         "source_filename": source_filename,
+        "source_sheet_name": parsed_row.source_sheet_name,
         "source_row_number": parsed_row.row_number,
     }
 
-    if values["business_service_ci_name"] is None:
+    raw_scope_status = get_raw_value(parsed_row.raw_data, "scope_status")
+    if raw_scope_status is not None:
+        parsed_scope = derive_inventory_scope_status(raw_scope_status)
+        if parsed_scope != "in_scope":
+            append_sample_message(
+                result.warnings,
+                f"Row {parsed_row.row_number}: Application Scope value '{raw_scope_status}' "
+                "was ignored because CMDB/Application Inventory uploads are treated as in scope.",
+            )
+
+    if assignment_group is None and business_service_ci_name is None:
         result.skipped_count += 1
         append_sample_message(
             result.errors,
-            f"Row {parsed_row.row_number}: Business Service CI Name is required.",
+            f"Row {parsed_row.row_number}: Support group name or Business Service CI Name "
+            "is required.",
         )
         return None
 
@@ -510,8 +512,11 @@ def track_upload_distincts(result: InventoryUploadResult, values: dict[str, Any]
 def duplicate_key_condition(values: dict[str, Any]) -> Any:
     return and_(
         ApplicationInventoryItem.project_id == values["project_id"],
-        func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name))
-        == normalize_match_key(values["business_service_ci_name"]),
+        func.coalesce(
+            func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name)),
+            "",
+        )
+        == (normalize_match_key(values["business_service_ci_name"]) or ""),
         func.coalesce(
             func.lower(func.btrim(ApplicationInventoryItem.parent_application_name)),
             "",
@@ -534,8 +539,11 @@ def inventory_match_condition(
 ) -> Any:
     return and_(
         ApplicationInventoryItem.project_id == project_id,
-        func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name))
-        == normalize_match_key(business_service_ci_name),
+        func.coalesce(
+            func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name)),
+            "",
+        )
+        == (normalize_match_key(business_service_ci_name) or ""),
         func.coalesce(
             func.lower(func.btrim(ApplicationInventoryItem.parent_application_name)),
             "",
@@ -801,7 +809,14 @@ def find_inventory_header_row(rows: Iterator[tuple[Any, ...]]) -> tuple[int, lis
             for value in raw_headers
             if value is not None and str(value).strip()
         }
-        if "business_service_ci_name" in normalized_headers:
+        required_header_aliases = (
+            *CORE_FIELD_ALIASES["business_service_ci_name"],
+            *CORE_FIELD_ALIASES["assignment_group"],
+        )
+        if any(
+            normalize_source_column_name(alias) in normalized_headers
+            for alias in required_header_aliases
+        ):
             return row_number, make_unique_headers(raw_headers)
     return None
 
@@ -812,27 +827,40 @@ def iter_inventory_xlsx_rows(
 ) -> Iterator[ParsedSourceRow]:
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
-        if TARGET_WORKSHEET_NAME in workbook.sheetnames:
-            worksheet = workbook[TARGET_WORKSHEET_NAME]
+        worksheet_name = next(
+            (
+                sheet_name
+                for sheet_name in TARGET_WORKSHEET_NAMES
+                if sheet_name in workbook.sheetnames
+            ),
+            None,
+        )
+        if worksheet_name is not None:
+            worksheet = workbook[worksheet_name]
         else:
             worksheet = workbook.worksheets[0]
             append_sample_message(
                 result.warnings,
-                f"Worksheet '{TARGET_WORKSHEET_NAME}' was not found; used first worksheet.",
+                "Worksheet 'Group-App-BizService-Inscope' was not found; used first worksheet.",
             )
 
         rows = worksheet.iter_rows(values_only=True)
         header = find_inventory_header_row(rows)
         if header is None:
             raise ApplicationInventoryError(
-                "Could not find a header row containing Business Service CI Name."
+                "Could not find a header row containing Support group name or Business "
+                "Service CI Name."
             )
 
         header_row_number, headers = header
         for row_number, values in enumerate(rows, start=header_row_number + 1):
             raw_data = build_raw_data(headers, list(values))
             if row_has_any_value(raw_data):
-                yield ParsedSourceRow(row_number=row_number, raw_data=raw_data)
+                yield ParsedSourceRow(
+                    row_number=row_number,
+                    raw_data=raw_data,
+                    source_sheet_name=worksheet.title,
+                )
     finally:
         workbook.close()
 
@@ -866,13 +894,6 @@ def upload_application_inventory_file(
 ) -> InventoryUploadResult:
     ensure_project_exists(db, project_id)
     result = InventoryUploadResult(project_id=project_id)
-    scope_assignment_groups = active_assignment_group_keys(db, project_id)
-    if not scope_assignment_groups:
-        append_sample_message(
-            result.warnings,
-            "No active In-Scope Assignment Groups reference rows were found; Application "
-            "Inventory rows without an explicit in-scope match will be marked out of scope.",
-        )
 
     try:
         for parsed_row in iter_inventory_file_rows(path, result):
@@ -882,7 +903,6 @@ def upload_application_inventory_file(
                 source_filename,
                 parsed_row,
                 result,
-                active_scope_assignment_groups=scope_assignment_groups,
             )
             if values is None:
                 continue

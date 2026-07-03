@@ -90,7 +90,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     assignment_group: Mapped[str | None] = mapped_column(Text, nullable=True)
     assignment_group_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     application_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
-    business_service_ci_name: Mapped[str] = mapped_column(Text, nullable=False)
+    business_service_ci_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     support_lead: Mapped[str | None] = mapped_column(Text, nullable=True)
     functional_track: Mapped[str | None] = mapped_column(Text, nullable=True)
     ams_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -109,6 +109,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     tickets_per_user_per_month: Mapped[float | None] = mapped_column(Float, nullable=True)
     cmdb_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     source_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_sheet_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     project: Mapped[Project] = relationship(back_populates="application_inventory_items")

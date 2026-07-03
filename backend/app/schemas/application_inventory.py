@@ -40,7 +40,7 @@ class ApplicationInventoryItemResponse(BaseModel):
     assignment_group: str | None
     assignment_group_owner: str | None
     application_owner: str | None
-    business_service_ci_name: str
+    business_service_ci_name: str | None
     support_lead: str | None
     functional_track: str | None
     ams_owner: str | None
@@ -58,6 +58,7 @@ class ApplicationInventoryItemResponse(BaseModel):
     tickets_per_user_per_month: float | None
     cmdb_payload: dict[str, Any] | None
     source_filename: str | None
+    source_sheet_name: str | None
     source_row_number: int | None
     created_at: datetime
     updated_at: datetime

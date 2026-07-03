@@ -5,9 +5,7 @@ import {
   deleteProjectAndRelatedData,
   getAssignmentGroupMasterReferenceStatus,
   getDashboardFilterCacheStatus,
-  getInScopeAssignmentGroupsStatus,
   importAssignmentGroupMasterReference,
-  importInScopeAssignmentGroups,
   prepareOperationalReprocessing,
   refreshDashboardFilterCache,
   resetProjectOperationalData,
@@ -16,8 +14,6 @@ import type {
   DashboardFilterCacheStatusItem,
   AssignmentGroupMasterImportResponse,
   AssignmentGroupMasterStatusResponse,
-  InScopeAssignmentGroupsImportResponse,
-  InScopeAssignmentGroupsStatusResponse,
   OperationalDataResetResponse,
   OperationalReprocessingResponse,
 } from "./api/admin";
@@ -142,15 +138,6 @@ function Maintenance() {
   const [isRefreshingCache, setIsRefreshingCache] = useState(false);
   const [cacheStatus, setCacheStatus] = useState<DashboardFilterCacheStatusItem[]>([]);
   const [cacheMessage, setCacheMessage] = useState<string | null>(null);
-  const [referenceFile, setReferenceFile] = useState<File | null>(null);
-  const [referenceStatus, setReferenceStatus] =
-    useState<InScopeAssignmentGroupsStatusResponse | null>(null);
-  const [referenceResult, setReferenceResult] =
-    useState<InScopeAssignmentGroupsImportResponse | null>(null);
-  const [isImportingReference, setIsImportingReference] = useState(false);
-  const [isLoadingReferenceStatus, setIsLoadingReferenceStatus] = useState(false);
-  const [referenceMessage, setReferenceMessage] = useState<string | null>(null);
-  const [referenceError, setReferenceError] = useState<string | null>(null);
   const [masterReferenceFile, setMasterReferenceFile] = useState<File | null>(null);
   const [masterReferenceStatus, setMasterReferenceStatus] =
     useState<AssignmentGroupMasterStatusResponse | null>(null);
@@ -208,11 +195,6 @@ function Maintenance() {
     setScopeSummary(null);
     setCacheStatus([]);
     setCacheMessage(null);
-    setReferenceFile(null);
-    setReferenceStatus(null);
-    setReferenceResult(null);
-    setReferenceMessage(null);
-    setReferenceError(null);
     setMasterReferenceFile(null);
     setMasterReferenceStatus(null);
     setMasterReferenceResult(null);
@@ -238,11 +220,6 @@ function Maintenance() {
       setScopeSummary(null);
       setCacheStatus([]);
       setCacheMessage(null);
-      setReferenceFile(null);
-      setReferenceStatus(null);
-      setReferenceResult(null);
-      setReferenceMessage(null);
-      setReferenceError(null);
       setMasterReferenceFile(null);
       setMasterReferenceStatus(null);
       setMasterReferenceResult(null);
@@ -333,68 +310,6 @@ function Maintenance() {
       );
     } finally {
       setIsRefreshingCache(false);
-    }
-  }
-
-  async function refreshReferenceStatus(showMessage = true) {
-    if (!projectId.trim()) {
-      setReferenceError("Select a customer/project first.");
-      return;
-    }
-    setIsLoadingReferenceStatus(true);
-    setReferenceError(null);
-    try {
-      const status = await getInScopeAssignmentGroupsStatus(projectId.trim());
-      setReferenceStatus(status);
-      if (showMessage) {
-        setReferenceMessage(
-          `Reference status loaded. Active assignment groups: ${formatNumber(
-            status.active_count
-          )}.`
-        );
-      }
-    } catch (requestError) {
-      setReferenceError(
-        maintenanceActionErrorMessage(
-          requestError,
-          "In-Scope Assignment Groups status"
-        )
-      );
-    } finally {
-      setIsLoadingReferenceStatus(false);
-    }
-  }
-
-  async function handleImportReference() {
-    if (!projectId.trim()) {
-      setReferenceError("Select a customer/project first.");
-      return;
-    }
-    if (!referenceFile) {
-      setReferenceError("Choose the In-Scope Assignment Groups workbook first.");
-      return;
-    }
-    setIsImportingReference(true);
-    setReferenceError(null);
-    setReferenceMessage(null);
-    try {
-      const result = await importInScopeAssignmentGroups(projectId.trim(), referenceFile);
-      setReferenceResult(result);
-      setReferenceMessage(
-        `Import completed. ${formatNumber(
-          result.imported_count
-        )} active assignment groups are now loaded for this project. Next: prepare operational reprocessing below, then resume processing in Upload Center.`
-      );
-      await refreshReferenceStatus(false);
-    } catch (requestError) {
-      setReferenceError(
-        maintenanceActionErrorMessage(
-          requestError,
-          "In-Scope Assignment Groups import"
-        )
-      );
-    } finally {
-      setIsImportingReference(false);
     }
   }
 
@@ -857,132 +772,6 @@ function Maintenance() {
           </div>
         ) : null}
         {cacheMessage ? <p className="success-text">{cacheMessage}</p> : null}
-      </div>
-
-      <div className="panel maintenance-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="label">Reference Data</p>
-            <h2>In-Scope Assignment Groups Reference</h2>
-          </div>
-          <div className="panel-actions">
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={!projectId.trim() || isLoadingReferenceStatus}
-              onClick={() => void refreshReferenceStatus()}
-            >
-              {isLoadingReferenceStatus ? "Loading..." : "Show Reference Status"}
-            </button>
-          </div>
-        </div>
-        <div className="warning-list">
-          <p>
-            Import the workbook with columns <strong>Assigment Groups</strong> and{" "}
-            <strong>Track</strong>. This replaces the active in-scope assignment group
-            reference for the selected project and marks dashboard filter cache stale.
-          </p>
-          <p>
-            Importing this reference does not reprocess uploaded ticket data. Use Operational
-            Reprocessing below, then complete processing in Upload Center.
-          </p>
-        </div>
-        <div className="form-grid summary-block">
-          <label>
-            <span>Reference workbook</span>
-            <input
-              type="file"
-              accept=".xlsx,.csv"
-              onChange={(event) => setReferenceFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
-        </div>
-        <div className="action-row">
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={!projectId.trim() || !referenceFile || isImportingReference}
-            onClick={() => void handleImportReference()}
-          >
-            {isImportingReference ? "Importing..." : "Import In-Scope Assignment Groups"}
-          </button>
-        </div>
-        <div className="message-stack" role="status" aria-live="polite">
-          {referenceMessage ? <p className="success-text">{referenceMessage}</p> : null}
-          {referenceError ? <p className="error-text">{referenceError}</p> : null}
-        </div>
-        {referenceResult ? (
-          <div className="summary-block">
-            <p className="scope-note">
-              Import succeeded for {referenceResult.source_filename}. The reference has been
-              replaced for this project; no ticket data has been reprocessed yet.
-            </p>
-            <div className="summary-grid">
-              <div>
-                <p className="label">Imported</p>
-                <strong>{formatNumber(referenceResult.imported_count)}</strong>
-              </div>
-              <div>
-                <p className="label">Skipped Rows</p>
-                <strong>{formatNumber(referenceResult.skipped_count)}</strong>
-              </div>
-              <div>
-                <p className="label">Duplicate Rows</p>
-                <strong>{formatNumber(referenceResult.duplicate_count)}</strong>
-              </div>
-              <div>
-                <p className="label">Warnings</p>
-                <strong>{formatNumber(referenceResult.warning_count)}</strong>
-              </div>
-            </div>
-            {referenceResult.warnings.length > 0 ? (
-              <ul className="warning-list">
-                {referenceResult.warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
-                ))}
-              </ul>
-            ) : null}
-            <p className="muted-text">
-              Next step: use Operational Reprocessing below, then complete the required
-              ingestion/normalization/apply mapping step in Upload Center.
-            </p>
-          </div>
-        ) : null}
-        {referenceStatus ? (
-          <div className="summary-block">
-            <p className="label">Active Reference Rows</p>
-            <strong>{formatNumber(referenceStatus.active_count)}</strong>
-            <p className="muted-text">
-              Last imported: {referenceStatus.last_imported_at ?? "Not available"}
-            </p>
-            <div className="table-scroll">
-              <table className="details-table">
-                <thead>
-                  <tr>
-                    <th>Assignment Group</th>
-                    <th>Track</th>
-                    <th>Source Row</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {referenceStatus.preview_rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={3}>No active reference rows found.</td>
-                    </tr>
-                  ) : (
-                    referenceStatus.preview_rows.map((row) => (
-                      <tr key={`${row.assignment_group}-${row.source_row_number ?? ""}`}>
-                        <td>{row.assignment_group}</td>
-                        <td>{row.functional_track ?? ""}</td>
-                        <td>{row.source_row_number ?? ""}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null}
       </div>
 
       <div className="panel maintenance-panel">

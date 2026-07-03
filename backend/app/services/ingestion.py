@@ -76,6 +76,7 @@ class IngestionJobAlreadyRunningError(IngestionError):
 class ParsedSourceRow:
     row_number: int
     raw_data: dict[str, Any]
+    source_sheet_name: str | None = None
 
 
 @dataclass(frozen=True)

@@ -510,10 +510,23 @@ class ApplicationsAssignmentGroupMappingRow(BaseModel):
     support_lead: str
     parent_business_application: str
     business_service_ci_name: str
+    application_number: str | None = None
+    application_owner: str | None = None
+    supported_by_vendor: str | None = None
     scope: str
     incident_count: int | None = None
     sc_task_count: int | None = None
     total_ticket_count: int | None = None
+    avg_monthly_incidents: int | None = None
+    avg_monthly_sc_tasks: int | None = None
+    avg_monthly_total_tickets: int | None = None
+
+
+class ApplicationsAssignmentGroupMappingVolumePeriod(BaseModel):
+    from_month: str
+    to_month: str
+    months: int
+    label: str
 
 
 class ApplicationsAssignmentGroupMappingResponse(BaseModel):
@@ -524,6 +537,7 @@ class ApplicationsAssignmentGroupMappingResponse(BaseModel):
     summary: ApplicationsAssignmentGroupMappingSummary
     rows: list[ApplicationsAssignmentGroupMappingRow]
     basis_security_rows: list[ApplicationsAssignmentGroupMappingRow] = Field(default_factory=list)
+    volume_period: ApplicationsAssignmentGroupMappingVolumePeriod | None = None
     data_notes: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 

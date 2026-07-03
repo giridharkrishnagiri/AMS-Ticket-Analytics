@@ -503,10 +503,16 @@ def test_applications_assignment_group_mapping_application_inventory_source() ->
             "support_lead": "Support Lead A",
             "parent_business_application": "Finance Parent",
             "business_service_ci_name": "Finance Service",
+            "application_number": "-",
+            "application_owner": "App Owner A",
+            "supported_by_vendor": "Vendor A",
             "scope": "in_scope",
             "incident_count": None,
             "sc_task_count": None,
             "total_ticket_count": None,
+            "avg_monthly_incidents": None,
+            "avg_monthly_sc_tasks": None,
+            "avg_monthly_total_tickets": None,
         }
         assert payload["basis_security_rows"] == []
         assert payload["summary"]["basis_security_mapping_count"] == 0
@@ -609,6 +615,10 @@ def test_applications_assignment_group_mapping_tickets_source_counts_generic_tic
         assert in_scope_payload["rows"][0]["total_ticket_count"] == 2
         assert in_scope_payload["rows"][0]["incident_count"] == 1
         assert in_scope_payload["rows"][0]["sc_task_count"] == 1
+        assert in_scope_payload["rows"][0]["avg_monthly_incidents"] == 0
+        assert in_scope_payload["rows"][0]["avg_monthly_sc_tasks"] == 0
+        assert in_scope_payload["rows"][0]["avg_monthly_total_tickets"] == 0
+        assert in_scope_payload["volume_period"]["label"] == "Dec-25 through May-26"
         assert in_scope_payload["rows"][0]["functional_track"] == "Finance"
         assert in_scope_payload["rows"][0]["ams_owner"] == "-"
         assert in_scope_payload["rows"][0]["support_lead"] == "-"

@@ -527,10 +527,23 @@ export type DashboardApplicationsAssignmentGroupMappingRow = {
   support_lead: string;
   parent_business_application: string;
   business_service_ci_name: string;
+  application_number: string | null;
+  application_owner: string | null;
+  supported_by_vendor: string | null;
   scope: string;
   incident_count: number | null;
   sc_task_count: number | null;
   total_ticket_count: number | null;
+  avg_monthly_incidents: number | null;
+  avg_monthly_sc_tasks: number | null;
+  avg_monthly_total_tickets: number | null;
+};
+
+export type DashboardApplicationsAssignmentGroupMappingVolumePeriod = {
+  from_month: string;
+  to_month: string;
+  months: number;
+  label: string;
 };
 
 export type DashboardApplicationsAssignmentGroupMapping = {
@@ -541,6 +554,7 @@ export type DashboardApplicationsAssignmentGroupMapping = {
   summary: DashboardApplicationsAssignmentGroupMappingSummary;
   rows: DashboardApplicationsAssignmentGroupMappingRow[];
   basis_security_rows: DashboardApplicationsAssignmentGroupMappingRow[];
+  volume_period: DashboardApplicationsAssignmentGroupMappingVolumePeriod | null;
   data_notes: string[];
   warnings: string[];
 };

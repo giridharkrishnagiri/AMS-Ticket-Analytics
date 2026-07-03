@@ -856,6 +856,23 @@ def applications_base_conditions(project_id: UUID) -> list[Any]:
     ]
 
 
+def applications_business_service_detail_conditions(
+    project_id: UUID,
+    filters: Any,
+    *,
+    excluded_filter_name: str | None = None,
+) -> list[Any]:
+    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
+    return [
+        *applications_filter_conditions(
+            project_id,
+            filters,
+            excluded_filter_name=excluded_filter_name,
+        ),
+        service_expression.is_not(None),
+    ]
+
+
 def selected_application_filter_values(filters: Any, filter_name: str) -> list[str]:
     values = getattr(filters, filter_name, []) or []
     return [value.strip() for value in values if value and value.strip()]
@@ -1251,7 +1268,7 @@ def applications_filter_value_counts(db: Session, request: Any) -> dict[str, Any
 
 def applications_summary(db: Session, request: Any) -> dict[str, Any]:
     filters = request.filters
-    conditions = applications_filter_conditions(request.project_id, filters)
+    conditions = applications_business_service_detail_conditions(request.project_id, filters)
     app_type_lower = func.lower(application_field_expression("app_type"))
     criticality_lower = func.lower(application_field_expression("biz_criticality"))
     statement = select(
@@ -1312,7 +1329,10 @@ def applications_sort_expression(column_name: str) -> Any:
 
 
 def applications_list(db: Session, request: Any) -> dict[str, Any]:
-    conditions = applications_filter_conditions(request.project_id, request.filters)
+    conditions = applications_business_service_detail_conditions(
+        request.project_id,
+        request.filters,
+    )
     total_statement = select(func.count(ApplicationInventoryItem.id)).where(*conditions)
     total = int(db.scalar(total_statement) or 0)
 
@@ -1351,7 +1371,12 @@ def applications_chart_counts(
             expression.label("label"),
             func.count(ApplicationInventoryItem.id).label("count"),
         )
-        .where(*applications_filter_conditions(request.project_id, request.filters))
+        .where(
+            *applications_business_service_detail_conditions(
+                request.project_id,
+                request.filters,
+            )
+        )
         .group_by(expression)
         .order_by(func.count(ApplicationInventoryItem.id).desc(), expression.asc())
     )
@@ -1738,6 +1763,11 @@ def display_assignment_group_value(values: set[str], fallback: str) -> str:
     return fallback
 
 
+def display_reference_value_without_multiple(values: set[str], fallback: str | None = None) -> str:
+    value = display_reference_value(values, fallback)
+    return REFERENCE_MISSING_LABEL if value == MULTIPLE_REFERENCE_LABEL else value
+
+
 def inventory_assignment_group_reference_map(
     db: Session,
     project_id: UUID,
@@ -1795,6 +1825,8 @@ def assignment_group_reference_for_row(
     row: dict[str, Any],
     reference_map: dict[tuple[str, str], dict[str, str]],
     master_manager_map: dict[str, str] | None = None,
+    *,
+    allow_multiple: bool = True,
 ) -> dict[str, str]:
     scope = str(row.get("scope") or "in_scope")
     assignment_key = str(row.get("assignment_group_key") or "")
@@ -1805,16 +1837,21 @@ def assignment_group_reference_for_row(
         if app_inventory_support_lead and app_inventory_support_lead != REFERENCE_MISSING_LABEL
         else (master_manager_map or {}).get(assignment_key)
     )
+    display = (
+        display_reference_value
+        if allow_multiple
+        else display_reference_value_without_multiple
+    )
     return {
-        "functional_track": display_reference_value(
+        "functional_track": display(
             {str(row.get("functional_track") or "")},
             fallback.get("functional_track"),
         ),
-        "ams_owner": display_reference_value(
+        "ams_owner": display(
             {str(row.get("ams_owner") or "")},
             fallback.get("ams_owner"),
         ),
-        "support_lead": display_reference_value(
+        "support_lead": display(
             {str(row.get("support_lead") or "")},
             support_lead_fallback,
         ),
@@ -1827,7 +1864,9 @@ def assignment_group_mapping_with_basis_split(
     regular_rows: list[dict[str, Any]] = []
     basis_security_rows: list[dict[str, Any]] = []
     for row in rows:
-        if is_basis_security_assignment_group(row.get("assignment_group")):
+        if row.get("scope") == "out_of_scope" and is_basis_security_assignment_group(
+            row.get("assignment_group")
+        ):
             basis_security_rows.append(row)
         else:
             regular_rows.append(row)
@@ -1865,8 +1904,7 @@ def application_inventory_scope_expression() -> Any:
     scope = normalized_text_expression(ApplicationInventoryItem.scope_status)
     return case(
         (scope == "in_scope", literal("in_scope")),
-        (scope == "out_of_scope", literal("out_of_scope")),
-        else_=literal("unknown"),
+        else_=literal("out_of_scope"),
     )
 
 
@@ -1949,13 +1987,20 @@ def applications_assignment_group_mapping_from_inventory(
     track_expression = reference_display_expression(ApplicationInventoryItem.functional_track)
     ams_owner_expression = reference_display_expression(ApplicationInventoryItem.ams_owner)
     support_lead_expression = reference_display_expression(ApplicationInventoryItem.support_lead)
-    parent_expression = validation_display_expression(
-        ApplicationInventoryItem.parent_application_name,
-        UNMAPPED_PARENT_APPLICATION_LABEL,
+    parent_expression = reference_display_expression(
+        ApplicationInventoryItem.parent_application_name
     )
-    business_service_expression = validation_display_expression(
-        ApplicationInventoryItem.business_service_ci_name,
-        UNMAPPED_BUSINESS_SERVICE_CI_LABEL,
+    business_service_expression = reference_display_expression(
+        ApplicationInventoryItem.business_service_ci_name
+    )
+    application_number_expression = reference_display_expression(
+        ApplicationInventoryItem.application_number_apm
+    )
+    application_owner_expression = reference_display_expression(
+        ApplicationInventoryItem.application_owner
+    )
+    supported_vendor_expression = reference_display_expression(
+        ApplicationInventoryItem.supported_by_vendor
     )
     conditions = application_inventory_mapping_conditions(request, scope_expression)
     if functional_track != "all":
@@ -1967,6 +2012,9 @@ def applications_assignment_group_mapping_from_inventory(
             track_expression,
             parent_expression,
             business_service_expression,
+            application_number_expression,
+            application_owner_expression,
+            supported_vendor_expression,
             scope_expression,
         ],
     )
@@ -1982,6 +2030,9 @@ def applications_assignment_group_mapping_from_inventory(
             support_lead_expression.label("support_lead"),
             parent_expression.label("parent_business_application"),
             business_service_expression.label("business_service_ci_name"),
+            application_number_expression.label("application_number"),
+            application_owner_expression.label("application_owner"),
+            supported_vendor_expression.label("supported_by_vendor"),
             scope_expression.label("scope"),
             func.count(ApplicationInventoryItem.id).label("row_count"),
         )
@@ -1994,6 +2045,9 @@ def applications_assignment_group_mapping_from_inventory(
             support_lead_expression,
             parent_expression,
             business_service_expression,
+            application_number_expression,
+            application_owner_expression,
+            supported_vendor_expression,
             scope_expression,
         )
         .order_by(
@@ -2011,10 +2065,16 @@ def applications_assignment_group_mapping_from_inventory(
             "support_lead": row["support_lead"],
             "parent_business_application": row["parent_business_application"],
             "business_service_ci_name": row["business_service_ci_name"],
+            "application_number": row["application_number"],
+            "application_owner": row["application_owner"],
+            "supported_by_vendor": row["supported_by_vendor"],
             "scope": row["scope"],
             "incident_count": None,
             "sc_task_count": None,
             "total_ticket_count": None,
+            "avg_monthly_incidents": None,
+            "avg_monthly_sc_tasks": None,
+            "avg_monthly_total_tickets": None,
         }
         for row in db.execute(statement).mappings().all()
     ]
@@ -2029,6 +2089,7 @@ def applications_assignment_group_mapping_from_inventory(
         "summary": summary,
         "rows": rows,
         "basis_security_rows": basis_security_rows,
+        "volume_period": None,
         "data_notes": [
             "Application Inventory source shows configured assignment group to application "
             "mapping.",
@@ -2089,6 +2150,20 @@ def applications_assignment_group_mapping_from_tickets(
     sc_task_count = func.count(source.c.id).filter(
         source.c.ticket_type == "SERVICE_CATALOG_TASK",
     )
+    volume_period = assignment_group_mapping_volume_period()
+    volume_period_conditions = (
+        source.c.created_at.is_not(None),
+        source.c.created_at >= volume_period["start_datetime"],
+        source.c.created_at < volume_period["end_datetime"],
+    )
+    period_incident_count = func.count(source.c.id).filter(
+        source.c.ticket_type == "INCIDENT",
+        *volume_period_conditions,
+    )
+    period_sc_task_count = func.count(source.c.id).filter(
+        source.c.ticket_type == "SERVICE_CATALOG_TASK",
+        *volume_period_conditions,
+    )
     statement = (
         select(
             assignment_expression.label("assignment_group"),
@@ -2102,6 +2177,8 @@ def applications_assignment_group_mapping_from_tickets(
             incident_count.label("incident_count"),
             sc_task_count.label("sc_task_count"),
             func.count(source.c.id).label("total_ticket_count"),
+            period_incident_count.label("period_incident_count"),
+            period_sc_task_count.label("period_sc_task_count"),
         )
         .select_from(source)
         .where(*conditions)
@@ -2123,13 +2200,33 @@ def applications_assignment_group_mapping_from_tickets(
         {
             "assignment_group": row["assignment_group"],
             "assignment_group_key": row["assignment_group_key"],
-            **assignment_group_reference_for_row(row, reference_map, master_manager_map),
+            **assignment_group_reference_for_row(
+                row,
+                reference_map,
+                master_manager_map,
+                allow_multiple=False,
+            ),
             "parent_business_application": row["parent_business_application"],
             "business_service_ci_name": row["business_service_ci_name"],
+            "application_number": None,
+            "application_owner": None,
+            "supported_by_vendor": None,
             "scope": row["scope"],
             "incident_count": int_count(row["incident_count"]),
             "sc_task_count": int_count(row["sc_task_count"]),
             "total_ticket_count": int_count(row["total_ticket_count"]),
+            "avg_monthly_incidents": rounded_average_monthly_count(
+                int_count(row["period_incident_count"]),
+                int(volume_period["months"]),
+            ),
+            "avg_monthly_sc_tasks": rounded_average_monthly_count(
+                int_count(row["period_sc_task_count"]),
+                int(volume_period["months"]),
+            ),
+            "avg_monthly_total_tickets": rounded_average_monthly_count(
+                int_count(row["period_incident_count"]) + int_count(row["period_sc_task_count"]),
+                int(volume_period["months"]),
+            ),
         }
         for row in db.execute(statement).mappings().all()
     ]
@@ -2144,11 +2241,18 @@ def applications_assignment_group_mapping_from_tickets(
         "summary": summary,
         "rows": rows,
         "basis_security_rows": basis_security_rows,
+        "volume_period": {
+            "from_month": volume_period["from_month"],
+            "to_month": volume_period["to_month"],
+            "months": volume_period["months"],
+            "label": volume_period["label"],
+        },
         "data_notes": [
             "Tickets Data source shows distinct mappings found in normalized Incident and "
             "SC Task records.",
             "Generic Tickets includes Incidents and SC Tasks only.",
             "Problems and Changes are excluded.",
+            f"Average monthly volumes use {volume_period['label']}.",
             "BASIS and SECURITY assignment groups are confirmed out-of-scope and shown "
             "separately when present.",
             "BASIS/SECURITY classification uses a case-insensitive contains match on "
@@ -2220,6 +2324,24 @@ def month_label(month_start: date) -> str:
     return f"{month_start:%b}-{month_start:%y}"
 
 
+def assignment_group_mapping_volume_period() -> dict[str, Any]:
+    months = month_key_date_range(*ASSIGNMENT_GROUP_VOLUMETRICS_DEFAULT_MONTHS)
+    return {
+        "from_month": month_key(months[0]),
+        "to_month": month_key(months[-1]),
+        "months": len(months),
+        "label": f"{month_label(months[0])} through {month_label(months[-1])}",
+        "start_datetime": datetime.combine(months[0], time.min, tzinfo=UTC),
+        "end_datetime": datetime.combine(next_month_start(months[-1]), time.min, tzinfo=UTC),
+    }
+
+
+def rounded_average_monthly_count(count: int, months: int) -> int:
+    if months <= 0:
+        return 0
+    return int(math.floor((count / months) + 0.5))
+
+
 def month_key(month_start: date) -> str:
     return f"{month_start:%Y-%m}"
 
@@ -2282,7 +2404,13 @@ def assignment_group_volumetrics_event_rows(
     category_expression = assignment_group_volumetrics_category_expression(source)
     month_expression = func.to_char(func.date_trunc("month", date_expression), "YYYY-MM")
     basis_security_expression = case(
-        (basis_security_assignment_group_condition(source.c.assignment_group), literal(True)),
+        (
+            and_(
+                source.c.scope == "out_of_scope",
+                basis_security_assignment_group_condition(source.c.assignment_group),
+            ),
+            literal(True),
+        ),
         else_=literal(False),
     )
     conditions: list[Any] = [

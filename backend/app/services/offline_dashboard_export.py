@@ -247,6 +247,9 @@ def application_export_rows(db: Session, project_id: UUID) -> list[dict[str, Any
         .where(
             ApplicationInventoryItem.project_id == project_id,
             ApplicationInventoryItem.active.is_(True),
+            nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name).is_not(
+                None
+            ),
         )
         .order_by(application_display_expression("business_service_ci_name").asc())
     )
@@ -4004,15 +4007,18 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ["all", "All"]
       ].map(([value, label]) => `<button type="button" data-app-mapping-scope="${value}" class="${state.appMappingScope === value ? "active" : ""}">${label}</button>`).join("");
       const trackButtons = [`<button type="button" data-app-mapping-track="all" class="${state.appMappingTrack === "all" ? "active" : ""}">All Tracks</button>`, ...tracks.map((track) => `<button type="button" data-app-mapping-track="${esc(track)}" class="${state.appMappingTrack === track ? "active" : ""}">${esc(track)}</button>`)].join("");
-      const countHeaders = state.appMappingSource === "tickets" ? "<th>Incident Count</th><th>SC Task Count</th><th>Total Ticket Count</th>" : "";
-      const countCells = (row) => state.appMappingSource === "tickets" ? `<td class="numeric-cell">${fmt(row.incident_count || 0)}</td><td class="numeric-cell">${fmt(row.sc_task_count || 0)}</td><td class="numeric-cell">${fmt(row.total_ticket_count || 0)}</td>` : "";
-      const mappingTable = (tableRows, tableId, emptyMessage) => `<div class="table-frame table-scroll validation-table-frame offline-validation-scroll offline-mapping-scroll" role="region" tabindex="0" aria-label="Scrollable Assignment Group Mapping table"><table id="${tableId}" class="applications-table validation-table"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>AMS Owner</th><th>Support Lead</th><th>Parent Business Application</th><th>Business Service CI Name</th><th>Scope</th>${countHeaders}</tr></thead><tbody>${tableRows.length ? tableRows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.ams_owner)}</td><td>${esc(row.support_lead)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td><td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("") : `<tr><td colspan="${7 + (state.appMappingSource === "tickets" ? 3 : 0)}">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>`;
+      const inventoryHeaders = state.appMappingSource === "application_inventory" ? "<th>Application Number</th><th>Application Owner</th><th>Supported By Vendor</th>" : "";
+      const inventoryCells = (row) => state.appMappingSource === "application_inventory" ? `<td>${esc(row.application_number || "-")}</td><td>${esc(row.application_owner || "-")}</td><td>${esc(row.supported_by_vendor || "-")}</td>` : "";
+      const countHeaders = state.appMappingSource === "tickets" ? "<th>Incident Count</th><th>SC Task Count</th><th>Total Ticket Count</th><th>Avg Monthly Incidents</th><th>Avg Monthly SC Tasks</th><th>Avg Monthly Total Tickets</th>" : "";
+      const countCells = (row) => state.appMappingSource === "tickets" ? `<td class="numeric-cell">${fmt(row.incident_count || 0)}</td><td class="numeric-cell">${fmt(row.sc_task_count || 0)}</td><td class="numeric-cell">${fmt(row.total_ticket_count || 0)}</td><td class="numeric-cell">${fmt(row.avg_monthly_incidents || 0)}</td><td class="numeric-cell">${fmt(row.avg_monthly_sc_tasks || 0)}</td><td class="numeric-cell">${fmt(row.avg_monthly_total_tickets || 0)}</td>` : "";
+      const extraColumnCount = state.appMappingSource === "tickets" ? 6 : 3;
+      const mappingTable = (tableRows, tableId, emptyMessage) => `<div class="table-frame table-scroll validation-table-frame offline-validation-scroll offline-mapping-scroll" role="region" tabindex="0" aria-label="Scrollable Assignment Group Mapping table"><table id="${tableId}" class="applications-table validation-table"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>AMS Owner</th><th>Support Lead</th><th>Parent Business Application</th><th>Business Service CI Name</th>${inventoryHeaders}<th>Scope</th>${countHeaders}</tr></thead><tbody>${tableRows.length ? tableRows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.ams_owner)}</td><td>${esc(row.support_lead)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td>${inventoryCells(row)}<td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("") : `<tr><td colspan="${7 + extraColumnCount}">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>`;
       const basisSection = basisRows.length ? `<section class="validation-subsection"><div class="chart-title-row"><div><p class="label">Confirmed Out-of-Scope</p><h3>BASIS and SECURITY Assignment Group Mapping</h3><p class="muted">Confirmed out-of-scope assignment groups containing "Basis" or "Security".</p></div><div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-basis-security">Copy Table</button><span class="copy-chart-status"></span></div></div>${mappingTable(basisRows, "offline-app-assignment-basis-security", "No BASIS or SECURITY assignment groups found for the selected scope and filters.")}</section>` : "";
       return `<section class="panel full"><p class="label">Applications</p><h2>Assignment Group ↔ Application Mapping</h2><p class="muted">Static validation table for Assignment Group mappings from Application Inventory or normalized Incident and SC Task data.</p>
         <div class="validation-toolbar">${sourceButtons}</div>
         <div class="validation-toolbar">${scopeButtons}</div>
         <div class="validation-toolbar">${trackButtons}</div>
-        <p class="muted">Showing ${fmt(rows.length)} Assignment Group mappings.</p>
+        <p class="muted">Showing ${fmt(rows.length)} Assignment Group mappings.${state.appMappingSource === "tickets" && payload.volume_period ? ` Average monthly volumes are based on ${esc(payload.volume_period.label)}.` : ""}</p>
         <div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-mapping">Copy Table</button><span class="copy-chart-status"></span></div>
         ${mappingTable(rows, "offline-app-assignment-mapping", "No mappings match the selected controls.")}
         ${basisSection}

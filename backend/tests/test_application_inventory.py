@@ -180,16 +180,17 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
         assert response.status_code == 201
         payload = response.json()
         assert payload["total_rows"] == 3
-        assert payload["inserted_count"] == 1
+        assert payload["inserted_count"] == 2
         assert payload["updated_count"] == 1
-        assert payload["skipped_count"] == 1
+        assert payload["skipped_count"] == 0
         assert payload["distinct_business_service_count"] == 1
-        assert payload["distinct_support_lead_count"] == 2
-        assert payload["error_count"] == 1
+        assert payload["distinct_support_lead_count"] == 3
+        assert payload["error_count"] == 0
 
         item = db.scalar(
             select(ApplicationInventoryItem).where(
-                ApplicationInventoryItem.project_id == project_id
+                ApplicationInventoryItem.project_id == project_id,
+                ApplicationInventoryItem.business_service_ci_name == "Claims Service",
             )
         )
         assert item is not None
@@ -204,6 +205,15 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
             "Business criticality": None,
             "Total USD$": None,
         }
+        scope_only_item = db.scalar(
+            select(ApplicationInventoryItem).where(
+                ApplicationInventoryItem.project_id == project_id,
+                ApplicationInventoryItem.business_service_ci_name == "",
+            )
+        )
+        assert scope_only_item is not None
+        assert scope_only_item.assignment_group == "IT-SAP-Claims"
+        assert scope_only_item.scope_status == "in_scope"
     finally:
         cleanup_client(db, client_id)
 
@@ -213,7 +223,7 @@ def test_xlsx_upload_detects_second_row_header() -> None:
     try:
         workbook = Workbook()
         worksheet = workbook.active
-        worksheet.title = "Group-App-BizService"
+        worksheet.title = "Group-App-BizService-Inscope"
         worksheet.append([None, None, "helper"])
         worksheet.append(
             [
@@ -276,6 +286,7 @@ def test_xlsx_upload_detects_second_row_header() -> None:
             )
         )
         assert item is not None
+        assert item.source_sheet_name == "Group-App-BizService-Inscope"
         assert item.source_row_number == 3
         assert item.active_users == 1234
         assert item.cmdb_payload == {"Application family": "Excel Family"}

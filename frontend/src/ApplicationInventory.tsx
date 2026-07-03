@@ -319,7 +319,7 @@ function ApplicationInventory({
               type="submit"
               disabled={isUploading || !projectId.trim() || !file}
             >
-              {isUploading ? "Uploading..." : "Upload Application Inventory"}
+              {isUploading ? "Uploading..." : "Upload CMDB/Application Inventory"}
             </button>
             <button
               className="secondary-button"
@@ -340,7 +340,9 @@ function ApplicationInventory({
             <span>Replace existing inventory enrichment</span>
           </label>
           <p className="scope-note">
-            Enrichment updates only denormalized inventory fields. It does not change raw ticket
+            Upload the CMDB application in-scope support group file here. Assignment groups in
+            this file are the source of truth for in-scope Incident and SC Task classification.
+            Enrichment updates only denormalized inventory fields and does not change raw ticket
             fields or uploaded source data.
           </p>
         </form>

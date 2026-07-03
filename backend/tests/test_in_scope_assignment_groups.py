@@ -144,7 +144,7 @@ def test_scope_reference_import_supports_misspelled_header_and_keeps_last_duplic
         cleanup_client(db, client_id)
 
 
-def test_incident_scope_uses_reference_not_application_inventory(tmp_path: Path) -> None:
+def test_incident_scope_uses_cmdb_inventory_not_old_reference(tmp_path: Path) -> None:
     db, client_id, project_id = create_project()
     path = tmp_path / "scope.xlsx"
     write_scope_workbook(path, [("Reference Support", "Run")])
@@ -179,6 +179,7 @@ def test_incident_scope_uses_reference_not_application_inventory(tmp_path: Path)
                 project_id=project_id,
                 assignment_group="Inventory Support",
                 business_service_ci_name="Inventory Service",
+                scope_status="in_scope",
                 active=True,
             )
         )
@@ -201,10 +202,10 @@ def test_incident_scope_uses_reference_not_application_inventory(tmp_path: Path)
         db.commit()
         batch_id = add_uploaded_raw_rows(db, project_id, "INCIDENT", rows)
         result = apply_mapping_to_batch(db, batch_id, mapping)
-        in_scope = db.scalar(select(Ticket).where(Ticket.ticket_number == "INC-SCOPE-1"))
+        in_scope = db.scalar(select(Ticket).where(Ticket.ticket_number == "INC-SCOPE-2"))
         out_of_scope = db.scalar(
             select(AssessmentOutOfScopeTicket).where(
-                AssessmentOutOfScopeTicket.ticket_number == "INC-SCOPE-2"
+                AssessmentOutOfScopeTicket.ticket_number == "INC-SCOPE-1"
             )
         )
 
@@ -217,13 +218,11 @@ def test_incident_scope_uses_reference_not_application_inventory(tmp_path: Path)
         cleanup_client(db, client_id)
 
 
-def test_application_inventory_scope_status_derives_from_reference(
+def test_application_inventory_upload_treats_rows_as_in_scope(
     tmp_path: Path,
 ) -> None:
     db, client_id, project_id = create_project()
-    scope_path = tmp_path / "scope.xlsx"
     inventory_path = tmp_path / "inventory.csv"
-    write_scope_workbook(scope_path, [("AMS Scope Team", "Run")])
     inventory_path.write_text(
         "\n".join(
             [
@@ -237,7 +236,6 @@ def test_application_inventory_scope_status_derives_from_reference(
     )
 
     try:
-        import_in_scope_assignment_groups(db, project_id, scope_path, scope_path.name)
         upload_application_inventory_file(db, project_id, inventory_path, inventory_path.name)
         rows = {
             row.business_service_ci_name: row.scope_status
@@ -249,8 +247,8 @@ def test_application_inventory_scope_status_derives_from_reference(
         }
 
         assert rows["In Scope App"] == "in_scope"
-        assert rows["Out Scope App"] == "out_of_scope"
-        assert rows["Blank Scope App"] == "out_of_scope"
+        assert rows["Out Scope App"] == "in_scope"
+        assert rows["Blank Scope App"] == "in_scope"
     finally:
         cleanup_client(db, client_id)
 

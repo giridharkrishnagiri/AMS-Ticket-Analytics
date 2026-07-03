@@ -222,6 +222,7 @@ def add_application_inventory_scope(
             functional_track="Mapping Track",
             ams_owner="Mapping AMS Owner",
             supported_by_vendor="HCLTech",
+            scope_status="in_scope",
             cmdb_payload={
                 "Architecture type": "Vendor Managed",
                 "Install type": "Cloud",
