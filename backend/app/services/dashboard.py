@@ -1731,6 +1731,13 @@ def display_reference_value(values: set[str], fallback: str | None = None) -> st
     return fallback or REFERENCE_MISSING_LABEL
 
 
+def display_assignment_group_value(values: set[str], fallback: str) -> str:
+    clean_values = {str(value).strip() for value in values if value and str(value).strip()}
+    if clean_values:
+        return sorted(clean_values, key=lambda value: (value.casefold(), value))[0]
+    return fallback
+
+
 def inventory_assignment_group_reference_map(
     db: Session,
     project_id: UUID,
@@ -2349,12 +2356,13 @@ def add_assignment_group_volumetrics_event(
     key = (
         row["ticket_category"],
         row["basis_security"],
-        row["assignment_group"],
+        row["assignment_group_key"],
     )
     entry = store.setdefault(
         key,
         {
             "assignment_group": row["assignment_group"],
+            "assignment_group_values": set(),
             "assignment_group_key": row["assignment_group_key"],
             "scopes": set(),
             "functional_track_values": set(),
@@ -2364,12 +2372,47 @@ def add_assignment_group_volumetrics_event(
             "months": blank_month_metrics(months),
         },
     )
+    entry["assignment_group_values"].add(row["assignment_group"])
     entry["scopes"].add(row["scope"])
     entry["functional_track_values"].add(row["functional_track"])
     entry["ams_owner_values"].add(row["ams_owner"])
     entry["support_lead_values"].add(row["support_lead"])
     if row["month_key"] in entry["months"]:
         entry["months"][row["month_key"]][event_name] += int_count(row[event_name])
+
+
+def merge_assignment_group_volumetrics_rows(
+    rows: list[dict[str, Any]],
+    months: list[date],
+) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row["assignment_group"]),
+            str(row["functional_track"]),
+            str(row["ams_owner"]),
+            str(row["support_lead"]),
+        )
+        entry = merged.setdefault(
+            key,
+            {
+                "assignment_group": row["assignment_group"],
+                "functional_track": row["functional_track"],
+                "ams_owner": row["ams_owner"],
+                "support_lead": row["support_lead"],
+                "months": blank_month_metrics(months),
+                "totals": {"created": 0, "resolved": 0, "cancelled": 0},
+            },
+        )
+        for current_month in months:
+            current_key = month_key(current_month)
+            for metric in ("created", "resolved", "cancelled"):
+                entry["months"][current_key][metric] += int_count(
+                    row["months"][current_key][metric],
+                )
+        for metric in ("created", "resolved", "cancelled"):
+            entry["totals"][metric] += int_count(row["totals"][metric])
+    return list(merged.values())
 
 
 def build_assignment_group_volumetrics_table(
@@ -2381,6 +2424,10 @@ def build_assignment_group_volumetrics_table(
 ) -> dict[str, Any]:
     output_rows: list[dict[str, Any]] = []
     for row in rows:
+        assignment_group = display_assignment_group_value(
+            row.get("assignment_group_values", set()),
+            str(row["assignment_group"]),
+        )
         scopes = row.get("scopes") or set()
         fallback_scope = next(iter(scopes)) if len(scopes) == 1 else ""
         fallback = reference_map.get((fallback_scope, row.get("assignment_group_key", "")), {})
@@ -2398,7 +2445,7 @@ def build_assignment_group_volumetrics_table(
         }
         output_rows.append(
             {
-                "assignment_group": row["assignment_group"],
+                "assignment_group": assignment_group,
                 "functional_track": display_reference_value(
                     row.get("functional_track_values", set()),
                     fallback.get("functional_track"),
@@ -2415,6 +2462,7 @@ def build_assignment_group_volumetrics_table(
                 "totals": totals,
             },
         )
+    output_rows = merge_assignment_group_volumetrics_rows(output_rows, months)
     output_rows.sort(
         key=lambda item: (
             -int_count(item["totals"]["created"]),
@@ -2497,11 +2545,12 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
     ]
     overall_by_assignment: dict[tuple[bool, str], dict[str, Any]] = {}
     for row in incident_rows + sc_task_rows:
-        key = (False, row["assignment_group"])
+        key = (False, row["assignment_group_key"])
         overall_row = overall_by_assignment.setdefault(
             key,
             {
                 "assignment_group": row["assignment_group"],
+                "assignment_group_values": set(),
                 "assignment_group_key": row["assignment_group_key"],
                 "scopes": set(),
                 "functional_track_values": set(),
@@ -2511,6 +2560,7 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
                 "months": blank_month_metrics(months),
             },
         )
+        overall_row["assignment_group_values"].update(row.get("assignment_group_values", set()))
         overall_row["scopes"].update(row.get("scopes", set()))
         overall_row["functional_track_values"].update(row.get("functional_track_values", set()))
         overall_row["ams_owner_values"].update(row.get("ams_owner_values", set()))
@@ -2522,11 +2572,12 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
 
     basis_overall_by_assignment: dict[tuple[bool, str], dict[str, Any]] = {}
     for row in basis_incident_rows + basis_sc_task_rows:
-        key = (True, row["assignment_group"])
+        key = (True, row["assignment_group_key"])
         overall_row = basis_overall_by_assignment.setdefault(
             key,
             {
                 "assignment_group": row["assignment_group"],
+                "assignment_group_values": set(),
                 "assignment_group_key": row["assignment_group_key"],
                 "scopes": set(),
                 "functional_track_values": set(),
@@ -2536,6 +2587,7 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
                 "months": blank_month_metrics(months),
             },
         )
+        overall_row["assignment_group_values"].update(row.get("assignment_group_values", set()))
         overall_row["scopes"].update(row.get("scopes", set()))
         overall_row["functional_track_values"].update(row.get("functional_track_values", set()))
         overall_row["ams_owner_values"].update(row.get("ams_owner_values", set()))

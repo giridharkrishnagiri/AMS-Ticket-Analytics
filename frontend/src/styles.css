@@ -1894,6 +1894,14 @@ h2 {
   z-index: 2;
 }
 
+.assignment-group-volumetrics-table thead tr:first-child th {
+  top: 0;
+}
+
+.assignment-group-volumetrics-table thead tr:nth-child(2) th {
+  top: 34px;
+}
+
 .assignment-group-volumetrics-table .numeric-cell,
 .assignment-group-volumetrics-table .month-subheader,
 .assignment-group-volumetrics-table .month-group-header {
@@ -1990,6 +1998,22 @@ h2 {
 .assignment-group-volumetrics-table .total-cell {
   background-color: #f1f5f9;
   font-weight: 900;
+}
+
+.assignment-group-volumetrics-table .assignment-volumetrics-total-row th,
+.assignment-group-volumetrics-table .assignment-volumetrics-total-row td {
+  position: sticky;
+  top: 68px;
+  z-index: 4;
+  background-color: #f1f5f9;
+}
+
+.assignment-group-volumetrics-table .assignment-volumetrics-total-row .assignment-group-column {
+  z-index: 6;
+}
+
+.assignment-group-volumetrics-table .assignment-volumetrics-total-row .reference-column {
+  background-color: #f1f5f9;
 }
 
 .applications-chart-grid {

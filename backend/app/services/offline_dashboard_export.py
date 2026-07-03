@@ -2395,6 +2395,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       top: 0;
       z-index: 2;
     }
+    .assignment-volumetrics-table thead tr:first-child th {
+      top: 0;
+    }
+    .assignment-volumetrics-table thead tr:nth-child(2) th {
+      top: 34px;
+    }
     .assignment-volumetrics-table .numeric-cell,
     .assignment-volumetrics-table .month-subheader,
     .assignment-volumetrics-table .month-group-header {
@@ -2440,6 +2446,23 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     .metric-cancelled { background-color: #fff7ed; }
     .month-boundary-left { border-left: 2px solid #94a3b8 !important; }
     .month-boundary-right { border-right: 2px solid #94a3b8 !important; }
+    .assignment-volumetrics-table .total-cell {
+      background-color: #f1f5f9;
+      font-weight: 900;
+    }
+    .assignment-volumetrics-table .assignment-volumetrics-total-row th,
+    .assignment-volumetrics-table .assignment-volumetrics-total-row td {
+      position: sticky;
+      top: 68px;
+      z-index: 4;
+      background-color: #f1f5f9;
+    }
+    .assignment-volumetrics-table .assignment-volumetrics-total-row .assignment-group-column {
+      z-index: 6;
+    }
+    .assignment-volumetrics-table .assignment-volumetrics-total-row .reference-column {
+      background-color: #f1f5f9;
+    }
     .lifecycle-detail-table {
       min-width: 2500px;
     }
@@ -4215,17 +4238,14 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function assignmentMonthTotals(rows, month, key) {
       return rows.reduce((total, row) => total + assignmentMetric(row, month, key), 0);
     }
-    function assignmentGrandTotal(rows, key) {
-      return rows.reduce((total, row) => total + Number(row.totals?.[key] || 0), 0);
-    }
     function assignmentVolumetricsTable(table, months, tableKey) {
       const rows = assignmentVolumetricsRows(table);
       const tableId = `offline-assignment-vol-${tableKey}`;
-      const header1 = `<tr><th class="assignment-group-column" rowspan="2">Assignment Group</th><th class="reference-column" rowspan="2">Functional Track</th><th class="reference-column" rowspan="2">AMS Owner</th><th class="reference-column" rowspan="2">Support Lead</th>${months.map((month, index) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right" colspan="3">${esc(month.month_label)}</th>`).join("")}<th class="month-boundary-left" colspan="3">Total</th></tr>`;
-      const header2 = `<tr>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${label}</th>`)).join("")}${ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${label}</th>`).join("")}</tr>`;
-      const bodyRows = rows.map((row) => `<tr><th class="assignment-group-column">${esc(row.assignment_group)}</th><td class="reference-column">${esc(row.functional_track)}</td><td class="reference-column">${esc(row.ams_owner)}</td><td class="reference-column">${esc(row.support_lead)}</td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMetric(row, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(row.totals?.[key] || 0)}</td>`).join("")}</tr>`).join("");
-      const totalRow = `<tr class="pivot-total-row"><th class="assignment-group-column">Grand Total</th><td class="reference-column"></td><td class="reference-column"></td><td class="reference-column"></td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMonthTotals(rows, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(assignmentGrandTotal(rows, key))}</td>`).join("")}</tr>`;
-      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><span class="copy-chart-status"></span></div></div><div class="table-frame table-scroll validation-table-frame offline-validation-scroll assignment-volumetrics-frame" role="region" tabindex="0" aria-label="${esc(table?.title || tableKey)} scrollable Assignment Group Volumetrics table"><table id="${tableId}" class="validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? bodyRows + totalRow : `<tr><td colspan="${4 + months.length * 3 + 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></section>`;
+      const header1 = `<tr><th class="assignment-group-column" rowspan="2">Assignment Group</th><th class="reference-column" rowspan="2">Functional Track</th><th class="reference-column" rowspan="2">AMS Owner</th><th class="reference-column" rowspan="2">Support Lead</th>${months.map((month, index) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right" colspan="3">${esc(month.month_label)}</th>`).join("")}</tr>`;
+      const header2 = `<tr>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${label}</th>`)).join("")}</tr>`;
+      const bodyRows = rows.map((row) => `<tr><th class="assignment-group-column">${esc(row.assignment_group)}</th><td class="reference-column">${esc(row.functional_track)}</td><td class="reference-column">${esc(row.ams_owner)}</td><td class="reference-column">${esc(row.support_lead)}</td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMetric(row, month, key))}</td>`)).join("")}</tr>`).join("");
+      const totalRow = `<tr class="pivot-total-row assignment-volumetrics-total-row"><th class="assignment-group-column">Grand Total</th><td class="reference-column"></td><td class="reference-column"></td><td class="reference-column"></td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMonthTotals(rows, month, key))}</td>`)).join("")}</tr>`;
+      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><span class="copy-chart-status"></span></div></div><div class="table-frame table-scroll validation-table-frame offline-validation-scroll assignment-volumetrics-frame" role="region" tabindex="0" aria-label="${esc(table?.title || tableKey)} scrollable Assignment Group Volumetrics table"><table id="${tableId}" class="validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? totalRow + bodyRows : `<tr><td colspan="${4 + months.length * 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></section>`;
     }
     function renderAssignmentGroupVolumetrics() {
       const payload = assignmentVolumetricsPayload();

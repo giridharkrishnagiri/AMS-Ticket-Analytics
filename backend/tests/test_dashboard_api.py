@@ -669,6 +669,18 @@ def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> N
             project_id,
             batch_id,
             file_id,
+            "INC-VOL-3",
+            "INCIDENT",
+            dt("2025-12-18T00:00:00"),
+            state="Open",
+            assignment_group="ag-fin",
+            functional_track="Finance",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
             "SCT-VOL-1",
             "SERVICE_CATALOG_TASK",
             dt("2025-12-12T00:00:00"),
@@ -772,11 +784,12 @@ def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> N
             "2026-05",
         ]
         incident_row = payload["tables"]["incidents"]["rows"][0]
+        assert len(payload["tables"]["incidents"]["rows"]) == 1
         assert incident_row["assignment_group"] == "AG-FIN"
-        assert incident_row["months"]["2025-12"]["created"] == 2
+        assert incident_row["months"]["2025-12"]["created"] == 3
         assert incident_row["months"]["2026-01"]["resolved"] == 1
         assert incident_row["months"]["2026-02"]["cancelled"] == 1
-        assert incident_row["totals"] == {"created": 2, "resolved": 1, "cancelled": 1}
+        assert incident_row["totals"] == {"created": 3, "resolved": 1, "cancelled": 1}
 
         sc_task_row = payload["tables"]["sc_tasks"]["rows"][0]
         assert sc_task_row["months"]["2025-12"] == {
@@ -785,7 +798,7 @@ def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> N
             "cancelled": 0,
         }
         overall_row = payload["tables"]["overall"]["rows"][0]
-        assert overall_row["totals"] == {"created": 3, "resolved": 2, "cancelled": 1}
+        assert overall_row["totals"] == {"created": 4, "resolved": 2, "cancelled": 1}
         serialized = json.dumps(payload)
         assert "PROBLEM" not in serialized
         assert "cmdb_payload" not in serialized
