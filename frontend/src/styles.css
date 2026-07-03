@@ -1790,6 +1790,31 @@ h2 {
   max-height: 520px;
 }
 
+.validation-table-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.validation-table-scroll {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.validation-table-scroll:focus {
+  outline: 3px solid rgb(15 118 110 / 24%);
+  outline-offset: -3px;
+}
+
 .validation-table {
   border-collapse: separate;
   border-spacing: 0;
@@ -1818,13 +1843,62 @@ h2 {
   border-top: 1px solid #cbd5e1;
 }
 
-.volumetrics-validation-frame {
+.volumetrics-validation-frame,
+.volumetrics-validation-card {
   max-height: 620px;
 }
 
+.assignment-volumetrics-frame,
+.assignment-volumetrics-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  max-height: 620px;
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior-x: contain;
+}
+
+.assignment-volumetrics-scroll::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+.assignment-volumetrics-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid #ffffff;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.assignment-volumetrics-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
 .assignment-group-volumetrics-table {
-  min-width: 2140px;
+  width: auto;
+  min-width: max-content;
+  max-width: none;
+  table-layout: auto;
   font-size: 0.78rem;
+}
+
+.assignment-group-volumetrics-table th,
+.assignment-group-volumetrics-table td {
+  padding: 7px 9px;
+}
+
+.assignment-group-volumetrics-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.assignment-group-volumetrics-table .numeric-cell,
+.assignment-group-volumetrics-table .month-subheader,
+.assignment-group-volumetrics-table .month-group-header {
+  min-width: 92px;
+  white-space: nowrap;
 }
 
 .assignment-group-volumetrics-table .assignment-group-column {

@@ -2276,6 +2276,59 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     .validation-table-frame {
       max-height: 560px;
     }
+    .validation-table-card {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .validation-table-scroll {
+      position: relative;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .validation-table-scroll:focus {
+      outline: 3px solid rgba(15, 118, 110, 0.24);
+      outline-offset: -3px;
+    }
+    .assignment-volumetrics-frame {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: auto;
+      scrollbar-gutter: stable both-edges;
+      overscroll-behavior-x: contain;
+    }
+    .assignment-volumetrics-scroll {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      max-height: 560px;
+      overflow-x: auto;
+      overflow-y: auto;
+      scrollbar-gutter: stable both-edges;
+      overscroll-behavior-x: contain;
+    }
+    .assignment-volumetrics-scroll::-webkit-scrollbar {
+      width: 14px;
+      height: 14px;
+    }
+    .assignment-volumetrics-scroll::-webkit-scrollbar-thumb {
+      border: 3px solid #fff;
+      border-radius: 999px;
+      background: #94a3b8;
+    }
+    .assignment-volumetrics-scroll::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
     .validation-table th,
     .validation-table td {
       border-right: 1px solid var(--border);
@@ -2283,9 +2336,27 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       vertical-align: top;
     }
     .assignment-volumetrics-table {
-      min-width: 2140px;
+      width: auto;
+      min-width: max-content;
+      max-width: none;
+      table-layout: auto;
       border-collapse: separate;
       border-spacing: 0;
+    }
+    .assignment-volumetrics-table th,
+    .assignment-volumetrics-table td {
+      padding: 7px 9px;
+    }
+    .assignment-volumetrics-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .assignment-volumetrics-table .numeric-cell,
+    .assignment-volumetrics-table .month-subheader,
+    .assignment-volumetrics-table .month-group-header {
+      min-width: 92px;
+      white-space: nowrap;
     }
     .assignment-volumetrics-table .assignment-group-column {
       position: sticky;
@@ -3802,6 +3873,34 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         });
       });
     }
+    function installScrollableTableKeyboard(root) {
+      root.querySelectorAll(".validation-table-scroll").forEach((frame) => {
+        if (frame.dataset.keyboardScrollReady === "true") return;
+        frame.dataset.keyboardScrollReady = "true";
+        frame.addEventListener("keydown", (event) => {
+          const scrollStep = event.shiftKey ? 240 : 80;
+          if (event.key === "ArrowRight") {
+            frame.scrollLeft += scrollStep;
+            event.preventDefault();
+          } else if (event.key === "ArrowLeft") {
+            frame.scrollLeft -= scrollStep;
+            event.preventDefault();
+          } else if (event.key === "PageDown") {
+            frame.scrollLeft += 480;
+            event.preventDefault();
+          } else if (event.key === "PageUp") {
+            frame.scrollLeft -= 480;
+            event.preventDefault();
+          } else if (event.key === "Home") {
+            frame.scrollLeft = 0;
+            event.preventDefault();
+          } else if (event.key === "End") {
+            frame.scrollLeft = frame.scrollWidth;
+            event.preventDefault();
+          }
+        });
+      });
+    }
     function renderAssignmentGroupMapping() {
       const payload = DASHBOARD.applications.assignment_group_mapping?.[state.appMappingSource] || { rows: [], basis_security_rows: [], summary: {}, available_functional_tracks: [] };
       const rows = (payload.rows || []).filter((row) =>
@@ -4024,6 +4123,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       attachDefaultCommentaries(document.getElementById("volumetrics"), currentVolumetricsCommentaryContext());
       installChartCopyButtons(document.getElementById("volumetrics"));
       installTableCopyButtons(document.getElementById("volumetrics"));
+      installScrollableTableKeyboard(document.getElementById("volumetrics"));
     }
     function volSubTabs() {
       const labels = {
@@ -4068,7 +4168,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const header2 = `<tr>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${label}</th>`)).join("")}${ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${label}</th>`).join("")}</tr>`;
       const bodyRows = rows.map((row) => `<tr><th class="assignment-group-column">${esc(row.assignment_group)}</th><td class="reference-column">${esc(row.functional_track)}</td><td class="reference-column">${esc(row.ams_owner)}</td><td class="reference-column">${esc(row.support_lead)}</td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMetric(row, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(row.totals?.[key] || 0)}</td>`).join("")}</tr>`).join("");
       const totalRow = `<tr class="pivot-total-row"><th class="assignment-group-column">Grand Total</th><td class="reference-column"></td><td class="reference-column"></td><td class="reference-column"></td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMonthTotals(rows, month, key))}</td>`)).join("")}${ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""}">${fmt(assignmentGrandTotal(rows, key))}</td>`).join("")}</tr>`;
-      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><span class="copy-chart-status"></span></div></div><div class="table-frame validation-table-frame"><table id="${tableId}" class="applications-table validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? bodyRows + totalRow : `<tr><td colspan="${4 + months.length * 3 + 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></section>`;
+      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><span class="copy-chart-status"></span></div></div><div class="validation-table-card"><div class="validation-table-scroll assignment-volumetrics-scroll" role="region" tabindex="0" aria-label="${esc(table?.title || tableKey)} scrollable Assignment Group Volumetrics table"><table id="${tableId}" class="validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? bodyRows + totalRow : `<tr><td colspan="${4 + months.length * 3 + 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></div></section>`;
     }
     function renderAssignmentGroupVolumetrics() {
       const payload = assignmentVolumetricsPayload();

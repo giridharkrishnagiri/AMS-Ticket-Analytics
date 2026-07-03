@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import {
   Bar,
   BarChart,
@@ -2652,6 +2652,29 @@ function AssignmentGroupVolumetricsTable({
     setCopyMessage("CSV downloaded.");
   }
 
+  function handleScrollKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const scrollStep = event.shiftKey ? 240 : 80;
+    if (event.key === "ArrowRight") {
+      event.currentTarget.scrollLeft += scrollStep;
+      event.preventDefault();
+    } else if (event.key === "ArrowLeft") {
+      event.currentTarget.scrollLeft -= scrollStep;
+      event.preventDefault();
+    } else if (event.key === "PageDown") {
+      event.currentTarget.scrollLeft += 480;
+      event.preventDefault();
+    } else if (event.key === "PageUp") {
+      event.currentTarget.scrollLeft -= 480;
+      event.preventDefault();
+    } else if (event.key === "Home") {
+      event.currentTarget.scrollLeft = 0;
+      event.preventDefault();
+    } else if (event.key === "End") {
+      event.currentTarget.scrollLeft = event.currentTarget.scrollWidth;
+      event.preventDefault();
+    }
+  }
+
   return (
     <section className="panel validation-table-panel">
       <div className="panel-heading">
@@ -2683,59 +2706,66 @@ function AssignmentGroupVolumetricsTable({
         </div>
       </div>
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
-      <div className="applications-table-frame validation-table-frame volumetrics-validation-frame">
-        <table className="applications-table validation-table assignment-group-volumetrics-table">
-          <thead>
-            <tr>
-              <th className="assignment-group-column" rowSpan={2} scope="col">
-                Assignment Group
-              </th>
-              <th className="reference-column" rowSpan={2} scope="col">
-                Functional Track
-              </th>
-              <th className="reference-column" rowSpan={2} scope="col">
-                AMS Owner
-              </th>
-              <th className="reference-column" rowSpan={2} scope="col">
-                Support Lead
-              </th>
-              {months.map((month, monthIndex) => (
-                <th
-                  className={`month-group-header month-group-${monthIndex % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right`}
-                  colSpan={3}
-                  key={month.month_key}
-                  scope="colgroup"
-                >
-                  {month.month_label}
+      <div className="validation-table-card volumetrics-validation-card">
+        <div
+          aria-label={`${table.title} scrollable Assignment Group Volumetrics table`}
+          className="validation-table-scroll assignment-volumetrics-scroll"
+          role="region"
+          tabIndex={0}
+          onKeyDown={handleScrollKeyDown}
+        >
+          <table className="validation-table assignment-group-volumetrics-table">
+            <thead>
+              <tr>
+                <th className="assignment-group-column" rowSpan={2} scope="col">
+                  Assignment Group
                 </th>
-              ))}
-              <th className="month-group-header total-cell month-boundary-left" colSpan={3}>
-                Total
-              </th>
-            </tr>
-            <tr>
-              {months.flatMap((month, monthIndex) =>
-                assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                <th className="reference-column" rowSpan={2} scope="col">
+                  Functional Track
+                </th>
+                <th className="reference-column" rowSpan={2} scope="col">
+                  AMS Owner
+                </th>
+                <th className="reference-column" rowSpan={2} scope="col">
+                  Support Lead
+                </th>
+                {months.map((month, monthIndex) => (
                   <th
-                    className={`month-subheader month-group-${monthIndex % 2 === 0 ? "a" : "b"} metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === assignmentGroupMetricLabels.length - 1 ? "month-boundary-right" : ""}`}
-                    key={`${month.month_key}-${metric.key}`}
+                    className={`month-group-header month-group-${monthIndex % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right`}
+                    colSpan={3}
+                    key={month.month_key}
+                    scope="colgroup"
+                  >
+                    {month.month_label}
+                  </th>
+                ))}
+                <th className="month-group-header total-cell month-boundary-left" colSpan={3}>
+                  Total
+                </th>
+              </tr>
+              <tr>
+                {months.flatMap((month, monthIndex) =>
+                  assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                    <th
+                      className={`month-subheader month-group-${monthIndex % 2 === 0 ? "a" : "b"} metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === assignmentGroupMetricLabels.length - 1 ? "month-boundary-right" : ""}`}
+                      key={`${month.month_key}-${metric.key}`}
+                      scope="col"
+                    >
+                      {metric.label}
+                    </th>
+                  ))
+                )}
+                {assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                  <th
+                    className={`month-subheader total-cell metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""}`}
+                    key={`total-${metric.key}`}
                     scope="col"
                   >
                     {metric.label}
                   </th>
-                ))
-              )}
-              {assignmentGroupMetricLabels.map((metric, metricIndex) => (
-                <th
-                  className={`month-subheader total-cell metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""}`}
-                  key={`total-${metric.key}`}
-                  scope="col"
-                >
-                  {metric.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
+                ))}
+              </tr>
+            </thead>
           <tbody>
             {status !== "loading" && rows.length === 0 ? (
               <tr>
@@ -2805,6 +2835,7 @@ function AssignmentGroupVolumetricsTable({
             ) : null}
           </tbody>
         </table>
+        </div>
       </div>
     </section>
   );
