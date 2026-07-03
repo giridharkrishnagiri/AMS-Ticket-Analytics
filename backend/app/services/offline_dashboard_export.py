@@ -2241,7 +2241,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     .applications-table {
       width: max-content;
-      min-width: 1800px;
+      min-width: 2600px;
+      max-width: none;
       border-collapse: collapse;
     }
     .validation-toolbar {
@@ -2286,17 +2287,38 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       background: #fff;
     }
     .validation-table-scroll {
+      display: block;
       position: relative;
       width: 100%;
       max-width: 100%;
       min-width: 0;
-      overflow-x: auto;
-      overflow-y: auto;
+      max-height: 560px;
+      overflow-x: scroll;
+      overflow-y: scroll;
+      scrollbar-gutter: stable both-edges;
+      overscroll-behavior-x: contain;
+      overscroll-behavior-y: contain;
       -webkit-overflow-scrolling: touch;
+      touch-action: pan-x pan-y;
     }
     .validation-table-scroll:focus {
       outline: 3px solid rgba(15, 118, 110, 0.24);
       outline-offset: -3px;
+    }
+    .validation-table-scroll::-webkit-scrollbar {
+      width: 14px;
+      height: 14px;
+    }
+    .validation-table-scroll::-webkit-scrollbar-thumb {
+      border: 3px solid #fff;
+      border-radius: 999px;
+      background: #94a3b8;
+    }
+    .validation-table-scroll::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    .offline-mapping-scroll {
+      max-height: 560px;
     }
     .assignment-volumetrics-frame {
       width: 100%;
@@ -2312,22 +2334,6 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       max-width: 100%;
       min-width: 0;
       max-height: 560px;
-      overflow-x: auto;
-      overflow-y: auto;
-      scrollbar-gutter: stable both-edges;
-      overscroll-behavior-x: contain;
-    }
-    .assignment-volumetrics-scroll::-webkit-scrollbar {
-      width: 14px;
-      height: 14px;
-    }
-    .assignment-volumetrics-scroll::-webkit-scrollbar-thumb {
-      border: 3px solid #fff;
-      border-radius: 999px;
-      background: #94a3b8;
-    }
-    .assignment-volumetrics-scroll::-webkit-scrollbar-track {
-      background: #f1f5f9;
     }
     .validation-table th,
     .validation-table td {
@@ -2336,8 +2342,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       vertical-align: top;
     }
     .assignment-volumetrics-table {
-      width: auto;
-      min-width: max-content;
+      width: max-content;
+      min-width: 2920px;
       max-width: none;
       table-layout: auto;
       border-collapse: separate;
@@ -3899,6 +3905,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
             event.preventDefault();
           }
         });
+        frame.addEventListener("wheel", (event) => {
+          if (!event.shiftKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+          frame.scrollLeft += event.deltaY;
+          event.preventDefault();
+        }, { passive: false });
       });
     }
     function renderAssignmentGroupMapping() {
@@ -3927,7 +3938,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const trackButtons = [`<button type="button" data-app-mapping-track="all" class="${state.appMappingTrack === "all" ? "active" : ""}">All Tracks</button>`, ...tracks.map((track) => `<button type="button" data-app-mapping-track="${esc(track)}" class="${state.appMappingTrack === track ? "active" : ""}">${esc(track)}</button>`)].join("");
       const countHeaders = state.appMappingSource === "tickets" ? "<th>Incident Count</th><th>SC Task Count</th><th>Total Ticket Count</th>" : "";
       const countCells = (row) => state.appMappingSource === "tickets" ? `<td class="numeric-cell">${fmt(row.incident_count || 0)}</td><td class="numeric-cell">${fmt(row.sc_task_count || 0)}</td><td class="numeric-cell">${fmt(row.total_ticket_count || 0)}</td>` : "";
-      const mappingTable = (tableRows, tableId, emptyMessage) => `<div class="table-frame validation-table-frame"><table id="${tableId}" class="applications-table validation-table"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>AMS Owner</th><th>Support Lead</th><th>Parent Business Application</th><th>Business Service CI Name</th><th>Scope</th>${countHeaders}</tr></thead><tbody>${tableRows.length ? tableRows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.ams_owner)}</td><td>${esc(row.support_lead)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td><td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("") : `<tr><td colspan="${7 + (state.appMappingSource === "tickets" ? 3 : 0)}">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>`;
+      const mappingTable = (tableRows, tableId, emptyMessage) => `<div class="validation-table-card"><div class="validation-table-scroll offline-mapping-scroll" role="region" tabindex="0" aria-label="Scrollable Assignment Group Mapping table"><table id="${tableId}" class="applications-table validation-table"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>AMS Owner</th><th>Support Lead</th><th>Parent Business Application</th><th>Business Service CI Name</th><th>Scope</th>${countHeaders}</tr></thead><tbody>${tableRows.length ? tableRows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.ams_owner)}</td><td>${esc(row.support_lead)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td><td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("") : `<tr><td colspan="${7 + (state.appMappingSource === "tickets" ? 3 : 0)}">${esc(emptyMessage)}</td></tr>`}</tbody></table></div></div>`;
       const basisSection = basisRows.length ? `<section class="validation-subsection"><div class="chart-title-row"><div><p class="label">Confirmed Out-of-Scope</p><h3>BASIS and SECURITY Assignment Group Mapping</h3><p class="muted">Confirmed out-of-scope assignment groups containing "Basis" or "Security".</p></div><div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-basis-security">Copy Table</button><span class="copy-chart-status"></span></div></div>${mappingTable(basisRows, "offline-app-assignment-basis-security", "No BASIS or SECURITY assignment groups found for the selected scope and filters.")}</section>` : "";
       return `<section class="panel full"><p class="label">Applications</p><h2>Assignment Group ↔ Application Mapping</h2><p class="muted">Static validation table for Assignment Group mappings from Application Inventory or normalized Incident and SC Task data.</p>
         <div class="validation-toolbar">${sourceButtons}</div>
@@ -4031,6 +4042,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       installCommentaryEditors(document.getElementById("applications"));
       installChartCopyButtons(document.getElementById("applications"));
       installTableCopyButtons(document.getElementById("applications"));
+      installScrollableTableKeyboard(document.getElementById("applications"));
     }
     function applicationTable(rows) {
       const columns = ["business_service_ci_name", "scope_status", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "lifecycle_stage_status", "lifecycle_current", "lifecycle_1_to_3_years", "lifecycle_3_to_5_years", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
