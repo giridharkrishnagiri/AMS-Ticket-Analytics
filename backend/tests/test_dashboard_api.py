@@ -4564,6 +4564,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "min-width: 2600px" in document
         assert "min-width: 2920px" in document
         assert "offline-mapping-scroll" in document
+        assert "calc(100vw - 320px)" in document
         assert "offline-validation-scroll assignment-volumetrics-frame" in document
         assert "table-frame table-scroll validation-table-frame" in document
         assert "installScrollableTableKeyboard" in document

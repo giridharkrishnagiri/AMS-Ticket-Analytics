@@ -2101,7 +2101,7 @@ function TicketDetailsWorkflow({
             {isSlaUpload
               ? isLoadingSlaContext
                 ? "Refreshing..."
-                : "Refresh SLA Context"
+                : `Refresh ${agreementLabel} Context`
               : isLoadingBatches
                 ? "Refreshing..."
                 : "Refresh Batches"}

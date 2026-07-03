@@ -2321,8 +2321,34 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       max-height: 560px;
     }
     .offline-validation-scroll {
+      display: block;
+      width: 100%;
+      inline-size: min(100%, calc(100vw - 320px));
+      max-width: 100%;
+      max-inline-size: min(100%, calc(100vw - 320px));
+      min-width: 0;
+      min-inline-size: 0;
       min-height: 300px;
       max-height: 560px;
+      overflow-x: scroll;
+      overflow-y: scroll;
+      scrollbar-gutter: stable both-edges;
+      overscroll-behavior: contain;
+      touch-action: pan-x pan-y;
+      scrollbar-width: auto;
+      scrollbar-color: #94a3b8 #f1f5f9;
+    }
+    .offline-validation-scroll::-webkit-scrollbar {
+      width: 14px;
+      height: 14px;
+    }
+    .offline-validation-scroll::-webkit-scrollbar-thumb {
+      border: 3px solid #fff;
+      border-radius: 999px;
+      background: #94a3b8;
+    }
+    .offline-validation-scroll::-webkit-scrollbar-track {
+      background: #f1f5f9;
     }
     .assignment-volumetrics-frame {
       width: 100%;
@@ -2687,6 +2713,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       .sc-task-catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .duration-grid { grid-template-columns: 1fr; }
       #volumetrics .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .offline-validation-scroll {
+        inline-size: 100%;
+        max-inline-size: 100%;
+      }
     }
     @media (max-width: 980px) {
       .topbar, .layout { grid-template-columns: 1fr; display: grid; }
