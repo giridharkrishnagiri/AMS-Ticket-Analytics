@@ -4564,9 +4564,9 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "min-width: 2600px" in document
         assert "min-width: 2920px" in document
         assert "offline-mapping-scroll" in document
-        assert "assignment-volumetrics-scroll" in document
+        assert "offline-validation-scroll assignment-volumetrics-frame" in document
+        assert "table-frame table-scroll validation-table-frame" in document
         assert "installScrollableTableKeyboard" in document
-        assert "overflow-x: scroll" in document
         assert "class=\"chart-svg pie-svg\"" in document
         assert "viewBox=\"0 0 520 320\"" in document
         assert "preserveAspectRatio=\"xMidYMid meet\"" in document
