@@ -182,6 +182,8 @@ def test_application_inventory_columns_exist() -> None:
     assert "hosting_env" in inventory_columns
     assert "global_application" in inventory_columns
     assert "active_users" in inventory_columns
+    assert "is_current" in inventory_columns
+    assert "replaced_at" in inventory_columns
     assert "cmdb_payload" in inventory_columns
     assert "application_inventory_id" in ticket_columns
     assert "parent_application_number" in ticket_columns

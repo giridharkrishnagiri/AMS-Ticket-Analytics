@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -465,6 +466,8 @@ def clean_inventory_values(
         "cmdb_payload": build_cmdb_payload(parsed_row.raw_data),
         "source_filename": source_filename,
         "source_sheet_name": parsed_row.source_sheet_name,
+        "is_current": True,
+        "replaced_at": None,
         "source_row_number": parsed_row.row_number,
     }
 
@@ -512,6 +515,7 @@ def track_upload_distincts(result: InventoryUploadResult, values: dict[str, Any]
 def duplicate_key_condition(values: dict[str, Any]) -> Any:
     return and_(
         ApplicationInventoryItem.project_id == values["project_id"],
+        ApplicationInventoryItem.is_current.is_(True),
         func.coalesce(
             func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name)),
             "",
@@ -539,6 +543,7 @@ def inventory_match_condition(
 ) -> Any:
     return and_(
         ApplicationInventoryItem.project_id == project_id,
+        ApplicationInventoryItem.is_current.is_(True),
         func.coalesce(
             func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name)),
             "",
@@ -570,6 +575,14 @@ def upsert_inventory_item(db: Session, values: dict[str, Any]) -> bool:
         setattr(item, field_name, value)
     db.flush()
     return False
+
+
+def inventory_values_key(values: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        normalize_match_key(values["business_service_ci_name"]) or "",
+        normalize_match_key(values["parent_application_name"]) or "",
+        normalize_match_key(values["assignment_group"]) or "",
+    )
 
 
 def update_application_inventory_active_users_from_file(
@@ -720,6 +733,7 @@ def update_application_inventory_hosting_env_from_file(
                     select(ApplicationInventoryItem)
                     .where(
                         ApplicationInventoryItem.project_id == project_id,
+                        ApplicationInventoryItem.is_current.is_(True),
                         func.lower(func.btrim(ApplicationInventoryItem.business_service_ci_name))
                         == normalize_match_key(business_service_ci_name),
                         func.coalesce(
@@ -896,6 +910,7 @@ def upload_application_inventory_file(
     result = InventoryUploadResult(project_id=project_id)
 
     try:
+        replacement_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
         for parsed_row in iter_inventory_file_rows(path, result):
             result.total_rows += 1
             values = clean_inventory_values(
@@ -907,14 +922,30 @@ def upload_application_inventory_file(
             if values is None:
                 continue
 
-            inserted = upsert_inventory_item(db, values)
-            if inserted:
-                result.inserted_count += 1
-            else:
+            row_key = inventory_values_key(values)
+            if row_key in replacement_rows:
                 result.updated_count += 1
+            else:
+                result.inserted_count += 1
+            replacement_rows[row_key] = values
 
-            if (result.inserted_count + result.updated_count) % INGESTION_BATCH_SIZE == 0:
-                db.commit()
+        if not replacement_rows:
+            raise ApplicationInventoryError(
+                "Application Inventory upload did not contain any valid rows; the active "
+                "inventory reference set was not changed."
+            )
+
+        replaced_at = datetime.now(UTC)
+        db.execute(
+            update(ApplicationInventoryItem)
+            .where(
+                ApplicationInventoryItem.project_id == project_id,
+                ApplicationInventoryItem.is_current.is_(True),
+            )
+            .values(is_current=False, replaced_at=replaced_at)
+        )
+        for values in replacement_rows.values():
+            db.add(ApplicationInventoryItem(**values))
 
         db.commit()
     except SQLAlchemyError as exc:
@@ -939,7 +970,10 @@ def list_inventory_items(db: Session, project_id: UUID) -> list[ApplicationInven
     ensure_project_exists(db, project_id)
     statement = (
         select(ApplicationInventoryItem)
-        .where(ApplicationInventoryItem.project_id == project_id)
+        .where(
+            ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.is_current.is_(True),
+        )
         .order_by(
             ApplicationInventoryItem.parent_application_name.asc().nullslast(),
             ApplicationInventoryItem.business_service_ci_name.asc(),
@@ -1028,6 +1062,7 @@ def backfill_ticket_hosting_env_from_inventory(db: Session, project_id: UUID) ->
                 FROM application_inventory_items AS i
                 WHERE t.project_id = CAST(:project_id AS uuid)
                   AND t.application_inventory_id = i.id
+                  AND i.is_current IS true
                   AND (
                     t.hosting_env IS DISTINCT FROM NULLIF(btrim(i.hosting_env), '')
                     OR t.business_critical IS DISTINCT FROM {business_critical_expression}
@@ -1098,6 +1133,7 @@ def update_tickets_from_inventory(
             FROM {table_name} AS t
             JOIN application_inventory_items AS i
               ON i.project_id = t.project_id
+             AND i.is_current IS true
              AND i.active IS NOT false
              AND nullif(btrim(t.{ticket_column}), '') IS NOT NULL
              AND lower(btrim(t.{ticket_column})) = lower(btrim(i.business_service_ci_name))
@@ -1160,6 +1196,7 @@ def distinct_inventory_business_service_count(db: Session, project_id: UUID) -> 
         )
     ).where(
         ApplicationInventoryItem.project_id == project_id,
+        ApplicationInventoryItem.is_current.is_(True),
         ApplicationInventoryItem.business_service_ci_name.is_not(None),
         func.btrim(ApplicationInventoryItem.business_service_ci_name) != "",
     )
@@ -1179,6 +1216,7 @@ def matched_ticket_business_service_count(db: Session, project_id: UUID) -> int:
             SELECT DISTINCT lower(btrim(business_service_ci_name)) AS service_key
             FROM application_inventory_items
             WHERE project_id = CAST(:project_id AS uuid)
+              AND is_current IS true
               AND nullif(btrim(business_service_ci_name), '') IS NOT NULL
         )
         SELECT count(*) AS matched_count
@@ -1360,6 +1398,7 @@ def inventory_filter_values(db: Session, project_id: UUID) -> dict[str, list[str
             .distinct()
             .where(
                 ApplicationInventoryItem.project_id == project_id,
+                ApplicationInventoryItem.is_current.is_(True),
                 column.is_not(None),
                 func.btrim(column) != "",
             )
@@ -1388,6 +1427,7 @@ def unmatched_business_services(
             SELECT DISTINCT lower(btrim(business_service_ci_name)) AS service_key
             FROM application_inventory_items
             WHERE project_id = CAST(:project_id AS uuid)
+              AND is_current IS true
               AND nullif(btrim(business_service_ci_name), '') IS NOT NULL
         )
         SELECT

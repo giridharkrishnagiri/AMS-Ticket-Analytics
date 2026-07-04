@@ -353,6 +353,7 @@ def add_inventory_item(
     lifecycle_1_to_3_years: str | None = None,
     lifecycle_3_to_5_years: str | None = None,
     scope_status: str = "in_scope",
+    is_current: bool = True,
     cmdb_payload: dict[str, object] | None = None,
 ) -> ApplicationInventoryItem:
     payload = cmdb_payload or {}
@@ -390,6 +391,7 @@ def add_inventory_item(
         hosting_env=hosting_env,
         global_application=global_application,
         scope_status=scope_status,
+        is_current=is_current,
         lifecycle_stage_status=lifecycle_stage_status,
         lifecycle_current=lifecycle_current,
         lifecycle_1_to_3_years=lifecycle_1_to_3_years,
@@ -478,6 +480,20 @@ def test_applications_assignment_group_mapping_application_inventory_source() ->
             scope_status="out_of_scope",
             cmdb_payload={"cmdb_payload": "hidden"},
         )
+        add_inventory_item(
+            db,
+            project_id,
+            "Legacy Service",
+            supported_by_vendor="Vendor Legacy",
+            functional_track="Legacy",
+            ams_owner="Owner Legacy",
+            assignment_group="IT-NSA-UK-RSSL",
+            application_owner="App Owner Legacy",
+            parent_application_name="Legacy Parent",
+            support_lead="Legacy Lead",
+            scope_status="in_scope",
+            is_current=False,
+        )
         db.commit()
 
         with TestClient(app) as client:
@@ -496,6 +512,7 @@ def test_applications_assignment_group_mapping_application_inventory_source() ->
         payload = response.json()
         assert payload["summary"]["mapping_count"] == 1
         assert payload["available_functional_tracks"] == ["Finance"]
+        assert all(row["assignment_group"] != "IT-NSA-UK-RSSL" for row in payload["rows"])
         assert payload["rows"][0] == {
             "assignment_group": "AG-FIN",
             "functional_track": "Finance",

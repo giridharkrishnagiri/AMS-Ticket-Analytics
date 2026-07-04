@@ -98,6 +98,7 @@ def _apply_context_and_filters(
     db: Session,
     request: ToolExecutionRequest,
 ) -> tuple[Any, dict[str, list[str]], list[str]]:
+    statement = statement.where(APP.is_current.is_(True))
     statement = apply_project_context(statement, APP, _project_ids(db, request))
     applied: dict[str, list[str]] = {}
     warnings: list[str] = []

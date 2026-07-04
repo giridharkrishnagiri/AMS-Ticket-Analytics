@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -58,6 +59,7 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_application_inventory_project_hosting_env", "project_id", "hosting_env"),
         Index("ix_application_inventory_project_global", "project_id", "global_application"),
         Index("ix_application_inventory_project_scope_status", "project_id", "scope_status"),
+        Index("ix_application_inventory_project_is_current", "project_id", "is_current"),
         Index(
             "ix_application_inventory_project_lifecycle_stage_status",
             "project_id",
@@ -104,6 +106,8 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     lifecycle_1_to_3_years: Mapped[str | None] = mapped_column(Text, nullable=True)
     lifecycle_3_to_5_years: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    replaced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     active_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
     avg_monthly_ticket_volume_6m: Mapped[float | None] = mapped_column(Float, nullable=True)
     tickets_per_user_per_month: Mapped[float | None] = mapped_column(Float, nullable=True)

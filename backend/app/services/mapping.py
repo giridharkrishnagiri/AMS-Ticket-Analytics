@@ -1193,6 +1193,7 @@ def load_active_inventory_items(
         select(ApplicationInventoryItem)
         .where(
             ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.is_current.is_(True),
             ApplicationInventoryItem.active.is_not(False),
         )
         .order_by(
@@ -1210,6 +1211,7 @@ def active_inventory_in_scope_assignment_group_keys(
 ) -> set[str]:
     statement = select(ApplicationInventoryItem.assignment_group).where(
         ApplicationInventoryItem.project_id == project_id,
+        ApplicationInventoryItem.is_current.is_(True),
         ApplicationInventoryItem.scope_status == "in_scope",
         ApplicationInventoryItem.assignment_group.is_not(None),
     )

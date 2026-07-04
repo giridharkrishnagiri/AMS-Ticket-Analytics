@@ -42,6 +42,7 @@ def recompute_application_ticket_user_metrics(
                         ELSE NULL
                     END
             WHERE project_id = CAST(:project_id AS uuid)
+              AND is_current IS true
             """,
         ),
         {"project_id": str(project_id)},
@@ -74,6 +75,7 @@ def recompute_application_ticket_user_metrics(
             FROM ticket_counts
             WHERE inventory.id = ticket_counts.application_inventory_id
               AND inventory.project_id = CAST(:project_id AS uuid)
+              AND inventory.is_current IS true
             """,
         ),
         {
@@ -87,6 +89,7 @@ def recompute_application_ticket_user_metrics(
         db.scalar(
             select(func.count(ApplicationInventoryItem.id)).where(
                 ApplicationInventoryItem.project_id == project_id,
+                ApplicationInventoryItem.is_current.is_(True),
                 ApplicationInventoryItem.active.is_(True),
             )
         )
@@ -96,6 +99,7 @@ def recompute_application_ticket_user_metrics(
         db.scalar(
             select(func.count(ApplicationInventoryItem.id)).where(
                 ApplicationInventoryItem.project_id == project_id,
+                ApplicationInventoryItem.is_current.is_(True),
                 ApplicationInventoryItem.active.is_(True),
                 ApplicationInventoryItem.active_users.is_not(None),
                 ApplicationInventoryItem.active_users > 0,

@@ -669,6 +669,7 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         .label("critical_application_count"),
     ).where(
         ApplicationInventoryItem.project_id == project_id,
+        ApplicationInventoryItem.is_current.is_(True),
         ApplicationInventoryItem.active.is_(True),
     )
     inventory_row = db.execute(inventory_statement).mappings().one()
@@ -852,6 +853,7 @@ def canonical_lifecycle_plan_value(value: Any) -> str | None:
 def applications_base_conditions(project_id: UUID) -> list[Any]:
     return [
         ApplicationInventoryItem.project_id == project_id,
+        ApplicationInventoryItem.is_current.is_(True),
         ApplicationInventoryItem.active.is_(True),
     ]
 
@@ -1790,6 +1792,7 @@ def inventory_assignment_group_reference_map(
         )
         .where(
             ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.is_current.is_(True),
             assignment_key_expression != "",
         )
         .group_by(
@@ -1910,7 +1913,10 @@ def application_inventory_scope_expression() -> Any:
 
 def application_inventory_mapping_conditions(request: Any, scope_expression: Any) -> list[Any]:
     scope = normalize_assignment_mapping_scope(request.scope)
-    conditions: list[Any] = [ApplicationInventoryItem.project_id == request.project_id]
+    conditions: list[Any] = [
+        ApplicationInventoryItem.project_id == request.project_id,
+        ApplicationInventoryItem.is_current.is_(True),
+    ]
     if scope != "all":
         conditions.append(scope_expression == scope)
     return conditions
@@ -4868,6 +4874,7 @@ def inventory_active_users_subquery(project_id: UUID) -> Any:
         )
         .where(
             ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.is_current.is_(True),
             ApplicationInventoryItem.active.is_(True),
             ApplicationInventoryItem.active_users.is_not(None),
             ApplicationInventoryItem.active_users > 0,

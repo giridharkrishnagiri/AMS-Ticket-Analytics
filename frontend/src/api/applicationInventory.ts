@@ -21,6 +21,8 @@ export type ApplicationInventoryItem = {
   lifecycle_1_to_3_years: string | null;
   lifecycle_3_to_5_years: string | null;
   active: boolean | null;
+  is_current: boolean;
+  replaced_at: string | null;
   active_users: number | null;
   cmdb_payload: Record<string, unknown> | null;
   source_filename: string | null;

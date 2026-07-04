@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from io import BytesIO
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from sqlalchemy import delete, event, func, select
@@ -19,9 +20,13 @@ from app.models import (
     UploadedFile,
 )
 from app.services.application_inventory import (
+    ApplicationInventoryError,
+    list_inventory_items,
     update_application_inventory_active_users_from_file,
     update_application_inventory_hosting_env_from_file,
+    upload_application_inventory_file,
 )
+from app.services.mapping import active_inventory_in_scope_assignment_group_keys
 
 
 def create_project():
@@ -290,6 +295,112 @@ def test_xlsx_upload_detects_second_row_header() -> None:
         assert item.source_row_number == 3
         assert item.active_users == 1234
         assert item.cmdb_payload == {"Application family": "Excel Family"}
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_cmdb_upload_replaces_current_inventory_reference_set(tmp_path) -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_project()
+    try:
+        first_path = tmp_path / "CMDB_CI_Support_Groups_Support_owners - Updated.csv"
+        first_path.write_text(
+            "\n".join(
+                [
+                    "Support group name,Business Service CI Name,Parent Business Application,"
+                    "Support Lead (Managed by),Functional Track,AMS Owner",
+                    "IT-NSA-UK-RSSL,Legacy Service,Legacy Parent,Legacy Lead,Legacy Track,"
+                    "Legacy Owner",
+                    "IT-KEEP,Keep Service,Keep Parent,Keep Lead,Keep Track,Keep Owner",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        first_result = upload_application_inventory_file(
+            db,
+            project_id,
+            first_path,
+            first_path.name,
+        )
+        assert first_result.inserted_count == 2
+
+        second_path = tmp_path / "CMDB_CI_Support_Groups_Support_owners - Inscope.csv"
+        second_path.write_text(
+            "\n".join(
+                [
+                    "Support group name,Business Service CI Name,Parent Business Application,"
+                    "Support Lead (Managed by),Functional Track,AMS Owner",
+                    "IT-KEEP,Keep Service,Keep Parent,Keep Lead Current,Keep Track,Keep Owner",
+                    "IT-NEW,,New Parent,New Lead,New Track,New Owner",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        second_result = upload_application_inventory_file(
+            db,
+            project_id,
+            second_path,
+            second_path.name,
+        )
+        assert second_result.inserted_count == 2
+
+        current_groups = {
+            item.assignment_group
+            for item in list_inventory_items(db, project_id)
+            if item.assignment_group
+        }
+        assert current_groups == {"IT-KEEP", "IT-NEW"}
+
+        legacy_item = db.scalar(
+            select(ApplicationInventoryItem).where(
+                ApplicationInventoryItem.project_id == project_id,
+                ApplicationInventoryItem.assignment_group == "IT-NSA-UK-RSSL",
+            )
+        )
+        assert legacy_item is not None
+        assert legacy_item.is_current is False
+        assert legacy_item.replaced_at is not None
+
+        active_keys = active_inventory_in_scope_assignment_group_keys(db, project_id)
+        assert "it-nsa-uk-rssl" not in active_keys
+        assert "it-keep" in active_keys
+        assert "it-new" in active_keys
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_failed_cmdb_upload_preserves_current_inventory_reference_set(tmp_path) -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_project()
+    try:
+        first_path = tmp_path / "current-inventory.csv"
+        first_path.write_text(
+            "\n".join(
+                [
+                    "Support group name,Business Service CI Name,Parent Business Application",
+                    "IT-CURRENT,Current Service,Current Parent",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        upload_application_inventory_file(db, project_id, first_path, first_path.name)
+
+        invalid_path = tmp_path / "empty-inventory.csv"
+        invalid_path.write_text(
+            "\n".join(
+                [
+                    "Support group name,Business Service CI Name,Parent Business Application",
+                    ",,",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ApplicationInventoryError):
+            upload_application_inventory_file(db, project_id, invalid_path, invalid_path.name)
+
+        current_items = list_inventory_items(db, project_id)
+        assert len(current_items) == 1
+        assert current_items[0].assignment_group == "IT-CURRENT"
+        assert current_items[0].is_current is True
+        assert current_items[0].replaced_at is None
     finally:
         cleanup_client(db, client_id)
 

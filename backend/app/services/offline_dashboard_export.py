@@ -246,6 +246,7 @@ def application_export_rows(db: Session, project_id: UUID) -> list[dict[str, Any
         select(*columns)
         .where(
             ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.is_current.is_(True),
             ApplicationInventoryItem.active.is_(True),
             nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name).is_not(
                 None

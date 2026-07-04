@@ -53,6 +53,8 @@ class ApplicationInventoryItemResponse(BaseModel):
     lifecycle_1_to_3_years: str | None
     lifecycle_3_to_5_years: str | None
     active: bool | None
+    is_current: bool
+    replaced_at: datetime | None
     active_users: int | None
     avg_monthly_ticket_volume_6m: float | None
     tickets_per_user_per_month: float | None
