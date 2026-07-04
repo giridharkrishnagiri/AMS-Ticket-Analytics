@@ -25,6 +25,7 @@ from app.services.genai.tools.validation import (
     numeric_percentage,
     project_ids_for_context,
     ticket_canceled_condition,
+    ticket_canceled_datetime_expression,
     ticket_closed_condition,
     ticket_completion_datetime_expression,
     ticket_open_condition,
@@ -134,12 +135,14 @@ def _apply_common_filters(
 def _metric_date_expression(model: type[Any], metric: str) -> Any:
     if metric == "created_count":
         return model.created_at
+    if metric == "canceled_closed_incomplete_count":
+        return ticket_canceled_datetime_expression(model)
     return ticket_completion_datetime_expression(model)
 
 
 def _metric_condition(model: type[Any], metric: str) -> Any:
     if metric == "resolved_closed_count":
-        return ticket_closed_condition(model) & ~ticket_canceled_condition(model)
+        return ticket_closed_condition(model)
     if metric == "canceled_closed_incomplete_count":
         return ticket_canceled_condition(model)
     return model.created_at.is_not(None)
@@ -156,7 +159,10 @@ def _count_metric(
     end: datetime | None,
 ) -> tuple[int, dict[str, Any], list[str]]:
     date_expression = _metric_date_expression(model, metric)
-    statement = select(func.count()).where(_metric_condition(model, metric))
+    statement = select(func.count()).where(
+        _metric_condition(model, metric),
+        date_expression.is_not(None),
+    )
     statement, applied, warnings = _apply_common_filters(
         statement,
         model,

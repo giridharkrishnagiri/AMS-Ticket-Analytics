@@ -577,6 +577,28 @@ def effective_completion_expression() -> Any:
     )
 
 
+def normalized_state_expression(model: Any) -> Any:
+    return func.lower(func.trim(func.coalesce(model.state, "")))
+
+
+def cancelled_or_canceled_state_condition(model: Any) -> Any:
+    return normalized_state_expression(model).like("%cancel%")
+
+
+def sc_task_closed_incomplete_state_condition(model: Any) -> Any:
+    return and_(
+        func.upper(model.ticket_type) == "SERVICE_CATALOG_TASK",
+        normalized_state_expression(model) == "closed incomplete",
+    )
+
+
+def valid_resolved_closed_state_condition(model: Any) -> Any:
+    return and_(
+        ~cancelled_or_canceled_state_condition(model),
+        ~sc_task_closed_incomplete_state_condition(model),
+    )
+
+
 def distinct_nonblank_count(column: Any) -> Any:
     return func.count(func.distinct(func.nullif(func.trim(column), "")))
 
@@ -601,6 +623,7 @@ def overview_ticket_volume_80pct_application_count(
             Ticket.project_id == project_id,
             application_expression.is_not(None),
             completion_expression.is_not(None),
+            valid_resolved_closed_state_condition(Ticket),
             completion_expression >= completion_start,
             completion_expression <= completion_end,
         )
@@ -680,6 +703,7 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         func.max(completion_expression).label("completion_date_max"),
     ).where(
         Ticket.project_id == project_id,
+        valid_resolved_closed_state_condition(Ticket),
         completion_expression.is_not(None),
     )
     range_row = db.execute(range_statement).mappings().one()
@@ -695,6 +719,7 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         ticket_conditions.extend(
             [
                 completion_expression.is_not(None),
+                valid_resolved_closed_state_condition(Ticket),
                 completion_expression >= completion_start,
                 completion_expression <= completion_end,
             ],
@@ -2625,12 +2650,9 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
     end_datetime = datetime.combine(next_month_start(months[-1]), time.min, tzinfo=UTC)
     source = volumetrics_source_subquery(request, scope_override=scope)
     cancelled_condition = volumetrics_cancelled_state_expression(source.c)
+    resolved_closed_condition = volumetrics_resolved_closed_state_expression(source.c)
     resolved_date_expression = source.c.completion_at
-    cancelled_date_expression = func.coalesce(
-        source.c.closed_at,
-        source.c.resolved_at,
-        source.c.completion_at,
-    )
+    cancelled_date_expression = volumetrics_cancelled_count_date_expression(source.c)
 
     reference_map = inventory_assignment_group_reference_map(db, request.project_id)
     master_reference_status = assignment_group_master_reference_status(db, request.project_id)
@@ -2654,7 +2676,7 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
         start_datetime=start_datetime,
         end_datetime=end_datetime,
         functional_track=functional_track,
-        extra_conditions=[~cancelled_condition],
+        extra_conditions=[resolved_closed_condition],
     ):
         add_assignment_group_volumetrics_event(store, row, months, "resolved")
     for row in assignment_group_volumetrics_event_rows(
@@ -2853,9 +2875,7 @@ def normalize_dashboard_datetime(value: datetime) -> datetime:
 
 
 def volumetrics_completion_expression(model: Any) -> Any:
-    cancelled_state = volumetrics_cancelled_state_expression(model)
     return case(
-        (cancelled_state, func.coalesce(model.resolved_at, model.closed_at)),
         (model.ticket_type == "INCIDENT", model.resolved_at),
         (model.ticket_type == "SERVICE_CATALOG_TASK", model.closed_at),
         else_=func.coalesce(model.resolved_at, model.closed_at),
@@ -2863,28 +2883,44 @@ def volumetrics_completion_expression(model: Any) -> Any:
 
 
 def volumetrics_availability_completion_expression(model: Any) -> Any:
+    completion_expression = volumetrics_completion_expression(model)
     return case(
-        (model.ticket_type == "INCIDENT", model.resolved_at),
-        (model.ticket_type == "SERVICE_CATALOG_TASK", model.closed_at),
-        else_=func.coalesce(model.resolved_at, model.closed_at),
+        (valid_resolved_closed_state_condition(model), completion_expression),
+        else_=None,
     )
 
 
 def volumetrics_cancelled_state_expression(model: Any) -> Any:
-    return func.lower(func.trim(func.coalesce(model.state, ""))).in_(VOLUMETRICS_CANCELLED_STATES)
+    return or_(
+        cancelled_or_canceled_state_condition(model),
+        sc_task_closed_incomplete_state_condition(model),
+    )
+
+
+def volumetrics_resolved_closed_state_expression(model: Any) -> Any:
+    return valid_resolved_closed_state_condition(model)
+
+
+def volumetrics_cancelled_count_date_expression(model: Any) -> Any:
+    return case(
+        (func.upper(model.ticket_type) == "SERVICE_CATALOG_TASK", model.closed_at),
+        else_=func.coalesce(model.closed_at, model.resolved_at),
+    )
 
 
 def volumetrics_exit_expression(model: Any) -> Any:
     completion_expression = volumetrics_completion_expression(model)
+    cancelled_date_expression = volumetrics_cancelled_count_date_expression(model)
     # Cancelled rows with no resolved/closed timestamp should not remain backlog forever.
     return case(
         (
             and_(
                 volumetrics_cancelled_state_expression(model),
-                completion_expression.is_(None),
+                cancelled_date_expression.is_(None),
             ),
             model.created_at,
         ),
+        (volumetrics_cancelled_state_expression(model), cancelled_date_expression),
         else_=completion_expression,
     )
 
@@ -2935,7 +2971,10 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         func.coalesce(model.ola_resolution_sla_breached, model.resolution_sla_breached).label(
             "ola_resolution_sla_breached",
         ),
-    ).where(model.project_id == project_id)
+    ).where(
+        model.project_id == project_id,
+        model.ticket_type.in_(tuple(VOLUMETRICS_TICKET_TYPE_VALUES.values())),
+    )
 
 
 def volumetrics_source_subquery(request: Any, *, scope_override: str | None = None) -> Any:
@@ -3574,8 +3613,7 @@ def build_volumetrics_periods(request: Any) -> list[VolumetricsPeriod]:
 
 
 def volumetrics_cancelled_expression(source: Any) -> Any:
-    state_expression = func.lower(func.trim(func.coalesce(source.c.state, "")))
-    return state_expression.in_(VOLUMETRICS_CANCELLED_STATES)
+    return volumetrics_cancelled_state_expression(source.c)
 
 
 def scalar_count(db: Session, source: Any, conditions: list[Any]) -> int:
@@ -3682,6 +3720,8 @@ def volumetrics_period_metrics(
         include_date_bounds=False,
     )
     cancelled_condition = volumetrics_cancelled_expression(source)
+    resolved_closed_condition = volumetrics_resolved_closed_state_expression(source.c)
+    cancelled_date_expression = volumetrics_cancelled_count_date_expression(source.c)
 
     created_rows = volumetrics_aggregate_by_period(
         db,
@@ -3696,14 +3736,14 @@ def volumetrics_period_metrics(
         source,
         source.c.completion_at,
         [func.count(source.c.id).label("resolved_closed_count")],
-        [~cancelled_condition],
+        [resolved_closed_condition],
     )
     cancelled_rows = (
         volumetrics_aggregate_by_period(
             db,
             request,
             source,
-            source.c.completion_at,
+            cancelled_date_expression,
             [func.count(source.c.id).label("cancelled_count")],
             [cancelled_condition],
         )
@@ -4156,7 +4196,7 @@ def volumetrics_hourly_created_resolved(db: Session, request: Any) -> dict[str, 
         weekdays=day_type == "weekdays",
     )
     source = volumetrics_source_subquery(request)
-    cancelled_condition = volumetrics_cancelled_expression(source)
+    resolved_closed_condition = volumetrics_resolved_closed_state_expression(source.c)
 
     created_counts = volumetrics_counts_by_hour(
         db,
@@ -4173,7 +4213,7 @@ def volumetrics_hourly_created_resolved(db: Session, request: Any) -> dict[str, 
         source.c.completion_at,
         day_type,
         "resolved_closed_count",
-        [~cancelled_condition],
+        [resolved_closed_condition],
     )
 
     points = []
@@ -4344,6 +4384,7 @@ def volumetrics_sla_trend_rows(
                 include_date_bounds=False,
             ),
             source.c.resolved_at.is_not(None),
+            volumetrics_resolved_closed_state_expression(source.c),
             source.c.resolved_at >= normalize_dashboard_datetime(request.start_datetime),
             source.c.resolved_at <= normalize_dashboard_datetime(request.end_datetime),
         )
@@ -4549,9 +4590,23 @@ def volumetrics_top_application_rows(
     source = volumetrics_source_subquery(request)
     application_expression = application_name_expression(source)
     cancelled_condition = volumetrics_cancelled_expression(source)
-    created_count_expression = (func.count(source.c.id) / 6.0).label("average_created")
+    cancelled_date_expression = volumetrics_cancelled_count_date_expression(source.c)
+    created_window_condition = and_(
+        source.c.created_at.is_not(None),
+        source.c.created_at >= window_start,
+        source.c.created_at <= window_end,
+    )
+    cancelled_window_condition = and_(
+        cancelled_condition,
+        cancelled_date_expression.is_not(None),
+        cancelled_date_expression >= window_start,
+        cancelled_date_expression <= window_end,
+    )
+    created_count_expression = (
+        func.count(source.c.id).filter(created_window_condition) / 6.0
+    ).label("average_created")
     canceled_count_expression = (
-        func.count(source.c.id).filter(cancelled_condition) / 6.0
+        func.count(source.c.id).filter(cancelled_window_condition) / 6.0
     ).label("average_canceled")
     conditions = [
         *volumetrics_base_conditions(
@@ -4559,9 +4614,7 @@ def volumetrics_top_application_rows(
             effective_request,
             include_date_bounds=False,
         ),
-        source.c.created_at.is_not(None),
-        source.c.created_at >= window_start,
-        source.c.created_at <= window_end,
+        or_(created_window_condition, cancelled_window_condition),
     ]
     if incident_batch_only:
         conditions.append(source.c.is_batch_related.is_(True))
@@ -5321,6 +5374,7 @@ def mttr_rows_for_ticket_type(
             completion_expression.is_not(None),
             completion_expression >= normalize_dashboard_datetime(complete_request.start_datetime),
             completion_expression <= normalize_dashboard_datetime(complete_request.end_datetime),
+            volumetrics_resolved_closed_state_expression(source.c),
             source.c.business_duration_seconds.is_not(None),
             source.c.business_duration_seconds >= 0,
             priority_expression.in_(MTTR_PRIORITIES),
@@ -5452,6 +5506,7 @@ def duration_bucket_rows_for_ticket_type(
             completion_expression >= periods[0].start,
             completion_expression <= periods[-1].end,
             completion_expression >= source.c.created_at,
+            volumetrics_resolved_closed_state_expression(source.c),
             bucket_expression.is_not(None),
         )
         .group_by(period_expression, bucket_expression)
@@ -6017,6 +6072,7 @@ def created_resolved_open_trend(db: Session, filters: DashboardFilters) -> list[
         filters,
         completion_expression,
         [func.count(Ticket.id).label("resolved_count")],
+        [valid_resolved_closed_state_condition(Ticket)],
     )
 
     state_expression = func.lower(func.coalesce(Ticket.state, ""))
@@ -6074,6 +6130,7 @@ def mttr_trend(db: Session, filters: DashboardFilters) -> list[dict[str, Any]]:
             Ticket.created_at.is_not(None),
             completion_expression.is_not(None),
             completion_expression >= Ticket.created_at,
+            valid_resolved_closed_state_condition(Ticket),
         ],
     )
 

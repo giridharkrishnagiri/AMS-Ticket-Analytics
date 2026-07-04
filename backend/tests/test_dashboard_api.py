@@ -3120,6 +3120,235 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_resolved_closed_counts_exclude_cancelled_and_incomplete_states() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-VALID-RESOLVED",
+            "INCIDENT",
+            dt("2026-01-01T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-05T10:00:00"),
+            assignment_group="AG-State-Filters",
+            functional_track="Track",
+            ams_owner="Owner",
+            support_lead="Lead",
+            sla_breached=False,
+        ).sla_response_sla_breached = False
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-CANCELLED-RESOLVED",
+            "INCIDENT",
+            dt("2026-01-02T00:00:00"),
+            state="Cancelled",
+            resolved_at=dt("2026-01-06T10:00:00"),
+            assignment_group="AG-State-Filters",
+            functional_track="Track",
+            ams_owner="Owner",
+            support_lead="Lead",
+            sla_breached=True,
+        ).sla_response_sla_breached = True
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-CLOSED-CANCELED",
+            "INCIDENT",
+            dt("2026-01-03T00:00:00"),
+            state="Closed Canceled",
+            resolved_at=dt("2026-01-07T10:00:00"),
+            closed_at=dt("2026-01-08T10:00:00"),
+            assignment_group="AG-State-Filters",
+            functional_track="Track",
+            ams_owner="Owner",
+            support_lead="Lead",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-VALID-CLOSED",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-04T00:00:00"),
+            state="Closed Complete",
+            closed_at=dt("2026-01-09T10:00:00"),
+            assignment_group="AG-State-Filters",
+            functional_track="Track",
+            ams_owner="Owner",
+            support_lead="Lead",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-CLOSED-INCOMPLETE",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-05T00:00:00"),
+            state="Closed Incomplete",
+            closed_at=dt("2026-01-10T10:00:00"),
+            assignment_group="AG-State-Filters",
+            functional_track="Track",
+            ams_owner="Owner",
+            support_lead="Lead",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-CANCELED",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-06T00:00:00"),
+            state="Canceled",
+            closed_at=dt("2026-01-11T10:00:00"),
+            assignment_group="AG-State-Filters",
+            functional_track="Track",
+            ams_owner="Owner",
+            support_lead="Lead",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-GENERIC-EXCLUDED",
+            "PROBLEM",
+            dt("2026-01-07T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-12T10:00:00"),
+            assignment_group="AG-State-Filters",
+            functional_track="Track",
+            ams_owner="Owner",
+            support_lead="Lead",
+        )
+        db.commit()
+
+        from app.services.offline_dashboard_export import (
+            build_detailed_volume_payload,
+            build_monthly_volumetrics_rows,
+        )
+
+        offline_rows = build_monthly_volumetrics_rows(
+            db,
+            project_id,
+            dt("2026-01-01T00:00:00"),
+            dt("2026-01-31T23:59:59"),
+        )
+        assert sum(row["created_count"] for row in offline_rows) == 6
+        assert sum(row["resolved_closed_count"] for row in offline_rows) == 2
+        assert sum(row["canceled_closed_incomplete_count"] for row in offline_rows) == 4
+
+        offline_detailed = build_detailed_volume_payload(
+            db,
+            project_id,
+            dt("2026-01-01T00:00:00"),
+            dt("2026-01-31T23:59:59"),
+        )
+        assert sum(row["created_count"] for row in offline_detailed["application_rows"]) == 6
+        assert (
+            sum(
+                row["canceled_closed_incomplete_count"]
+                for row in offline_detailed["application_rows"]
+            )
+            == 4
+        )
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "in_scope",
+            "ticket_type": "all",
+            "time_grain": "monthly",
+            "start_datetime": "2026-01-01T00:00:00+00:00",
+            "end_datetime": "2026-01-31T23:59:59+00:00",
+            "filters": {},
+        }
+
+        with TestClient(app) as client:
+            summary_response = client.post(
+                "/api/dashboard/volumetrics/summary",
+                json=request_body,
+            )
+            sc_task_summary_response = client.post(
+                "/api/dashboard/volumetrics/summary",
+                json={**request_body, "ticket_type": "sc_task"},
+            )
+            created_resolved_cancelled_response = client.post(
+                "/api/dashboard/volumetrics/created-resolved-canceled",
+                json=request_body,
+            )
+            assignment_group_response = client.post(
+                "/api/dashboard/volumetrics/assignment-group-volumetrics",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "in_scope",
+                    "functional_track": "all",
+                    "from_month": "2026-01",
+                    "to_month": "2026-01",
+                },
+            )
+            sla_trends_response = client.post(
+                "/api/dashboard/volumetrics/sla-trends",
+                json=request_body,
+            )
+
+        assert summary_response.status_code == 200
+        summary = summary_response.json()
+        assert summary["created"]["total"] == 6
+        assert summary["resolved_closed"]["total"] == 2
+        assert summary["cancelled"]["total"] == 4
+
+        assert sc_task_summary_response.status_code == 200
+        sc_task_summary = sc_task_summary_response.json()
+        assert sc_task_summary["created"]["total"] == 3
+        assert sc_task_summary["resolved_closed"]["total"] == 1
+        assert sc_task_summary["cancelled"]["total"] == 2
+
+        assert created_resolved_cancelled_response.status_code == 200
+        point = created_resolved_cancelled_response.json()["points"][0]
+        assert point["created_count"] == 6
+        assert point["resolved_closed_count"] == 2
+        assert point["canceled_closed_incomplete_count"] == 4
+
+        assert assignment_group_response.status_code == 200
+        tables = assignment_group_response.json()["tables"]
+        incident_row = tables["incidents"]["rows"][0]
+        sc_task_row = tables["sc_tasks"]["rows"][0]
+        overall_row = tables["overall"]["rows"][0]
+        assert incident_row["months"]["2026-01"] == {
+            "created": 3,
+            "resolved": 1,
+            "cancelled": 2,
+        }
+        assert sc_task_row["months"]["2026-01"] == {
+            "created": 3,
+            "resolved": 1,
+            "cancelled": 2,
+        }
+        assert overall_row["months"]["2026-01"] == {
+            "created": 6,
+            "resolved": 2,
+            "cancelled": 4,
+        }
+
+        assert sla_trends_response.status_code == 200
+        sla_trends = sla_trends_response.json()
+        assert sla_trends["response"][0]["total_closed_ticket_count"] == 1
+        assert sla_trends["response"][0]["sla_captured_count"] == 1
+        assert sla_trends["response"][0]["sla_adhered_count"] == 1
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
@@ -3292,7 +3521,7 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
             "Application C",
         ]
         assert top_apps["points"][0]["average_created"] == 3
-        assert top_apps["points"][0]["average_canceled_closed_incomplete"] == 1
+        assert top_apps["points"][0]["average_canceled_closed_incomplete"] == 5 / 6
         assert top_apps["overall_average_monthly_volume"] == 6
         assert round(top_apps["points"][0]["volume_pct"], 1) == 50.0
         assert top_apps["points"][0]["display_label"] == "3 (50.0%)"
@@ -3319,7 +3548,7 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
             "Application B",
         ]
         assert top_batch["points"][0]["average_batch_created"] == 2
-        assert top_batch["points"][0]["average_batch_canceled"] == 1
+        assert top_batch["points"][0]["average_batch_canceled"] == 5 / 6
         assert round(top_batch["points"][0]["pareto_cumulative_pct"], 1) == 66.7
 
         assert tickets_per_user_response.status_code == 200

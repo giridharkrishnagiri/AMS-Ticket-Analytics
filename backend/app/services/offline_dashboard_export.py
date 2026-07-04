@@ -54,10 +54,12 @@ from app.services.dashboard import (
     ranking_window_payload,
     volumetrics_assignment_group_volumetrics,
     volumetrics_base_conditions,
+    volumetrics_cancelled_count_date_expression,
     volumetrics_cancelled_expression,
     volumetrics_data_range,
     volumetrics_display_expression,
     volumetrics_period_start_expression,
+    volumetrics_resolved_closed_state_expression,
     volumetrics_source_select,
 )
 from app.services.dashboard_commentary import export_project_commentaries
@@ -739,6 +741,8 @@ def build_monthly_volumetrics_rows(
     periods = build_volumetrics_periods(request)
     source = build_volumetrics_source(project_id)
     cancelled_condition = volumetrics_cancelled_expression(source)
+    resolved_closed_condition = volumetrics_resolved_closed_state_expression(source.c)
+    cancelled_date_expression = volumetrics_cancelled_count_date_expression(source.c)
 
     created_rows = offline_period_rows(db, request, source, source.c.created_at, "created_count")
     completed_rows = offline_period_rows(
@@ -747,13 +751,13 @@ def build_monthly_volumetrics_rows(
         source,
         source.c.completion_at,
         "resolved_closed_count",
-        [~cancelled_condition],
+        [resolved_closed_condition],
     )
     cancelled_rows = offline_period_rows(
         db,
         request,
         source,
-        source.c.completion_at,
+        cancelled_date_expression,
         "cancelled_count",
         [cancelled_condition],
     )
@@ -1070,7 +1074,7 @@ def build_hourly_created_resolved_payload(
 ) -> dict[str, Any]:
     request = monthly_request(project_id, start_datetime, end_datetime)
     source = build_volumetrics_source(project_id)
-    cancelled_condition = volumetrics_cancelled_expression(source)
+    resolved_closed_condition = volumetrics_resolved_closed_state_expression(source.c)
     denominators = {
         "weekdays": day_count_for_week_part(
             start_datetime.date(),
@@ -1100,7 +1104,7 @@ def build_hourly_created_resolved_payload(
             source.c.completion_at,
             day_type=day_type,
             value_label="resolved_closed_count",
-            extra_conditions=[~cancelled_condition],
+            extra_conditions=[resolved_closed_condition],
         )
         keys = {key for key, _hour in [*created_rows.keys(), *resolved_rows.keys()]}
         denominator = denominators[day_type]
@@ -1229,6 +1233,7 @@ def build_sla_trends_payload(
         .where(
             *volumetrics_base_conditions(source, request, include_date_bounds=False),
             source.c.resolved_at.is_not(None),
+            volumetrics_resolved_closed_state_expression(source.c),
             source.c.resolved_at >= normalize_dashboard_datetime(start_datetime),
             source.c.resolved_at <= normalize_dashboard_datetime(end_datetime),
         )
@@ -1279,7 +1284,7 @@ def build_detailed_volume_payload(
     request = monthly_request(project_id, start_datetime, end_datetime)
     source = build_volumetrics_source(project_id)
     dimensions = volumetrics_dimension_expressions(source)
-    period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
+    created_period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
     application_expression = volumetrics_display_expression(source.c.business_service_ci_name)
     architecture_expression = volumetrics_display_expression(source.c.architecture_type)
     install_expression = volumetrics_display_expression(source.c.install_type)
@@ -1289,64 +1294,134 @@ def build_detailed_volume_payload(
         literal("Unmapped Catalog Item"),
     )
     cancelled_condition = volumetrics_cancelled_expression(source)
+    cancelled_date_expression = volumetrics_cancelled_count_date_expression(source.c)
+    cancelled_period_expression = volumetrics_period_start_expression(
+        cancelled_date_expression,
+        "monthly",
+    )
     incident_batch_condition = (
         (source.c.ticket_type == "INCIDENT") & source.c.is_batch_related.is_(True)
     )
-    statement = (
+    grouping_expressions = (
+        *dimensions.values(),
+        application_expression,
+        architecture_expression,
+        install_expression,
+        hosting_env_expression,
+        catalog_item_expression,
+    )
+    selected_dimensions = (
+        *[expression.label(name) for name, expression in dimensions.items()],
+        application_expression.label("application_name"),
+        architecture_expression.label("architecture_type"),
+        install_expression.label("install_type"),
+        hosting_env_expression.label("hosting_env"),
+        catalog_item_expression.label("catalog_item_name"),
+    )
+    created_statement = (
         select(
-            *[expression.label(name) for name, expression in dimensions.items()],
-            application_expression.label("application_name"),
-            architecture_expression.label("architecture_type"),
-            install_expression.label("install_type"),
-            hosting_env_expression.label("hosting_env"),
-            catalog_item_expression.label("catalog_item_name"),
-            period_expression.label("period_start"),
+            *selected_dimensions,
+            created_period_expression.label("period_start"),
             func.count(source.c.id).label("created_count"),
-            func.count(source.c.id)
-            .filter(cancelled_condition)
-            .label("canceled_closed_incomplete_count"),
             func.count(source.c.id)
             .filter(incident_batch_condition)
             .label("incident_batch_created_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(source, request, include_date_bounds=False),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= normalize_dashboard_datetime(start_datetime),
+            source.c.created_at <= normalize_dashboard_datetime(end_datetime),
+        )
+        .group_by(*grouping_expressions, created_period_expression)
+    )
+    cancelled_statement = (
+        select(
+            *selected_dimensions,
+            cancelled_period_expression.label("period_start"),
+            func.count(source.c.id).label("canceled_closed_incomplete_count"),
             func.count(source.c.id)
-            .filter(incident_batch_condition & cancelled_condition)
+            .filter(incident_batch_condition)
             .label("incident_batch_canceled_count"),
         )
         .select_from(source)
-        .where(*volumetrics_base_conditions(source, request))
-        .group_by(
-            *dimensions.values(),
-            application_expression,
-            architecture_expression,
-            install_expression,
-            hosting_env_expression,
-            catalog_item_expression,
-            period_expression,
+        .where(
+            *volumetrics_base_conditions(source, request, include_date_bounds=False),
+            cancelled_condition,
+            cancelled_date_expression.is_not(None),
+            cancelled_date_expression >= normalize_dashboard_datetime(start_datetime),
+            cancelled_date_expression <= normalize_dashboard_datetime(end_datetime),
         )
+        .group_by(*grouping_expressions, cancelled_period_expression)
     )
-    rows = []
-    for row in db.execute(statement).mappings().all():
+
+    rows_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+    def detailed_key(row: dict[str, Any]) -> tuple[Any, ...] | None:
         period_start = row["period_start"]
         if period_start is None:
-            continue
-        rows.append(
-            {
-                **dimension_dict(dimension_key(row)),
-                "application_name": str(row["application_name"]),
-                "architecture_type": str(row["architecture_type"]),
-                "install_type": str(row["install_type"]),
-                "hosting_env": str(row["hosting_env"]),
-                "catalog_item_name": str(row["catalog_item_name"]),
-                "period_key": month_key(period_start),
-                "period_label": f"{period_start:%b-%y}",
-                "created_count": int(row["created_count"] or 0),
-                "canceled_closed_incomplete_count": int(
-                    row["canceled_closed_incomplete_count"] or 0,
-                ),
-                "incident_batch_created_count": int(row["incident_batch_created_count"] or 0),
-                "incident_batch_canceled_count": int(row["incident_batch_canceled_count"] or 0),
-            },
+            return None
+        return (
+            dimension_key(row),
+            str(row["application_name"]),
+            str(row["architecture_type"]),
+            str(row["install_type"]),
+            str(row["hosting_env"]),
+            str(row["catalog_item_name"]),
+            month_key(period_start),
         )
+
+    def default_detailed_row(row: dict[str, Any]) -> dict[str, Any]:
+        period_start = row["period_start"]
+        return {
+            **dimension_dict(dimension_key(row)),
+            "application_name": str(row["application_name"]),
+            "architecture_type": str(row["architecture_type"]),
+            "install_type": str(row["install_type"]),
+            "hosting_env": str(row["hosting_env"]),
+            "catalog_item_name": str(row["catalog_item_name"]),
+            "period_key": month_key(period_start),
+            "period_label": f"{period_start:%b-%y}",
+            "created_count": 0,
+            "canceled_closed_incomplete_count": 0,
+            "incident_batch_created_count": 0,
+            "incident_batch_canceled_count": 0,
+        }
+
+    for row in db.execute(created_statement).mappings().all():
+        key = detailed_key(row)
+        if key is None:
+            continue
+        output_row = rows_by_key.setdefault(key, default_detailed_row(row))
+        output_row["created_count"] = int(row["created_count"] or 0)
+        output_row["incident_batch_created_count"] = int(
+            row["incident_batch_created_count"] or 0,
+        )
+
+    for row in db.execute(cancelled_statement).mappings().all():
+        key = detailed_key(row)
+        if key is None:
+            continue
+        output_row = rows_by_key.setdefault(key, default_detailed_row(row))
+        output_row["canceled_closed_incomplete_count"] = int(
+            row["canceled_closed_incomplete_count"] or 0,
+        )
+        output_row["incident_batch_canceled_count"] = int(
+            row["incident_batch_canceled_count"] or 0,
+        )
+
+    rows = sorted(
+        rows_by_key.values(),
+        key=lambda row: (
+            row["period_key"],
+            row["application_name"].casefold(),
+            row["architecture_type"].casefold(),
+            row["install_type"].casefold(),
+            row["hosting_env"].casefold(),
+            row["catalog_item_name"].casefold(),
+        ),
+    )
 
     window_start, window_end = latest_complete_month_window(db, project_id, 6)
     split_window_start, split_window_end = latest_complete_month_window(db, project_id, 6)
@@ -1436,6 +1511,7 @@ def build_kpi_mttr_payload(
                 completion_expression.is_not(None),
                 completion_expression >= normalize_dashboard_datetime(start_datetime),
                 completion_expression <= normalize_dashboard_datetime(end_datetime),
+                volumetrics_resolved_closed_state_expression(source.c),
                 source.c.business_duration_seconds.is_not(None),
                 source.c.business_duration_seconds >= 0,
                 priority_expression.in_(MTTR_PRIORITIES),
@@ -1503,6 +1579,7 @@ def build_duration_bucket_payload(db: Session, project_id: UUID) -> dict[str, An
                 completion_expression >= normalize_dashboard_datetime(window_start),
                 completion_expression <= normalize_dashboard_datetime(window_end),
                 completion_expression >= source.c.created_at,
+                volumetrics_resolved_closed_state_expression(source.c),
                 bucket_expression.is_not(None),
             )
             .group_by(*dimensions.values(), period_expression, bucket_expression)

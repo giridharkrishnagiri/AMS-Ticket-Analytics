@@ -177,6 +177,9 @@ def insert_in_scope_filter_facts(
                 t.ticket_number,
                 t.created_at,
                 CASE
+                    WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%cancel%' THEN NULL
+                    WHEN t.ticket_type = 'SERVICE_CATALOG_TASK'
+                         AND lower(btrim(COALESCE(t.state, ''))) = 'closed incomplete' THEN NULL
                     WHEN t.ticket_type = 'INCIDENT' THEN t.resolved_at
                     WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN t.closed_at
                     ELSE COALESCE(t.resolved_at, t.closed_at)
@@ -185,6 +188,9 @@ def insert_in_scope_filter_facts(
                 CAST(date_trunc(
                     'month',
                     CASE
+                        WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%cancel%' THEN NULL
+                        WHEN t.ticket_type = 'SERVICE_CATALOG_TASK'
+                             AND lower(btrim(COALESCE(t.state, ''))) = 'closed incomplete' THEN NULL
                         WHEN t.ticket_type = 'INCIDENT' THEN t.resolved_at
                         WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN t.closed_at
                         ELSE COALESCE(t.resolved_at, t.closed_at)
@@ -228,6 +234,9 @@ def insert_in_scope_filter_facts(
                 left(
                     CASE
                         WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%cancel%' THEN 'cancelled'
+                        WHEN t.ticket_type = 'SERVICE_CATALOG_TASK'
+                             AND lower(btrim(COALESCE(t.state, ''))) = 'closed incomplete'
+                            THEN 'cancelled'
                         WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%closed%' THEN 'closed'
                         WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%resolved%' THEN 'closed'
                         WHEN NULLIF(btrim(t.state), '') IS NULL THEN '(blank)'
@@ -309,6 +318,9 @@ def insert_out_of_scope_filter_facts(
                 t.ticket_number,
                 t.created_at,
                 CASE
+                    WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%cancel%' THEN NULL
+                    WHEN t.ticket_type = 'SERVICE_CATALOG_TASK'
+                         AND lower(btrim(COALESCE(t.state, ''))) = 'closed incomplete' THEN NULL
                     WHEN t.ticket_type = 'INCIDENT' THEN t.resolved_at
                     WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN t.closed_at
                     ELSE COALESCE(t.resolved_at, t.closed_at)
@@ -317,6 +329,9 @@ def insert_out_of_scope_filter_facts(
                 CAST(date_trunc(
                     'month',
                     CASE
+                        WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%cancel%' THEN NULL
+                        WHEN t.ticket_type = 'SERVICE_CATALOG_TASK'
+                             AND lower(btrim(COALESCE(t.state, ''))) = 'closed incomplete' THEN NULL
                         WHEN t.ticket_type = 'INCIDENT' THEN t.resolved_at
                         WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN t.closed_at
                         ELSE COALESCE(t.resolved_at, t.closed_at)
@@ -360,6 +375,9 @@ def insert_out_of_scope_filter_facts(
                 left(
                     CASE
                         WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%cancel%' THEN 'cancelled'
+                        WHEN t.ticket_type = 'SERVICE_CATALOG_TASK'
+                             AND lower(btrim(COALESCE(t.state, ''))) = 'closed incomplete'
+                            THEN 'cancelled'
                         WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%closed%' THEN 'closed'
                         WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%resolved%' THEN 'closed'
                         WHEN NULLIF(btrim(t.state), '') IS NULL THEN '(blank)'

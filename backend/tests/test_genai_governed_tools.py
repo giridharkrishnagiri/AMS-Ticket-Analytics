@@ -467,6 +467,61 @@ def test_ticket_volume_summary_excludes_problem_and_change_records() -> None:
         cleanup_client(client_id)
 
 
+def test_ticket_volume_summary_uses_state_filters_for_completed_and_incomplete_counts() -> None:
+    client_id, project_id, batch_id = create_tool_project()
+    db = SessionLocal()
+    try:
+        db.add(
+            Ticket(
+                project_id=project_id,
+                upload_batch_id=batch_id,
+                ticket_number=f"SCTASK-INCOMPLETE-{uuid4().hex[:8]}",
+                ticket_type="SERVICE_CATALOG_TASK",
+                month_key="2026-05",
+                created_at=datetime(2026, 5, 6, tzinfo=UTC),
+                closed_at=datetime(2026, 5, 9, tzinfo=UTC),
+                state="Closed Incomplete",
+                priority="P2",
+                parent_application_name="HR Parent",
+                business_service_ci_name="HR Service",
+                functional_track="HR",
+                ams_owner="Ben",
+                supported_by_vendor="Vendor A",
+                assignment_group="AMS HR",
+                assignment_group_owner="Owner B",
+                sap_non_sap="Non-SAP",
+                architecture_type="On Prem",
+                install_type="Run",
+                reopen_count=0,
+            ),
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            result = execute_tool(
+                client,
+                "get_ticket_volume_summary",
+                project_id,
+                parameters={
+                    "scope": "in_scope",
+                    "ticket_type": "all",
+                    "from_date": "2026-05-01",
+                    "to_date": "2026-05-31",
+                },
+            )
+
+        assert result["status"] == "success"
+        metrics = {row["metric"]: row["value"] for row in result["rows"]}
+        assert metrics["Created count"] == 4
+        assert metrics["Resolved/Closed count"] == 2
+        assert metrics["Canceled/Closed Incomplete count"] == 2
+        assert "normalized_payload" not in str(result)
+    finally:
+        db.close()
+        reset_tool_logs(project_id)
+        cleanup_client(client_id)
+
+
 def test_ticket_scope_all_includes_out_of_scope_generic_tickets_only() -> None:
     client_id, project_id, _batch_id = create_tool_project()
     try:

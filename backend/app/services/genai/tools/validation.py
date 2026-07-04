@@ -213,18 +213,29 @@ def ticket_completion_datetime_expression(model: Any) -> Any:
     )
 
 
+def ticket_canceled_datetime_expression(model: Any) -> Any:
+    ticket_type = func.upper(model.ticket_type)
+    return case(
+        (ticket_type == "SERVICE_CATALOG_TASK", model.closed_at),
+        else_=func.coalesce(model.closed_at, model.resolved_at),
+    )
+
+
 def ticket_canceled_condition(model: Any) -> Any:
     ticket_type = func.upper(model.ticket_type)
     state = lower_trim_expression(model.state)
     return or_(
-        and_(ticket_type == "INCIDENT", state.like("%cancel%")),
-        and_(ticket_type == "SERVICE_CATALOG_TASK", state.like("%closed incomplete%")),
+        state.like("%cancel%"),
+        and_(ticket_type == "SERVICE_CATALOG_TASK", state == "closed incomplete"),
     )
 
 
 def ticket_closed_condition(model: Any) -> Any:
     completion_date = ticket_completion_datetime_expression(model)
-    return completion_date.is_not(None)
+    return and_(
+        completion_date.is_not(None),
+        ~ticket_canceled_condition(model),
+    )
 
 
 def ticket_open_condition(model: Any) -> Any:
