@@ -4933,18 +4933,36 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function installChartCopyButtons" in document
         assert "function installTableCopyButtons" in document
         assert "function installTableCsvButtons" in document
+        assert "function ensureTableExportActions" in document
+        assert "function existingTableActionContainer" in document
+        assert "table-export-actions" in document
+        assert "offline-export-table-${generatedOfflineTableExportId}" in document
         assert 'data-copy-table="offline-app-assignment-mapping"' in document
         assert 'data-copy-table="offline-app-assignment-basis-security"' in document
         assert 'data-download-table-csv="offline-app-assignment-mapping"' in document
         assert 'data-download-table-csv="offline-app-assignment-basis-security"' in document
         assert 'data-copy-table="${tableId}"' in document
         assert 'data-download-table-csv="${tableId}"' in document
+        assert 'data-download-filename="${csvFilename}"' in document
         assert "offline-assignment-vol-${tableKey}" in document
+        assert (
+            'assignmentVolumetricsTable(payload.tables?.incidents, payload.months || [], '
+            '"incidents")' in document
+        )
+        assert (
+            'assignmentVolumetricsTable(payload.tables?.sc_tasks, payload.months || [], '
+            '"sc-tasks")' in document
+        )
+        assert (
+            'assignmentVolumetricsTable(payload.tables?.overall, payload.months || [], '
+            '"overall")' in document
+        )
         assert "_assignment_group_volumetrics.csv" in document
         assert "Download CSV" in document
         assert "assignment-mapping-total-row" in document
         assert "function parseDashboardPayload" in document
         assert "function safeRenderSection" in document
+        assert "ensureTableExportActions(document.getElementById(sectionId))" in document
         assert "function renderFatalDashboardError" in document
         assert "Commentary / Inferences" in document
         assert "commentary-icon-button" in document

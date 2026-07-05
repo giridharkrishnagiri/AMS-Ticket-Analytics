@@ -2353,6 +2353,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       gap: 8px;
       margin: 8px 0;
     }
+    .table-export-actions {
+      display: flex;
+      justify-content: flex-end;
+      width: 100%;
+      margin: 8px 0;
+    }
     .validation-actions button,
     .validation-toolbar button {
       min-height: 30px;
@@ -3236,6 +3242,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function safeRenderSection(sectionId, title, renderFn) {
       try {
         renderFn();
+        ensureTableExportActions(document.getElementById(sectionId));
       } catch (error) {
         renderSectionError(sectionId, title, error);
       }
@@ -4053,6 +4060,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function installTableCopyButtons(root) {
       root.querySelectorAll("[data-copy-table]").forEach((button) => {
+        if (button.dataset.copyTableReady === "true") return;
+        button.dataset.copyTableReady = "true";
         button.addEventListener("click", async () => {
           const table = document.getElementById(button.dataset.copyTable);
           const status = button.closest(".validation-actions")?.querySelector(".copy-chart-status");
@@ -4068,6 +4077,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function installTableCsvButtons(root) {
       root.querySelectorAll("[data-download-table-csv]").forEach((button) => {
+        if (button.dataset.csvTableReady === "true") return;
+        button.dataset.csvTableReady = "true";
         button.addEventListener("click", () => {
           const table = document.getElementById(button.dataset.downloadTableCsv);
           const status = button.closest(".validation-actions")?.querySelector(".copy-chart-status");
@@ -4077,6 +4088,92 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           if (status) status.textContent = "CSV downloaded.";
         });
       });
+    }
+    let generatedOfflineTableExportId = 0;
+    function hasTableAction(root, attribute, tableId) {
+      return [...root.querySelectorAll(`[${attribute}]`)].some((button) =>
+        button.getAttribute(attribute) === tableId
+      );
+    }
+    function existingTableActionContainer(root, tableId) {
+      const actionButton = [...root.querySelectorAll("[data-copy-table], [data-download-table-csv]")]
+        .find((button) =>
+          button.getAttribute("data-copy-table") === tableId ||
+          button.getAttribute("data-download-table-csv") === tableId
+        );
+      return actionButton?.closest(".validation-actions") || null;
+    }
+    function tableExportTitle(table) {
+      const panel = table.closest(".panel, .table-card, section");
+      const heading = panel?.querySelector("h2, h3")?.textContent?.trim();
+      return heading || table.id || "table";
+    }
+    function ensureTableExportActions(root = document) {
+      if (!root) return;
+      root.querySelectorAll("table").forEach((table) => {
+        if (!table.id) {
+          generatedOfflineTableExportId += 1;
+          table.id = `offline-export-table-${generatedOfflineTableExportId}`;
+        }
+        const hasCopy = hasTableAction(root, "data-copy-table", table.id);
+        const hasCsv = hasTableAction(root, "data-download-table-csv", table.id);
+        if (hasCopy && hasCsv) return;
+        const existingActions = existingTableActionContainer(root, table.id);
+        if (existingActions) {
+          const status = existingActions.querySelector(".copy-chart-status");
+          if (!hasCopy) {
+            const copyButton = document.createElement("button");
+            copyButton.type = "button";
+            copyButton.textContent = "Copy Table";
+            copyButton.dataset.copyTable = table.id;
+            existingActions.insertBefore(copyButton, status || null);
+          }
+          if (!hasCsv) {
+            const csvButton = document.createElement("button");
+            csvButton.type = "button";
+            csvButton.textContent = "Download CSV";
+            csvButton.dataset.downloadTableCsv = table.id;
+            csvButton.dataset.downloadFilename = `${safeCsvFilename(tableExportTitle(table))}.csv`;
+            existingActions.insertBefore(csvButton, status || null);
+          }
+          return;
+        }
+        const frame = table.closest(
+          ".table-frame, .table-scroll, .validation-table-frame, .validation-table-scroll"
+        ) || table;
+        const existingToolbar = frame.previousElementSibling;
+        if (
+          existingToolbar?.classList?.contains("table-export-actions") &&
+          existingToolbar.dataset.tableId === table.id
+        ) {
+          return;
+        }
+        const toolbar = document.createElement("div");
+        toolbar.className = "validation-actions table-export-actions";
+        toolbar.dataset.tableId = table.id;
+        if (!hasCopy) {
+          const copyButton = document.createElement("button");
+          copyButton.type = "button";
+          copyButton.textContent = "Copy Table";
+          copyButton.dataset.copyTable = table.id;
+          toolbar.appendChild(copyButton);
+        }
+        if (!hasCsv) {
+          const csvButton = document.createElement("button");
+          csvButton.type = "button";
+          csvButton.textContent = "Download CSV";
+          csvButton.dataset.downloadTableCsv = table.id;
+          csvButton.dataset.downloadFilename = `${safeCsvFilename(tableExportTitle(table))}.csv`;
+          toolbar.appendChild(csvButton);
+        }
+        const status = document.createElement("span");
+        status.className = "copy-chart-status";
+        status.setAttribute("aria-live", "polite");
+        toolbar.appendChild(status);
+        frame.parentElement?.insertBefore(toolbar, frame);
+      });
+      installTableCopyButtons(root);
+      installTableCsvButtons(root);
     }
     function installScrollableTableKeyboard(root) {
       root.querySelectorAll(".validation-table-scroll, .offline-validation-scroll").forEach((frame) => {
