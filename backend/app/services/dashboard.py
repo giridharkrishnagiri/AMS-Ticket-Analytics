@@ -2161,7 +2161,16 @@ def applications_assignment_group_mapping_from_tickets(
         source.c.business_service_ci_name,
         UNMAPPED_BUSINESS_SERVICE_CI_LABEL,
     )
-    conditions: list[Any] = [source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values())]
+    volume_period = assignment_group_mapping_volume_period()
+    volume_period_conditions = (
+        source.c.created_at.is_not(None),
+        source.c.created_at >= volume_period["start_datetime"],
+        source.c.created_at < volume_period["end_datetime"],
+    )
+    conditions: list[Any] = [
+        source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values()),
+        *volume_period_conditions,
+    ]
     if functional_track != "all":
         conditions.append(filter_track_expression == functional_track)
     search_condition = assignment_mapping_search_condition(
@@ -2180,12 +2189,6 @@ def applications_assignment_group_mapping_from_tickets(
     incident_count = func.count(source.c.id).filter(source.c.ticket_type == "INCIDENT")
     sc_task_count = func.count(source.c.id).filter(
         source.c.ticket_type == "SERVICE_CATALOG_TASK",
-    )
-    volume_period = assignment_group_mapping_volume_period()
-    volume_period_conditions = (
-        source.c.created_at.is_not(None),
-        source.c.created_at >= volume_period["start_datetime"],
-        source.c.created_at < volume_period["end_datetime"],
     )
     period_incident_count = func.count(source.c.id).filter(
         source.c.ticket_type == "INCIDENT",
@@ -2280,10 +2283,10 @@ def applications_assignment_group_mapping_from_tickets(
         },
         "data_notes": [
             "Tickets Data source shows distinct mappings found in normalized Incident and "
-            "SC Task records.",
+            f"SC Task records created during {volume_period['label']}.",
             "Generic Tickets includes Incidents and SC Tasks only.",
             "Problems and Changes are excluded.",
-            f"Average monthly volumes use {volume_period['label']}.",
+            f"Ticket counts and average monthly volumes use {volume_period['label']}.",
             "BASIS and SECURITY assignment groups are confirmed out-of-scope and shown "
             "separately when present.",
             "BASIS/SECURITY classification uses a case-insensitive contains match on "

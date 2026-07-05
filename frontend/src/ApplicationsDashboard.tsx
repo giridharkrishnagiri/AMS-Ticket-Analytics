@@ -1993,7 +1993,7 @@ function AssignmentGroupMappingPanel({
             </p>
             {selectedSource === "tickets" && data.volume_period ? (
               <p className="muted-text">
-                Average monthly volumes are based on {data.volume_period.label}.
+                Ticket counts and average monthly volumes are based on {data.volume_period.label}.
               </p>
             ) : null}
           </div>

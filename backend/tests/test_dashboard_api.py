@@ -562,6 +562,45 @@ def test_applications_assignment_group_mapping_tickets_source_counts_generic_tic
                 business_service_ci_name="Finance Service",
                 raw_payload={"normalized_payload": "hidden"},
             )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-MAP-OLD",
+            "INCIDENT",
+            dt("2025-01-02T00:00:00"),
+            assignment_group="AG-FIN",
+            functional_track="Finance",
+            parent_application_name="Finance Parent",
+            business_service_ci_name="Finance Service",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCT-MAP-FUTURE",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-06-15T00:00:00"),
+            assignment_group="AG-FIN",
+            functional_track="Finance",
+            parent_application_name="Finance Parent",
+            business_service_ci_name="Finance Service",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-MAP-OLD-ONLY",
+            "INCIDENT",
+            dt("2025-01-03T00:00:00"),
+            assignment_group="AG-OLD-ONLY",
+            functional_track="Finance",
+            parent_application_name="Finance Parent",
+            business_service_ci_name="Finance Service",
+        )
         add_out_of_scope_ticket(
             db,
             project_id,
@@ -636,11 +675,16 @@ def test_applications_assignment_group_mapping_tickets_source_counts_generic_tic
         assert in_scope_payload["rows"][0]["avg_monthly_sc_tasks"] == 0
         assert in_scope_payload["rows"][0]["avg_monthly_total_tickets"] == 0
         assert in_scope_payload["volume_period"]["label"] == "Dec-25 through May-26"
+        assert any(
+            note == "Ticket counts and average monthly volumes use Dec-25 through May-26."
+            for note in in_scope_payload["data_notes"]
+        )
         assert in_scope_payload["rows"][0]["functional_track"] == "Finance"
         assert in_scope_payload["rows"][0]["ams_owner"] == "-"
         assert in_scope_payload["rows"][0]["support_lead"] == "-"
         assert in_scope_payload["basis_security_rows"] == []
         assert "CHANGE" not in json.dumps(in_scope_payload)
+        assert "AG-OLD-ONLY" not in json.dumps(in_scope_payload)
 
         assert all_scope_response.status_code == 200
         all_scope_payload = all_scope_response.json()

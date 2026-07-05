@@ -4096,7 +4096,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         <div class="validation-toolbar">${sourceButtons}</div>
         <div class="validation-toolbar">${scopeButtons}</div>
         <div class="validation-toolbar">${trackButtons}</div>
-        <p class="muted">Showing ${fmt(rows.length)} Assignment Group mappings.${state.appMappingSource === "tickets" && payload.volume_period ? ` Average monthly volumes are based on ${esc(payload.volume_period.label)}.` : ""}</p>
+        <p class="muted">Showing ${fmt(rows.length)} Assignment Group mappings.${state.appMappingSource === "tickets" && payload.volume_period ? ` Ticket counts and average monthly volumes are based on ${esc(payload.volume_period.label)}.` : ""}</p>
         <div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-mapping">Copy Table</button><span class="copy-chart-status"></span></div>
         ${mappingTable(rows, "offline-app-assignment-mapping", "No mappings match the selected controls.")}
         ${basisSection}
