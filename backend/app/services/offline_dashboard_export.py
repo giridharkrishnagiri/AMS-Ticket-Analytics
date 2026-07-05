@@ -4027,6 +4027,30 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         [...tr.children].map((cell) => String(cell.textContent || "").trim()).join("\\t")
       ).join("\\n");
     }
+    function csvEscape(value) {
+      const text = String(value ?? "");
+      return /[",\\n\\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+    }
+    function tableToCsv(table) {
+      return [...table.querySelectorAll("tr")].map((tr) =>
+        [...tr.children].map((cell) => csvEscape(String(cell.textContent || "").trim())).join(",")
+      ).join("\\n");
+    }
+    function safeCsvFilename(value) {
+      const cleaned = String(value || "table").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      return cleaned || "table";
+    }
+    function downloadTextFile(filename, text, mimeType = "text/csv;charset=utf-8") {
+      const blob = new Blob([text], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
     function installTableCopyButtons(root) {
       root.querySelectorAll("[data-copy-table]").forEach((button) => {
         button.addEventListener("click", async () => {
@@ -4039,6 +4063,18 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           } catch (error) {
             if (status) status.textContent = "Copy failed. Select the table and copy manually.";
           }
+        });
+      });
+    }
+    function installTableCsvButtons(root) {
+      root.querySelectorAll("[data-download-table-csv]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const table = document.getElementById(button.dataset.downloadTableCsv);
+          const status = button.closest(".validation-actions")?.querySelector(".copy-chart-status");
+          if (!table) return;
+          const filename = button.dataset.downloadFilename || `${safeCsvFilename(table.id)}.csv`;
+          downloadTextFile(filename, tableToCsv(table));
+          if (status) status.textContent = "CSV downloaded.";
         });
       });
     }
@@ -4120,13 +4156,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const mappingTotalRow = (tableRows) => state.appMappingSource === "tickets" && tableRows.length ? `<tr class="assignment-mapping-total-row"><th scope="row">Grand Total</th><td></td><td></td><td></td><td></td><td></td><td></td>${totalCountCells(tableRows)}</tr>` : "";
       const extraColumnCount = state.appMappingSource === "tickets" ? 6 : 3;
       const mappingTable = (tableRows, tableId, emptyMessage) => `<div class="table-frame table-scroll validation-table-frame offline-validation-scroll offline-mapping-scroll" role="region" tabindex="0" aria-label="Scrollable Assignment Group Mapping table"><table id="${tableId}" class="applications-table validation-table${state.appMappingSource === "tickets" ? " assignment-mapping-ticket-table" : ""}"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>AMS Owner</th><th>Support Lead</th><th>Parent Business Application</th><th>Business Service CI Name</th>${inventoryHeaders}<th>Scope</th>${countHeaders}</tr></thead><tbody>${tableRows.length ? mappingTotalRow(tableRows) + tableRows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.ams_owner)}</td><td>${esc(row.support_lead)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td>${inventoryCells(row)}<td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("") : `<tr><td colspan="${7 + extraColumnCount}">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>`;
-      const basisSection = basisRows.length ? `<section class="validation-subsection"><div class="chart-title-row"><div><p class="label">Confirmed Out-of-Scope</p><h3>BASIS and SECURITY Assignment Group Mapping</h3><p class="muted">Confirmed out-of-scope assignment groups containing "Basis" or "Security".</p></div><div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-basis-security">Copy Table</button><span class="copy-chart-status"></span></div></div>${mappingTable(basisRows, "offline-app-assignment-basis-security", "No BASIS or SECURITY assignment groups found for the selected scope and filters.")}</section>` : "";
+      const basisSection = basisRows.length ? `<section class="validation-subsection"><div class="chart-title-row"><div><p class="label">Confirmed Out-of-Scope</p><h3>BASIS and SECURITY Assignment Group Mapping</h3><p class="muted">Confirmed out-of-scope assignment groups containing "Basis" or "Security".</p></div><div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-basis-security">Copy Table</button><button type="button" data-download-table-csv="offline-app-assignment-basis-security" data-download-filename="basis_security_assignment_group_mapping.csv">Download CSV</button><span class="copy-chart-status"></span></div></div>${mappingTable(basisRows, "offline-app-assignment-basis-security", "No BASIS or SECURITY assignment groups found for the selected scope and filters.")}</section>` : "";
       return `<section class="panel full"><p class="label">Applications</p><h2>Assignment Group ↔ Application Mapping</h2><p class="muted">Static validation table for Assignment Group mappings from Application Inventory or normalized Incident and SC Task data.</p>
         <div class="validation-toolbar">${sourceButtons}</div>
         <div class="validation-toolbar">${scopeButtons}</div>
         <div class="validation-toolbar">${trackButtons}</div>
         <p class="muted">Showing ${fmt(rows.length)} Assignment Group mappings.${state.appMappingSource === "tickets" && payload.volume_period ? ` Ticket counts and average monthly volumes are based on ${esc(payload.volume_period.label)}.` : ""}</p>
-        <div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-mapping">Copy Table</button><span class="copy-chart-status"></span></div>
+        <div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-mapping">Copy Table</button><button type="button" data-download-table-csv="offline-app-assignment-mapping" data-download-filename="assignment_group_mapping.csv">Download CSV</button><span class="copy-chart-status"></span></div>
         ${mappingTable(rows, "offline-app-assignment-mapping", "No mappings match the selected controls.")}
         ${basisSection}
         ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "assignment_group_mapping", section_key: "applications_assignment_group_mapping", chart_key: "assignment_group_mapping", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: "all" })}
@@ -4223,6 +4259,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       installCommentaryEditors(document.getElementById("applications"));
       installChartCopyButtons(document.getElementById("applications"));
       installTableCopyButtons(document.getElementById("applications"));
+      installTableCsvButtons(document.getElementById("applications"));
       installScrollableTableKeyboard(document.getElementById("applications"));
     }
     function applicationTable(rows) {
@@ -4316,6 +4353,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       attachDefaultCommentaries(document.getElementById("volumetrics"), currentVolumetricsCommentaryContext());
       installChartCopyButtons(document.getElementById("volumetrics"));
       installTableCopyButtons(document.getElementById("volumetrics"));
+      installTableCsvButtons(document.getElementById("volumetrics"));
       installScrollableTableKeyboard(document.getElementById("volumetrics"));
     }
     function volSubTabs() {
@@ -4358,7 +4396,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const header2 = `<tr>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${label}</th>`)).join("")}</tr>`;
       const bodyRows = rows.map((row) => `<tr><th class="assignment-group-column">${esc(row.assignment_group)}</th><td class="reference-column">${esc(row.functional_track)}</td><td class="reference-column">${esc(row.ams_owner)}</td><td class="reference-column">${esc(row.support_lead)}</td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMetric(row, month, key))}</td>`)).join("")}</tr>`).join("");
       const totalRow = `<tr class="pivot-total-row assignment-volumetrics-total-row"><th class="assignment-group-column">Grand Total</th><td class="reference-column"></td><td class="reference-column"></td><td class="reference-column"></td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMonthTotals(rows, month, key))}</td>`)).join("")}</tr>`;
-      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><span class="copy-chart-status"></span></div></div><div class="table-frame table-scroll validation-table-frame offline-validation-scroll assignment-volumetrics-frame" role="region" tabindex="0" aria-label="${esc(table?.title || tableKey)} scrollable Assignment Group Volumetrics table"><table id="${tableId}" class="validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? totalRow + bodyRows : `<tr><td colspan="${4 + months.length * 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></section>`;
+      const csvFilename = `${safeCsvFilename(table?.title || tableKey)}_assignment_group_volumetrics.csv`;
+      return `<section class="panel full"><div class="chart-title-row"><div><p class="label">Assignment Group Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Assignment Groups.</p></div><div class="validation-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${csvFilename}">Download CSV</button><span class="copy-chart-status"></span></div></div><div class="table-frame table-scroll validation-table-frame offline-validation-scroll assignment-volumetrics-frame" role="region" tabindex="0" aria-label="${esc(table?.title || tableKey)} scrollable Assignment Group Volumetrics table"><table id="${tableId}" class="validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? totalRow + bodyRows : `<tr><td colspan="${4 + months.length * 3}">No Assignment Groups match the selected controls.</td></tr>`}</tbody></table></div></section>`;
     }
     function renderAssignmentGroupVolumetrics() {
       const payload = assignmentVolumetricsPayload();

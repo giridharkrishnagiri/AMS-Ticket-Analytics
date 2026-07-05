@@ -4932,10 +4932,16 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function copyOfflineChart" in document
         assert "function installChartCopyButtons" in document
         assert "function installTableCopyButtons" in document
+        assert "function installTableCsvButtons" in document
         assert 'data-copy-table="offline-app-assignment-mapping"' in document
         assert 'data-copy-table="offline-app-assignment-basis-security"' in document
+        assert 'data-download-table-csv="offline-app-assignment-mapping"' in document
+        assert 'data-download-table-csv="offline-app-assignment-basis-security"' in document
         assert 'data-copy-table="${tableId}"' in document
+        assert 'data-download-table-csv="${tableId}"' in document
         assert "offline-assignment-vol-${tableKey}" in document
+        assert "_assignment_group_volumetrics.csv" in document
+        assert "Download CSV" in document
         assert "assignment-mapping-total-row" in document
         assert "function parseDashboardPayload" in document
         assert "function safeRenderSection" in document
@@ -4970,6 +4976,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert 'installChartCopyButtons(document.getElementById("volumetrics"))' in document
         assert 'installTableCopyButtons(document.getElementById("applications"))' in document
         assert 'installTableCopyButtons(document.getElementById("volumetrics"))' in document
+        assert 'installTableCsvButtons(document.getElementById("applications"))' in document
+        assert 'installTableCsvButtons(document.getElementById("volumetrics"))' in document
         assert "table-card" in document
         assert "table-scroll" in document
         assert "applications-table" in document
