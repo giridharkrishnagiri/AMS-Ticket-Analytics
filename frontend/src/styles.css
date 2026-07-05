@@ -1683,6 +1683,23 @@ h2 {
   z-index: 2;
 }
 
+.assignment-mapping-ticket-table thead th {
+  z-index: 5;
+}
+
+.assignment-mapping-ticket-table .assignment-mapping-total-row th,
+.assignment-mapping-ticket-table .assignment-mapping-total-row td {
+  position: sticky;
+  top: 34px;
+  z-index: 4;
+  background: #f1f5f9;
+  font-weight: 900;
+}
+
+.assignment-mapping-ticket-table .assignment-mapping-total-row .total-cell {
+  color: #0f172a;
+}
+
 .table-sort-button {
   display: inline-flex;
   align-items: center;

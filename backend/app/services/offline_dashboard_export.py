@@ -2326,6 +2326,20 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       max-width: none;
       border-collapse: collapse;
     }
+    .assignment-mapping-ticket-table thead th {
+      z-index: 5;
+    }
+    .assignment-mapping-ticket-table .assignment-mapping-total-row th,
+    .assignment-mapping-ticket-table .assignment-mapping-total-row td {
+      position: sticky;
+      top: 34px;
+      z-index: 4;
+      background: #f1f5f9;
+      font-weight: 900;
+    }
+    .assignment-mapping-ticket-table .assignment-mapping-total-row .total-cell {
+      color: #0f172a;
+    }
     .validation-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -4089,8 +4103,23 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const inventoryCells = (row) => state.appMappingSource === "application_inventory" ? `<td>${esc(row.application_number || "-")}</td><td>${esc(row.application_owner || "-")}</td><td>${esc(row.supported_by_vendor || "-")}</td>` : "";
       const countHeaders = state.appMappingSource === "tickets" ? "<th>Incident Count</th><th>SC Task Count</th><th>Total Ticket Count</th><th>Avg Monthly Incidents</th><th>Avg Monthly SC Tasks</th><th>Avg Monthly Total Tickets</th>" : "";
       const countCells = (row) => state.appMappingSource === "tickets" ? `<td class="numeric-cell">${fmt(row.incident_count || 0)}</td><td class="numeric-cell">${fmt(row.sc_task_count || 0)}</td><td class="numeric-cell">${fmt(row.total_ticket_count || 0)}</td><td class="numeric-cell">${fmt(row.avg_monthly_incidents || 0)}</td><td class="numeric-cell">${fmt(row.avg_monthly_sc_tasks || 0)}</td><td class="numeric-cell">${fmt(row.avg_monthly_total_tickets || 0)}</td>` : "";
+      const countTotals = (tableRows) => tableRows.reduce((totals, row) => {
+        totals.incident_count += Number(row.incident_count || 0);
+        totals.sc_task_count += Number(row.sc_task_count || 0);
+        totals.total_ticket_count += Number(row.total_ticket_count || 0);
+        totals.avg_monthly_incidents += Number(row.avg_monthly_incidents || 0);
+        totals.avg_monthly_sc_tasks += Number(row.avg_monthly_sc_tasks || 0);
+        totals.avg_monthly_total_tickets += Number(row.avg_monthly_total_tickets || 0);
+        return totals;
+      }, { incident_count: 0, sc_task_count: 0, total_ticket_count: 0, avg_monthly_incidents: 0, avg_monthly_sc_tasks: 0, avg_monthly_total_tickets: 0 });
+      const totalCountCells = (tableRows) => {
+        if (state.appMappingSource !== "tickets" || !tableRows.length) return "";
+        const totals = countTotals(tableRows);
+        return `<td class="numeric-cell total-cell">${fmt(totals.incident_count)}</td><td class="numeric-cell total-cell">${fmt(totals.sc_task_count)}</td><td class="numeric-cell total-cell">${fmt(totals.total_ticket_count)}</td><td class="numeric-cell total-cell">${fmt(totals.avg_monthly_incidents)}</td><td class="numeric-cell total-cell">${fmt(totals.avg_monthly_sc_tasks)}</td><td class="numeric-cell total-cell">${fmt(totals.avg_monthly_total_tickets)}</td>`;
+      };
+      const mappingTotalRow = (tableRows) => state.appMappingSource === "tickets" && tableRows.length ? `<tr class="assignment-mapping-total-row"><th scope="row">Grand Total</th><td></td><td></td><td></td><td></td><td></td><td></td>${totalCountCells(tableRows)}</tr>` : "";
       const extraColumnCount = state.appMappingSource === "tickets" ? 6 : 3;
-      const mappingTable = (tableRows, tableId, emptyMessage) => `<div class="table-frame table-scroll validation-table-frame offline-validation-scroll offline-mapping-scroll" role="region" tabindex="0" aria-label="Scrollable Assignment Group Mapping table"><table id="${tableId}" class="applications-table validation-table"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>AMS Owner</th><th>Support Lead</th><th>Parent Business Application</th><th>Business Service CI Name</th>${inventoryHeaders}<th>Scope</th>${countHeaders}</tr></thead><tbody>${tableRows.length ? tableRows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.ams_owner)}</td><td>${esc(row.support_lead)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td>${inventoryCells(row)}<td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("") : `<tr><td colspan="${7 + extraColumnCount}">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>`;
+      const mappingTable = (tableRows, tableId, emptyMessage) => `<div class="table-frame table-scroll validation-table-frame offline-validation-scroll offline-mapping-scroll" role="region" tabindex="0" aria-label="Scrollable Assignment Group Mapping table"><table id="${tableId}" class="applications-table validation-table${state.appMappingSource === "tickets" ? " assignment-mapping-ticket-table" : ""}"><thead><tr><th>Assignment Group</th><th>Functional Track</th><th>AMS Owner</th><th>Support Lead</th><th>Parent Business Application</th><th>Business Service CI Name</th>${inventoryHeaders}<th>Scope</th>${countHeaders}</tr></thead><tbody>${tableRows.length ? mappingTotalRow(tableRows) + tableRows.map((row) => `<tr><td>${esc(row.assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${esc(row.ams_owner)}</td><td>${esc(row.support_lead)}</td><td>${esc(row.parent_business_application)}</td><td>${esc(row.business_service_ci_name)}</td>${inventoryCells(row)}<td>${esc(row.scope)}</td>${countCells(row)}</tr>`).join("") : `<tr><td colspan="${7 + extraColumnCount}">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>`;
       const basisSection = basisRows.length ? `<section class="validation-subsection"><div class="chart-title-row"><div><p class="label">Confirmed Out-of-Scope</p><h3>BASIS and SECURITY Assignment Group Mapping</h3><p class="muted">Confirmed out-of-scope assignment groups containing "Basis" or "Security".</p></div><div class="validation-actions"><button type="button" data-copy-table="offline-app-assignment-basis-security">Copy Table</button><span class="copy-chart-status"></span></div></div>${mappingTable(basisRows, "offline-app-assignment-basis-security", "No BASIS or SECURITY assignment groups found for the selected scope and filters.")}</section>` : "";
       return `<section class="panel full"><p class="label">Applications</p><h2>Assignment Group ↔ Application Mapping</h2><p class="muted">Static validation table for Assignment Group mappings from Application Inventory or normalized Incident and SC Task data.</p>
         <div class="validation-toolbar">${sourceButtons}</div>

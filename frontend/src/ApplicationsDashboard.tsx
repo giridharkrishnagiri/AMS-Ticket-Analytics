@@ -1685,6 +1685,15 @@ const assignmentMappingColumns: Array<{
   },
 ];
 
+const assignmentMappingVolumeColumns = new Set<AssignmentMappingSortKey>([
+  "incident_count",
+  "sc_task_count",
+  "total_ticket_count",
+  "avg_monthly_incidents",
+  "avg_monthly_sc_tasks",
+  "avg_monthly_total_tickets",
+]);
+
 function displayScope(value: string): string {
   if (value === "in_scope") {
     return "In Scope";
@@ -1704,6 +1713,20 @@ function assignmentMappingCell(
   }
   const value = row[key];
   return typeof value === "number" ? value.toLocaleString() : tableCellText(value);
+}
+
+function isAssignmentMappingVolumeColumn(key: AssignmentMappingSortKey): boolean {
+  return assignmentMappingVolumeColumns.has(key);
+}
+
+function assignmentMappingColumnTotal(
+  rows: DashboardApplicationsAssignmentGroupMappingRow[],
+  key: AssignmentMappingSortKey
+): number {
+  return rows.reduce((total, row) => {
+    const value = row[key as keyof DashboardApplicationsAssignmentGroupMappingRow];
+    return total + (typeof value === "number" ? value : 0);
+  }, 0);
 }
 
 function assignmentMappingSortValue(
@@ -1814,8 +1837,24 @@ function AssignmentGroupMappingPanel({
     });
   }, [columns, data.basis_security_rows, searchTerm, sort.column, sort.direction]);
   const tableHeaders = columns.map((column) => column.label);
-  const tableRowsFor = (sourceRows: DashboardApplicationsAssignmentGroupMappingRow[]) =>
-    sourceRows.map((row) => columns.map((column) => assignmentMappingCell(row, column.key)));
+  const totalTableRowFor = (sourceRows: DashboardApplicationsAssignmentGroupMappingRow[]) =>
+    selectedSource === "tickets" && sourceRows.length > 0
+      ? [
+          columns.map((column, columnIndex) => {
+            if (columnIndex === 0) {
+              return "Grand Total";
+            }
+            if (isAssignmentMappingVolumeColumn(column.key)) {
+              return assignmentMappingColumnTotal(sourceRows, column.key).toLocaleString();
+            }
+            return "";
+          }),
+        ]
+      : [];
+  const tableRowsFor = (sourceRows: DashboardApplicationsAssignmentGroupMappingRow[]) => [
+    ...totalTableRowFor(sourceRows),
+    ...sourceRows.map((row) => columns.map((column) => assignmentMappingCell(row, column.key))),
+  ];
   const totalTicketSummary =
     selectedSource === "tickets" ? (
       <>
@@ -1867,7 +1906,11 @@ function AssignmentGroupMappingPanel({
   ) {
     return (
       <div className="applications-table-frame validation-table-frame">
-        <table className="applications-table validation-table">
+        <table
+          className={`applications-table validation-table${
+            selectedSource === "tickets" ? " assignment-mapping-ticket-table" : ""
+          }`}
+        >
           <thead>
             <tr>
               {columns.map((column) => (
@@ -1892,24 +1935,49 @@ function AssignmentGroupMappingPanel({
                 <td colSpan={columns.length}>{emptyMessage}</td>
               </tr>
             ) : (
-              sourceRows.map((row, index) => (
-                <tr key={`${row.assignment_group}-${row.business_service_ci_name}-${index}`}>
-                  {columns.map((column) => (
-                    <td
-                      className={
-                        column.key.endsWith("_count") ||
-                        column.key === "total_ticket_count" ||
-                        column.key.startsWith("avg_monthly_")
-                          ? "numeric-cell"
-                          : undefined
-                      }
-                      key={column.key}
-                    >
-                      {assignmentMappingCell(row, column.key)}
-                    </td>
-                  ))}
-                </tr>
-              ))
+              <>
+                {selectedSource === "tickets" && sourceRows.length > 0 ? (
+                  <tr className="assignment-mapping-total-row">
+                    {columns.map((column, columnIndex) => {
+                      const className = isAssignmentMappingVolumeColumn(column.key)
+                        ? "numeric-cell total-cell"
+                        : undefined;
+                      const content =
+                        columnIndex === 0
+                          ? "Grand Total"
+                          : isAssignmentMappingVolumeColumn(column.key)
+                            ? assignmentMappingColumnTotal(
+                                sourceRows,
+                                column.key
+                              ).toLocaleString()
+                            : "";
+                      return columnIndex === 0 ? (
+                        <th className={className} key={column.key} scope="row">
+                          {content}
+                        </th>
+                      ) : (
+                        <td className={className} key={column.key}>
+                          {content}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ) : null}
+                {sourceRows.map((row, index) => (
+                  <tr key={`${row.assignment_group}-${row.business_service_ci_name}-${index}`}>
+                    {columns.map((column) => (
+                      <td
+                        className={
+                          isAssignmentMappingVolumeColumn(column.key) ? "numeric-cell" : undefined
+                        }
+                        key={column.key}
+                      >
+                        {assignmentMappingCell(row, column.key)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </>
             )}
           </tbody>
         </table>
@@ -2063,7 +2131,11 @@ function AssignmentGroupMappingPanel({
         {data.warnings.length > 0 ? <p className="error-text">{data.warnings[0]}</p> : null}
         {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
         <div className="applications-table-frame validation-table-frame">
-          <table className="applications-table validation-table">
+          <table
+            className={`applications-table validation-table${
+              selectedSource === "tickets" ? " assignment-mapping-ticket-table" : ""
+            }`}
+          >
             <thead>
               <tr>
                 {columns.map((column) => (
@@ -2088,24 +2160,46 @@ function AssignmentGroupMappingPanel({
                   <td colSpan={columns.length}>No mappings match the selected controls.</td>
                 </tr>
               ) : (
-                rows.map((row, index) => (
-                  <tr key={`${row.assignment_group}-${row.business_service_ci_name}-${index}`}>
-                    {columns.map((column) => (
-                      <td
-                        className={
-                          column.key.endsWith("_count") ||
-                          column.key === "total_ticket_count" ||
-                          column.key.startsWith("avg_monthly_")
-                            ? "numeric-cell"
-                            : undefined
-                        }
-                        key={column.key}
-                      >
-                        {assignmentMappingCell(row, column.key)}
-                      </td>
-                    ))}
-                  </tr>
-                ))
+                <>
+                  {selectedSource === "tickets" && rows.length > 0 ? (
+                    <tr className="assignment-mapping-total-row">
+                      {columns.map((column, columnIndex) => {
+                        const className = isAssignmentMappingVolumeColumn(column.key)
+                          ? "numeric-cell total-cell"
+                          : undefined;
+                        const content =
+                          columnIndex === 0
+                            ? "Grand Total"
+                            : isAssignmentMappingVolumeColumn(column.key)
+                              ? assignmentMappingColumnTotal(rows, column.key).toLocaleString()
+                              : "";
+                        return columnIndex === 0 ? (
+                          <th className={className} key={column.key} scope="row">
+                            {content}
+                          </th>
+                        ) : (
+                          <td className={className} key={column.key}>
+                            {content}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ) : null}
+                  {rows.map((row, index) => (
+                    <tr key={`${row.assignment_group}-${row.business_service_ci_name}-${index}`}>
+                      {columns.map((column) => (
+                        <td
+                          className={
+                            isAssignmentMappingVolumeColumn(column.key) ? "numeric-cell" : undefined
+                          }
+                          key={column.key}
+                        >
+                          {assignmentMappingCell(row, column.key)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </>
               )}
             </tbody>
           </table>

@@ -4821,6 +4821,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Copy Chart" in document
         assert "function copyOfflineChart" in document
         assert "function installChartCopyButtons" in document
+        assert "function installTableCopyButtons" in document
+        assert 'data-copy-table="offline-app-assignment-mapping"' in document
+        assert 'data-copy-table="offline-app-assignment-basis-security"' in document
+        assert 'data-copy-table="${tableId}"' in document
+        assert "offline-assignment-vol-${tableKey}" in document
+        assert "assignment-mapping-total-row" in document
         assert "function parseDashboardPayload" in document
         assert "function safeRenderSection" in document
         assert "function renderFatalDashboardError" in document
@@ -4852,6 +4858,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert 'split("\n")' not in document
         assert 'installChartCopyButtons(document.getElementById("applications"))' in document
         assert 'installChartCopyButtons(document.getElementById("volumetrics"))' in document
+        assert 'installTableCopyButtons(document.getElementById("applications"))' in document
+        assert 'installTableCopyButtons(document.getElementById("volumetrics"))' in document
         assert "table-card" in document
         assert "table-scroll" in document
         assert "applications-table" in document
