@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.schemas.health import HealthCheckItem, HealthResponse
+from app.schemas.health import HealthCheckItem, HealthPingResponse, HealthResponse
 
 router = APIRouter(tags=["health"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -236,6 +236,18 @@ def _overall_status(checks: list[HealthCheckItem]) -> str:
     if statuses.intersection({"degraded", "warning"}):
         return "degraded"
     return "ok"
+
+
+@router.get("/health/ping", response_model=HealthPingResponse)
+def health_ping() -> HealthPingResponse:
+    settings = get_settings()
+    return HealthPingResponse(
+        status="ok",
+        service=settings.app_name,
+        version=settings.app_version,
+        environment=settings.environment,
+        checked_at=datetime.now(UTC),
+    )
 
 
 @router.get("/health", response_model=HealthResponse)

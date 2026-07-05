@@ -20,3 +20,18 @@ def test_health_check_returns_ok() -> None:
     assert "genai_frontend" in check_names
     assert "database" in payload
     assert "frontends" in payload
+
+
+def test_health_ping_returns_lightweight_liveness() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/health/ping")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["service"] == "AMS Ticket Intelligence"
+    assert payload["environment"]
+    assert payload["checked_at"]
+    assert "checks" not in payload
+    assert "database" not in payload
+    assert "frontends" not in payload

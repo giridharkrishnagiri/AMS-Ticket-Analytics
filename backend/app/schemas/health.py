@@ -22,3 +22,11 @@ class HealthResponse(BaseModel):
     checks: list[HealthCheckItem] = Field(default_factory=list)
     database: dict[str, Any] = Field(default_factory=dict)
     frontends: dict[str, Any] = Field(default_factory=dict)
+
+
+class HealthPingResponse(BaseModel):
+    status: str
+    service: str
+    version: str
+    environment: str
+    checked_at: datetime

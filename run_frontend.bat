@@ -16,7 +16,7 @@ if not exist node_modules (
 )
 
 echo Frontend API base URL: %VITE_API_BASE_URL%
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$url='%VITE_API_BASE_URL%/health'; try { $response=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5; Write-Host ('Backend health reachable: HTTP {0}' -f $response.StatusCode) } catch { Write-Host ('Warning: backend health is not reachable at {0}. Start run_backend.bat first, or verify AMS_BACKEND_PORT. {1}' -f $url, $_.Exception.Message) }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$base='%VITE_API_BASE_URL%'.TrimEnd('/'); $pingUrl=$base + '/health/ping'; $healthUrl=$base + '/health'; $lastError=$null; for ($attempt=1; $attempt -le 15; $attempt++) { try { $response=Invoke-WebRequest -Uri $pingUrl -UseBasicParsing -TimeoutSec 2; Write-Host ('Backend API reachable: HTTP {0} ({1})' -f $response.StatusCode, $pingUrl); exit 0 } catch { $lastError=$_.Exception.Message; if ($attempt -lt 15) { Write-Host ('Waiting for backend API at {0} ({1}/15)...' -f $pingUrl, $attempt); Start-Sleep -Seconds 1 } } }; try { $response=Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 12; Write-Host ('Backend full health reachable: HTTP {0} ({1})' -f $response.StatusCode, $healthUrl); exit 0 } catch { Write-Host ('Warning: backend API is not reachable at {0}. Start run_backend.bat first, or verify AMS_BACKEND_PORT. Last ping error: {1}; full health error: {2}' -f $pingUrl, $lastError, $_.Exception.Message); exit 0 }"
 
 echo Starting AMS Ticket Intelligence frontend at http://127.0.0.1:5173
 npm.cmd run dev -- --host 127.0.0.1 --port 5173
