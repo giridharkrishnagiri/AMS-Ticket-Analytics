@@ -908,6 +908,116 @@ def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> N
         cleanup_client(db, client_id)
 
 
+def test_assignment_group_volumetrics_splits_distinct_reference_combinations() -> None:
+    db, client_id, project_id, batch_id, _, _ = create_dashboard_project()
+    try:
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-SPLIT-A",
+            "INCIDENT",
+            dt("2025-12-03T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2025-12-04T00:00:00"),
+            assignment_group="AG-OOS-SPLIT",
+            functional_track="Track A",
+            ams_owner="Owner A",
+            support_lead="Lead A",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-SPLIT-B",
+            "INCIDENT",
+            dt("2025-12-05T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2025-12-06T00:00:00"),
+            assignment_group="AG-OOS-SPLIT",
+            functional_track="Track B",
+            ams_owner="Owner B",
+            support_lead="Lead B",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "SCT-SPLIT-B",
+            "SERVICE_CATALOG_TASK",
+            dt("2025-12-07T00:00:00"),
+            state="Closed Complete",
+            closed_at=dt("2025-12-08T00:00:00"),
+            assignment_group="AG-OOS-SPLIT",
+            functional_track="Track B",
+            ams_owner="Owner B",
+            support_lead="Lead B",
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/assignment-group-volumetrics",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "out_of_scope",
+                    "functional_track": "all",
+                    "from_month": "2025-12",
+                    "to_month": "2026-05",
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        incident_rows = [
+            row
+            for row in payload["tables"]["incidents"]["rows"]
+            if row["assignment_group"] == "AG-OOS-SPLIT"
+        ]
+        assert {
+            (row["functional_track"], row["ams_owner"], row["support_lead"]): row["totals"]
+            for row in incident_rows
+        } == {
+            ("Track A", "Owner A", "Lead A"): {
+                "created": 1,
+                "resolved": 1,
+                "cancelled": 0,
+            },
+            ("Track B", "Owner B", "Lead B"): {
+                "created": 1,
+                "resolved": 1,
+                "cancelled": 0,
+            },
+        }
+        overall_rows = [
+            row
+            for row in payload["tables"]["overall"]["rows"]
+            if row["assignment_group"] == "AG-OOS-SPLIT"
+        ]
+        assert {
+            (row["functional_track"], row["ams_owner"], row["support_lead"]): row["totals"]
+            for row in overall_rows
+        } == {
+            ("Track A", "Owner A", "Lead A"): {
+                "created": 1,
+                "resolved": 1,
+                "cancelled": 0,
+            },
+            ("Track B", "Owner B", "Lead B"): {
+                "created": 2,
+                "resolved": 2,
+                "cancelled": 0,
+            },
+        }
+        assert "Multiple" not in json.dumps(payload["tables"]["incidents"]["rows"])
+        assert "Multiple" not in json.dumps(payload["tables"]["overall"]["rows"])
+        serialized = json.dumps(payload)
+        assert "cmdb_payload" not in serialized
+        assert "normalized_payload" not in serialized
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_assignment_group_volumetrics_support_lead_uses_master_reference_fallback() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:

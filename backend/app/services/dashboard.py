@@ -2510,7 +2510,7 @@ def blank_month_metrics(months: list[date]) -> dict[str, dict[str, int]]:
 
 
 def add_assignment_group_volumetrics_event(
-    store: dict[tuple[str, bool, str], dict[str, Any]],
+    store: dict[tuple[str, bool, str, str, str, str], dict[str, Any]],
     row: dict[str, Any],
     months: list[date],
     event_name: str,
@@ -2519,6 +2519,9 @@ def add_assignment_group_volumetrics_event(
         row["ticket_category"],
         row["basis_security"],
         row["assignment_group_key"],
+        row["functional_track"],
+        row["ams_owner"],
+        row["support_lead"],
     )
     entry = store.setdefault(
         key,
@@ -2526,6 +2529,9 @@ def add_assignment_group_volumetrics_event(
             "assignment_group": row["assignment_group"],
             "assignment_group_values": set(),
             "assignment_group_key": row["assignment_group_key"],
+            "functional_track": row["functional_track"],
+            "ams_owner": row["ams_owner"],
+            "support_lead": row["support_lead"],
             "scopes": set(),
             "functional_track_values": set(),
             "ams_owner_values": set(),
@@ -2541,6 +2547,14 @@ def add_assignment_group_volumetrics_event(
     entry["support_lead_values"].add(row["support_lead"])
     if row["month_key"] in entry["months"]:
         entry["months"][row["month_key"]][event_name] += int_count(row[event_name])
+
+
+def assignment_group_volumetrics_reference_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("functional_track") or ""),
+        str(row.get("ams_owner") or ""),
+        str(row.get("support_lead") or ""),
+    )
 
 
 def merge_assignment_group_volumetrics_rows(
@@ -2660,7 +2674,7 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
     reference_map = inventory_assignment_group_reference_map(db, request.project_id)
     master_reference_status = assignment_group_master_reference_status(db, request.project_id)
     master_manager_map = active_assignment_group_master_manager_map(db, request.project_id)
-    store: dict[tuple[str, bool, str], dict[str, Any]] = {}
+    store: dict[tuple[str, bool, str, str, str, str], dict[str, Any]] = {}
     for row in assignment_group_volumetrics_event_rows(
         db,
         source,
@@ -2702,15 +2716,18 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
     basis_sc_task_rows = [
         row for key, row in store.items() if key[0] == "sc_tasks" and key[1]
     ]
-    overall_by_assignment: dict[tuple[bool, str], dict[str, Any]] = {}
+    overall_by_assignment: dict[tuple[bool, str, str, str, str], dict[str, Any]] = {}
     for row in incident_rows + sc_task_rows:
-        key = (False, row["assignment_group_key"])
+        key = (False, row["assignment_group_key"], *assignment_group_volumetrics_reference_key(row))
         overall_row = overall_by_assignment.setdefault(
             key,
             {
                 "assignment_group": row["assignment_group"],
                 "assignment_group_values": set(),
                 "assignment_group_key": row["assignment_group_key"],
+                "functional_track": row["functional_track"],
+                "ams_owner": row["ams_owner"],
+                "support_lead": row["support_lead"],
                 "scopes": set(),
                 "functional_track_values": set(),
                 "ams_owner_values": set(),
@@ -2729,15 +2746,18 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
             for metric in ("created", "resolved", "cancelled"):
                 overall_row["months"][current_key][metric] += row["months"][current_key][metric]
 
-    basis_overall_by_assignment: dict[tuple[bool, str], dict[str, Any]] = {}
+    basis_overall_by_assignment: dict[tuple[bool, str, str, str, str], dict[str, Any]] = {}
     for row in basis_incident_rows + basis_sc_task_rows:
-        key = (True, row["assignment_group_key"])
+        key = (True, row["assignment_group_key"], *assignment_group_volumetrics_reference_key(row))
         overall_row = basis_overall_by_assignment.setdefault(
             key,
             {
                 "assignment_group": row["assignment_group"],
                 "assignment_group_values": set(),
                 "assignment_group_key": row["assignment_group_key"],
+                "functional_track": row["functional_track"],
+                "ams_owner": row["ams_owner"],
+                "support_lead": row["support_lead"],
                 "scopes": set(),
                 "functional_track_values": set(),
                 "ams_owner_values": set(),
