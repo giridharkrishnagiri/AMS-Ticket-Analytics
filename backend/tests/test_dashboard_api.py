@@ -4936,6 +4936,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function ensureTableExportActions" in document
         assert "function existingTableActionContainer" in document
         assert "table-export-actions" in document
+        assert "assignment-volumetrics-panel" in document
+        assert "assignment-volumetrics-export-actions" in document
         assert "offline-export-table-${generatedOfflineTableExportId}" in document
         assert 'data-copy-table="offline-app-assignment-mapping"' in document
         assert 'data-copy-table="offline-app-assignment-basis-security"' in document
@@ -4944,6 +4946,10 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert 'data-copy-table="${tableId}"' in document
         assert 'data-download-table-csv="${tableId}"' in document
         assert 'data-download-filename="${csvFilename}"' in document
+        assert (
+            "validation-actions table-export-actions assignment-volumetrics-export-actions"
+            in document
+        )
         assert "offline-assignment-vol-${tableKey}" in document
         assert (
             'assignmentVolumetricsTable(payload.tables?.incidents, payload.months || [], '
