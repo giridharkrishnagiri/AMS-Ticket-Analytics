@@ -1726,6 +1726,8 @@ h2 {
   display: grid;
   gap: 12px;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .validation-controls {
@@ -1814,21 +1816,27 @@ h2 {
   max-height: 520px;
 }
 
-.assignment-mapping-table-card {
+.validation-table-card.assignment-mapping-table-card {
   width: 100%;
-  max-width: 100%;
+  inline-size: 100%;
+  max-width: min(100%, max(320px, calc(100vw - 360px)));
   min-width: 0;
+  overflow: hidden;
+  contain: inline-size;
 }
 
-.assignment-mapping-table-scroll {
+.validation-table-scroll.assignment-mapping-table-scroll {
+  display: block;
   width: 100%;
+  inline-size: 100%;
   max-width: 100%;
   min-width: 0;
   max-height: 520px;
-  overflow-x: auto;
+  overflow-x: scroll;
   overflow-y: auto;
   scrollbar-gutter: stable both-edges;
   overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .assignment-mapping-table-scroll::-webkit-scrollbar {
@@ -1846,16 +1854,20 @@ h2 {
   background: #f1f5f9;
 }
 
-.assignment-mapping-table {
-  width: auto;
-  min-width: max-content;
+.applications-table.assignment-mapping-table {
+  width: max-content;
+  min-width: 100%;
   max-width: none;
   table-layout: auto;
 }
 
 .assignment-mapping-subsection-toolbar {
+  display: flex;
   align-items: center;
+  justify-content: flex-start;
   margin-bottom: 10px;
+  max-width: 100%;
+  overflow: visible;
 }
 
 .assignment-mapping-table-toolbar {
@@ -1915,6 +1927,11 @@ h2 {
 }
 
 .validation-subsection {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   margin-top: 1.25rem;
   padding-top: 1rem;
   border-top: 1px solid #cbd5e1;
@@ -2796,6 +2813,10 @@ h2 {
   .applications-filter-pane {
     position: static;
     max-height: none;
+  }
+
+  .validation-table-card.assignment-mapping-table-card {
+    max-width: 100%;
   }
 
   .kpi-grid {
