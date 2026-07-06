@@ -554,6 +554,23 @@ def baseline_rows_for_filter(
     dashboard_area: str,
     filter_key: str,
 ) -> list[dict[str, Any]]:
+    if dashboard_area == "applications" and filter_key == "application_scope":
+        rows = {
+            row["scope"]: int(row["count"] or 0)
+            for row in db.execute(
+                select(DashboardFilterFact.scope, func.count(DashboardFilterFact.id).label("count"))
+                .where(
+                    DashboardFilterFact.project_id == project_id,
+                    DashboardFilterFact.dashboard_area == dashboard_area,
+                )
+                .group_by(DashboardFilterFact.scope),
+            ).mappings()
+            if row["scope"] is not None
+        }
+        return [
+            {"value": "in_scope", "count": rows.get("in_scope", 0)},
+            {"value": "out_of_scope", "count": rows.get("out_of_scope", 0)},
+        ]
     if dashboard_area == "volumetrics" and filter_key == "scope":
         rows = [
             {"value": row["scope"], "count": int(row["count"] or 0)}

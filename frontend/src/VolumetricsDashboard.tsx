@@ -90,6 +90,7 @@ import type {
 } from "./api/dashboard";
 import CommentaryEditor from "./components/CommentaryEditor";
 import ExcelMultiSelectFilter from "./components/ExcelMultiSelectFilter";
+import TableExportActions from "./components/TableExportActions";
 import type { ExcelFilterOption } from "./components/ExcelMultiSelectFilter";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
@@ -3053,16 +3054,28 @@ function ScTaskCatalogPie({
   period: DashboardVolumetricsScTaskCatalogItemPeriod;
 }) {
   const chartTitle = `${period.period_label} Catalog Item Proportion`;
-  const { chartRef, plotWidth } = useChartFrame(chartTitle);
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(chartTitle);
   const hasRows = period.pie_rows.length > 0;
   const chartWidth = Math.max(320, plotWidth - 8);
   const outerRadius = Math.min(76, Math.max(58, Math.floor(chartWidth * 0.17)));
   return (
     <section className="sc-task-catalog-card">
-      <h4>{period.period_label} Catalog Item Proportion</h4>
-      <p className="muted-text">
+      <div className="applications-chart-header">
+        <div>
+          <h4>{period.period_label} Catalog Item Proportion</h4>
+          <p className="muted-text">
         {period.from_date} to {period.to_date} · {formatNumber(period.total_sc_tasks)} SC Tasks
-      </p>
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          disabled={!hasRows}
+          type="button"
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
       {hasRows ? (
         <div className="sc-task-catalog-pie-stage" ref={chartRef}>
           <PieChart
@@ -3112,6 +3125,7 @@ function ScTaskCatalogPie({
           {period.warnings[0] ?? "No data available for this period."}
         </p>
       )}
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
     </section>
   );
 }
@@ -3121,30 +3135,39 @@ function ScTaskCatalogTable({
 }: {
   period: DashboardVolumetricsScTaskCatalogItemPeriod;
 }) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
   return (
     <section className="sc-task-catalog-card sc-task-catalog-table-card">
       <h4>{period.period_label} Top Catalog Items</h4>
       {period.top_10_rows.length ? (
-        <div className="compact-table-wrapper">
-          <table className="compact-data-table">
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Catalog Item</th>
-                <th>Average Monthly Volume</th>
-              </tr>
-            </thead>
-            <tbody>
-              {period.top_10_rows.map((row) => (
-                <tr key={`${period.period_key}-${row.rank}-${row.catalog_item_name}`}>
-                  <td>{row.rank}</td>
-                  <td>{row.catalog_item_name}</td>
-                  <td>{row.avg_monthly_with_pct_label}</td>
+        <>
+          <TableExportActions
+            filename={`sc_task_catalog_items_${period.period_key}.csv`}
+            label={`${period.period_label} SC Task catalog items`}
+            tableRef={tableRef}
+          />
+          <div className="compact-table-wrapper">
+            <table className="compact-data-table" ref={tableRef}>
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Catalog Item</th>
+                  <th>Average Monthly Volume</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {period.top_10_rows.map((row) => (
+                  <tr key={`${period.period_key}-${row.rank}-${row.catalog_item_name}`}>
+                    <td>{row.rank}</td>
+                    <td>{row.catalog_item_name}</td>
+                    <td>{row.avg_monthly_with_pct_label}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
         <p className="muted-text chart-state-text">
           {period.warnings[0] ?? "No data available for this period."}
@@ -4185,33 +4208,42 @@ function ReassignmentHopsTable({
 }: {
   points: DashboardVolumetricsReassignmentHopsPoint[];
 }) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
   return (
-    <div className="applications-table-frame volumetrics-data-table-frame">
-      <table className="applications-table volumetrics-data-table">
-        <thead>
-          <tr>
-            <th>Month</th>
-            <th>Total Created Tickets</th>
-            <th>Tickets with 2+ Reassignments</th>
-            <th>Total Reassignment Hops for 2+ Reassignment Tickets</th>
-            <th>% Tickets with 2+ Reassignments</th>
-            <th>% Reassignment Hops to Created Volume</th>
-          </tr>
-        </thead>
-        <tbody>
-          {points.map((point) => (
-            <tr key={point.period_key}>
-              <td>{point.period_label}</td>
-              <td>{formatNumber(point.total_created_tickets)}</td>
-              <td>{formatNumber(point.tickets_with_2_plus_reassignments)}</td>
-              <td>{formatNumber(point.total_reassignment_hops_ge_2)}</td>
-              <td>{formatPercent(point.pct_tickets_with_2_plus_reassignments)}</td>
-              <td>{formatPercent(point.reassignment_hops_pct_of_created)}</td>
+    <>
+      <TableExportActions
+        filename="reassignment_hops_trend.csv"
+        label="Reassignment / hops trend"
+        tableRef={tableRef}
+      />
+      <div className="applications-table-frame volumetrics-data-table-frame">
+        <table className="applications-table volumetrics-data-table" ref={tableRef}>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Total Created Tickets</th>
+              <th>Tickets with 2+ Reassignments</th>
+              <th>Total Reassignment Hops for 2+ Reassignment Tickets</th>
+              <th>% Tickets with 2+ Reassignments</th>
+              <th>% Reassignment Hops to Created Volume</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {points.map((point) => (
+              <tr key={point.period_key}>
+                <td>{point.period_label}</td>
+                <td>{formatNumber(point.total_created_tickets)}</td>
+                <td>{formatNumber(point.tickets_with_2_plus_reassignments)}</td>
+                <td>{formatNumber(point.total_reassignment_hops_ge_2)}</td>
+                <td>{formatPercent(point.pct_tickets_with_2_plus_reassignments)}</td>
+                <td>{formatPercent(point.reassignment_hops_pct_of_created)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -4406,31 +4438,40 @@ function ProblemManagementTable({
 }: {
   points: DashboardVolumetricsProblemManagementPoint[];
 }) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
   return (
-    <div className="applications-table-frame volumetrics-data-table-frame">
-      <table className="applications-table volumetrics-data-table">
-        <thead>
-          <tr>
-            <th>Month</th>
-            <th>Problem Tickets Created</th>
-            <th>Problem Tickets Closed</th>
-            <th>Linked Incidents Resolved Permanently</th>
-            <th>Avg Linked Incidents per Closed Problem</th>
-          </tr>
-        </thead>
-        <tbody>
-          {points.map((point) => (
-            <tr key={point.period_key}>
-              <td>{point.period_label}</td>
-              <td>{formatNumber(point.problem_tickets_created)}</td>
-              <td>{formatNumber(point.problem_tickets_closed)}</td>
-              <td>{formatNumber(point.linked_incidents_resolved_permanently)}</td>
-              <td>{formatNumber(point.avg_linked_incidents_per_closed_problem, 2)}</td>
+    <>
+      <TableExportActions
+        filename="problem_management_trend.csv"
+        label="Problem Management trend"
+        tableRef={tableRef}
+      />
+      <div className="applications-table-frame volumetrics-data-table-frame">
+        <table className="applications-table volumetrics-data-table" ref={tableRef}>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Problem Tickets Created</th>
+              <th>Problem Tickets Closed</th>
+              <th>Linked Incidents Resolved Permanently</th>
+              <th>Avg Linked Incidents per Closed Problem</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {points.map((point) => (
+              <tr key={point.period_key}>
+                <td>{point.period_label}</td>
+                <td>{formatNumber(point.problem_tickets_created)}</td>
+                <td>{formatNumber(point.problem_tickets_closed)}</td>
+                <td>{formatNumber(point.linked_incidents_resolved_permanently)}</td>
+                <td>{formatNumber(point.avg_linked_incidents_per_closed_problem, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -5509,31 +5550,40 @@ function priorityCellText(
 }
 
 function PriorityDistributionTable({ data }: { data: DashboardVolumetricsPriorityDistribution }) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
   return (
-    <div className="applications-table-frame volumetrics-data-table-frame">
-      <table className="applications-table volumetrics-data-table">
-        <thead>
-          <tr>
-            <th>Period</th>
-            {data.priorities.map((priority) => (
-              <th key={priority}>{priority}</th>
-            ))}
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.points.map((point) => (
-            <tr key={point.period_key}>
-              <td>{point.period_label}</td>
+    <>
+      <TableExportActions
+        filename="priority_distribution.csv"
+        label="Priority-wise ticket distribution"
+        tableRef={tableRef}
+      />
+      <div className="applications-table-frame volumetrics-data-table-frame">
+        <table className="applications-table volumetrics-data-table" ref={tableRef}>
+          <thead>
+            <tr>
+              <th>Period</th>
               {data.priorities.map((priority) => (
-                <td key={priority}>{priorityCellText(point, priority)}</td>
+                <th key={priority}>{priority}</th>
               ))}
-              <td>{formatNumber(point.total)}</td>
+              <th>Total</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {data.points.map((point) => (
+              <tr key={point.period_key}>
+                <td>{point.period_label}</td>
+                {data.priorities.map((priority) => (
+                  <td key={priority}>{priorityCellText(point, priority)}</td>
+                ))}
+                <td>{formatNumber(point.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -5717,31 +5767,37 @@ function SlaTrendTable({
   data: DashboardVolumetricsSlaTrends["response"];
   metricLabel: string;
 }) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const filename = `${metricLabel.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_trend.csv`;
+
   return (
-    <div className="applications-table-frame volumetrics-data-table-frame">
-      <table className="applications-table volumetrics-data-table">
-        <thead>
-          <tr>
-            <th>Duration</th>
-            <th>Total closed tickets</th>
-            <th>{metricLabel} captured</th>
-            <th>{metricLabel} adhered</th>
-            <th>{metricLabel} adherence %</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row) => (
-            <tr key={row.period_key}>
-              <td>{row.period_label}</td>
-              <td>{formatNumber(row.total_closed_ticket_count)}</td>
-              <td>{formatNumber(row.sla_captured_count)}</td>
-              <td>{formatNumber(row.sla_adhered_count)}</td>
-              <td>{formatPercent(row.sla_adherence_pct)}</td>
+    <>
+      <TableExportActions filename={filename} label={`${metricLabel} trend`} tableRef={tableRef} />
+      <div className="applications-table-frame volumetrics-data-table-frame">
+        <table className="applications-table volumetrics-data-table" ref={tableRef}>
+          <thead>
+            <tr>
+              <th>Duration</th>
+              <th>Total closed tickets</th>
+              <th>{metricLabel} captured</th>
+              <th>{metricLabel} adhered</th>
+              <th>{metricLabel} adherence %</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {data.map((row) => (
+              <tr key={row.period_key}>
+                <td>{row.period_label}</td>
+                <td>{formatNumber(row.total_closed_ticket_count)}</td>
+                <td>{formatNumber(row.sla_captured_count)}</td>
+                <td>{formatNumber(row.sla_adhered_count)}</td>
+                <td>{formatPercent(row.sla_adherence_pct)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 

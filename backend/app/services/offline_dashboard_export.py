@@ -4290,7 +4290,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const appScopeValues = [
         { value: "in_scope", label: "In Scope" },
         { value: "out_of_scope", label: "Out of Scope" }
-      ].filter((item) => DASHBOARD.applications.rows.some((row) => row.scope_status === item.value));
+      ];
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
       const businessCriticalValues = sortCriticalityValues(uniqueSorted(DASHBOARD.applications.rows, "biz_criticality"));
       const businessCount = rows.filter((row) => ["business", "business application"].includes(String(row.app_type).toLowerCase())).length;

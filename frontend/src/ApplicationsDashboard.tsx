@@ -48,6 +48,7 @@ import type {
 } from "./api/dashboard";
 import CommentaryEditor from "./components/CommentaryEditor";
 import ExcelMultiSelectFilter from "./components/ExcelMultiSelectFilter";
+import TableExportActions from "./components/TableExportActions";
 import type { ExcelFilterOption } from "./components/ExcelMultiSelectFilter";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
@@ -163,6 +164,11 @@ const lifecyclePlanLineColors: Record<DashboardApplicationsLifecyclePlan, string
   Maintain: "#1d4ed8",
   Retired: "#581c87",
 };
+
+const applicationScopeOptions: ExcelFilterOption[] = [
+  { value: "in_scope", label: "In Scope", count: 0 },
+  { value: "out_of_scope", label: "Out of Scope", count: 0 },
+];
 
 const emptyLifecyclePlanning: DashboardApplicationsLifecyclePlanning = {
   matrix: {
@@ -392,6 +398,20 @@ function singleFilterOptions(values: Array<{ label: string; value: string; count
     label: value.label,
     count: value.count,
   }));
+}
+
+function applicationScopeFilterOptions(
+  values: Array<{ label: string; value: string; count: number }>
+): ExcelFilterOption[] {
+  const valuesByScope = new Map(values.map((value) => [value.value, value]));
+  return applicationScopeOptions.map((option) => {
+    const value = valuesByScope.get(option.value);
+    return {
+      ...option,
+      label: value?.label ?? option.label,
+      count: value?.count ?? option.count,
+    };
+  });
 }
 
 function splitCombinedFilterValue(label: string): { left_value: string; right_value: string } {
@@ -871,10 +891,11 @@ function ApplicationsDashboard({
     LoadState<DashboardApplicationsAssignmentGroupMapping>
   >(createLoadState(emptyAssignmentGroupMapping));
   const [loadedProjectId, setLoadedProjectId] = useState("");
+  const applicationListTableRef = useRef<HTMLTableElement | null>(null);
 
   const filterOptions = useMemo(
     () => ({
-      application_scope: singleFilterOptions(filterValues.data.application_scope),
+      application_scope: applicationScopeFilterOptions(filterValues.data.application_scope),
       functional_track_ams_owner: combinedFilterOptions(
         filterValues.data.functional_track_ams_owner
       ),
@@ -1336,12 +1357,14 @@ function ApplicationsDashboard({
         ) : null}
 
         <div className="applications-filter-stack">
-          <ExcelMultiSelectFilter
-            label="Application Scope"
-            options={filterOptions.application_scope}
-            selectedValues={filters.application_scope}
-            onChange={(values) => updateFilter("application_scope", values)}
-          />
+          {activeSubTab !== "assignment_group_mapping" ? (
+            <ExcelMultiSelectFilter
+              label="Application Scope"
+              options={filterOptions.application_scope}
+              selectedValues={filters.application_scope}
+              onChange={(values) => updateFilter("application_scope", values)}
+            />
+          ) : null}
           <ExcelMultiSelectFilter
             label="Functional Track - AMS Owner"
             options={filterOptions.functional_track_ams_owner}
@@ -1492,8 +1515,14 @@ function ApplicationsDashboard({
           {applicationList.status === "error" ? (
             <p className="error-text">{applicationList.error}</p>
           ) : null}
+          <TableExportActions
+            disabled={applicationList.status === "loading"}
+            filename="applications_list.csv"
+            label="Applications list"
+            tableRef={applicationListTableRef}
+          />
           <div className="applications-table-frame">
-            <table className="applications-table">
+            <table className="applications-table" ref={applicationListTableRef}>
               <thead>
                 <tr>
                   {tableColumns.map((column) => (
@@ -2339,6 +2368,7 @@ function LifecyclePlanningMatrixTable({
 }) {
   const matrix = data.matrix;
   const hasRows = matrix.in_use_application_count > 0;
+  const tableRef = useRef<HTMLTableElement | null>(null);
 
   return (
     <section className="panel lifecycle-matrix-panel" aria-label="Lifecycle planning matrix">
@@ -2360,8 +2390,14 @@ function LifecyclePlanningMatrixTable({
         </p>
       ) : null}
       {status !== "loading" && status !== "error" && hasRows ? (
-        <div className="applications-pivot-table-frame">
-          <table className="applications-pivot-table lifecycle-matrix-table">
+        <>
+          <TableExportActions
+            filename="application_lifecycle_planning_matrix.csv"
+            label="Application Lifecycle Planning Matrix"
+            tableRef={tableRef}
+          />
+          <div className="applications-pivot-table-frame">
+          <table className="applications-pivot-table lifecycle-matrix-table" ref={tableRef}>
             <thead>
               <tr>
                 <th scope="col">Lifecycle Plan</th>
@@ -2389,6 +2425,7 @@ function LifecyclePlanningMatrixTable({
             Matrix is based on {formatNumber(matrix.in_use_application_count)} In Use applications.
           </p>
         </div>
+        </>
       ) : null}
     </section>
   );
@@ -2501,6 +2538,7 @@ function LifecyclePlanDetailTable({
   status: LoadStatus;
 }) {
   const rows = data.selected_plan.applications;
+  const tableRef = useRef<HTMLTableElement | null>(null);
 
   return (
     <section className="panel lifecycle-detail-panel" aria-label={`${selectedPlan} application details`}>
@@ -2521,8 +2559,14 @@ function LifecyclePlanDetailTable({
         </p>
       ) : null}
       {status !== "loading" && rows.length > 0 ? (
-        <div className="applications-table-frame">
-          <table className="applications-table lifecycle-detail-table">
+        <>
+          <TableExportActions
+            filename={`${selectedPlan.toLowerCase()}_lifecycle_plan_details.csv`}
+            label={`${selectedPlan} lifecycle plan details`}
+            tableRef={tableRef}
+          />
+          <div className="applications-table-frame">
+          <table className="applications-table lifecycle-detail-table" ref={tableRef}>
             <thead>
               <tr>
                 {lifecycleDetailColumns.map((column) => (
@@ -2545,6 +2589,7 @@ function LifecyclePlanDetailTable({
             </tbody>
           </table>
         </div>
+        </>
       ) : null}
     </section>
   );
@@ -2564,6 +2609,7 @@ function ApplicationsCriticalityHostingPivotTable({
   const title = "Application Criticality by Hosting Environment";
   const hasRows = data.grand_total > 0;
   const rowsByCriticality = new Map(data.values.map((row) => [row.business_criticality, row]));
+  const tableRef = useRef<HTMLTableElement | null>(null);
 
   return (
     <section className="chart-card applications-chart-card applications-wide-chart" aria-label={title}>
@@ -2581,8 +2627,14 @@ function ApplicationsCriticalityHostingPivotTable({
         <p className="muted-text chart-state-text">No in-use applications match the selected filters.</p>
       ) : null}
       {status !== "loading" && status !== "error" && hasRows ? (
-        <div className="applications-pivot-table-frame">
-          <table className="applications-pivot-table">
+        <>
+          <TableExportActions
+            filename="application_criticality_by_hosting_environment.csv"
+            label={title}
+            tableRef={tableRef}
+          />
+          <div className="applications-pivot-table-frame">
+          <table className="applications-pivot-table" ref={tableRef}>
             <thead>
               <tr>
                 <th scope="col">Business Criticality</th>
@@ -2630,6 +2682,7 @@ function ApplicationsCriticalityHostingPivotTable({
             </tbody>
           </table>
         </div>
+        </>
       ) : null}
       {commentary}
     </section>

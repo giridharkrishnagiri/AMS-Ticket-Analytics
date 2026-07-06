@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Bar,
@@ -49,6 +49,7 @@ import type {
 } from "./api/dashboard";
 import ApplicationsDashboard from "./ApplicationsDashboard";
 import CommentaryEditor from "./components/CommentaryEditor";
+import TableExportActions from "./components/TableExportActions";
 import CustomerSelector from "./CustomerSelector";
 import VolumetricsDashboard from "./VolumetricsDashboard";
 import type { ProjectOption } from "./api/projects";
@@ -384,38 +385,47 @@ function SlaNameDistributionTable({
   title: string;
   rows: IncidentSlaNameBreakdown["response_sla_names"];
 }) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
   return (
     <div className="sla-name-table">
       <h4>{title}</h4>
       {rows.length === 0 ? (
         <p className="muted-text">No SLA names returned for the selected filters.</p>
       ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>SLA name</th>
-                <th>Tickets</th>
-                <th>Met</th>
-                <th>Breached</th>
-                <th>Adherence</th>
-                <th>Avg hours</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.sla_name}>
-                  <td>{row.sla_name}</td>
-                  <td>{formatNumber(row.ticket_count)}</td>
-                  <td>{formatNumber(row.met_count)}</td>
-                  <td>{formatNumber(row.breached_count)}</td>
-                  <td>{formatPercent(row.adherence_pct)}</td>
-                  <td>{formatNumber(row.avg_business_elapsed_hours, 2)}</td>
+        <>
+          <TableExportActions
+            filename={`${title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.csv`}
+            label={title}
+            tableRef={tableRef}
+          />
+          <div className="table-wrap">
+            <table ref={tableRef}>
+              <thead>
+                <tr>
+                  <th>SLA name</th>
+                  <th>Tickets</th>
+                  <th>Met</th>
+                  <th>Breached</th>
+                  <th>Adherence</th>
+                  <th>Avg hours</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.sla_name}>
+                    <td>{row.sla_name}</td>
+                    <td>{formatNumber(row.ticket_count)}</td>
+                    <td>{formatNumber(row.met_count)}</td>
+                    <td>{formatNumber(row.breached_count)}</td>
+                    <td>{formatPercent(row.adherence_pct)}</td>
+                    <td>{formatNumber(row.avg_business_elapsed_hours, 2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );

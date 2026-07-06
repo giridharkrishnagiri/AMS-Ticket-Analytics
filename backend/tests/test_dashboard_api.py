@@ -1530,6 +1530,13 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
         assert applications_catalog_response.status_code == 200
         applications_catalog = applications_catalog_response.json()
         assert applications_catalog["status"] == "ready"
+        assert [
+            (row["value"], row["label"], row["baseline_count"])
+            for row in applications_catalog["filters"]["application_scope"]
+        ] == [
+            ("in_scope", "In Scope", 2),
+            ("out_of_scope", "Out of Scope", 0),
+        ]
         assert [row["value"] for row in applications_catalog["filters"]["business_critical"]] == [
             "Critical",
             "Low",
@@ -4936,6 +4943,15 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function ensureTableExportActions" in document
         assert "function existingTableActionContainer" in document
         assert "table-export-actions" in document
+        assert (
+            'const appScopeValues = [\n        { value: "in_scope", label: "In Scope" },'
+            '\n        { value: "out_of_scope", label: "Out of Scope" }\n      ];'
+            in document
+        )
+        assert (
+            "DASHBOARD.applications.rows.some((row) => row.scope_status === item.value)"
+            not in document
+        )
         assert "assignment-volumetrics-panel" in document
         assert "assignment-volumetrics-export-actions" in document
         assert "offline-export-table-${generatedOfflineTableExportId}" in document
