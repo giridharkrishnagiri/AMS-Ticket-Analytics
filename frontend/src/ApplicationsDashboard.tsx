@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import {
   Bar,
   BarChart,
@@ -1823,6 +1823,8 @@ function AssignmentGroupMappingPanel({
   status: LoadStatus;
 }) {
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const mappingTableRef = useRef<HTMLTableElement | null>(null);
+  const basisSecurityTableRef = useRef<HTMLTableElement | null>(null);
   const columns = assignmentMappingColumns.filter(
     (column) =>
       (!column.ticketSourceOnly || selectedSource === "tickets") &&
@@ -1931,14 +1933,23 @@ function AssignmentGroupMappingPanel({
 
   function renderMappingTable(
     sourceRows: DashboardApplicationsAssignmentGroupMappingRow[],
-    emptyMessage: string
+    emptyMessage: string,
+    tableRef: Ref<HTMLTableElement>,
+    ariaLabel: string
   ) {
     return (
-      <div className="applications-table-frame validation-table-frame">
+      <div className="validation-table-card assignment-mapping-table-card">
+        <div
+          aria-label={ariaLabel}
+          className="validation-table-scroll assignment-mapping-table-scroll"
+          role="region"
+          tabIndex={0}
+        >
         <table
-          className={`applications-table validation-table${
+          className={`applications-table validation-table assignment-mapping-table${
             selectedSource === "tickets" ? " assignment-mapping-ticket-table" : ""
           }`}
+          ref={tableRef}
         >
           <thead>
             <tr>
@@ -2010,6 +2021,7 @@ function AssignmentGroupMappingPanel({
             )}
           </tbody>
         </table>
+        </div>
       </div>
     );
   }
@@ -2128,7 +2140,7 @@ function AssignmentGroupMappingPanel({
           />
           {totalTicketSummary}
         </div>
-        <div className="validation-table-toolbar">
+        <div className="validation-table-toolbar assignment-mapping-table-toolbar">
           <label className="validation-search">
             <span>Search</span>
             <input
@@ -2159,11 +2171,18 @@ function AssignmentGroupMappingPanel({
         {status === "error" ? <p className="error-text">{error}</p> : null}
         {data.warnings.length > 0 ? <p className="error-text">{data.warnings[0]}</p> : null}
         {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
-        <div className="applications-table-frame validation-table-frame">
+        <div className="validation-table-card assignment-mapping-table-card">
+          <div
+            aria-label="Scrollable Assignment Group Mapping table"
+            className="validation-table-scroll assignment-mapping-table-scroll"
+            role="region"
+            tabIndex={0}
+          >
           <table
-            className={`applications-table validation-table${
+            className={`applications-table validation-table assignment-mapping-table${
               selectedSource === "tickets" ? " assignment-mapping-ticket-table" : ""
             }`}
+            ref={mappingTableRef}
           >
             <thead>
               <tr>
@@ -2232,6 +2251,7 @@ function AssignmentGroupMappingPanel({
               )}
             </tbody>
           </table>
+          </div>
         </div>
         {basisSecurityRows.length > 0 || data.basis_security_rows.length > 0 ? (
           <section className="validation-subsection">
@@ -2243,6 +2263,9 @@ function AssignmentGroupMappingPanel({
                   Confirmed out-of-scope assignment groups containing "Basis" or "Security".
                 </p>
               </div>
+            </div>
+            <div className="validation-table-toolbar assignment-mapping-subsection-toolbar">
+              <span className="validation-control-label">Table Actions</span>
               <div className="validation-actions">
                 <button
                   className="secondary-button"
@@ -2267,7 +2290,9 @@ function AssignmentGroupMappingPanel({
             </div>
             {renderMappingTable(
               basisSecurityRows,
-              "No BASIS or SECURITY assignment groups found for the selected scope and filters."
+              "No BASIS or SECURITY assignment groups found for the selected scope and filters.",
+              basisSecurityTableRef,
+              "Scrollable BASIS and SECURITY Assignment Group Mapping table"
             )}
           </section>
         ) : null}

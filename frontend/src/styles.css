@@ -1814,6 +1814,59 @@ h2 {
   max-height: 520px;
 }
 
+.assignment-mapping-table-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.assignment-mapping-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  max-height: 520px;
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior-x: contain;
+}
+
+.assignment-mapping-table-scroll::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+.assignment-mapping-table-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid #ffffff;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.assignment-mapping-table-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.assignment-mapping-table {
+  width: auto;
+  min-width: max-content;
+  max-width: none;
+  table-layout: auto;
+}
+
+.assignment-mapping-subsection-toolbar {
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.assignment-mapping-table-toolbar {
+  justify-content: flex-start;
+}
+
+.assignment-mapping-table-toolbar .validation-actions,
+.assignment-mapping-subsection-toolbar .validation-actions {
+  justify-content: flex-start;
+}
+
 .validation-table-card {
   width: 100%;
   max-width: 100%;
