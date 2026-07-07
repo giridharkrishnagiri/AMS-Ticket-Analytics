@@ -7,13 +7,17 @@ from fastapi.routing import APIRoute
 
 from app.api.router import api_routers
 from app.core.config import get_settings
+from app.db.session import engine
 from app.services.storage import storage_service
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     storage_service.ensure_storage_dirs()
-    yield
+    try:
+        yield
+    finally:
+        engine.dispose()
 
 
 settings = get_settings()

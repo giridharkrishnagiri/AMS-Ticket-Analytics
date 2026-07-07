@@ -5,6 +5,7 @@ cd /d "%~dp0backend"
 
 if "%AMS_BACKEND_PORT%"=="" set "AMS_BACKEND_PORT=8001"
 if "%AMS_BACKEND_RELOAD%"=="" set "AMS_BACKEND_RELOAD=0"
+if "%AMS_BACKEND_SHUTDOWN_TIMEOUT%"=="" set "AMS_BACKEND_SHUTDOWN_TIMEOUT=10"
 
 set UV_CACHE_DIR=%CD%\.uv-cache
 
@@ -30,10 +31,10 @@ if exist ".venv\Scripts\python.exe" (
 
 if /I "%AMS_BACKEND_RELOAD%"=="1" (
     echo Starting AMS Ticket Intelligence backend with reload at http://127.0.0.1:%AMS_BACKEND_PORT%
-    "%BACKEND_PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port %AMS_BACKEND_PORT% --reload
+    "%BACKEND_PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port %AMS_BACKEND_PORT% --reload --timeout-graceful-shutdown %AMS_BACKEND_SHUTDOWN_TIMEOUT%
 ) else (
     echo Starting AMS Ticket Intelligence backend without reload at http://127.0.0.1:%AMS_BACKEND_PORT%
-    "%BACKEND_PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port %AMS_BACKEND_PORT%
+    "%BACKEND_PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port %AMS_BACKEND_PORT% --timeout-graceful-shutdown %AMS_BACKEND_SHUTDOWN_TIMEOUT%
 )
 
 endlocal
