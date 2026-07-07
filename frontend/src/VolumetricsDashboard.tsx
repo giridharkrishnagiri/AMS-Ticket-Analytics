@@ -32,6 +32,7 @@ import {
   getDashboardVolumetricsKpiDurationBuckets,
   getDashboardVolumetricsKpiMttrTrends,
   getDashboardVolumetricsKpiOpenTicketAgingTrend,
+  getDashboardVolumetricsPerformanceTrends,
   getDashboardVolumetricsKpiProblemManagementTrend,
   getDashboardVolumetricsKpiReassignmentHopsTrend,
   getDashboardVolumetricsAssignmentGroupVolumetrics,
@@ -65,6 +66,9 @@ import type {
   DashboardVolumetricsOpenTicketAgingPoint,
   DashboardVolumetricsOpenTicketAgingSet,
   DashboardVolumetricsOpenTicketAgingTrend,
+  DashboardVolumetricsPerformanceDurationBreakdownRow,
+  DashboardVolumetricsPerformanceEngineerRow,
+  DashboardVolumetricsPerformanceTrends,
   DashboardVolumetricsAssignmentGroupMonth,
   DashboardVolumetricsAssignmentGroupMonthMetrics,
   DashboardVolumetricsAssignmentGroupTable,
@@ -122,16 +126,19 @@ type VolumetricsSubTab =
   | "overall_sla"
   | "detailed_volume"
   | "kpi"
+  | "performance"
   | "category"
   | "assignment_group_volumetrics";
 type PriorityDistributionView = "graph" | "table";
 type TopNSelection = 10 | 20;
+type PerformanceLookbackMonths = 1 | 2 | 3;
 
 const subTabCommentaryKeys: Record<VolumetricsSubTab, string> = {
   overall_volume: "overall_volume_trends",
   overall_sla: "overall_sla_trends",
   detailed_volume: "detailed_volume_trends",
   kpi: "kpi_trends",
+  performance: "performance_trends",
   category: "category_wise_trends",
   assignment_group_volumetrics: "assignment_group_volumetrics",
 };
@@ -332,6 +339,22 @@ const emptyOpenTicketAgingTrend: DashboardVolumetricsOpenTicketAgingTrend = {
   incidents: { ...emptyOpenTicketAgingSet, title: "Incidents" },
   sc_tasks: { ...emptyOpenTicketAgingSet, title: "SC Tasks" },
   overall: { ...emptyOpenTicketAgingSet, title: "Overall" },
+  data_notes: [],
+  warnings: [],
+};
+
+const emptyPerformanceTrends: DashboardVolumetricsPerformanceTrends = {
+  performance_period: {
+    from_month: "",
+    to_month: "",
+    months: 3,
+    label: "",
+    working_days: 0,
+  },
+  top_performers: [],
+  bottom_performers: [],
+  all_engineers: [],
+  duration_breakdown: [],
   data_notes: [],
   warnings: [],
 };
@@ -1097,6 +1120,8 @@ function VolumetricsDashboard({
   const [topApplicationsN, setTopApplicationsN] = useState<TopNSelection>(10);
   const [topBatchApplicationsN, setTopBatchApplicationsN] = useState<TopNSelection>(10);
   const [ticketsPerUserN, setTicketsPerUserN] = useState<TopNSelection>(10);
+  const [performanceLookbackMonths, setPerformanceLookbackMonths] =
+    useState<PerformanceLookbackMonths>(3);
   const [filters, setFilters] = useState<DashboardVolumetricsFilters>(emptyFilters);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardVolumetricsFilterValues>>(
     createLoadState(emptyFilterValues)
@@ -1157,6 +1182,9 @@ function VolumetricsDashboard({
   const [openTicketAgingTrend, setOpenTicketAgingTrend] = useState<
     LoadState<DashboardVolumetricsOpenTicketAgingTrend>
   >(createLoadState(emptyOpenTicketAgingTrend));
+  const [performanceTrends, setPerformanceTrends] = useState<
+    LoadState<DashboardVolumetricsPerformanceTrends>
+  >(createLoadState(emptyPerformanceTrends));
   const [reassignmentHopsTrend, setReassignmentHopsTrend] = useState<
     LoadState<DashboardVolumetricsReassignmentHopsTrend>
   >(createLoadState(emptyReassignmentHopsTrend));
@@ -1383,6 +1411,7 @@ function VolumetricsDashboard({
     setKpiMttrTrends(createLoadState(emptyKpiMttrTrends, "loading"));
     setKpiDurationBuckets(createLoadState(emptyDurationBuckets, "loading"));
     setOpenTicketAgingTrend(createLoadState(emptyOpenTicketAgingTrend, "loading"));
+    setPerformanceTrends(createLoadState(emptyPerformanceTrends, "loading"));
     setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend, "loading"));
     setProblemManagementTrend(createLoadState(emptyProblemManagementTrend, "loading"));
 
@@ -1621,6 +1650,22 @@ function VolumetricsDashboard({
         });
       });
 
+    void getDashboardVolumetricsPerformanceTrends(requestBody, performanceLookbackMonths)
+      .then((nextPerformanceTrends) => {
+        setPerformanceTrends({
+          status: "success",
+          data: nextPerformanceTrends,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setPerformanceTrends({
+          status: "error",
+          data: emptyPerformanceTrends,
+          error: errorMessage(error, "Unable to load Performance Trends"),
+        });
+      });
+
     void getDashboardVolumetricsKpiReassignmentHopsTrend(requestBody)
       .then((nextReassignmentHopsTrend) => {
         setReassignmentHopsTrend({
@@ -1656,6 +1701,7 @@ function VolumetricsDashboard({
   }, [
     createdPatternType,
     hourlyDayType,
+    performanceLookbackMonths,
     requestBody,
     ticketsPerUserN,
     topApplicationsN,
@@ -1714,6 +1760,7 @@ function VolumetricsDashboard({
       setTopApplicationsN(10);
       setTopBatchApplicationsN(10);
       setTicketsPerUserN(10);
+      setPerformanceLookbackMonths(3);
       setFilterValues(createLoadState(emptyFilterValues));
       setFilterCatalog(null);
       setFilterCounts(null);
@@ -1735,6 +1782,7 @@ function VolumetricsDashboard({
       setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
       setKpiDurationBuckets(createLoadState(emptyDurationBuckets));
       setOpenTicketAgingTrend(createLoadState(emptyOpenTicketAgingTrend));
+      setPerformanceTrends(createLoadState(emptyPerformanceTrends));
       setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend));
       setProblemManagementTrend(createLoadState(emptyProblemManagementTrend));
       setAssignmentGroupVolumetrics(createLoadState(emptyAssignmentGroupVolumetrics));
@@ -2309,6 +2357,16 @@ function VolumetricsDashboard({
             }
           />
         ) : null}
+        {activeSubTab === "performance" ? (
+          <PerformanceTrendsPanel
+            commentary={volumetricsCommentary("performance", "performance_trends")}
+            data={performanceTrends.data}
+            error={performanceTrends.error}
+            lookbackMonths={performanceLookbackMonths}
+            onLookbackMonthsChange={setPerformanceLookbackMonths}
+            status={performanceTrends.status}
+          />
+        ) : null}
         {activeSubTab === "category" ? (
           <VolumetricsPlaceholder
             title="Category-wise Trends"
@@ -2380,6 +2438,7 @@ const volumetricsSubTabs: Array<{ value: VolumetricsSubTab; label: string }> = [
   { value: "overall_sla", label: "Overall SLA Trends" },
   { value: "detailed_volume", label: "Detailed Volume Trends" },
   { value: "kpi", label: "KPI Trends" },
+  { value: "performance", label: "Performance Trends" },
   { value: "category", label: "Category-wise Trends" },
   { value: "assignment_group_volumetrics", label: "Assignment Group Volumetrics" },
 ];
@@ -3969,6 +4028,380 @@ const mttrPriorityPairs: Array<Array<keyof DashboardVolumetricsKpiMttrPrioritySe
 ];
 
 const durationBucketLabels = ["0-1 day", "1-3 days", "3-10 days", ">10 days"];
+
+const performanceLookbackOptions: Array<{
+  value: PerformanceLookbackMonths;
+  label: string;
+}> = [
+  { value: 1, label: "Most recent 1 complete month" },
+  { value: 2, label: "Most recent 2 complete months" },
+  { value: 3, label: "Most recent 3 complete months" },
+];
+
+function performanceFilenamePart(label: string): string {
+  return (
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "latest_complete_months"
+  );
+}
+
+function PerformanceTrendsPanel({
+  commentary,
+  data,
+  error,
+  lookbackMonths,
+  onLookbackMonthsChange,
+  status,
+}: {
+  commentary?: ReactNode;
+  data: DashboardVolumetricsPerformanceTrends;
+  error: string | null;
+  lookbackMonths: PerformanceLookbackMonths;
+  onLookbackMonthsChange: (value: PerformanceLookbackMonths) => void;
+  status: LoadStatus;
+}) {
+  const periodLabel = data.performance_period.label || "latest complete months";
+  const periodFilename = performanceFilenamePart(periodLabel);
+  const hasRows = data.all_engineers.length > 0;
+
+  return (
+    <section className="panel kpi-trends-section performance-trends-section">
+      <div className="panel-heading">
+        <div>
+          <p className="label">Performance Trends</p>
+          <h3>Support Engineer Productivity</h3>
+          <p className="muted-text">
+            Productivity is based on resolved Incidents and closed SC Tasks by Assigned To.
+          </p>
+        </div>
+      </div>
+
+      <div className="segmented-control volumetrics-pattern-control" aria-label="Performance period">
+        {performanceLookbackOptions.map((option) => (
+          <button
+            className={lookbackMonths === option.value ? "active" : ""}
+            key={option.value}
+            type="button"
+            onClick={() => onLookbackMonthsChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="muted-text">
+        Performance period: {periodLabel}
+        {data.performance_period.working_days
+          ? ` (${formatNumber(data.performance_period.working_days)} working days)`
+          : ""}
+        . The dashboard duration/date filter does not affect this sub-tab.
+      </p>
+
+      {status === "loading" ? (
+        <p className="muted-text chart-state-text">Loading Performance Trends...</p>
+      ) : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">
+          No eligible resolved tickets with Assigned To are available for this period.
+        </p>
+      ) : null}
+
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <>
+          <div className="open-ticket-aging-chart-grid performance-pareto-grid">
+            <PerformanceParetoChart
+              cumulativeKey="cumulative_productivity_pct"
+              rows={data.top_performers}
+              title="Top 20 Performers"
+            />
+            <PerformanceParetoChart
+              cumulativeKey="bottom_up_cumulative_productivity_pct"
+              rows={data.bottom_performers}
+              title="Bottom 20 Performers"
+            />
+          </div>
+          <PerformanceProductivityTable
+            filename={`support_engineer_productivity_${periodFilename}.csv`}
+            rows={data.all_engineers}
+          />
+          <PerformanceDurationBreakdownTable
+            filename={`support_engineer_resolved_duration_breakdown_${periodFilename}.csv`}
+            rows={data.duration_breakdown}
+          />
+        </>
+      ) : null}
+
+      {data.data_notes.length ? (
+        <ul className="muted-text volumetrics-note-list">
+          {data.data_notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+      {data.warnings.length ? (
+        <ul className="error-text volumetrics-note-list">
+          {data.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+      {commentary}
+    </section>
+  );
+}
+
+type PerformanceParetoCumulativeKey =
+  | "cumulative_productivity_pct"
+  | "bottom_up_cumulative_productivity_pct";
+
+function PerformanceParetoChart({
+  cumulativeKey,
+  rows,
+  title,
+}: {
+  cumulativeKey: PerformanceParetoCumulativeKey;
+  rows: DashboardVolumetricsPerformanceEngineerRow[];
+  title: string;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const chartWidth = Math.max(920, plotWidth - 24, rows.length * 68);
+  const canCopy = rows.length > 0;
+  const cumulativeLabel =
+    cumulativeKey === "cumulative_productivity_pct"
+      ? "Cumulative productivity %"
+      : "Bottom-up cumulative productivity %";
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Bars show average monthly resolved-ticket productivity; the line uses all engineers.
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+        <div className="applications-chart-scroll">
+          <div className="applications-chart-stage">
+            <ComposedChart
+              data={rows}
+              width={chartWidth}
+              height={420}
+              margin={{ top: 46, right: 78, bottom: 128, left: 58 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis
+                dataKey="support_engineer"
+                angle={-40}
+                height={132}
+                interval={0}
+                textAnchor="end"
+                tickMargin={12}
+                tick={{ fontSize: 11 }}
+              />
+              <YAxis
+                yAxisId="productivity"
+                label={{
+                  value: "Avg monthly productivity",
+                  angle: -90,
+                  position: "insideLeft",
+                }}
+                tickFormatter={(value) => formatNumber(Number(value))}
+              />
+              <YAxis
+                domain={[0, 100]}
+                orientation="right"
+                yAxisId="percentage"
+                tickFormatter={(value) => `${formatNumber(Number(value))}%`}
+              />
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) {
+                    return null;
+                  }
+                  const point = payload[0].payload as DashboardVolumetricsPerformanceEngineerRow;
+                  const cumulativeValue = point[cumulativeKey];
+                  return (
+                    <div className="chart-tooltip-card">
+                      <strong>{point.support_engineer}</strong>
+                      <span>Assignment Group: {point.primary_assignment_group}</span>
+                      <span>Functional Track: {point.functional_track}</span>
+                      <span>Resolved Tickets: {formatNumber(point.resolved_ticket_count)}</span>
+                      <span>
+                        Avg Monthly Productivity:{" "}
+                        {formatNumber(point.average_monthly_productivity)}
+                      </span>
+                      <span>Cumulative: {formatPercent(cumulativeValue)}</span>
+                    </div>
+                  );
+                }}
+              />
+              <Legend />
+              <Bar
+                dataKey="average_monthly_productivity"
+                fill={chartColors.created}
+                name="Average Monthly Productivity"
+                radius={[4, 4, 0, 0]}
+                yAxisId="productivity"
+              >
+                <LabelList
+                  dataKey="average_monthly_productivity"
+                  fontSize={10}
+                  position="top"
+                />
+              </Bar>
+              <Line
+                connectNulls
+                dataKey={cumulativeKey}
+                dot={{ r: 3 }}
+                name={cumulativeLabel}
+                stroke={chartColors.average}
+                strokeWidth={2.5}
+                type="monotone"
+                yAxisId="percentage"
+              />
+            </ComposedChart>
+          </div>
+        </div>
+      </div>
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function PerformanceProductivityTable({
+  filename,
+  rows,
+}: {
+  filename: string;
+  rows: DashboardVolumetricsPerformanceEngineerRow[];
+}) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
+  return (
+    <section className="chart-card volumetrics-chart-card">
+      <div className="applications-chart-header">
+        <div>
+          <h3>Full Support Engineer Productivity</h3>
+          <p className="muted-text">Sorted from top to bottom performers.</p>
+        </div>
+        <TableExportActions
+          filename={filename}
+          label="Full support engineer productivity"
+          tableRef={tableRef}
+        />
+      </div>
+      <div className="applications-table-frame volumetrics-data-table-frame">
+        <table className="applications-table volumetrics-data-table" ref={tableRef}>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Support Engineer</th>
+              <th>Primary Assignment Group</th>
+              <th>Functional Track</th>
+              <th>Resolved Ticket Count</th>
+              <th>Average Monthly Productivity</th>
+              <th>Performance Period Months</th>
+              <th>Performance Period Label</th>
+              <th>Working Days</th>
+              <th>Tickets Resolved Per Working Day</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`${row.rank}-${row.support_engineer}`}>
+                <td>{row.rank}</td>
+                <td>{row.support_engineer}</td>
+                <td>{row.primary_assignment_group}</td>
+                <td>{row.functional_track}</td>
+                <td>{formatNumber(row.resolved_ticket_count)}</td>
+                <td>{formatNumber(row.average_monthly_productivity)}</td>
+                <td>{formatNumber(row.performance_period_months)}</td>
+                <td>{row.performance_period_label}</td>
+                <td>{formatNumber(row.working_days)}</td>
+                <td>{formatNumber(row.tickets_resolved_per_working_day, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function PerformanceDurationBreakdownTable({
+  filename,
+  rows,
+}: {
+  filename: string;
+  rows: DashboardVolumetricsPerformanceDurationBreakdownRow[];
+}) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
+  return (
+    <section className="chart-card volumetrics-chart-card">
+      <div className="applications-chart-header">
+        <div>
+          <h3>Support Engineer Resolved Duration Breakdown</h3>
+          <p className="muted-text">Resolved-ticket duration buckets by support engineer.</p>
+        </div>
+        <TableExportActions
+          filename={filename}
+          label="Support engineer resolved duration breakdown"
+          tableRef={tableRef}
+        />
+      </div>
+      <div className="applications-table-frame volumetrics-data-table-frame">
+        <table className="applications-table volumetrics-data-table" ref={tableRef}>
+          <thead>
+            <tr>
+              <th>Support Engineer</th>
+              <th>Primary Assignment Group</th>
+              <th>Functional Track</th>
+              <th>Resolved Ticket Count</th>
+              <th>0-1 Day Resolved</th>
+              <th>1-3 Days Resolved</th>
+              <th>3-10 Days Resolved</th>
+              <th>&gt;10 Days Resolved</th>
+              <th>Working Days</th>
+              <th>Tickets Resolved Per Working Day</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.support_engineer}>
+                <td>{row.support_engineer}</td>
+                <td>{row.primary_assignment_group}</td>
+                <td>{row.functional_track}</td>
+                <td>{formatNumber(row.resolved_ticket_count)}</td>
+                <td>{formatNumber(row.resolved_0_1_day)}</td>
+                <td>{formatNumber(row.resolved_1_3_days)}</td>
+                <td>{formatNumber(row.resolved_3_10_days)}</td>
+                <td>{formatNumber(row.resolved_gt_10_days)}</td>
+                <td>{formatNumber(row.working_days)}</td>
+                <td>{formatNumber(row.tickets_resolved_per_working_day, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
 
 function KpiTrends({
   commentaryForChart,

@@ -565,6 +565,10 @@ class VolumetricsRequest(BaseModel):
     filters: VolumetricsFilters = Field(default_factory=VolumetricsFilters)
 
 
+class VolumetricsPerformanceTrendsRequest(VolumetricsRequest):
+    lookback_months: int = Field(default=3, ge=1, le=3)
+
+
 class VolumetricsFilterValuesResponse(BaseModel):
     scope: list[ApplicationFilterCountValue]
     ticket_type: list[ApplicationFilterCountValue]
@@ -1011,6 +1015,53 @@ class VolumetricsOpenTicketAgingTrendResponse(BaseModel):
     incidents: VolumetricsOpenTicketAgingSet
     sc_tasks: VolumetricsOpenTicketAgingSet
     overall: VolumetricsOpenTicketAgingSet
+    data_notes: list[str]
+    warnings: list[str]
+
+
+class VolumetricsPerformancePeriod(BaseModel):
+    from_month: str
+    to_month: str
+    months: int
+    label: str
+    working_days: int
+
+
+class VolumetricsPerformanceEngineerRow(BaseModel):
+    rank: int
+    support_engineer: str
+    primary_assignment_group: str
+    functional_track: str
+    resolved_ticket_count: int
+    average_monthly_productivity: int
+    average_monthly_productivity_raw: float
+    performance_period_months: int
+    performance_period_label: str
+    working_days: int
+    tickets_resolved_per_working_day: float
+    cumulative_productivity_pct: float | None = None
+    bottom_up_cumulative_productivity_pct: float | None = None
+
+
+class VolumetricsPerformanceDurationBreakdownRow(BaseModel):
+    support_engineer: str
+    primary_assignment_group: str
+    functional_track: str
+    resolved_ticket_count: int
+    resolved_0_1_day: int
+    resolved_1_3_days: int
+    resolved_3_10_days: int
+    resolved_gt_10_days: int
+    working_days: int
+    tickets_resolved_per_working_day: float
+
+
+class VolumetricsPerformanceTrendsResponse(BaseModel):
+    performance_period: VolumetricsPerformancePeriod
+    top_performers: list[VolumetricsPerformanceEngineerRow]
+    bottom_performers: list[VolumetricsPerformanceEngineerRow]
+    all_engineers: list[VolumetricsPerformanceEngineerRow]
+    duration_breakdown: list[VolumetricsPerformanceDurationBreakdownRow]
     data_notes: list[str]
     warnings: list[str]
 

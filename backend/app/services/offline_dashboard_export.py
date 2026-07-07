@@ -59,6 +59,7 @@ from app.services.dashboard import (
     volumetrics_cancelled_state_expression,
     volumetrics_data_range,
     volumetrics_display_expression,
+    volumetrics_performance_trends,
     volumetrics_period_start_expression,
     volumetrics_resolved_closed_state_expression,
     volumetrics_source_select,
@@ -321,6 +322,13 @@ def build_assignment_group_volumetrics_payload(db: Session, project_id: UUID) ->
         )
         for scope in ("in_scope", "out_of_scope", "all")
     }
+
+
+def build_performance_trends_payload(db: Session, project_id: UUID) -> dict[str, Any]:
+    start_datetime, end_datetime = latest_complete_month_window(db, project_id, 3)
+    request = monthly_request(project_id, start_datetime, end_datetime)
+    request.lookback_months = 3
+    return volumetrics_performance_trends(db, request)
 
 
 def build_volumetrics_source(project_id: UUID) -> Any:
@@ -1751,6 +1759,7 @@ def build_volumetrics_payload(
                 "overall_sla_trends",
                 "detailed_volume_trends",
                 "kpi_trends",
+                "performance_trends",
                 "category_wise_trends",
                 "assignment_group_volumetrics",
             ],
@@ -1773,6 +1782,7 @@ def build_volumetrics_payload(
                 "reassignment_hops": {"rows": []},
                 "problem_management": {"rows": [], "data_notes": []},
             },
+            "performance_trends": {},
             "placeholders": {
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
             },
@@ -1793,6 +1803,7 @@ def build_volumetrics_payload(
                 "overall_sla_trends",
                 "detailed_volume_trends",
                 "kpi_trends",
+                "performance_trends",
                 "category_wise_trends",
                 "assignment_group_volumetrics",
             ],
@@ -1815,6 +1826,7 @@ def build_volumetrics_payload(
                 "reassignment_hops": {"rows": []},
                 "problem_management": {"rows": [], "data_notes": []},
             },
+            "performance_trends": {},
             "placeholders": {
                 "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
             },
@@ -1849,6 +1861,7 @@ def build_volumetrics_payload(
             "overall_sla_trends",
             "detailed_volume_trends",
             "kpi_trends",
+            "performance_trends",
             "category_wise_trends",
             "assignment_group_volumetrics",
         ],
@@ -1895,6 +1908,7 @@ def build_volumetrics_payload(
                 end_datetime,
             ),
         },
+        "performance_trends": build_performance_trends_payload(db, project_id),
         "placeholders": {
             "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
         },
@@ -4566,6 +4580,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         overall_sla_trends: "Overall SLA Trends",
         detailed_volume_trends: "Detailed Volume Trends",
         kpi_trends: "KPI Trends",
+        performance_trends: "Performance Trends",
         category_wise_trends: "Category-wise Trends",
         assignment_group_volumetrics: "Assignment Group Volumetrics"
       };
@@ -4615,10 +4630,86 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const basisSection = basisTables.length ? `<section class="panel full"><p class="label">Confirmed Out-of-Scope</p><h2>BASIS and SECURITY Assignment Group Volumetrics</h2><p class="muted">Confirmed out-of-scope BASIS/SECURITY assignment groups shown separately for validation.</p></section>${basisTables.map(([key, table]) => assignmentVolumetricsTable(table, payload.months || [], key)).join("")}` : "";
       return `<section class="panel full"><p class="label">Volumetrics &amp; SLA</p><h2>Assignment Group-wise Volumetrics</h2><p class="muted">Monthly created, resolved, and cancelled generic ticket volumes by Assignment Group for Dec-25 through May-26. Problems and Changes are excluded.</p><div class="validation-toolbar">${trackButtons}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "assignment_group_volumetrics" })}</section>${assignmentVolumetricsTable(payload.tables?.incidents, payload.months || [], "incidents")}${assignmentVolumetricsTable(payload.tables?.sc_tasks, payload.months || [], "sc-tasks")}${assignmentVolumetricsTable(payload.tables?.overall, payload.months || [], "overall")}${basisSection}`;
     }
+    function performancePayload() {
+      return DASHBOARD.volumetrics.performance_trends || {
+        performance_period: { label: "", working_days: 0, months: 3 },
+        top_performers: [],
+        bottom_performers: [],
+        all_engineers: [],
+        duration_breakdown: [],
+        data_notes: [],
+        warnings: []
+      };
+    }
+    function performanceParetoChart(rows, cumulativeKey, title) {
+      if (!rows.length) return `<p class="muted" style="padding:12px">No Performance Trends data available.</p>`;
+      const width = 1100;
+      const height = 460;
+      const margin = { top: 58, right: 84, bottom: 150, left: 62 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const maxValue = Math.max(1, ...rows.map((row) => Number(row.average_monthly_productivity || 0)));
+      const groupWidth = plotWidth / Math.max(1, rows.length);
+      const barWidth = Math.max(10, Math.min(34, groupWidth - 12));
+      const bars = [];
+      const linePoints = [];
+      rows.forEach((row, index) => {
+        const centerX = margin.left + index * groupWidth + groupWidth / 2;
+        const barHeight = (Number(row.average_monthly_productivity || 0) / maxValue) * plotHeight;
+        const y = margin.top + plotHeight - barHeight;
+        const x = centerX - barWidth / 2;
+        const cumulative = row[cumulativeKey] === null || row[cumulativeKey] === undefined ? null : Number(row[cumulativeKey]);
+        bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${COLORS.teal}" rx="4"><title>${esc(row.support_engineer)} | ${esc(row.primary_assignment_group)} | ${esc(row.functional_track)} | Resolved ${fmt(row.resolved_ticket_count)} | Avg ${fmt(row.average_monthly_productivity)} | Cumulative ${cumulative === null ? "N/A" : `${cumulative.toFixed(1)}%`}</title></rect>`);
+        if (Number(row.average_monthly_productivity || 0) > 0) {
+          bars.push(`<text x="${centerX}" y="${Math.max(margin.top + 12, y - 8)}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${fmt(row.average_monthly_productivity)}</text>`);
+        }
+        if (cumulative !== null) {
+          linePoints.push({ x: centerX, y: margin.top + plotHeight - (cumulative / 100) * plotHeight, pct: cumulative });
+        }
+      });
+      const linePath = linePoints.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
+      const labels = rows.map((row, index) => {
+        const x = margin.left + index * groupWidth + groupWidth / 2;
+        return `<text x="${x}" y="${height - 58}" text-anchor="end" transform="rotate(-40 ${x} ${height - 58})" font-size="10" font-weight="800" fill="#334155"><title>${esc(row.support_engineer)}</title>${esc(truncateLabel(row.support_engineer, 24))}</text>`;
+      }).join("");
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(title)}">
+        <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
+        <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + plotHeight}" stroke="#94a3b8"></line>
+        <text x="20" y="${margin.top + plotHeight / 2}" transform="rotate(-90 20 ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">Avg monthly productivity</text>
+        <text x="${width - margin.right + 26}" y="${margin.top}" text-anchor="middle" font-size="10" font-weight="900" fill="${COLORS.purple}">100%</text>
+        ${bars.join("")}
+        <path d="${linePath}" fill="none" stroke="${COLORS.purple}" stroke-width="3"></path>
+        ${linePoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${COLORS.purple}" stroke-width="2"></circle>`).join("")}
+        ${labels}
+      </svg>${legend([{ name: "Average Monthly Productivity", color: COLORS.teal }, { name: "Cumulative productivity %", color: COLORS.purple }])}`;
+    }
+    function performanceProductivityTable(rows, tableId, filename) {
+      return `<section class="panel full table-card"><div class="chart-title-row"><div><p class="label">Performance Trends</p><h3>Full Support Engineer Productivity</h3><p class="muted">Sorted from top to bottom performers.</p></div></div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll"><table id="${tableId}" class="applications-table"><thead><tr><th>Rank</th><th>Support Engineer</th><th>Primary Assignment Group</th><th>Functional Track</th><th>Resolved Ticket Count</th><th>Average Monthly Productivity</th><th>Performance Period Months</th><th>Performance Period Label</th><th>Working Days</th><th>Tickets Resolved Per Working Day</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${fmt(row.rank)}</td><td>${esc(row.support_engineer)}</td><td>${esc(row.primary_assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${fmt(row.resolved_ticket_count)}</td><td>${fmt(row.average_monthly_productivity)}</td><td>${fmt(row.performance_period_months)}</td><td>${esc(row.performance_period_label)}</td><td>${fmt(row.working_days)}</td><td>${fmt(row.tickets_resolved_per_working_day, 2)}</td></tr>`).join("")}</tbody></table></div></section>`;
+    }
+    function performanceDurationTable(rows, tableId, filename) {
+      return `<section class="panel full table-card"><div class="chart-title-row"><div><p class="label">Performance Trends</p><h3>Support Engineer Resolved Duration Breakdown</h3><p class="muted">Resolved-ticket duration buckets by support engineer.</p></div></div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll"><table id="${tableId}" class="applications-table"><thead><tr><th>Support Engineer</th><th>Primary Assignment Group</th><th>Functional Track</th><th>Resolved Ticket Count</th><th>0-1 Day Resolved</th><th>1-3 Days Resolved</th><th>3-10 Days Resolved</th><th>&gt;10 Days Resolved</th><th>Working Days</th><th>Tickets Resolved Per Working Day</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.support_engineer)}</td><td>${esc(row.primary_assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${fmt(row.resolved_ticket_count)}</td><td>${fmt(row.resolved_0_1_day)}</td><td>${fmt(row.resolved_1_3_days)}</td><td>${fmt(row.resolved_3_10_days)}</td><td>${fmt(row.resolved_gt_10_days)}</td><td>${fmt(row.working_days)}</td><td>${fmt(row.tickets_resolved_per_working_day, 2)}</td></tr>`).join("")}</tbody></table></div></section>`;
+    }
+    function renderPerformanceTrends() {
+      const payload = performancePayload();
+      const period = payload.performance_period || {};
+      const filenamePart = safeCsvFilename(period.label || "latest_complete_months");
+      const notes = payload.data_notes || [];
+      const warnings = payload.warnings || [];
+      return `<section class="panel full" data-commentary-key="performance_trends"><p class="label">Performance Trends</p><h2>Support Engineer Productivity</h2><p class="muted">Performance period: ${esc(period.label || "latest complete months")} (${fmt(period.working_days || 0)} working days). Offline export includes the latest 3 complete months at export time.</p><p class="muted">The dashboard duration/date filter does not affect Performance Trends. Generic Tickets includes Incidents and SC Tasks only.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "performance_trends" })}</section>
+        <div class="chart-grid two">
+          <section class="chart-card panel full"><h3>Top 20 Performers</h3><p class="muted">Pareto line is calculated using all support engineers.</p><div class="chart-frame chart-stage">${performanceParetoChart(payload.top_performers || [], "cumulative_productivity_pct", "Top 20 Performers")}</div></section>
+          <section class="chart-card panel full"><h3>Bottom 20 Performers</h3><p class="muted">Bottom-up Pareto line is calculated using all support engineers.</p><div class="chart-frame chart-stage">${performanceParetoChart(payload.bottom_performers || [], "bottom_up_cumulative_productivity_pct", "Bottom 20 Performers")}</div></section>
+        </div>
+        ${performanceProductivityTable(payload.all_engineers || [], "performance-productivity-table", `support_engineer_productivity_${filenamePart}.csv`)}
+        ${performanceDurationTable(payload.duration_breakdown || [], "performance-duration-table", `support_engineer_resolved_duration_breakdown_${filenamePart}.csv`)}
+        ${notes.length ? `<section class="panel full"><ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul></section>` : ""}
+        ${warnings.length ? `<section class="panel full"><ul class="error-text">${warnings.map((warning) => `<li>${esc(warning)}</li>`).join("")}</ul></section>` : ""}`;
+    }
     function renderVolumetricsSubTab(periods) {
       if (state.volSubTab === "overall_sla_trends") return renderSlaTrends();
       if (state.volSubTab === "detailed_volume_trends") return renderDetailedVolumeTrends();
       if (state.volSubTab === "kpi_trends") return renderKpiTrends();
+      if (state.volSubTab === "performance_trends") return renderPerformanceTrends();
       if (state.volSubTab === "assignment_group_volumetrics") return renderAssignmentGroupVolumetrics();
       if (state.volSubTab === "category_wise_trends") return placeholder("Category-wise Trends");
       return renderOverallVolume(periods);

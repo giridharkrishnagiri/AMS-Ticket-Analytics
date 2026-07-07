@@ -2968,6 +2968,7 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         model.state.label("state"),
         model.priority.label("priority"),
         model.assignment_group.label("assignment_group"),
+        model.assigned_to.label("assigned_to"),
         model.support_lead.label("support_lead"),
         model.functional_track.label("functional_track"),
         model.ams_owner.label("ams_owner"),
@@ -5682,6 +5683,359 @@ def volumetrics_kpi_open_ticket_aging_trend(db: Session, request: Any) -> dict[s
             "Cancelled/canceled tickets are excluded.",
             "SC Tasks in Closed Incomplete state are excluded.",
             "Overall includes Incidents and SC Tasks only.",
+        ],
+        "warnings": [],
+    }
+
+
+def normalize_performance_lookback_months(value: int | None) -> int:
+    months = int(value or 3)
+    if months not in {1, 2, 3}:
+        raise ValueError("lookback_months must be 1, 2, or 3")
+    return months
+
+
+def working_days_between(start_datetime: datetime, end_datetime: datetime) -> int:
+    current = start_datetime.date()
+    end_date = end_datetime.date()
+    working_days = 0
+    while current <= end_date:
+        if current.weekday() < 5:
+            working_days += 1
+        current += timedelta(days=1)
+    return working_days
+
+
+def performance_period_payload(
+    start_datetime: datetime,
+    end_datetime: datetime,
+    *,
+    months: int,
+    working_days: int,
+) -> dict[str, Any]:
+    return {
+        "from_month": f"{start_datetime.year:04d}-{start_datetime.month:02d}",
+        "to_month": f"{end_datetime.year:04d}-{end_datetime.month:02d}",
+        "months": months,
+        "label": f"{start_datetime:%b-%y} through {end_datetime:%b-%y}",
+        "working_days": working_days,
+    }
+
+
+def active_assignment_group_functional_track_map(
+    db: Session,
+    project_id: UUID,
+) -> dict[str, str]:
+    assignment_key_expression = normalized_assignment_group_expression(
+        ApplicationInventoryItem.assignment_group,
+    )
+    track_expression = reference_display_expression(ApplicationInventoryItem.functional_track)
+    statement = (
+        select(
+            assignment_key_expression.label("assignment_group_key"),
+            track_expression.label("functional_track"),
+            func.count(ApplicationInventoryItem.id).label("row_count"),
+        )
+        .where(
+            ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.is_current.is_(True),
+            assignment_key_expression != "",
+        )
+        .group_by(assignment_key_expression, track_expression)
+    )
+    candidates: dict[str, list[tuple[str, int]]] = {}
+    for row in db.execute(statement).mappings().all():
+        key = str(row["assignment_group_key"] or "").strip()
+        if not key:
+            continue
+        candidates.setdefault(key, []).append(
+            (str(row["functional_track"] or REFERENCE_MISSING_LABEL), int_count(row["row_count"])),
+        )
+
+    result: dict[str, str] = {}
+    for key, values in candidates.items():
+        values.sort(
+            key=lambda item: (
+                item[0] == REFERENCE_MISSING_LABEL,
+                -item[1],
+                item[0].casefold(),
+            ),
+        )
+        result[key] = values[0][0] if values else REFERENCE_MISSING_LABEL
+    return result
+
+
+def performance_duration_seconds_expression(source: Any) -> Any:
+    timestamp_duration = func.extract("epoch", source.c.completion_at - source.c.created_at)
+    return case(
+        (
+            and_(
+                source.c.business_duration_seconds.is_not(None),
+                source.c.business_duration_seconds >= 0,
+            ),
+            cast(source.c.business_duration_seconds, Float),
+        ),
+        else_=timestamp_duration,
+    )
+
+
+def rounded_nearest_integer(value: float) -> int:
+    return int(math.floor(value + 0.5))
+
+
+def performance_track_from_ticket_rows(
+    rows: list[dict[str, Any]],
+    *,
+    assignment_group_key: str,
+    assignment_group: str,
+) -> str:
+    track_counts: dict[str, int] = {}
+    for row in rows:
+        same_key = assignment_group_key and row["assignment_group_key"] == assignment_group_key
+        same_display = row["assignment_group"] == assignment_group
+        if not same_key and not same_display:
+            continue
+        track = str(row["ticket_functional_track"] or REFERENCE_MISSING_LABEL)
+        if track == REFERENCE_MISSING_LABEL:
+            continue
+        track_counts[track] = track_counts.get(track, 0) + int(row["resolved_ticket_count"] or 0)
+    if not track_counts:
+        return REFERENCE_MISSING_LABEL
+    return sorted(track_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[0][0]
+
+
+def primary_assignment_group_for_engineer(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[tuple[str, str], int] = {}
+    for row in rows:
+        assignment_group = str(row["assignment_group"] or REFERENCE_MISSING_LABEL)
+        assignment_group_key = str(row["assignment_group_key"] or "")
+        key = (assignment_group_key, assignment_group)
+        grouped[key] = grouped.get(key, 0) + int(row["resolved_ticket_count"] or 0)
+
+    candidates = [
+        {
+            "assignment_group_key": key[0],
+            "assignment_group": key[1],
+            "resolved_ticket_count": count,
+        }
+        for key, count in grouped.items()
+    ]
+    non_blank_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate["assignment_group"] != REFERENCE_MISSING_LABEL
+    ]
+    selected_candidates = non_blank_candidates or candidates
+    return sorted(
+        selected_candidates,
+        key=lambda item: (
+            -int(item["resolved_ticket_count"]),
+            str(item["assignment_group"]).casefold(),
+        ),
+    )[0]
+
+
+def volumetrics_performance_aggregate_rows(
+    db: Session,
+    request: Any,
+    *,
+    period_start: datetime,
+    period_end: datetime,
+) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    support_engineer_expression = reference_display_expression(source.c.assigned_to)
+    assignment_group_expression = reference_display_expression(source.c.assignment_group)
+    assignment_group_key_expression = normalized_assignment_group_expression(
+        source.c.assignment_group,
+    )
+    ticket_track_expression = reference_display_expression(source.c.functional_track)
+    duration_seconds = performance_duration_seconds_expression(source)
+
+    statement = (
+        select(
+            support_engineer_expression.label("support_engineer"),
+            assignment_group_expression.label("assignment_group"),
+            assignment_group_key_expression.label("assignment_group_key"),
+            ticket_track_expression.label("ticket_functional_track"),
+            func.count(source.c.id).label("resolved_ticket_count"),
+            func.count(source.c.id)
+            .filter(duration_seconds >= 0, duration_seconds <= SECONDS_PER_DAY)
+            .label("resolved_0_1_day"),
+            func.count(source.c.id)
+            .filter(duration_seconds > SECONDS_PER_DAY, duration_seconds <= SECONDS_PER_DAY * 3)
+            .label("resolved_1_3_days"),
+            func.count(source.c.id)
+            .filter(
+                duration_seconds > SECONDS_PER_DAY * 3,
+                duration_seconds <= SECONDS_PER_DAY * 10,
+            )
+            .label("resolved_3_10_days"),
+            func.count(source.c.id)
+            .filter(duration_seconds > SECONDS_PER_DAY * 10)
+            .label("resolved_gt_10_days"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(source, request, include_date_bounds=False),
+            source.c.completion_at.is_not(None),
+            source.c.completion_at >= period_start,
+            source.c.completion_at <= period_end,
+            source.c.created_at.is_not(None),
+            source.c.completion_at >= source.c.created_at,
+            source.c.assigned_to.is_not(None),
+            func.btrim(source.c.assigned_to) != "",
+            volumetrics_resolved_closed_state_expression(source.c),
+        )
+        .group_by(
+            support_engineer_expression,
+            assignment_group_expression,
+            assignment_group_key_expression,
+            ticket_track_expression,
+        )
+    )
+    return [dict(row) for row in db.execute(statement).mappings().all()]
+
+
+def volumetrics_performance_trends(db: Session, request: Any) -> dict[str, Any]:
+    lookback_months = normalize_performance_lookback_months(getattr(request, "lookback_months", 3))
+    period_start, period_end = latest_complete_month_window(
+        db,
+        request.project_id,
+        lookback_months,
+    )
+    working_days = working_days_between(period_start, period_end)
+    period_payload = performance_period_payload(
+        period_start,
+        period_end,
+        months=lookback_months,
+        working_days=working_days,
+    )
+    aggregate_rows = volumetrics_performance_aggregate_rows(
+        db,
+        request,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    inventory_tracks = active_assignment_group_functional_track_map(db, request.project_id)
+
+    rows_by_engineer: dict[str, list[dict[str, Any]]] = {}
+    for row in aggregate_rows:
+        rows_by_engineer.setdefault(str(row["support_engineer"]), []).append(row)
+
+    engineer_rows: list[dict[str, Any]] = []
+    duration_rows: list[dict[str, Any]] = []
+    for support_engineer, rows in rows_by_engineer.items():
+        resolved_ticket_count = sum(int(row["resolved_ticket_count"] or 0) for row in rows)
+        if resolved_ticket_count <= 0:
+            continue
+        primary_assignment = primary_assignment_group_for_engineer(rows)
+        primary_assignment_group = str(primary_assignment["assignment_group"])
+        primary_assignment_group_key = str(primary_assignment["assignment_group_key"] or "")
+        functional_track = inventory_tracks.get(primary_assignment_group_key)
+        if not functional_track or functional_track == REFERENCE_MISSING_LABEL:
+            functional_track = performance_track_from_ticket_rows(
+                rows,
+                assignment_group_key=primary_assignment_group_key,
+                assignment_group=primary_assignment_group,
+            )
+
+        avg_raw = resolved_ticket_count / float(lookback_months)
+        avg_display = rounded_nearest_integer(avg_raw)
+        per_working_day = round(resolved_ticket_count / working_days, 2) if working_days else 0.0
+        bucket_counts = {
+            "resolved_0_1_day": sum(int(row["resolved_0_1_day"] or 0) for row in rows),
+            "resolved_1_3_days": sum(int(row["resolved_1_3_days"] or 0) for row in rows),
+            "resolved_3_10_days": sum(int(row["resolved_3_10_days"] or 0) for row in rows),
+            "resolved_gt_10_days": sum(int(row["resolved_gt_10_days"] or 0) for row in rows),
+        }
+        base_payload = {
+            "support_engineer": support_engineer,
+            "primary_assignment_group": primary_assignment_group,
+            "functional_track": functional_track or REFERENCE_MISSING_LABEL,
+            "resolved_ticket_count": resolved_ticket_count,
+            "average_monthly_productivity": avg_display,
+            "average_monthly_productivity_raw": round(avg_raw, 4),
+            "performance_period_months": lookback_months,
+            "performance_period_label": period_payload["label"],
+            "working_days": working_days,
+            "tickets_resolved_per_working_day": per_working_day,
+        }
+        engineer_rows.append(base_payload)
+        duration_rows.append(
+            {
+                "support_engineer": support_engineer,
+                "primary_assignment_group": primary_assignment_group,
+                "functional_track": functional_track or REFERENCE_MISSING_LABEL,
+                "resolved_ticket_count": resolved_ticket_count,
+                **bucket_counts,
+                "working_days": working_days,
+                "tickets_resolved_per_working_day": per_working_day,
+            },
+        )
+
+    top_sorted = sorted(
+        engineer_rows,
+        key=lambda item: (
+            -float(item["average_monthly_productivity_raw"]),
+            -int(item["resolved_ticket_count"]),
+            str(item["support_engineer"]).casefold(),
+        ),
+    )
+    total_productivity = sum(float(row["average_monthly_productivity_raw"]) for row in top_sorted)
+    running_productivity = 0.0
+    full_rank_by_engineer: dict[str, int] = {}
+    for index, row in enumerate(top_sorted, start=1):
+        running_productivity += float(row["average_monthly_productivity_raw"])
+        row["rank"] = index
+        row["cumulative_productivity_pct"] = (
+            round(running_productivity / total_productivity * 100, 2)
+            if total_productivity
+            else None
+        )
+        row["bottom_up_cumulative_productivity_pct"] = None
+        full_rank_by_engineer[str(row["support_engineer"])] = index
+
+    bottom_sorted = sorted(
+        (dict(row) for row in engineer_rows),
+        key=lambda item: (
+            float(item["average_monthly_productivity_raw"]),
+            int(item["resolved_ticket_count"]),
+            str(item["support_engineer"]).casefold(),
+        ),
+    )
+    running_bottom_productivity = 0.0
+    for row in bottom_sorted:
+        running_bottom_productivity += float(row["average_monthly_productivity_raw"])
+        row["rank"] = full_rank_by_engineer.get(str(row["support_engineer"]), 0)
+        row["cumulative_productivity_pct"] = None
+        row["bottom_up_cumulative_productivity_pct"] = (
+            round(running_bottom_productivity / total_productivity * 100, 2)
+            if total_productivity
+            else None
+        )
+
+    duration_rows = sorted(
+        duration_rows,
+        key=lambda item: (
+            -int(item["resolved_ticket_count"]),
+            -float(item["resolved_ticket_count"]) / float(lookback_months),
+            str(item["support_engineer"]).casefold(),
+        ),
+    )
+
+    return {
+        "performance_period": period_payload,
+        "top_performers": top_sorted[:20],
+        "bottom_performers": bottom_sorted[:20],
+        "all_engineers": top_sorted,
+        "duration_breakdown": duration_rows,
+        "data_notes": [
+            "Performance Trends uses resolved Incidents and closed SC Tasks only.",
+            "Cancelled/canceled records are excluded.",
+            "SC Tasks with Closed Incomplete state are excluded.",
+            "Tickets without Assigned To are excluded from support engineer productivity ranking.",
+            "The dashboard duration/date filter does not affect Performance Trends.",
+            "Pareto lines are calculated using the full support engineer population.",
         ],
         "warnings": [],
     }

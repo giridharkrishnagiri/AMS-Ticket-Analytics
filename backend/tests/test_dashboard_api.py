@@ -132,6 +132,7 @@ def add_ticket(
     functional_track: str | None = None,
     ams_owner: str | None = None,
     support_lead: str | None = None,
+    assigned_to: str | None = None,
     architecture_type: str | None = None,
     business_critical: str | None = None,
     install_type: str | None = None,
@@ -172,6 +173,7 @@ def add_ticket(
         functional_track=functional_track,
         ams_owner=ams_owner,
         support_lead=support_lead,
+        assigned_to=assigned_to,
         sla_breached=sla_breached,
         is_batch_related=derive_is_batch_related(ticket_type, resolved_short_description),
         reopen_count=reopen_count,
@@ -205,6 +207,7 @@ def add_out_of_scope_ticket(
     functional_track: str | None = None,
     ams_owner: str | None = None,
     support_lead: str | None = None,
+    assigned_to: str | None = None,
 ) -> AssessmentOutOfScopeTicket:
     ticket = AssessmentOutOfScopeTicket(
         project_id=project_id,
@@ -223,6 +226,7 @@ def add_out_of_scope_ticket(
         functional_track=functional_track,
         ams_owner=ams_owner,
         support_lead=support_lead,
+        assigned_to=assigned_to,
         sap_non_sap=derive_sap_non_sap(assignment_group),
         is_batch_related=derive_is_batch_related(ticket_type, f"{number} title"),
         out_of_scope_reason="assignment_group_not_in_reference",
@@ -5385,6 +5389,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             "overall_sla_trends",
             "detailed_volume_trends",
             "kpi_trends",
+            "performance_trends",
             "category_wise_trends",
             "assignment_group_volumetrics",
         ]
@@ -5406,6 +5411,9 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["volumetrics"]["kpi_trends"]["open_ticket_aging"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["reassignment_hops"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["problem_management"]["rows"]
+        assert "performance_trends" in payload["volumetrics"]
+        assert payload["volumetrics"]["performance_trends"]["performance_period"]["months"] == 3
+        assert "all_engineers" in payload["volumetrics"]["performance_trends"]
         detailed_row = payload["volumetrics"]["detailed_volume_trends"]["application_rows"][0]
         assert "ticket_number" not in detailed_row
         assert "short_description" not in detailed_row

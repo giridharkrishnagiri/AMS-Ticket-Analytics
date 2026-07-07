@@ -2591,6 +2591,19 @@ h2 {
   font-size: 0.82rem;
 }
 
+.chart-tooltip-card {
+  display: grid;
+  gap: 4px;
+  max-width: 300px;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 22px rgb(15 23 42 / 14%);
+  color: #0f172a;
+  font-size: 0.82rem;
+}
+
 .chart-data-notes {
   margin: 0;
   padding-left: 20px;
@@ -2615,6 +2628,10 @@ h2 {
   min-width: 0;
 }
 
+.performance-trends-section {
+  min-width: 0;
+}
+
 .open-ticket-aging-category {
   display: grid;
   gap: 12px;
@@ -2632,6 +2649,10 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   min-width: 0;
+}
+
+.performance-pareto-grid {
+  align-items: stretch;
 }
 
 .duration-bucket-grid {
@@ -2857,6 +2878,7 @@ h2 {
   .volumetrics-two-column-grid,
   .volumetrics-three-column-grid,
   .open-ticket-aging-chart-grid,
+  .performance-pareto-grid,
   .duration-bucket-grid {
     grid-template-columns: 1fr;
   }

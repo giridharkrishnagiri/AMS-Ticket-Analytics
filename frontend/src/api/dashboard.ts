@@ -928,6 +928,53 @@ export type DashboardVolumetricsOpenTicketAgingTrend = {
   warnings: string[];
 };
 
+export type DashboardVolumetricsPerformancePeriod = {
+  from_month: string;
+  to_month: string;
+  months: number;
+  label: string;
+  working_days: number;
+};
+
+export type DashboardVolumetricsPerformanceEngineerRow = {
+  rank: number;
+  support_engineer: string;
+  primary_assignment_group: string;
+  functional_track: string;
+  resolved_ticket_count: number;
+  average_monthly_productivity: number;
+  average_monthly_productivity_raw: number;
+  performance_period_months: number;
+  performance_period_label: string;
+  working_days: number;
+  tickets_resolved_per_working_day: number;
+  cumulative_productivity_pct: number | null;
+  bottom_up_cumulative_productivity_pct: number | null;
+};
+
+export type DashboardVolumetricsPerformanceDurationBreakdownRow = {
+  support_engineer: string;
+  primary_assignment_group: string;
+  functional_track: string;
+  resolved_ticket_count: number;
+  resolved_0_1_day: number;
+  resolved_1_3_days: number;
+  resolved_3_10_days: number;
+  resolved_gt_10_days: number;
+  working_days: number;
+  tickets_resolved_per_working_day: number;
+};
+
+export type DashboardVolumetricsPerformanceTrends = {
+  performance_period: DashboardVolumetricsPerformancePeriod;
+  top_performers: DashboardVolumetricsPerformanceEngineerRow[];
+  bottom_performers: DashboardVolumetricsPerformanceEngineerRow[];
+  all_engineers: DashboardVolumetricsPerformanceEngineerRow[];
+  duration_breakdown: DashboardVolumetricsPerformanceDurationBreakdownRow[];
+  data_notes: string[];
+  warnings: string[];
+};
+
 export type DashboardVolumetricsReassignmentHopsDateRange = {
   from_date: string;
   to_date: string;
@@ -1515,6 +1562,18 @@ export function getDashboardVolumetricsKpiOpenTicketAgingTrend(
   return postVolumetricsRequest<DashboardVolumetricsOpenTicketAgingTrend>(
     "/dashboard/volumetrics/kpi-open-ticket-aging-trend",
     input
+  );
+}
+
+export function getDashboardVolumetricsPerformanceTrends(
+  input: DashboardVolumetricsRequest,
+  lookbackMonths: 1 | 2 | 3
+): Promise<DashboardVolumetricsPerformanceTrends> {
+  return postVolumetricsRequest<DashboardVolumetricsPerformanceTrends>(
+    "/dashboard/volumetrics/performance-trends",
+    { ...input, lookback_months: lookbackMonths } as DashboardVolumetricsRequest & {
+      lookback_months: 1 | 2 | 3;
+    }
   );
 }
 

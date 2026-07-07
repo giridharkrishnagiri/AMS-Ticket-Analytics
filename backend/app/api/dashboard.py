@@ -64,6 +64,8 @@ from app.schemas.dashboard import (
     VolumetricsKpiDurationBucketsResponse,
     VolumetricsKpiMttrTrendsResponse,
     VolumetricsOpenTicketAgingTrendResponse,
+    VolumetricsPerformanceTrendsRequest,
+    VolumetricsPerformanceTrendsResponse,
     VolumetricsPriorityDistributionResponse,
     VolumetricsProblemManagementTrendResponse,
     VolumetricsReassignmentHopsTrendResponse,
@@ -116,6 +118,7 @@ from app.services.dashboard import (
     volumetrics_kpi_open_ticket_aging_trend,
     volumetrics_kpi_problem_management_trend,
     volumetrics_kpi_reassignment_hops_trend,
+    volumetrics_performance_trends,
     volumetrics_priority_distribution,
     volumetrics_sc_task_catalog_item_proportion,
     volumetrics_sla_trends,
@@ -668,6 +671,20 @@ def get_dashboard_volumetrics_kpi_open_ticket_aging_trend(
 ) -> dict[str, object]:
     try:
         return volumetrics_kpi_open_ticket_aging_trend(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/performance-trends",
+    response_model=VolumetricsPerformanceTrendsResponse,
+)
+def get_dashboard_volumetrics_performance_trends(
+    request: VolumetricsPerformanceTrendsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_performance_trends(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
