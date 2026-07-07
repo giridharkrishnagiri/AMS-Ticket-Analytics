@@ -4566,7 +4566,7 @@ function OpenTicketAgingTrendSection({
           <p className="label">KPI Trends</p>
           <h3>Open Ticket Aging Trend</h3>
           <p className="muted-text">
-            Open tickets at period end grouped by aging bucket. Cancelled tickets are excluded.
+            Open tickets at period end grouped by aging bucket using the Backlog(Open) exit logic.
           </p>
         </div>
       </div>

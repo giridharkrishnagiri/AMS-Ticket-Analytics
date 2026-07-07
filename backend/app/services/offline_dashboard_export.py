@@ -56,7 +56,6 @@ from app.services.dashboard import (
     volumetrics_base_conditions,
     volumetrics_cancelled_count_date_expression,
     volumetrics_cancelled_expression,
-    volumetrics_cancelled_state_expression,
     volumetrics_data_range,
     volumetrics_display_expression,
     volumetrics_performance_trends,
@@ -1630,7 +1629,10 @@ def build_open_ticket_aging_payload(
         effective_request = SimpleNamespace(**{**request.__dict__, "ticket_type": ticket_type})
         for period in periods:
             period_end = normalize_dashboard_datetime(period.end)
+            period_start = normalize_dashboard_datetime(period.start)
             age_seconds = func.extract("epoch", literal(period_end) - source.c.created_at)
+            created_period = volumetrics_period_start_expression(source.c.created_at, "monthly")
+            exit_period = volumetrics_period_start_expression(source.c.exit_at, "monthly")
             statement = (
                 select(
                     *[expression.label(name) for name, expression in dimensions.items()],
@@ -1655,9 +1657,8 @@ def build_open_ticket_aging_payload(
                         include_date_bounds=False,
                     ),
                     source.c.created_at.is_not(None),
-                    source.c.created_at <= period_end,
-                    or_(source.c.exit_at.is_(None), source.c.exit_at > period_end),
-                    ~volumetrics_cancelled_state_expression(source.c),
+                    created_period <= period_start,
+                    or_(source.c.exit_at.is_(None), exit_period > period_start),
                 )
                 .group_by(*dimensions.values())
             )
@@ -1690,8 +1691,8 @@ def build_open_ticket_aging_payload(
             "Open Ticket Aging Trend uses the same normalized volumetrics source and "
             "period-end exit logic as Backlog(Open).",
             "Age is calculated as period end date minus created date.",
-            "Cancelled/canceled tickets are excluded.",
-            "SC Tasks in Closed Incomplete state are excluded.",
+            "Cancelled/canceled tickets and SC Tasks in Closed Incomplete state are removed "
+            "from the aging trend when their Backlog(Open) exit period has passed.",
             "Overall includes Incidents and SC Tasks only.",
         ],
     }
@@ -5228,7 +5229,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function openTicketAgingGroup() {
       const notes = DASHBOARD.volumetrics.kpi_trends?.open_ticket_aging?.data_notes || [];
-      return `<section class="panel full" data-commentary-key="open_ticket_aging_trend"><p class="label">KPI Trends</p><h3>Open Ticket Aging Trend</h3><p class="muted">Open tickets at period end grouped by aging bucket. Cancelled tickets are excluded.</p>${openTicketAgingCategory("Incidents", "incident", "open_ticket_aging_incidents")}${openTicketAgingCategory("SC Tasks", "sc_task", "open_ticket_aging_sc_tasks")}${openTicketAgingCategory("Overall", "all", "open_ticket_aging_overall")}${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}</section>`;
+      return `<section class="panel full" data-commentary-key="open_ticket_aging_trend"><p class="label">KPI Trends</p><h3>Open Ticket Aging Trend</h3><p class="muted">Open tickets at period end grouped by aging bucket using the Backlog(Open) exit logic.</p>${openTicketAgingCategory("Incidents", "incident", "open_ticket_aging_incidents")}${openTicketAgingCategory("SC Tasks", "sc_task", "open_ticket_aging_sc_tasks")}${openTicketAgingCategory("Overall", "all", "open_ticket_aging_overall")}${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}</section>`;
     }
     function reassignmentHopsPoints() {
       const rows = (DASHBOARD.volumetrics.kpi_trends?.reassignment_hops?.rows || []).filter(offlineFilterMatch);

@@ -5583,7 +5583,7 @@ def volumetrics_kpi_duration_buckets(db: Session, request: Any) -> dict[str, Any
 
 def open_ticket_aging_rows(db: Session, request: Any) -> list[dict[str, Any]]:
     monthly_request = replace_request_value(
-        complete_month_clamped_request(db, request),
+        request,
         "time_grain",
         "monthly",
     )
@@ -5593,7 +5593,10 @@ def open_ticket_aging_rows(db: Session, request: Any) -> list[dict[str, Any]]:
 
     for period in periods:
         period_end = normalize_dashboard_datetime(period.end)
+        period_start = normalize_dashboard_datetime(period.start)
         age_seconds = func.extract("epoch", literal(period_end) - source.c.created_at)
+        created_period = volumetrics_period_start_expression(source.c.created_at, "monthly")
+        exit_period = volumetrics_period_start_expression(source.c.exit_at, "monthly")
         statement = (
             select(
                 func.count(source.c.id)
@@ -5623,9 +5626,8 @@ def open_ticket_aging_rows(db: Session, request: Any) -> list[dict[str, Any]]:
                     include_date_bounds=False,
                 ),
                 source.c.created_at.is_not(None),
-                source.c.created_at <= period_end,
-                or_(source.c.exit_at.is_(None), source.c.exit_at > period_end),
-                ~volumetrics_cancelled_state_expression(source.c),
+                created_period <= period_start,
+                or_(source.c.exit_at.is_(None), exit_period > period_start),
             )
         )
         values = db.execute(statement).mappings().one()
@@ -5680,8 +5682,8 @@ def volumetrics_kpi_open_ticket_aging_trend(db: Session, request: Any) -> dict[s
             "Open Ticket Aging Trend uses the same normalized volumetrics source and "
             "period-end exit logic as Backlog(Open).",
             "Age is calculated as period end date minus created date.",
-            "Cancelled/canceled tickets are excluded.",
-            "SC Tasks in Closed Incomplete state are excluded.",
+            "Cancelled/canceled tickets and SC Tasks in Closed Incomplete state are removed "
+            "from the aging trend when their Backlog(Open) exit period has passed.",
             "Overall includes Incidents and SC Tasks only.",
         ],
         "warnings": [],

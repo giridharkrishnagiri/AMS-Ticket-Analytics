@@ -4243,6 +4243,38 @@ def test_volumetrics_open_ticket_aging_trend_buckets_and_exclusions() -> None:
             project_id,
             batch_id,
             file_id,
+            "INC-AGING-CANCELLED-AFTER-END",
+            "INCIDENT",
+            dt("2026-05-01T00:00:00"),
+            state="Cancelled",
+            closed_at=dt("2026-06-10T00:00:00"),
+            assignment_group="IT-SAP-Aging",
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-AGING-INCOMPLETE-AFTER-END",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-05-01T00:00:00"),
+            state="Closed Incomplete",
+            closed_at=dt("2026-06-10T00:00:00"),
+            assignment_group="IT-SAP-Aging",
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
             "SCTASK-AGING-INCOMPLETE",
             "SERVICE_CATALOG_TASK",
             dt("2026-05-01T00:00:00"),
@@ -4341,6 +4373,10 @@ def test_volumetrics_open_ticket_aging_trend_buckets_and_exclusions() -> None:
                     "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
                 },
             )
+            backlog_response = client.post(
+                "/api/dashboard/volumetrics/backlog",
+                json=request_body,
+            )
 
         assert response.status_code == 200
         payload = response.json()
@@ -4356,35 +4392,44 @@ def test_volumetrics_open_ticket_aging_trend_buckets_and_exclusions() -> None:
         assert incident_may["open_0_1_days"] == 1
         assert incident_may["open_1_3_days"] == 1
         assert incident_may["open_3_10_days"] == 1
-        assert incident_may["open_gt_10_days"] == 1
-        assert incident_may["total_open"] == 4
+        assert incident_may["open_gt_10_days"] == 3
+        assert incident_may["total_open"] == 6
         assert sc_task_may["open_0_1_days"] == 1
         assert sc_task_may["open_1_3_days"] == 1
         assert sc_task_may["open_3_10_days"] == 1
-        assert sc_task_may["open_gt_10_days"] == 1
-        assert sc_task_may["total_open"] == 4
+        assert sc_task_may["open_gt_10_days"] == 2
+        assert sc_task_may["total_open"] == 5
         assert overall_may["open_0_1_days"] == 2
         assert overall_may["open_1_3_days"] == 2
         assert overall_may["open_3_10_days"] == 2
-        assert overall_may["open_gt_10_days"] == 2
-        assert overall_may["total_open"] == 8
-        assert "Cancelled/canceled tickets are excluded." in payload["data_notes"]
+        assert overall_may["open_gt_10_days"] == 5
+        assert overall_may["total_open"] == 11
+        assert (
+            "Cancelled/canceled tickets and SC Tasks in Closed Incomplete state are removed "
+            "from the aging trend when their Backlog(Open) exit period has passed."
+            in payload["data_notes"]
+        )
         assert "Overall includes Incidents and SC Tasks only." in payload["data_notes"]
         assert "normalized_payload" not in response.text
         assert "cmdb_payload" not in response.text
+        assert backlog_response.status_code == 200
+        backlog_may = {row["period_label"]: row for row in backlog_response.json()["points"]}[
+            "May-26"
+        ]
+        assert overall_may["total_open"] == backlog_may["backlog_open"]
 
         assert all_scope_response.status_code == 200
         all_scope_incident_may = {
             row["period_key"]: row for row in all_scope_response.json()["incidents"]["rows"]
         }["2026-05"]
-        assert all_scope_incident_may["open_gt_10_days"] == 2
-        assert all_scope_incident_may["total_open"] == 5
+        assert all_scope_incident_may["open_gt_10_days"] == 4
+        assert all_scope_incident_may["total_open"] == 7
 
         assert filtered_response.status_code == 200
         filtered_overall_may = {
             row["period_key"]: row for row in filtered_response.json()["overall"]["rows"]
         }["2026-05"]
-        assert filtered_overall_may["total_open"] == 8
+        assert filtered_overall_may["total_open"] == 11
     finally:
         cleanup_client(db, client_id)
 
