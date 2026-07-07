@@ -63,6 +63,7 @@ from app.schemas.dashboard import (
     VolumetricsIncidentBatchTrendResponse,
     VolumetricsKpiDurationBucketsResponse,
     VolumetricsKpiMttrTrendsResponse,
+    VolumetricsOpenTicketAgingTrendResponse,
     VolumetricsPriorityDistributionResponse,
     VolumetricsProblemManagementTrendResponse,
     VolumetricsReassignmentHopsTrendResponse,
@@ -112,6 +113,7 @@ from app.services.dashboard import (
     volumetrics_incident_batch_trend,
     volumetrics_kpi_duration_buckets,
     volumetrics_kpi_mttr_trends,
+    volumetrics_kpi_open_ticket_aging_trend,
     volumetrics_kpi_problem_management_trend,
     volumetrics_kpi_reassignment_hops_trend,
     volumetrics_priority_distribution,
@@ -652,6 +654,20 @@ def get_dashboard_volumetrics_kpi_duration_buckets(
 ) -> dict[str, object]:
     try:
         return volumetrics_kpi_duration_buckets(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/kpi-open-ticket-aging-trend",
+    response_model=VolumetricsOpenTicketAgingTrendResponse,
+)
+def get_dashboard_volumetrics_kpi_open_ticket_aging_trend(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_kpi_open_ticket_aging_trend(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

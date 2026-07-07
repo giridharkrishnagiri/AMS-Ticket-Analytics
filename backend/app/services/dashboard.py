@@ -5580,6 +5580,113 @@ def volumetrics_kpi_duration_buckets(db: Session, request: Any) -> dict[str, Any
     }
 
 
+def open_ticket_aging_rows(db: Session, request: Any) -> list[dict[str, Any]]:
+    monthly_request = replace_request_value(
+        complete_month_clamped_request(db, request),
+        "time_grain",
+        "monthly",
+    )
+    periods = build_volumetrics_periods(monthly_request)
+    source = volumetrics_source_subquery(monthly_request)
+    rows: list[dict[str, Any]] = []
+
+    for period in periods:
+        period_end = normalize_dashboard_datetime(period.end)
+        age_seconds = func.extract("epoch", literal(period_end) - source.c.created_at)
+        statement = (
+            select(
+                func.count(source.c.id)
+                .filter(age_seconds >= 0, age_seconds <= SECONDS_PER_DAY)
+                .label("open_0_1_days"),
+                func.count(source.c.id)
+                .filter(
+                    age_seconds > SECONDS_PER_DAY,
+                    age_seconds <= SECONDS_PER_DAY * 3,
+                )
+                .label("open_1_3_days"),
+                func.count(source.c.id)
+                .filter(
+                    age_seconds > SECONDS_PER_DAY * 3,
+                    age_seconds <= SECONDS_PER_DAY * 10,
+                )
+                .label("open_3_10_days"),
+                func.count(source.c.id)
+                .filter(age_seconds > SECONDS_PER_DAY * 10)
+                .label("open_gt_10_days"),
+            )
+            .select_from(source)
+            .where(
+                *volumetrics_base_conditions(
+                    source,
+                    monthly_request,
+                    include_date_bounds=False,
+                ),
+                source.c.created_at.is_not(None),
+                source.c.created_at <= period_end,
+                or_(source.c.exit_at.is_(None), source.c.exit_at > period_end),
+                ~volumetrics_cancelled_state_expression(source.c),
+            )
+        )
+        values = db.execute(statement).mappings().one()
+        open_0_1_days = int_count(values["open_0_1_days"])
+        open_1_3_days = int_count(values["open_1_3_days"])
+        open_3_10_days = int_count(values["open_3_10_days"])
+        open_gt_10_days = int_count(values["open_gt_10_days"])
+        rows.append(
+            {
+                "period_key": volumetrics_period_lookup_key(period.start, "monthly"),
+                "period_label": period.label,
+                "period_start": period.start,
+                "period_end": period.end,
+                "open_0_1_days": open_0_1_days,
+                "open_1_3_days": open_1_3_days,
+                "open_3_10_days": open_3_10_days,
+                "open_gt_10_days": open_gt_10_days,
+                "total_open": (
+                    open_0_1_days
+                    + open_1_3_days
+                    + open_3_10_days
+                    + open_gt_10_days
+                ),
+            },
+        )
+    return rows
+
+
+def volumetrics_kpi_open_ticket_aging_trend(db: Session, request: Any) -> dict[str, Any]:
+    monthly_request = replace_request_value(request, "time_grain", "monthly")
+    return {
+        "time_grain": "monthly",
+        "incidents": {
+            "title": "Incidents",
+            "rows": open_ticket_aging_rows(
+                db,
+                replace_request_value(monthly_request, "ticket_type", "incident"),
+            ),
+        },
+        "sc_tasks": {
+            "title": "SC Tasks",
+            "rows": open_ticket_aging_rows(
+                db,
+                replace_request_value(monthly_request, "ticket_type", "sc_task"),
+            ),
+        },
+        "overall": {
+            "title": "Overall",
+            "rows": open_ticket_aging_rows(db, monthly_request),
+        },
+        "data_notes": [
+            "Open Ticket Aging Trend uses the same normalized volumetrics source and "
+            "period-end exit logic as Backlog(Open).",
+            "Age is calculated as period end date minus created date.",
+            "Cancelled/canceled tickets are excluded.",
+            "SC Tasks in Closed Incomplete state are excluded.",
+            "Overall includes Incidents and SC Tasks only.",
+        ],
+        "warnings": [],
+    }
+
+
 def non_negative_reassignment_expression(source: Any) -> Any:
     reassignment_count = func.coalesce(source.c.reassignment_count, 0)
     return case((reassignment_count < 0, 0), else_=reassignment_count)

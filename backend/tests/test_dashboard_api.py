@@ -4169,6 +4169,222 @@ def test_volumetrics_prompt17_detailed_splits_mttr_and_duration_buckets() -> Non
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_open_ticket_aging_trend_buckets_and_exclusions() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        period_end = dt("2026-05-31T23:59:59")
+        incident_specs = [
+            ("INC-AGING-0-1", "2026-05-31T00:00:00"),
+            ("INC-AGING-1-3", "2026-05-29T00:00:00"),
+            ("INC-AGING-3-10", "2026-05-25T00:00:00"),
+            ("INC-AGING-GT-10", "2026-05-01T00:00:00"),
+        ]
+        for number, created_at in incident_specs:
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                number,
+                "INCIDENT",
+                dt(created_at),
+                state="Open",
+                assignment_group="IT-SAP-Aging",
+                functional_track="Data",
+                ams_owner="Owner A",
+                sap_non_sap="SAP",
+                business_critical="Critical",
+            )
+
+        sc_task_specs = [
+            ("SCTASK-AGING-0-1", "2026-05-31T12:00:00"),
+            ("SCTASK-AGING-1-3", "2026-05-29T12:00:00"),
+            ("SCTASK-AGING-3-10", "2026-05-26T00:00:00"),
+            ("SCTASK-AGING-GT-10", "2026-05-10T00:00:00"),
+        ]
+        for number, created_at in sc_task_specs:
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                number,
+                "SERVICE_CATALOG_TASK",
+                dt(created_at),
+                state="Open",
+                assignment_group="IT-SAP-Aging",
+                functional_track="Data",
+                ams_owner="Owner A",
+                sap_non_sap="SAP",
+                business_critical="Critical",
+            )
+
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-AGING-CANCELLED",
+            "INCIDENT",
+            dt("2026-05-01T00:00:00"),
+            state="Cancelled",
+            assignment_group="IT-SAP-Aging",
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-AGING-INCOMPLETE",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-05-01T00:00:00"),
+            state="Closed Incomplete",
+            assignment_group="IT-SAP-Aging",
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-AGING-RESOLVED-BEFORE-END",
+            "INCIDENT",
+            dt("2026-05-01T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-05-20T00:00:00"),
+            assignment_group="IT-SAP-Aging",
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-AGING-CLOSED-BEFORE-END",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-05-01T00:00:00"),
+            state="Closed Complete",
+            closed_at=dt("2026-05-15T00:00:00"),
+            assignment_group="IT-SAP-Aging",
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-AGING-COMPLETION-MARKER",
+            "INCIDENT",
+            dt("2026-05-01T00:00:00"),
+            state="Resolved",
+            resolved_at=period_end,
+            assignment_group="IT-SAP-Aging",
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-AGING-OOS-GT-10",
+            "INCIDENT",
+            dt("2026-05-01T00:00:00"),
+            state="Open",
+            assignment_group="IT-SAP-Aging-OOS",
+            functional_track="Data",
+            ams_owner="Owner A",
+        )
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "in_scope",
+            "ticket_type": "all",
+            "time_grain": "monthly",
+            "start_datetime": "2026-05-01T00:00:00+00:00",
+            "end_datetime": "2026-05-31T23:59:59+00:00",
+            "filters": {},
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/kpi-open-ticket-aging-trend",
+                json=request_body,
+            )
+            all_scope_response = client.post(
+                "/api/dashboard/volumetrics/kpi-open-ticket-aging-trend",
+                json={**request_body, "scope": "all"},
+            )
+            filtered_response = client.post(
+                "/api/dashboard/volumetrics/kpi-open-ticket-aging-trend",
+                json={
+                    **request_body,
+                    "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        incident_may = {row["period_key"]: row for row in payload["incidents"]["rows"]}[
+            "2026-05"
+        ]
+        sc_task_may = {row["period_key"]: row for row in payload["sc_tasks"]["rows"]}[
+            "2026-05"
+        ]
+        overall_may = {row["period_key"]: row for row in payload["overall"]["rows"]}[
+            "2026-05"
+        ]
+        assert incident_may["open_0_1_days"] == 1
+        assert incident_may["open_1_3_days"] == 1
+        assert incident_may["open_3_10_days"] == 1
+        assert incident_may["open_gt_10_days"] == 1
+        assert incident_may["total_open"] == 4
+        assert sc_task_may["open_0_1_days"] == 1
+        assert sc_task_may["open_1_3_days"] == 1
+        assert sc_task_may["open_3_10_days"] == 1
+        assert sc_task_may["open_gt_10_days"] == 1
+        assert sc_task_may["total_open"] == 4
+        assert overall_may["open_0_1_days"] == 2
+        assert overall_may["open_1_3_days"] == 2
+        assert overall_may["open_3_10_days"] == 2
+        assert overall_may["open_gt_10_days"] == 2
+        assert overall_may["total_open"] == 8
+        assert "Cancelled/canceled tickets are excluded." in payload["data_notes"]
+        assert "Overall includes Incidents and SC Tasks only." in payload["data_notes"]
+        assert "normalized_payload" not in response.text
+        assert "cmdb_payload" not in response.text
+
+        assert all_scope_response.status_code == 200
+        all_scope_incident_may = {
+            row["period_key"]: row for row in all_scope_response.json()["incidents"]["rows"]
+        }["2026-05"]
+        assert all_scope_incident_may["open_gt_10_days"] == 2
+        assert all_scope_incident_may["total_open"] == 5
+
+        assert filtered_response.status_code == 200
+        filtered_overall_may = {
+            row["period_key"]: row for row in filtered_response.json()["overall"]["rows"]
+        }["2026-05"]
+        assert filtered_overall_may["total_open"] == 8
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_volumetrics_reassignment_hops_trend_counts_hops_and_filters() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
@@ -4654,6 +4870,29 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         sc_task.application_owner = "Application Owner B"
         sc_task.supported_by_vendor = "Vendor B"
 
+        open_aging_ticket = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-OFFLINE-OPEN-AGING",
+            "INCIDENT",
+            dt("2026-01-31T12:00:00"),
+            state="Open",
+            assignment_group="IT-SAP-PAYROLL",
+            architecture_type="Cloud",
+            business_critical="Critical",
+            install_type="Production",
+            hosting_env="Production",
+        )
+        open_aging_ticket.functional_track = "Data"
+        open_aging_ticket.ams_owner = "Owner A"
+        open_aging_ticket.support_lead = "Lead A"
+        open_aging_ticket.business_service_ci_name = "Payroll Portal"
+        open_aging_ticket.parent_application_name = "Parent Payroll"
+        open_aging_ticket.application_owner = "Application Owner A"
+        open_aging_ticket.supported_by_vendor = "Vendor A"
+
         incomplete_month_incident = add_ticket(
             db,
             project_id,
@@ -4915,6 +5154,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "sc_task_duration_buckets_row" in document
         assert "Reassignment / Hops Trend" in document
         assert "reassignment_hops_trend" in document
+        assert "Open Ticket Aging Trend" in document
+        assert "open_ticket_aging_trend" in document
+        assert "open_ticket_aging_incidents" in document
+        assert "function openTicketAgingLineChart" in document
+        assert "0-1 Days Open" in document
+        assert "&gt;10 Days Open" in document
         assert "Problem Management Trend" in document
         assert "problem_management_trend" in document
         assert "function problemManagementChart" in document
@@ -5057,6 +5302,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Math.max(options.width || 1180" not in document
         assert "data.length * 60" not in document
         assert "INC-OFFLINE-RAW-SECRET" not in document
+        assert "INC-OFFLINE-OPEN-AGING" not in document
         assert "INC-OFFLINE-INCOMPLETE-MONTH" not in document
         assert "SCTASK-OFFLINE-RAW-SECRET" not in document
         assert "INC-OFFLINE-OOS-SECRET" not in document
@@ -5157,6 +5403,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         ] == "Latest complete 6 months"
         assert payload["volumetrics"]["kpi_trends"]["mttr"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["duration_buckets"]["rows"]
+        assert payload["volumetrics"]["kpi_trends"]["open_ticket_aging"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["reassignment_hops"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["problem_management"]["rows"]
         detailed_row = payload["volumetrics"]["detailed_volume_trends"]["application_rows"][0]
@@ -5185,6 +5432,13 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "ticket_number" not in reassignment_row
         assert "short_description" not in reassignment_row
         assert "normalized_payload" not in reassignment_row
+        aging_row = payload["volumetrics"]["kpi_trends"]["open_ticket_aging"]["rows"][0]
+        assert "open_0_1_days" in aging_row
+        assert "open_gt_10_days" in aging_row
+        assert "total_open" in aging_row
+        assert "ticket_number" not in aging_row
+        assert "short_description" not in aging_row
+        assert "normalized_payload" not in aging_row
         problem_row = payload["volumetrics"]["kpi_trends"]["problem_management"]["rows"][0]
         assert "scope" in problem_row
         assert "problem_tickets_created" in problem_row

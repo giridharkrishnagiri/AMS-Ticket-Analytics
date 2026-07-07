@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Float, Integer, case, cast, func, literal, select, union_all
+from sqlalchemy import Float, Integer, case, cast, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -56,6 +56,7 @@ from app.services.dashboard import (
     volumetrics_base_conditions,
     volumetrics_cancelled_count_date_expression,
     volumetrics_cancelled_expression,
+    volumetrics_cancelled_state_expression,
     volumetrics_data_range,
     volumetrics_display_expression,
     volumetrics_period_start_expression,
@@ -1605,6 +1606,89 @@ def build_duration_bucket_payload(db: Session, project_id: UUID) -> dict[str, An
     }
 
 
+def build_open_ticket_aging_payload(
+    db: Session,
+    project_id: UUID,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> dict[str, Any]:
+    request = monthly_request(project_id, start_datetime, end_datetime)
+    source = build_volumetrics_source(project_id)
+    dimensions = volumetrics_dimension_expressions(source)
+    periods = build_volumetrics_periods(request)
+    rows: list[dict[str, Any]] = []
+
+    for ticket_type in ("incident", "sc_task"):
+        effective_request = SimpleNamespace(**{**request.__dict__, "ticket_type": ticket_type})
+        for period in periods:
+            period_end = normalize_dashboard_datetime(period.end)
+            age_seconds = func.extract("epoch", literal(period_end) - source.c.created_at)
+            statement = (
+                select(
+                    *[expression.label(name) for name, expression in dimensions.items()],
+                    func.count(source.c.id)
+                    .filter(age_seconds >= 0, age_seconds <= 86400)
+                    .label("open_0_1_days"),
+                    func.count(source.c.id)
+                    .filter(age_seconds > 86400, age_seconds <= 86400 * 3)
+                    .label("open_1_3_days"),
+                    func.count(source.c.id)
+                    .filter(age_seconds > 86400 * 3, age_seconds <= 86400 * 10)
+                    .label("open_3_10_days"),
+                    func.count(source.c.id)
+                    .filter(age_seconds > 86400 * 10)
+                    .label("open_gt_10_days"),
+                )
+                .select_from(source)
+                .where(
+                    *volumetrics_base_conditions(
+                        source,
+                        effective_request,
+                        include_date_bounds=False,
+                    ),
+                    source.c.created_at.is_not(None),
+                    source.c.created_at <= period_end,
+                    or_(source.c.exit_at.is_(None), source.c.exit_at > period_end),
+                    ~volumetrics_cancelled_state_expression(source.c),
+                )
+                .group_by(*dimensions.values())
+            )
+            for row in db.execute(statement).mappings().all():
+                open_0_1_days = int(row["open_0_1_days"] or 0)
+                open_1_3_days = int(row["open_1_3_days"] or 0)
+                open_3_10_days = int(row["open_3_10_days"] or 0)
+                open_gt_10_days = int(row["open_gt_10_days"] or 0)
+                rows.append(
+                    {
+                        **dimension_dict(dimension_key(row)),
+                        "period_key": month_key(period.start),
+                        "period_label": period.label,
+                        "open_0_1_days": open_0_1_days,
+                        "open_1_3_days": open_1_3_days,
+                        "open_3_10_days": open_3_10_days,
+                        "open_gt_10_days": open_gt_10_days,
+                        "total_open": (
+                            open_0_1_days
+                            + open_1_3_days
+                            + open_3_10_days
+                            + open_gt_10_days
+                        ),
+                    },
+                )
+
+    return {
+        "rows": rows,
+        "data_notes": [
+            "Open Ticket Aging Trend uses the same normalized volumetrics source and "
+            "period-end exit logic as Backlog(Open).",
+            "Age is calculated as period end date minus created date.",
+            "Cancelled/canceled tickets are excluded.",
+            "SC Tasks in Closed Incomplete state are excluded.",
+            "Overall includes Incidents and SC Tasks only.",
+        ],
+    }
+
+
 def build_filter_values(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
     functional_values = sorted(
         {row["functional_track_ams_owner"] for row in monthly_rows},
@@ -1685,6 +1769,7 @@ def build_volumetrics_payload(
             "kpi_trends": {
                 "mttr": {"rows": []},
                 "duration_buckets": {"periods": [], "buckets": [], "rows": []},
+                "open_ticket_aging": {"rows": [], "data_notes": []},
                 "reassignment_hops": {"rows": []},
                 "problem_management": {"rows": [], "data_notes": []},
             },
@@ -1726,6 +1811,7 @@ def build_volumetrics_payload(
             "kpi_trends": {
                 "mttr": {"rows": []},
                 "duration_buckets": {"periods": [], "buckets": [], "rows": []},
+                "open_ticket_aging": {"rows": [], "data_notes": []},
                 "reassignment_hops": {"rows": []},
                 "problem_management": {"rows": [], "data_notes": []},
             },
@@ -1795,6 +1881,12 @@ def build_volumetrics_payload(
         "kpi_trends": {
             "mttr": build_kpi_mttr_payload(db, project_id, start_datetime, end_datetime),
             "duration_buckets": build_duration_bucket_payload(db, project_id),
+            "open_ticket_aging": build_open_ticket_aging_payload(
+                db,
+                project_id,
+                start_datetime,
+                end_datetime,
+            ),
             "reassignment_hops": build_reassignment_hops_payload(monthly_rows),
             "problem_management": build_problem_management_payload(
                 db,
@@ -4954,6 +5046,99 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const commentaryKey = ticketType === "incident" ? "incident_duration_buckets_row" : "sc_task_duration_buckets_row";
       return `<section class="panel full"><p class="label">Duration Buckets</p><h3>${esc(title)}</h3><div class="duration-grid">${durationRows(ticketType).map(durationBucketChart).join("")}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: commentaryKey })}</section>`;
     }
+    const openAgingSeries = {
+      short: [
+        { key: "open_0_1_days", name: "0-1 Days Open", color: COLORS.teal },
+        { key: "open_1_3_days", name: "1-3 Days Open", color: COLORS.blue }
+      ],
+      long: [
+        { key: "open_3_10_days", name: "3-10 Days Open", color: COLORS.purple },
+        { key: "open_gt_10_days", name: ">10 Days Open", color: COLORS.red }
+      ]
+    };
+    function openTicketAgingPoints(ticketType) {
+      const rows = (DASHBOARD.volumetrics.kpi_trends?.open_ticket_aging?.rows || [])
+        .filter((row) => (ticketType === "all" || row.ticket_type === ticketType) && offlineFilterMatch(row));
+      const totals = new Map();
+      rows.forEach((row) => {
+        const current = totals.get(row.period_key) || {
+          open_0_1_days: 0,
+          open_1_3_days: 0,
+          open_3_10_days: 0,
+          open_gt_10_days: 0
+        };
+        current.open_0_1_days += Number(row.open_0_1_days || 0);
+        current.open_1_3_days += Number(row.open_1_3_days || 0);
+        current.open_3_10_days += Number(row.open_3_10_days || 0);
+        current.open_gt_10_days += Number(row.open_gt_10_days || 0);
+        totals.set(row.period_key, current);
+      });
+      return DASHBOARD.volumetrics.periods.map((period) => {
+        const values = totals.get(period.period_key) || {
+          open_0_1_days: 0,
+          open_1_3_days: 0,
+          open_3_10_days: 0,
+          open_gt_10_days: 0
+        };
+        return {
+          label: period.period_label,
+          period_key: period.period_key,
+          ...values,
+          total_open:
+            values.open_0_1_days +
+            values.open_1_3_days +
+            values.open_3_10_days +
+            values.open_gt_10_days
+        };
+      });
+    }
+    function openTicketAgingLineChart(data, series, ariaLabel) {
+      if (!data.length) return `<p class="muted" style="padding:12px">No open ticket aging data available.</p>`;
+      const width = 1040;
+      const height = 360;
+      const margin = { top: 54, right: 48, bottom: 82, left: 64 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const maxValue = Math.max(1, ...data.flatMap((row) => series.map((item) => Number(row[item.key] || 0))));
+      const xAt = (index) => margin.left + (plotWidth * index) / Math.max(1, data.length - 1);
+      const yAt = (value) => margin.top + plotHeight - (Number(value || 0) / maxValue) * plotHeight;
+      const gridLines = Array.from({ length: 4 }, (_, index) => {
+        const y = margin.top + (plotHeight * index) / 3;
+        return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#e2e8f0"></line>`;
+      }).join("");
+      const axisLabels = data.map((row, index) => {
+        const x = xAt(index);
+        return `<text x="${x}" y="${height - 38}" text-anchor="end" transform="rotate(-35 ${x} ${height - 38})" font-size="10" font-weight="700" fill="#475569">${esc(row.label)}</text>`;
+      }).join("");
+      const lines = series.map((item) => {
+        const points = data.map((row, index) => ({ x: xAt(index), y: yAt(row[item.key]), value: Number(row[item.key] || 0) }));
+        const path = points.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
+        return `<path d="${path}" fill="none" stroke="${item.color}" stroke-width="3"></path>${points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${item.color}" stroke-width="2"></circle>${point.value > 0 ? `<text x="${point.x}" y="${Math.max(margin.top + 12, point.y - 12)}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${fmt(point.value)}</text>` : ""}`).join("")}`;
+      }).join("");
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(ariaLabel)}">
+        ${gridLines}
+        <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + plotHeight}" stroke="#94a3b8"></line>
+        <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
+        <text x="18" y="${margin.top + plotHeight / 2}" transform="rotate(-90 18 ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">Open tickets</text>
+        ${lines}
+        ${axisLabels}
+      </svg>${legend(series.map((item) => ({ name: item.name, color: item.color })))}`;
+    }
+    function openTicketAgingTable(data, tableKey) {
+      return `<div class="table-card"><div class="table-scroll"><table class="applications-table" id="open-ticket-aging-${esc(tableKey)}"><thead><tr><th>Month</th><th>0-1 Days Open</th><th>1-3 Days Open</th><th>3-10 Days Open</th><th>&gt;10 Days Open</th><th>Total Open Tickets</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.open_0_1_days)}</td><td>${fmt(row.open_1_3_days)}</td><td>${fmt(row.open_3_10_days)}</td><td>${fmt(row.open_gt_10_days)}</td><td>${fmt(row.total_open)}</td></tr>`).join("")}</tbody></table></div></div>`;
+    }
+    function openTicketAgingCategory(title, ticketType, commentaryKey) {
+      const notApplicable = ticketType !== "all" && state.volTicketType !== "all" && state.volTicketType !== ticketType;
+      if (notApplicable) {
+        return `<section class="chart-card panel full"><h3>${esc(title)}</h3><p class="muted">This open aging group is not applicable for the selected ticket type.</p></section>`;
+      }
+      const points = openTicketAgingPoints(ticketType);
+      return `<section class="chart-card panel full"><h3>${esc(title)}</h3><p class="muted">Open tickets at period end by age from created date.</p><div class="chart-grid two"><div><h4>0-1 and 1-3 Days Open</h4><div class="chart-frame chart-stage">${openTicketAgingLineChart(points, openAgingSeries.short, `${title} 0-1 and 1-3 Days Open`)}</div></div><div><h4>3-10 and &gt;10 Days Open</h4><div class="chart-frame chart-stage">${openTicketAgingLineChart(points, openAgingSeries.long, `${title} 3-10 and >10 Days Open`)}</div></div></div>${openTicketAgingTable(points, ticketType)}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: commentaryKey })}</section>`;
+    }
+    function openTicketAgingGroup() {
+      const notes = DASHBOARD.volumetrics.kpi_trends?.open_ticket_aging?.data_notes || [];
+      return `<section class="panel full" data-commentary-key="open_ticket_aging_trend"><p class="label">KPI Trends</p><h3>Open Ticket Aging Trend</h3><p class="muted">Open tickets at period end grouped by aging bucket. Cancelled tickets are excluded.</p>${openTicketAgingCategory("Incidents", "incident", "open_ticket_aging_incidents")}${openTicketAgingCategory("SC Tasks", "sc_task", "open_ticket_aging_sc_tasks")}${openTicketAgingCategory("Overall", "all", "open_ticket_aging_overall")}${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}</section>`;
+    }
     function reassignmentHopsPoints() {
       const rows = (DASHBOARD.volumetrics.kpi_trends?.reassignment_hops?.rows || []).filter(offlineFilterMatch);
       const totals = new Map();
@@ -5111,6 +5296,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ${mttrGroup("Incident MTTR by Priority", "incident")}
         ${mttrGroup("SC Task MTTR by Priority", "sc_task")}
         ${reassignmentHopsGroup()}
+        ${openTicketAgingGroup()}
         ${problemManagementGroup()}
         ${durationGroup("Incident Resolved Volume by Resolution Duration", "incident")}
         ${durationGroup("SC Task Closed Volume by Closed Duration", "sc_task")}

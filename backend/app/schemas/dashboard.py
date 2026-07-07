@@ -992,6 +992,29 @@ class VolumetricsKpiDurationBucketsResponse(BaseModel):
     sc_task: list[VolumetricsDurationBucketRow]
 
 
+class VolumetricsOpenTicketAgingPoint(PeriodMetricRow):
+    period_key: str
+    open_0_1_days: int
+    open_1_3_days: int
+    open_3_10_days: int
+    open_gt_10_days: int
+    total_open: int
+
+
+class VolumetricsOpenTicketAgingSet(BaseModel):
+    title: str
+    rows: list[VolumetricsOpenTicketAgingPoint]
+
+
+class VolumetricsOpenTicketAgingTrendResponse(BaseModel):
+    time_grain: str
+    incidents: VolumetricsOpenTicketAgingSet
+    sc_tasks: VolumetricsOpenTicketAgingSet
+    overall: VolumetricsOpenTicketAgingSet
+    data_notes: list[str]
+    warnings: list[str]
+
+
 class VolumetricsReassignmentHopsDateRange(BaseModel):
     from_date: datetime
     to_date: datetime

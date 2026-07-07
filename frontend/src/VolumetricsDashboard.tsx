@@ -31,6 +31,7 @@ import {
   getDashboardVolumetricsIncidentBatchTrend,
   getDashboardVolumetricsKpiDurationBuckets,
   getDashboardVolumetricsKpiMttrTrends,
+  getDashboardVolumetricsKpiOpenTicketAgingTrend,
   getDashboardVolumetricsKpiProblemManagementTrend,
   getDashboardVolumetricsKpiReassignmentHopsTrend,
   getDashboardVolumetricsAssignmentGroupVolumetrics,
@@ -61,6 +62,9 @@ import type {
   DashboardVolumetricsKpiMttrPoint,
   DashboardVolumetricsKpiMttrPrioritySet,
   DashboardVolumetricsKpiMttrTrends,
+  DashboardVolumetricsOpenTicketAgingPoint,
+  DashboardVolumetricsOpenTicketAgingSet,
+  DashboardVolumetricsOpenTicketAgingTrend,
   DashboardVolumetricsAssignmentGroupMonth,
   DashboardVolumetricsAssignmentGroupMonthMetrics,
   DashboardVolumetricsAssignmentGroupTable,
@@ -316,6 +320,20 @@ const emptyDurationBuckets: DashboardVolumetricsKpiDurationBuckets = {
   months: [],
   incident: [],
   sc_task: [],
+};
+
+const emptyOpenTicketAgingSet: DashboardVolumetricsOpenTicketAgingSet = {
+  title: "",
+  rows: [],
+};
+
+const emptyOpenTicketAgingTrend: DashboardVolumetricsOpenTicketAgingTrend = {
+  time_grain: "monthly",
+  incidents: { ...emptyOpenTicketAgingSet, title: "Incidents" },
+  sc_tasks: { ...emptyOpenTicketAgingSet, title: "SC Tasks" },
+  overall: { ...emptyOpenTicketAgingSet, title: "Overall" },
+  data_notes: [],
+  warnings: [],
 };
 
 const emptyReassignmentHopsTrend: DashboardVolumetricsReassignmentHopsTrend = {
@@ -1136,6 +1154,9 @@ function VolumetricsDashboard({
   const [kpiDurationBuckets, setKpiDurationBuckets] = useState<
     LoadState<DashboardVolumetricsKpiDurationBuckets>
   >(createLoadState(emptyDurationBuckets));
+  const [openTicketAgingTrend, setOpenTicketAgingTrend] = useState<
+    LoadState<DashboardVolumetricsOpenTicketAgingTrend>
+  >(createLoadState(emptyOpenTicketAgingTrend));
   const [reassignmentHopsTrend, setReassignmentHopsTrend] = useState<
     LoadState<DashboardVolumetricsReassignmentHopsTrend>
   >(createLoadState(emptyReassignmentHopsTrend));
@@ -1361,6 +1382,7 @@ function VolumetricsDashboard({
     );
     setKpiMttrTrends(createLoadState(emptyKpiMttrTrends, "loading"));
     setKpiDurationBuckets(createLoadState(emptyDurationBuckets, "loading"));
+    setOpenTicketAgingTrend(createLoadState(emptyOpenTicketAgingTrend, "loading"));
     setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend, "loading"));
     setProblemManagementTrend(createLoadState(emptyProblemManagementTrend, "loading"));
 
@@ -1583,6 +1605,22 @@ function VolumetricsDashboard({
         });
       });
 
+    void getDashboardVolumetricsKpiOpenTicketAgingTrend(requestBody)
+      .then((nextOpenTicketAgingTrend) => {
+        setOpenTicketAgingTrend({
+          status: "success",
+          data: nextOpenTicketAgingTrend,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        setOpenTicketAgingTrend({
+          status: "error",
+          data: emptyOpenTicketAgingTrend,
+          error: errorMessage(error, "Unable to load open ticket aging trend"),
+        });
+      });
+
     void getDashboardVolumetricsKpiReassignmentHopsTrend(requestBody)
       .then((nextReassignmentHopsTrend) => {
         setReassignmentHopsTrend({
@@ -1696,6 +1734,7 @@ function VolumetricsDashboard({
       setScTaskCatalogItemProportion(createLoadState(emptyScTaskCatalogItemProportion));
       setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
       setKpiDurationBuckets(createLoadState(emptyDurationBuckets));
+      setOpenTicketAgingTrend(createLoadState(emptyOpenTicketAgingTrend));
       setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend));
       setProblemManagementTrend(createLoadState(emptyProblemManagementTrend));
       setAssignmentGroupVolumetrics(createLoadState(emptyAssignmentGroupVolumetrics));
@@ -2254,6 +2293,9 @@ function VolumetricsDashboard({
             mttr={kpiMttrTrends.data}
             mttrError={kpiMttrTrends.error}
             mttrStatus={kpiMttrTrends.status}
+            openTicketAging={openTicketAgingTrend.data}
+            openTicketAgingError={openTicketAgingTrend.error}
+            openTicketAgingStatus={openTicketAgingTrend.status}
             reassignmentHops={reassignmentHopsTrend.data}
             reassignmentHopsError={reassignmentHopsTrend.error}
             reassignmentHopsStatus={reassignmentHopsTrend.status}
@@ -3936,6 +3978,9 @@ function KpiTrends({
   mttr,
   mttrError,
   mttrStatus,
+  openTicketAging,
+  openTicketAgingError,
+  openTicketAgingStatus,
   problemManagement,
   problemManagementError,
   problemManagementStatus,
@@ -3952,6 +3997,9 @@ function KpiTrends({
   mttr: DashboardVolumetricsKpiMttrTrends;
   mttrError: string | null;
   mttrStatus: LoadStatus;
+  openTicketAging: DashboardVolumetricsOpenTicketAgingTrend;
+  openTicketAgingError: string | null;
+  openTicketAgingStatus: LoadStatus;
   problemManagement: DashboardVolumetricsProblemManagementTrend;
   problemManagementError: string | null;
   problemManagementStatus: LoadStatus;
@@ -3989,6 +4037,13 @@ function KpiTrends({
         error={reassignmentHopsError}
         status={reassignmentHopsStatus}
       />
+      <OpenTicketAgingTrendSection
+        commentaryForChart={commentaryForChart}
+        data={openTicketAging}
+        error={openTicketAgingError}
+        selectedTicketType={ticketType}
+        status={openTicketAgingStatus}
+      />
       <ProblemManagementTrendChart
         commentary={commentaryForChart("problem_management_trend")}
         data={problemManagement}
@@ -4013,6 +4068,317 @@ function KpiTrends({
         title="SC Task Closed Volume by Closed Duration"
         valueTicketType="sc_task"
       />
+    </>
+  );
+}
+
+const openTicketAgingSeries = {
+  short: [
+    {
+      dataKey: "open_0_1_days",
+      labelKey: "open_0_1_days_label",
+      name: "0-1 Days Open",
+      color: chartColors.created,
+    },
+    {
+      dataKey: "open_1_3_days",
+      labelKey: "open_1_3_days_label",
+      name: "1-3 Days Open",
+      color: chartColors.resolved,
+    },
+  ],
+  long: [
+    {
+      dataKey: "open_3_10_days",
+      labelKey: "open_3_10_days_label",
+      name: "3-10 Days Open",
+      color: chartColors.average,
+    },
+    {
+      dataKey: "open_gt_10_days",
+      labelKey: "open_gt_10_days_label",
+      name: ">10 Days Open",
+      color: chartColors.canceled,
+    },
+  ],
+};
+
+function openTicketAgingRows(rows: DashboardVolumetricsOpenTicketAgingPoint[]) {
+  return rows.map((row) => ({
+    ...row,
+    open_0_1_days_label: row.open_0_1_days > 0 ? String(row.open_0_1_days) : null,
+    open_1_3_days_label: row.open_1_3_days > 0 ? String(row.open_1_3_days) : null,
+    open_3_10_days_label: row.open_3_10_days > 0 ? String(row.open_3_10_days) : null,
+    open_gt_10_days_label: row.open_gt_10_days > 0 ? String(row.open_gt_10_days) : null,
+  }));
+}
+
+function OpenTicketAgingTrendSection({
+  commentaryForChart,
+  data,
+  error,
+  selectedTicketType,
+  status,
+}: {
+  commentaryForChart: (chartKey: string) => ReactNode;
+  data: DashboardVolumetricsOpenTicketAgingTrend;
+  error: string | null;
+  selectedTicketType: VolumetricsTicketType;
+  status: LoadStatus;
+}) {
+  return (
+    <section className="panel kpi-trends-section open-ticket-aging-section">
+      <div className="panel-heading">
+        <div>
+          <p className="label">KPI Trends</p>
+          <h3>Open Ticket Aging Trend</h3>
+          <p className="muted-text">
+            Open tickets at period end grouped by aging bucket. Cancelled tickets are excluded.
+          </p>
+        </div>
+      </div>
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      <OpenTicketAgingCategoryBlock
+        commentary={commentaryForChart("open_ticket_aging_incidents")}
+        data={data.incidents}
+        filenamePrefix="open_ticket_aging_incidents"
+        selectedTicketType={selectedTicketType}
+        status={status}
+        valueTicketType="incident"
+      />
+      <OpenTicketAgingCategoryBlock
+        commentary={commentaryForChart("open_ticket_aging_sc_tasks")}
+        data={data.sc_tasks}
+        filenamePrefix="open_ticket_aging_sc_tasks"
+        selectedTicketType={selectedTicketType}
+        status={status}
+        valueTicketType="sc_task"
+      />
+      <OpenTicketAgingCategoryBlock
+        commentary={commentaryForChart("open_ticket_aging_overall")}
+        data={data.overall}
+        filenamePrefix="open_ticket_aging_overall"
+        selectedTicketType={selectedTicketType}
+        status={status}
+        valueTicketType="all"
+      />
+      {data.data_notes.length ? (
+        <ul className="muted-text volumetrics-note-list">
+          {data.data_notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+      {data.warnings.length ? (
+        <ul className="error-text volumetrics-note-list">
+          {data.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function OpenTicketAgingCategoryBlock({
+  commentary,
+  data,
+  filenamePrefix,
+  selectedTicketType,
+  status,
+  valueTicketType,
+}: {
+  commentary: ReactNode;
+  data: DashboardVolumetricsOpenTicketAgingSet;
+  filenamePrefix: string;
+  selectedTicketType: VolumetricsTicketType;
+  status: LoadStatus;
+  valueTicketType: VolumetricsTicketType;
+}) {
+  const notApplicable =
+    valueTicketType !== "all" &&
+    splitChartNotApplicable(
+      selectedTicketType,
+      valueTicketType as Exclude<VolumetricsTicketType, "all">
+    );
+  const rows = openTicketAgingRows(data.rows);
+
+  if (notApplicable) {
+    return (
+      <section className="open-ticket-aging-category">
+        <h4>{data.title}</h4>
+        <p className="muted-text chart-state-text">
+          This open aging group is not applicable for the selected ticket type.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="open-ticket-aging-category">
+      <h4>{data.title}</h4>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading charts...</p> : null}
+      {status !== "loading" && rows.length === 0 ? (
+        <p className="muted-text chart-state-text">No open ticket aging data available.</p>
+      ) : null}
+      {status !== "loading" && rows.length ? (
+        <>
+          <div className="open-ticket-aging-chart-grid">
+            <OpenTicketAgingLineChart
+              rows={rows}
+              series={openTicketAgingSeries.short}
+              title={`${data.title}: 0-1 and 1-3 Days Open`}
+            />
+            <OpenTicketAgingLineChart
+              rows={rows}
+              series={openTicketAgingSeries.long}
+              title={`${data.title}: 3-10 and >10 Days Open`}
+            />
+          </div>
+          <OpenTicketAgingTable
+            filename={`${filenamePrefix}.csv`}
+            label={`${data.title} open ticket aging trend`}
+            rows={data.rows}
+          />
+        </>
+      ) : null}
+      {commentary}
+    </section>
+  );
+}
+
+function OpenTicketAgingLineChart({
+  rows,
+  series,
+  title,
+}: {
+  rows: ReturnType<typeof openTicketAgingRows>;
+  series: Array<{
+    dataKey: string;
+    labelKey: string;
+    name: string;
+    color: string;
+  }>;
+  title: string;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const chartWidth = trendChartWidth(rows.length, "monthly", plotWidth);
+  const canCopy = rows.length > 0;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">Open tickets at period end by age from created date.</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+      <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+        <div className="applications-chart-scroll">
+          <div className="applications-chart-stage">
+            <ComposedChart
+              data={rows}
+              width={chartWidth}
+              height={320}
+              margin={{ top: 48, right: 48, bottom: 76, left: 58 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis
+                dataKey="period_label"
+                angle={-35}
+                height={78}
+                interval={0}
+                textAnchor="end"
+                tickMargin={12}
+              />
+              <YAxis
+                label={{ value: "Open tickets", angle: -90, position: "insideLeft" }}
+                tickFormatter={(value) => formatNumber(Number(value))}
+              />
+              <Tooltip
+                formatter={(value, name) => [formatNumber(Number(value)), name]}
+                labelFormatter={(label) => `Month: ${label}`}
+              />
+              <Legend />
+              {series.map((item, index) => (
+                <Line
+                  connectNulls
+                  dataKey={item.dataKey}
+                  dot={{ r: 3 }}
+                  key={item.dataKey}
+                  name={item.name}
+                  stroke={item.color}
+                  strokeWidth={2.5}
+                  type="monotone"
+                >
+                  <LabelList
+                    content={(props) =>
+                      renderMttrPointLabel({
+                        ...props,
+                        verticalOffset: index === 0 ? -14 : 24,
+                      })
+                    }
+                    dataKey={item.labelKey}
+                  />
+                </Line>
+              ))}
+            </ComposedChart>
+          </div>
+        </div>
+      </div>
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+function OpenTicketAgingTable({
+  filename,
+  label,
+  rows,
+}: {
+  filename: string;
+  label: string;
+  rows: DashboardVolumetricsOpenTicketAgingPoint[];
+}) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
+  return (
+    <>
+      <TableExportActions filename={filename} label={label} tableRef={tableRef} />
+      <div className="applications-table-frame volumetrics-data-table-frame">
+        <table className="applications-table volumetrics-data-table" ref={tableRef}>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>0-1 Days Open</th>
+              <th>1-3 Days Open</th>
+              <th>3-10 Days Open</th>
+              <th>&gt;10 Days Open</th>
+              <th>Total Open Tickets</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.period_key}>
+                <td>{row.period_label}</td>
+                <td>{formatNumber(row.open_0_1_days)}</td>
+                <td>{formatNumber(row.open_1_3_days)}</td>
+                <td>{formatNumber(row.open_3_10_days)}</td>
+                <td>{formatNumber(row.open_gt_10_days)}</td>
+                <td>{formatNumber(row.total_open)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

@@ -902,6 +902,32 @@ export type DashboardVolumetricsKpiDurationBuckets = {
   sc_task: DashboardVolumetricsDurationBucketRow[];
 };
 
+export type DashboardVolumetricsOpenTicketAgingPoint = {
+  period_key: string;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  open_0_1_days: number;
+  open_1_3_days: number;
+  open_3_10_days: number;
+  open_gt_10_days: number;
+  total_open: number;
+};
+
+export type DashboardVolumetricsOpenTicketAgingSet = {
+  title: string;
+  rows: DashboardVolumetricsOpenTicketAgingPoint[];
+};
+
+export type DashboardVolumetricsOpenTicketAgingTrend = {
+  time_grain: "monthly";
+  incidents: DashboardVolumetricsOpenTicketAgingSet;
+  sc_tasks: DashboardVolumetricsOpenTicketAgingSet;
+  overall: DashboardVolumetricsOpenTicketAgingSet;
+  data_notes: string[];
+  warnings: string[];
+};
+
 export type DashboardVolumetricsReassignmentHopsDateRange = {
   from_date: string;
   to_date: string;
@@ -1479,6 +1505,15 @@ export function getDashboardVolumetricsKpiDurationBuckets(
 ): Promise<DashboardVolumetricsKpiDurationBuckets> {
   return postVolumetricsRequest<DashboardVolumetricsKpiDurationBuckets>(
     "/dashboard/volumetrics/kpi-duration-buckets",
+    input
+  );
+}
+
+export function getDashboardVolumetricsKpiOpenTicketAgingTrend(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsOpenTicketAgingTrend> {
+  return postVolumetricsRequest<DashboardVolumetricsOpenTicketAgingTrend>(
+    "/dashboard/volumetrics/kpi-open-ticket-aging-trend",
     input
   );
 }
