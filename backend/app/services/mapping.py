@@ -1324,6 +1324,46 @@ def select_inventory_item_for_ticket(
     )
 
 
+def select_inventory_item_for_business_service_ci(
+    inventory_items: list[ApplicationInventoryItem],
+    business_service_ci_name: str | None,
+) -> ApplicationInventoryItem | None:
+    business_service_key = normalize_match_key(business_service_ci_name)
+    if business_service_key is None:
+        return None
+
+    matches = [
+        item
+        for item in inventory_items
+        if normalize_match_key(item.business_service_ci_name) == business_service_key
+    ]
+    if not matches:
+        return None
+
+    return sorted(
+        matches,
+        key=lambda item: (
+            0 if item.active is True else 1,
+            item.source_row_number or 999_999_999,
+            item.created_at,
+            str(item.id),
+        ),
+    )[0]
+
+
+def apply_service_inventory_enrichment_to_ticket(
+    ticket: Ticket,
+    inventory_item: ApplicationInventoryItem | None,
+) -> None:
+    if inventory_item is None:
+        ticket.service_type = None
+        ticket.service_entitlement = None
+        return
+
+    ticket.service_type = text_or_none(inventory_item.service_type)
+    ticket.service_entitlement = text_or_none(inventory_item.service_entitlement)
+
+
 def apply_inventory_enrichment_to_ticket(
     ticket: Ticket,
     inventory_item: ApplicationInventoryItem | None,
@@ -1340,6 +1380,8 @@ def apply_inventory_enrichment_to_ticket(
     ticket.functional_track = inventory_item.functional_track
     ticket.ams_owner = inventory_item.ams_owner
     ticket.supported_by_vendor = inventory_item.supported_by_vendor
+    ticket.service_type = text_or_none(inventory_item.service_type)
+    ticket.service_entitlement = text_or_none(inventory_item.service_entitlement)
     ticket.assignment_group_owner = inventory_item.assignment_group_owner
     ticket.derived_vendor = inventory_item.supported_by_vendor
     ticket.hosting_env = inventory_item.hosting_env
@@ -1610,6 +1652,8 @@ def build_out_of_scope_ticket(
         functional_track=ticket.functional_track,
         ams_owner=ticket.ams_owner,
         supported_by_vendor=ticket.supported_by_vendor,
+        service_type=ticket.service_type,
+        service_entitlement=ticket.service_entitlement,
         assignment_group_owner=ticket.assignment_group_owner,
         sap_non_sap=ticket.sap_non_sap,
         architecture_type=ticket.architecture_type,
@@ -2254,6 +2298,11 @@ def apply_mapping_to_batch(
 
                 inventory_item = select_inventory_item_for_ticket(ticket, inventory_items)
                 apply_inventory_enrichment_to_ticket(ticket, inventory_item)
+                service_inventory_item = select_inventory_item_for_business_service_ci(
+                    inventory_items,
+                    ticket.business_service,
+                )
+                apply_service_inventory_enrichment_to_ticket(ticket, service_inventory_item)
                 assignment_group_key = normalize_match_key(ticket.assignment_group)
                 if assignment_group_key is None:
                     out_of_scope_reason = "blank_assignment_group"

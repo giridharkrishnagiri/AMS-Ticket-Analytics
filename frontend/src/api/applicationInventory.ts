@@ -13,6 +13,8 @@ export type ApplicationInventoryItem = {
   functional_track: string | null;
   ams_owner: string | null;
   supported_by_vendor: string | null;
+  service_type: string | null;
+  service_entitlement: string | null;
   hosting_env: string | null;
   global_application: string | null;
   scope_status: string;

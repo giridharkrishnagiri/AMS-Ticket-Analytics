@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -89,6 +90,13 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "functional_track": ("Functional Track", "Track", "functional_track"),
     "ams_owner": ("AMS Owner", "AMS owner", "ams_owner"),
     "supported_by_vendor": ("Supported By Vendor", "Support vendor", "Vendor"),
+    "service_type": ("Service Type", "Service type", "service_type", "ServiceType"),
+    "service_entitlement": (
+        "Service Entitlement",
+        "Service entitlement",
+        "service_entitlement",
+        "ServiceEntitlement",
+    ),
     "hosting_env": ("Hosting Env", "Hosting Environment", "hosting_env"),
     "global_application": ("Global", "Global Application", "global_application"),
     "scope_status": (
@@ -274,7 +282,10 @@ def append_sample_message(messages: list[str], message: str) -> None:
 
 def normalize_match_key(value: Any) -> str | None:
     text = text_or_none(value)
-    return text.lower() if text is not None else None
+    if text is None:
+        return None
+    normalized = re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip().casefold()
+    return normalized or None
 
 
 def get_raw_value(raw_data: dict[str, Any], field_name: str) -> Any:
@@ -434,6 +445,10 @@ def clean_inventory_values(
         "ams_owner": text_or_none(get_raw_value(parsed_row.raw_data, "ams_owner")),
         "supported_by_vendor": text_or_none(
             get_raw_value(parsed_row.raw_data, "supported_by_vendor")
+        ),
+        "service_type": text_or_none(get_raw_value(parsed_row.raw_data, "service_type")),
+        "service_entitlement": text_or_none(
+            get_raw_value(parsed_row.raw_data, "service_entitlement")
         ),
         "hosting_env": text_or_none(get_raw_value(parsed_row.raw_data, "hosting_env")),
         "global_application": text_or_none(
@@ -1019,6 +1034,8 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             functional_track=None,
             ams_owner=None,
             supported_by_vendor=None,
+            service_type=None,
+            service_entitlement=None,
             assignment_group_owner=None,
             sap_non_sap=None,
             business_critical=None,
@@ -1039,6 +1056,8 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             functional_track=None,
             ams_owner=None,
             supported_by_vendor=None,
+            service_type=None,
+            service_entitlement=None,
             assignment_group_owner=None,
             sap_non_sap=None,
             business_critical=None,
@@ -1084,6 +1103,15 @@ def business_critical_expression_sql(alias: str = "i") -> str:
     return f"COALESCE({', '.join(expressions)})"
 
 
+def normalized_business_service_ci_sql(expression: str) -> str:
+    return (
+        "lower(regexp_replace("
+        f"btrim(replace({expression}, chr(160), ' ')), "
+        "'[[:space:]]+', ' ', 'g'"
+        "))"
+    )
+
+
 def update_tickets_from_inventory(
     db: Session,
     project_id: UUID,
@@ -1093,6 +1121,16 @@ def update_tickets_from_inventory(
 ) -> int:
     if table_name not in {"tickets", "assessment_out_of_scope_tickets"}:
         raise ApplicationInventoryError(f"Unsupported enrichment table: {table_name}")
+    service_type_expression = (
+        "NULLIF(btrim(i.service_type), '')" if ticket_column == "business_service" else "NULL"
+    )
+    service_entitlement_expression = (
+        "NULLIF(btrim(i.service_entitlement), '')"
+        if ticket_column == "business_service"
+        else "NULL"
+    )
+    ticket_key_expression = normalized_business_service_ci_sql(f"t.{ticket_column}")
+    inventory_key_expression = normalized_business_service_ci_sql("i.business_service_ci_name")
 
     statement = text(
         f"""
@@ -1108,6 +1146,8 @@ def update_tickets_from_inventory(
                 i.functional_track,
                 i.ams_owner,
                 i.supported_by_vendor,
+                {service_type_expression} AS service_type,
+                {service_entitlement_expression} AS service_entitlement,
                 i.assignment_group_owner,
                 i.hosting_env,
                 {business_critical_expression_sql()} AS business_critical,
@@ -1136,7 +1176,7 @@ def update_tickets_from_inventory(
              AND i.is_current IS true
              AND i.active IS NOT false
              AND nullif(btrim(t.{ticket_column}), '') IS NOT NULL
-             AND lower(btrim(t.{ticket_column})) = lower(btrim(i.business_service_ci_name))
+             AND {ticket_key_expression} = {inventory_key_expression}
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.application_inventory_id IS NULL
         )
@@ -1151,6 +1191,8 @@ def update_tickets_from_inventory(
             functional_track = candidates.functional_track,
             ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
+            service_type = candidates.service_type,
+            service_entitlement = candidates.service_entitlement,
             assignment_group_owner = candidates.assignment_group_owner,
             business_critical = candidates.business_critical,
             hosting_env = candidates.hosting_env,

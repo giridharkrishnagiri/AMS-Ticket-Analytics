@@ -195,6 +195,8 @@ def add_application_inventory_scope(
     *,
     assignment_group: str = IN_SCOPE_ASSIGNMENT_GROUP,
     business_service: str = IN_SCOPE_BUSINESS_SERVICE,
+    service_type: str | None = None,
+    service_entitlement: str | None = None,
 ) -> None:
     client_id = db.scalar(select(Project.client_id).where(Project.id == project_id))
     db.add(
@@ -222,6 +224,8 @@ def add_application_inventory_scope(
             functional_track="Mapping Track",
             ams_owner="Mapping AMS Owner",
             supported_by_vendor="HCLTech",
+            service_type=service_type,
+            service_entitlement=service_entitlement,
             scope_status="in_scope",
             cmdb_payload={
                 "Architecture type": "Vendor Managed",
@@ -814,6 +818,142 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
         assert ticket.reassignment_count == 3
         assert ticket.catalog_item_name == "Laptop Access"
         assert ticket.catalog_knowledge_base == "End User KB"
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_apply_mapping_enriches_service_fields_for_incidents_by_business_service_ci() -> None:
+    rows = [
+        {
+            "number": "INC-SERVICE-IN",
+            "short_description": "Matched in-scope service",
+            "state": "Resolved",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": "  mapping\xa0 SERVICE  ",
+            "sys_created_on": "2026-06-03 09:15:00",
+            "resolved_at": "2026-06-03 10:30:00",
+        },
+        {
+            "number": "INC-SERVICE-OUT",
+            "short_description": "Matched out-of-scope service",
+            "state": "Open",
+            "assignment_group": "External Support",
+            "business_service": "Mapping   Service",
+            "sys_created_on": "2026-06-04 09:15:00",
+        },
+        {
+            "number": "INC-SERVICE-NOMATCH",
+            "short_description": "Unmatched out-of-scope service",
+            "state": "Open",
+            "assignment_group": "External Support",
+            "business_service": "Unknown Service",
+            "sys_created_on": "2026-06-05 09:15:00",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(rows)
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+        "resolved_at": "resolved_at",
+    }
+
+    try:
+        add_application_inventory_scope(
+            db,
+            project_id,
+            service_type="Managed Service",
+            service_entitlement="Gold",
+        )
+        db.commit()
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+
+        in_scope_ticket = db.scalar(
+            select(Ticket).where(Ticket.ticket_number == "INC-SERVICE-IN")
+        )
+        out_tickets = {
+            row.ticket_number: row
+            for row in db.scalars(
+                select(AssessmentOutOfScopeTicket).where(
+                    AssessmentOutOfScopeTicket.project_id == project_id
+                )
+            ).all()
+        }
+
+        assert result.normalized_ticket_count == 1
+        assert result.out_of_scope_ticket_count == 2
+        assert in_scope_ticket is not None
+        assert in_scope_ticket.service_type == "Managed Service"
+        assert in_scope_ticket.service_entitlement == "Gold"
+        assert out_tickets["INC-SERVICE-OUT"].service_type == "Managed Service"
+        assert out_tickets["INC-SERVICE-OUT"].service_entitlement == "Gold"
+        assert out_tickets["INC-SERVICE-NOMATCH"].service_type is None
+        assert out_tickets["INC-SERVICE-NOMATCH"].service_entitlement is None
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_business_service_ci() -> None:
+    rows = [
+        {
+            "number": "SCTASK-SERVICE-IN",
+            "short_description": "Matched in-scope task",
+            "state": "Closed Complete",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": "Mapping Service",
+            "sys_created_on": "2026-06-03 09:15:00",
+        },
+        {
+            "number": "SCTASK-SERVICE-OUT",
+            "short_description": "Matched out-of-scope task",
+            "state": "Open",
+            "assignment_group": "External Support",
+            "business_service": "mapping service",
+            "sys_created_on": "2026-06-04 09:15:00",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
+        rows,
+        ticket_type="SERVICE_CATALOG_TASK",
+    )
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+    }
+
+    try:
+        add_application_inventory_scope(
+            db,
+            project_id,
+            service_type="Task Service",
+            service_entitlement="Silver",
+        )
+        db.commit()
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        in_scope_ticket = db.scalar(
+            select(Ticket).where(Ticket.ticket_number == "SCTASK-SERVICE-IN")
+        )
+        out_of_scope_ticket = db.scalar(
+            select(AssessmentOutOfScopeTicket).where(
+                AssessmentOutOfScopeTicket.ticket_number == "SCTASK-SERVICE-OUT"
+            )
+        )
+
+        assert result.normalized_ticket_count == 1
+        assert result.out_of_scope_ticket_count == 1
+        assert in_scope_ticket is not None
+        assert in_scope_ticket.service_type == "Task Service"
+        assert in_scope_ticket.service_entitlement == "Silver"
+        assert out_of_scope_ticket is not None
+        assert out_of_scope_ticket.service_type == "Task Service"
+        assert out_of_scope_ticket.service_entitlement == "Silver"
     finally:
         cleanup_client(db, client_id)
 

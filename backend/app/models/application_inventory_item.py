@@ -97,6 +97,8 @@ class ApplicationInventoryItem(UuidPrimaryKeyMixin, TimestampMixin, Base):
     functional_track: Mapped[str | None] = mapped_column(Text, nullable=True)
     ams_owner: Mapped[str | None] = mapped_column(Text, nullable=True)
     supported_by_vendor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    service_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    service_entitlement: Mapped[str | None] = mapped_column(Text, nullable=True)
     sap_non_sap: Mapped[str | None] = mapped_column(Text, nullable=True)
     hosting_env: Mapped[str | None] = mapped_column(Text, nullable=True)
     global_application: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -357,6 +357,8 @@ class ApplicationsListRow(BaseModel):
     functional_track: str
     ams_owner: str
     supported_by_vendor: str
+    service_type: str
+    service_entitlement: str
     hosting_env: str
     global_application: str
     lifecycle_stage_status: str

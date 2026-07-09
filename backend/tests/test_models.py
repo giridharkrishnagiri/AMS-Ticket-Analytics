@@ -179,6 +179,8 @@ def test_application_inventory_columns_exist() -> None:
     assert "functional_track" in inventory_columns
     assert "ams_owner" in inventory_columns
     assert "supported_by_vendor" in inventory_columns
+    assert "service_type" in inventory_columns
+    assert "service_entitlement" in inventory_columns
     assert "hosting_env" in inventory_columns
     assert "global_application" in inventory_columns
     assert "active_users" in inventory_columns
@@ -194,6 +196,8 @@ def test_application_inventory_columns_exist() -> None:
     assert "functional_track" in ticket_columns
     assert "ams_owner" in ticket_columns
     assert "supported_by_vendor" in ticket_columns
+    assert "service_type" in ticket_columns
+    assert "service_entitlement" in ticket_columns
     assert "assignment_group_owner" in ticket_columns
     assert "architecture_type" in ticket_columns
     assert "install_type" in ticket_columns
@@ -269,6 +273,8 @@ def test_scope_split_vendor_sla_columns_exist() -> None:
     assert "functional_track" in out_of_scope_columns
     assert "ams_owner" in out_of_scope_columns
     assert "business_service_ci_name" in out_of_scope_columns
+    assert "service_type" in out_of_scope_columns
+    assert "service_entitlement" in out_of_scope_columns
     assert "architecture_type" in out_of_scope_columns
     assert "install_type" in out_of_scope_columns
     assert "hosting_env" in out_of_scope_columns

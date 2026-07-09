@@ -18,6 +18,8 @@ class ApplicationInventoryItemUpdateRequest(BaseModel):
     functional_track: str | None = None
     ams_owner: str | None = None
     supported_by_vendor: str | None = None
+    service_type: str | None = None
+    service_entitlement: str | None = None
     hosting_env: str | None = None
     global_application: str | None = None
     scope_status: str | None = None
@@ -45,6 +47,8 @@ class ApplicationInventoryItemResponse(BaseModel):
     functional_track: str | None
     ams_owner: str | None
     supported_by_vendor: str | None
+    service_type: str | None
+    service_entitlement: str | None
     hosting_env: str | None
     global_application: str | None
     scope_status: str

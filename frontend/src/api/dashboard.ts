@@ -318,6 +318,8 @@ export type DashboardApplicationRow = {
   functional_track: string;
   ams_owner: string;
   supported_by_vendor: string;
+  service_type: string;
+  service_entitlement: string;
   hosting_env: string;
   global_application: string;
   lifecycle_stage_status: string;

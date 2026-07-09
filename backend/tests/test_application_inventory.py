@@ -13,6 +13,7 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentOutOfScopeTicket,
     Client,
     Project,
     Ticket,
@@ -90,6 +91,8 @@ def add_inventory_item(
     functional_track: str = "Claims",
     ams_owner: str = "AMS Owner",
     vendor: str = "Vendor A",
+    service_type: str | None = None,
+    service_entitlement: str | None = None,
     hosting_env: str | None = None,
     row_number: int = 10,
     active: bool | None = True,
@@ -107,6 +110,8 @@ def add_inventory_item(
         functional_track=functional_track,
         ams_owner=ams_owner,
         supported_by_vendor=vendor,
+        service_type=service_type,
+        service_entitlement=service_entitlement,
         hosting_env=hosting_env,
         active=active,
         active_users=active_users,
@@ -164,14 +169,16 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
                 "Application Number (APM),Parent Business Application,Support group name,"
                 "Support group's owner,Application Owner,Business Service CI Name,"
                 "Support Lead (Managed by),Functional Track,AMS Owner,Supported By Vendor,"
-                "Active,Active Users,Application family,Business criticality,Total USD$",
+                "Service Type,Service Entitlement,Active,Active Users,Application family,"
+                "Business criticality,Total USD$",
                 " APM-1 , Parent App , IT-SAP-Claims , Group Owner , Owner One , "
-                "Claims Service , Lead One , Claims , AMS Owner , Vendor A , true , "
-                "100, Claims Family , High , #N/A",
+                "Claims Service , Lead One , Claims , AMS Owner , Vendor A , Gold , "
+                "Entitled , true , 100, Claims Family , High , #N/A",
                 "APM-1,Parent App,IT-SAP-Claims,Group Owner,Owner Two,Claims Service,"
-                "Lead Two,Claims,AMS Owner,Vendor A,true,250,Claims Family,#N/A,#N/A",
+                "Lead Two,Claims,AMS Owner,Vendor A,Platinum,Premium,true,250,"
+                "Claims Family,#N/A,#N/A",
                 "APM-2,Parent App,IT-SAP-Claims,Group Owner,Owner Missing,,Lead,Claims,"
-                "AMS Owner,Vendor A,true,15,Family,Low,#N/A",
+                "AMS Owner,Vendor A,,,true,15,Family,Low,#N/A",
             ]
         )
 
@@ -203,6 +210,8 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
         assert item.assignment_group == "IT-SAP-Claims"
         assert item.sap_non_sap == "SAP"
         assert item.business_service_ci_name == "Claims Service"
+        assert item.service_type == "Platinum"
+        assert item.service_entitlement == "Premium"
         assert item.active is True
         assert item.active_users == 250
         assert item.cmdb_payload == {
@@ -218,6 +227,8 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
         )
         assert scope_only_item is not None
         assert scope_only_item.assignment_group == "IT-SAP-Claims"
+        assert scope_only_item.service_type is None
+        assert scope_only_item.service_entitlement is None
         assert scope_only_item.scope_status == "in_scope"
     finally:
         cleanup_client(db, client_id)
@@ -242,6 +253,8 @@ def test_xlsx_upload_detects_second_row_header() -> None:
                 "Functional Track",
                 "AMS Owner",
                 "Supported By Vendor",
+                "service_type",
+                "Service entitlement",
                 "Active",
                 "Active Users",
                 "Application family",
@@ -259,6 +272,8 @@ def test_xlsx_upload_detects_second_row_header() -> None:
                 "Excel Track",
                 "AMS Excel Owner",
                 "Vendor Excel",
+                "Standard",
+                "Included",
                 "Yes",
                 1234,
                 "Excel Family",
@@ -293,6 +308,8 @@ def test_xlsx_upload_detects_second_row_header() -> None:
         assert item is not None
         assert item.source_sheet_name == "Group-App-BizService-Inscope"
         assert item.source_row_number == 3
+        assert item.service_type == "Standard"
+        assert item.service_entitlement == "Included"
         assert item.active_users == 1234
         assert item.cmdb_payload == {"Application family": "Excel Family"}
     finally:
@@ -597,6 +614,8 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
             "Claims Service",
             assignment_group="AMS Claims",
             support_lead="Claims Lead One",
+            service_type="Run",
+            service_entitlement="Bronze",
             row_number=10,
         )
         preferred_item = add_inventory_item(
@@ -605,6 +624,8 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
             "Claims Service",
             assignment_group="AMS Priority",
             support_lead="Claims Lead Two",
+            service_type="Run",
+            service_entitlement="Gold",
             row_number=20,
         )
         add_inventory_item(
@@ -657,6 +678,21 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
             business_service="Missing Service",
             application="Missing App",
         )
+        db.add(
+            AssessmentOutOfScopeTicket(
+                project_id=project_id,
+                upload_batch_id=batch_id,
+                ticket_number="INC-OOS-BUSINESS",
+                ticket_type="INCIDENT",
+                month_key="2026-06",
+                created_at=datetime(2026, 6, 1, tzinfo=UTC),
+                state="Open",
+                priority="P3",
+                assignment_group="External Support",
+                business_service="Claims\xa0Service",
+                out_of_scope_reason="assignment_group_not_in_scope_reference",
+            )
+        )
         db.commit()
 
         captured_sql: list[str] = []
@@ -677,7 +713,7 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
         assert preserve_response.status_code == 200
         payload = preserve_response.json()
         assert payload["total_tickets"] == 4
-        assert payload["updated_tickets"] == 2
+        assert payload["updated_tickets"] == 3
         assert payload["matched_tickets"] == 3
         assert payload["matched_by_business_service_count"] == 1
         assert payload["matched_by_application_count"] == 1
@@ -690,13 +726,27 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
         business_ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "INC-BUSINESS"))
         fallback_ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "INC-FALLBACK"))
         preserved_ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "INC-PRESERVED"))
+        out_of_scope_ticket = db.scalar(
+            select(AssessmentOutOfScopeTicket).where(
+                AssessmentOutOfScopeTicket.ticket_number == "INC-OOS-BUSINESS"
+            )
+        )
         assert business_ticket is not None
         assert fallback_ticket is not None
         assert preserved_ticket is not None
+        assert out_of_scope_ticket is not None
         assert business_ticket.application_inventory_id == preferred_item.id
         assert business_ticket.support_lead == "Claims Lead Two"
+        assert business_ticket.service_type == "Run"
+        assert business_ticket.service_entitlement == "Gold"
         assert fallback_ticket.business_service_ci_name == "Fallback Service"
+        assert fallback_ticket.service_type is None
+        assert fallback_ticket.service_entitlement is None
         assert preserved_ticket.support_lead == "Do Not Replace"
+        assert preserved_ticket.service_type is None
+        assert preserved_ticket.service_entitlement is None
+        assert out_of_scope_ticket.service_type == "Run"
+        assert out_of_scope_ticket.service_entitlement == "Bronze"
 
         with TestClient(app) as client:
             replace_response = client.post(
@@ -718,9 +768,11 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
             )
 
         assert replace_response.status_code == 200
-        assert replace_response.json()["updated_tickets"] == 3
+        assert replace_response.json()["updated_tickets"] == 4
         db.refresh(preserved_ticket)
         assert preserved_ticket.support_lead == "Claims Lead One"
+        assert preserved_ticket.service_type == "Run"
+        assert preserved_ticket.service_entitlement == "Bronze"
         assert values_response.status_code == 200
         filter_values = values_response.json()
         assert "Claims" in filter_values["functional_tracks"]
