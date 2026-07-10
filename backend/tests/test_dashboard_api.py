@@ -5796,8 +5796,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             "business_critical",
         ]
         assert payload["metadata"]["data_available_to"].startswith("2026-01-31")
-        assert payload["metadata"]["complete_month_from"].startswith("2026-01-01")
-        assert payload["metadata"]["complete_month_to"].startswith("2026-01-31")
+        assert payload["metadata"]["complete_month_from"].startswith("2025-01-01")
+        assert payload["metadata"]["complete_month_to"].startswith("2026-05-31")
         assert payload["overview"]["application_inventory"]["total_applications"] == 1
         assert payload["overview"]["application_inventory"]["critical_application_count"] == 1
         assert payload["overview"]["application_inventory"]["very_critical_application_count"] == 0
@@ -5844,10 +5844,17 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "sox_scope" not in payload["applications"]["charts"]
         assert payload["volumetrics"]["monthly_rows"]
         assert payload["volumetrics"]["filter_values"]["business_critical"] == ["Critical"]
-        assert [row["period_key"] for row in payload["volumetrics"]["periods"]] == ["2026-01"]
-        assert {
+        period_keys = [row["period_key"] for row in payload["volumetrics"]["periods"]]
+        assert period_keys[0] == "2025-01"
+        assert period_keys[-1] == "2026-05"
+        assert "2026-06" not in period_keys
+        monthly_row_periods = {
             row["period_key"] for row in payload["volumetrics"]["monthly_rows"]
-        } == {"2026-01"}
+        }
+        assert "2025-01" in monthly_row_periods
+        assert "2026-01" in monthly_row_periods
+        assert "2026-05" in monthly_row_periods
+        assert "2026-06" not in monthly_row_periods
         assert payload["volumetrics"]["sub_tabs"] == [
             "overall_volume_trends",
             "overall_sla_trends",
@@ -5870,13 +5877,29 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["volumetrics"]["detailed_volume_trends"]["split_window"][
             "description"
         ] == "Latest complete 6 months"
+        assert (
+            payload["volumetrics"]["detailed_volume_trends"]["ranking_window"]["end_month"]
+            == "2026-05"
+        )
+        assert (
+            payload["volumetrics"]["detailed_volume_trends"]["split_window"]["end_month"]
+            == "2026-05"
+        )
         assert payload["volumetrics"]["kpi_trends"]["mttr"]["rows"]
-        assert payload["volumetrics"]["kpi_trends"]["duration_buckets"]["rows"]
+        duration_period_keys = [
+            row["period_key"]
+            for row in payload["volumetrics"]["kpi_trends"]["duration_buckets"]["periods"]
+        ]
+        assert duration_period_keys == ["2026-03", "2026-04", "2026-05"]
         assert payload["volumetrics"]["kpi_trends"]["open_ticket_aging"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["reassignment_hops"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["problem_management"]["rows"]
         assert "performance_trends" in payload["volumetrics"]
         assert payload["volumetrics"]["performance_trends"]["performance_period"]["months"] == 3
+        assert (
+            payload["volumetrics"]["performance_trends"]["performance_period"]["to_month"]
+            == "2026-05"
+        )
         assert "all_engineers" in payload["volumetrics"]["performance_trends"]
         detailed_row = payload["volumetrics"]["detailed_volume_trends"]["application_rows"][0]
         assert "ticket_number" not in detailed_row

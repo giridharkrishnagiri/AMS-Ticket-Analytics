@@ -6059,11 +6059,17 @@ def volumetrics_performance_aggregate_rows(
 
 def volumetrics_performance_trends(db: Session, request: Any) -> dict[str, Any]:
     lookback_months = normalize_performance_lookback_months(getattr(request, "lookback_months", 3))
-    period_start, period_end = latest_complete_month_window(
-        db,
-        request.project_id,
-        lookback_months,
-    )
+    override_start = getattr(request, "performance_period_start", None)
+    override_end = getattr(request, "performance_period_end", None)
+    if override_start is not None and override_end is not None:
+        period_start = normalize_dashboard_datetime(override_start)
+        period_end = normalize_dashboard_datetime(override_end)
+    else:
+        period_start, period_end = latest_complete_month_window(
+            db,
+            request.project_id,
+            lookback_months,
+        )
     working_days = working_days_between(period_start, period_end)
     period_payload = performance_period_payload(
         period_start,

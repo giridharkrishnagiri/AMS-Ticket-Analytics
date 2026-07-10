@@ -43,7 +43,6 @@ from app.services.dashboard import (
     date_counts_by_weekday,
     day_count_for_week_part,
     duration_bucket_expression,
-    latest_complete_month_window,
     latest_complete_window_payload,
     non_negative_reassignment_expression,
     nonblank_text_expression,
@@ -76,6 +75,10 @@ OFFLINE_CREATED_PATTERN_TYPES = (
 )
 OFFLINE_SCOPE_VALUES = ("in_scope", "out_of_scope")
 OFFLINE_TICKET_TYPE_VALUES = ("incident", "sc_task")
+OFFLINE_VOLUMETRICS_START_MONTH = (2025, 1)
+OFFLINE_VOLUMETRICS_END_MONTH = (2026, 5)
+OFFLINE_PERFORMANCE_START_MONTH = (2026, 3)
+OFFLINE_PERFORMANCE_END_MONTH = (2026, 5)
 MONDELEZ_LOGO_FILENAMES = ("MDLZlogo_smr.webp", "MDLZlogo.webp")
 
 
@@ -148,6 +151,17 @@ def first_day_of_month(value: datetime) -> datetime:
 def last_moment_of_month(value: datetime) -> datetime:
     last_day = calendar.monthrange(value.year, value.month)[1]
     return datetime(value.year, value.month, last_day, 23, 59, 59, 999999, tzinfo=value.tzinfo)
+
+
+def fixed_month_window(
+    start_month: tuple[int, int],
+    end_month: tuple[int, int],
+    *,
+    tzinfo: Any = UTC,
+) -> tuple[datetime, datetime]:
+    start_datetime = datetime(start_month[0], start_month[1], 1, tzinfo=tzinfo)
+    end_datetime = datetime(end_month[0], end_month[1], 1, tzinfo=tzinfo)
+    return start_datetime, last_moment_of_month(end_datetime)
 
 
 def first_day_of_next_month(value: datetime) -> datetime:
@@ -324,9 +338,18 @@ def build_assignment_group_volumetrics_payload(db: Session, project_id: UUID) ->
 
 
 def build_performance_trends_payload(db: Session, project_id: UUID) -> dict[str, Any]:
-    start_datetime, end_datetime = latest_complete_month_window(db, project_id, 3)
+    data_range = volumetrics_data_range(db, project_id)
+    data_end = data_range.get("completion_date_max")
+    tzinfo = normalize_dashboard_datetime(data_end).tzinfo if data_end is not None else UTC
+    start_datetime, end_datetime = fixed_month_window(
+        OFFLINE_PERFORMANCE_START_MONTH,
+        OFFLINE_PERFORMANCE_END_MONTH,
+        tzinfo=tzinfo,
+    )
     request = monthly_request(project_id, start_datetime, end_datetime)
     request.lookback_months = 3
+    request.performance_period_start = start_datetime
+    request.performance_period_end = end_datetime
     return volumetrics_performance_trends(db, request)
 
 
@@ -1441,13 +1464,11 @@ def build_detailed_volume_payload(
         ),
     )
 
-    window_start, window_end = latest_complete_month_window(db, project_id, 6)
-    split_window_start, split_window_end = latest_complete_month_window(db, project_id, 6)
     return {
-        "ranking_window": ranking_window_payload(window_start, window_end),
-        "split_window": latest_complete_window_payload(split_window_start, split_window_end),
+        "ranking_window": ranking_window_payload(start_datetime, end_datetime),
+        "split_window": latest_complete_window_payload(start_datetime, end_datetime),
         "application_rows": rows,
-        "split_rows": build_detailed_split_rows(db, project_id),
+        "split_rows": build_detailed_split_rows(db, project_id, start_datetime, end_datetime),
         "batch_rule": {
             "field": "short_description",
             "rule_description": (
@@ -1458,9 +1479,13 @@ def build_detailed_volume_payload(
     }
 
 
-def build_detailed_split_rows(db: Session, project_id: UUID) -> list[dict[str, Any]]:
-    window_start, window_end = latest_complete_month_window(db, project_id, 6)
-    request = monthly_request(project_id, window_start, window_end)
+def build_detailed_split_rows(
+    db: Session,
+    project_id: UUID,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> list[dict[str, Any]]:
+    request = monthly_request(project_id, start_datetime, end_datetime)
     source = build_volumetrics_source(project_id)
     dimensions = volumetrics_dimension_expressions(source)
     rows: list[dict[str, Any]] = []
@@ -1555,8 +1580,12 @@ def build_kpi_mttr_payload(
     return {"rows": rows}
 
 
-def build_duration_bucket_payload(db: Session, project_id: UUID) -> dict[str, Any]:
-    window_start, window_end = latest_complete_month_window(db, project_id, 3)
+def build_duration_bucket_payload(
+    db: Session,
+    project_id: UUID,
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[str, Any]:
     request = monthly_request(project_id, window_start, window_end)
     source = build_volumetrics_source(project_id)
     dimensions = volumetrics_dimension_expressions(source)
@@ -1807,7 +1836,12 @@ def build_volumetrics_payload(
             "complete_month_to": None,
         }
 
-    start_datetime, end_datetime = complete_month_bounds(start_value, end_value)
+    range_timezone = normalize_dashboard_datetime(end_value).tzinfo
+    start_datetime, end_datetime = fixed_month_window(
+        OFFLINE_VOLUMETRICS_START_MONTH,
+        OFFLINE_VOLUMETRICS_END_MONTH,
+        tzinfo=range_timezone,
+    )
     if start_datetime is None or end_datetime is None:
         return {
             "filter_values": build_filter_values([]),
@@ -1909,7 +1943,15 @@ def build_volumetrics_payload(
         ),
         "kpi_trends": {
             "mttr": build_kpi_mttr_payload(db, project_id, start_datetime, end_datetime),
-            "duration_buckets": build_duration_bucket_payload(db, project_id),
+            "duration_buckets": build_duration_bucket_payload(
+                db,
+                project_id,
+                *fixed_month_window(
+                    OFFLINE_PERFORMANCE_START_MONTH,
+                    OFFLINE_PERFORMANCE_END_MONTH,
+                    tzinfo=start_datetime.tzinfo,
+                ),
+            ),
             "open_ticket_aging": build_open_ticket_aging_payload(
                 db,
                 project_id,
@@ -3852,7 +3894,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         button.textContent = "Copy Chart";
         button.addEventListener("click", () => copyOfflineChart(button));
         toolbar.append(status, button);
-        card.insertBefore(toolbar, frame);
+        (frame.parentElement || card).insertBefore(
+          toolbar,
+          frame.parentElement ? frame : null
+        );
         card.dataset.copyReady = "true";
       });
     }
@@ -4283,7 +4328,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         if (hasCopy && hasCsv) return;
         const existingActions = existingTableActionContainer(root, table.id);
         if (existingActions) {
-          const status = existingActions.querySelector(".copy-chart-status");
+          const candidateStatus = existingActions.querySelector(".copy-chart-status");
+          const status = candidateStatus?.parentElement === existingActions ? candidateStatus : null;
           if (!hasCopy) {
             const copyButton = document.createElement("button");
             copyButton.type = "button";
@@ -4926,9 +4972,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function scTaskCatalogPeriodDefinitions() {
       return [
-        { key: "H1_2025", label: "H1 2025", title: "H1 2025 Catalog Item Proportion", start: "2025-01", end: "2025-06", from: "2025-01-01", to: "2025-06-30" },
-        { key: "H2_2025", label: "H2 2025", title: "H2 2025 Catalog Item Proportion", start: "2025-07", end: "2025-12", from: "2025-07-01", to: "2025-12-31" },
-        { key: "H1_2026", label: "H1 2026", title: "H1 2026 Catalog Item Proportion", start: "2026-01", end: "2026-06", from: "2026-01-01", to: "2026-06-30" }
+        { key: "H1_2025", label: "H1 2025", title: "H1 2025 Catalog Item Proportion", start: "2025-01", end: "2025-06", from: "2025-01-01", to: "2025-06-30", months: 6 },
+        { key: "H2_2025", label: "H2 2025", title: "H2 2025 Catalog Item Proportion", start: "2025-07", end: "2025-12", from: "2025-07-01", to: "2025-12-31", months: 6 },
+        { key: "JAN_MAY_2026", label: "Jan-May 2026", title: "Jan-May 2026 Catalog Item Proportion", start: "2026-01", end: "2026-05", from: "2026-01-01", to: "2026-05-31", months: 5 }
       ];
     }
     function scTaskCatalogPeriodData(period) {
@@ -4948,10 +4994,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .filter((row) => row.count > 0)
         .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
       const total = allRows.reduce((sum, row) => sum + row.count, 0);
+      const monthCount = Number(period.months || 6);
       const topRows = allRows.slice(0, 10).map((row, index) => ({
         ...row,
         rank: index + 1,
-        avg: row.count / 6,
+        avg: row.count / Math.max(1, monthCount),
         pct: total > 0 ? (row.count / total) * 100 : null
       }));
       const visiblePieRows = [];
@@ -4983,7 +5030,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">SC Task Catalog Item Proportion is available for SC Tasks only. Change Ticket Type to All or SC Tasks.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
       }
       const periods = scTaskCatalogPeriodDefinitions().map(scTaskCatalogPeriodData);
-      return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows the proportion of SC Tasks by catalog item across selected half-year periods. Values are based on created SC Task volume.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage">${pieChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Catalog items below 2% are grouped into Others. Average monthly volume is calculated over six months.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
+      return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows the proportion of SC Tasks by catalog item across selected periods. Values are based on created SC Task volume through May-26.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage">${pieChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Catalog items below 2% are grouped into Others. Average monthly volume is calculated over the months shown for each period.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
     }
     function incidentBatchTrendPoints() {
       const rows = detailedVolumeRows().filter(incidentBatchFilterMatch);
