@@ -33,12 +33,16 @@ from app.services.dashboard_assignment_groups import (
     is_basis_security_assignment_group,
     normalized_assignment_group_expression,
 )
-from app.services.dashboard_filter_facts import ensure_dashboard_filter_facts
+from app.services.dashboard_filter_facts import (
+    dashboard_filter_fact_service_field_fragments,
+    ensure_dashboard_filter_facts,
+)
 
 SECONDS_PER_DAY = 86400
 SECONDS_PER_HOUR = 3600
 FILTER_VALUE_LIMIT = 2000
 BLANK_LABEL = "(blank)"
+SERVICE_BLANK_LABEL = "Blank"
 FINAL_STATES = {"closed", "resolved", "complete", "completed", "cancelled", "canceled"}
 DATE_TRUNC_GRAIN = {
     "DAILY": "day",
@@ -153,6 +157,7 @@ APPLICATION_LIST_FIELDS = (
 
 SINGLE_APPLICATION_FILTER_FIELDS = {
     "application_scope": "scope_status",
+    "service_entitlement": "service_entitlement",
     "parent_application_name": "parent_application_name",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -229,6 +234,7 @@ VOLUMETRICS_CANCELLED_STATES = {
 }
 
 SINGLE_VOLUMETRICS_FILTER_FIELDS = {
+    "service_entitlement": "service_entitlement",
     "parent_application_name": "parent_application_name",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -244,6 +250,7 @@ COMBINED_VOLUMETRICS_FILTER_FIELDS = {
 }
 
 FACT_SINGLE_VOLUMETRICS_FILTER_FIELDS = {
+    "service_entitlement": "service_entitlement",
     "parent_application_name": "parent_business_application",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -694,11 +701,7 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         distinct_nonblank_count(active_application_expression)
         .filter(criticality_expression == "critical")
         .label("critical_application_count"),
-    ).where(
-        ApplicationInventoryItem.project_id == project_id,
-        ApplicationInventoryItem.is_current.is_(True),
-        ApplicationInventoryItem.active.is_(True),
-    )
+    ).where(*applications_base_conditions(project_id))
     inventory_row = db.execute(inventory_statement).mappings().one()
 
     completion_expression = effective_completion_expression()
@@ -880,10 +883,12 @@ def canonical_lifecycle_plan_value(value: Any) -> str | None:
 
 
 def applications_base_conditions(project_id: UUID) -> list[Any]:
+    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
     return [
         ApplicationInventoryItem.project_id == project_id,
         ApplicationInventoryItem.is_current.is_(True),
-        ApplicationInventoryItem.active.is_(True),
+        ApplicationInventoryItem.scope_status == "in_scope",
+        service_expression.is_not(None),
     ]
 
 
@@ -893,14 +898,12 @@ def applications_business_service_detail_conditions(
     *,
     excluded_filter_name: str | None = None,
 ) -> list[Any]:
-    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
     return [
         *applications_filter_conditions(
             project_id,
             filters,
             excluded_filter_name=excluded_filter_name,
         ),
-        service_expression.is_not(None),
     ]
 
 
@@ -988,6 +991,11 @@ def applications_filter_values(db: Session, project_id: UUID) -> dict[str, Any]:
             project_id,
             "scope_status",
             filter_name="application_scope",
+        ),
+        "service_entitlement": distinct_application_filter_values(
+            db,
+            project_id,
+            "service_entitlement",
         ),
         "functional_track_ams_owner": distinct_combined_application_filter_values(
             db,
@@ -1212,6 +1220,12 @@ def applications_filter_value_counts(db: Session, request: Any) -> dict[str, Any
             request,
             "application_scope",
             "scope_status",
+        ),
+        "service_entitlement": application_filter_value_count_rows(
+            db,
+            request,
+            "service_entitlement",
+            "service_entitlement",
         ),
         "functional_track_ams_owner": combined_application_filter_value_count_rows(
             db,
@@ -1520,6 +1534,44 @@ def applications_global_local(db: Session, request: Any) -> list[dict[str, Any]]
     ]
 
 
+def applications_service_split(
+    db: Session,
+    request: Any,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
+    field_expression = func.coalesce(
+        nonblank_text_expression(application_field_expression(field_name)),
+        literal(SERVICE_BLANK_LABEL),
+    )
+    statement = (
+        select(
+            field_expression.label("label"),
+            func.count(func.distinct(service_expression)).label("application_count"),
+        )
+        .where(
+            *applications_filter_conditions(request.project_id, request.filters),
+            service_expression.is_not(None),
+        )
+        .group_by(field_expression)
+        .order_by(func.count(func.distinct(service_expression)).desc(), field_expression.asc())
+    )
+    rows = [dict(row) for row in db.execute(statement).mappings().all()]
+    total = sum(int(row["application_count"] or 0) for row in rows)
+    return [
+        {
+            "label": str(row["label"]),
+            "application_count": int(row["application_count"] or 0),
+            "percentage": (
+                int(row["application_count"] or 0) / total * 100
+                if total
+                else None
+            ),
+        }
+        for row in rows
+    ]
+
+
 def applications_charts(db: Session, request: Any) -> dict[str, Any]:
     lifecycle_selected = bool(
         selected_application_filter_values(request.filters, "lifecycle_status_stage"),
@@ -1532,6 +1584,16 @@ def applications_charts(db: Session, request: Any) -> dict[str, Any]:
         "install_type": applications_chart_counts(db, request, "install_type"),
         "hosting_env": applications_chart_counts(db, request, "hosting_env"),
         "strategic": applications_chart_counts(db, request, "strategic"),
+        "applications_by_service_entitlement": applications_service_split(
+            db,
+            request,
+            "service_entitlement",
+        ),
+        "applications_by_service_type": applications_service_split(
+            db,
+            request,
+            "service_type",
+        ),
         "criticality_hosting_pivot": applications_criticality_hosting_pivot(db, request),
         "global_local_applications": applications_global_local(db, request),
     }
@@ -2309,13 +2371,23 @@ def assignment_group_mapping_summary(rows: list[dict[str, Any]]) -> dict[str, An
     sc_task_total = (
         sum(int_count(row.get("sc_task_count")) for row in rows) if has_ticket_counts else None
     )
+    business_service_cis = {
+        row["business_service_ci_name"]
+        for row in rows
+        if row["business_service_ci_name"]
+        not in {REFERENCE_MISSING_LABEL, UNMAPPED_BUSINESS_SERVICE_CI_LABEL}
+    }
+    parent_business_applications = {
+        row["parent_business_application"]
+        for row in rows
+        if row["parent_business_application"]
+        not in {REFERENCE_MISSING_LABEL, UNMAPPED_PARENT_APPLICATION_LABEL}
+    }
     return {
         "mapping_count": len(rows),
         "assignment_group_count": len({row["assignment_group"] for row in rows}),
-        "business_service_ci_count": len({row["business_service_ci_name"] for row in rows}),
-        "parent_business_application_count": len(
-            {row["parent_business_application"] for row in rows},
-        ),
+        "business_service_ci_count": len(business_service_cis),
+        "parent_business_application_count": len(parent_business_applications),
         "incident_count": incident_total,
         "sc_task_count": sc_task_total,
         "total_ticket_count": (
@@ -3496,9 +3568,21 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
             },
         )
 
+    service_filter_rows = (
+        volumetrics_filter_fact_value_count_rows(
+            db,
+            request,
+            "service_entitlement",
+            "service_entitlement",
+        )
+        if dashboard_filter_fact_service_field_fragments(db)[0]
+        else []
+    )
+
     return {
         "scope": scope_rows,
         "ticket_type": ticket_type_rows,
+        "service_entitlement": service_filter_rows,
         "functional_track_ams_owner": combined_volumetrics_filter_fact_value_count_rows(
             db,
             request,
@@ -5077,6 +5161,49 @@ def volumetrics_distribution_split_rows(
     ]
 
 
+def volumetrics_service_volume_split_rows(
+    db: Session,
+    request: Any,
+    *,
+    field_name: str,
+    ticket_type: str,
+) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    effective_request = (
+        replace_request_value(request, "ticket_type", ticket_type)
+        if ticket_type != "all"
+        else replace_request_value(request, "ticket_type", "all")
+    )
+    split_expression = func.coalesce(
+        nonblank_text_expression(getattr(source.c, field_name)),
+        literal(SERVICE_BLANK_LABEL),
+    )
+    statement = (
+        select(
+            split_expression.label("label"),
+            func.count(source.c.id).label("ticket_count"),
+        )
+        .select_from(source)
+        .where(*volumetrics_base_conditions(source, effective_request))
+        .group_by(split_expression)
+        .order_by(func.count(source.c.id).desc(), split_expression.asc())
+    )
+    rows = [dict(row) for row in db.execute(statement).mappings().all()]
+    total = sum(int(row["ticket_count"] or 0) for row in rows)
+    return [
+        {
+            "label": str(row["label"]),
+            "ticket_count": int(row["ticket_count"] or 0),
+            "percentage": (
+                int(row["ticket_count"] or 0) / total * 100
+                if total
+                else None
+            ),
+        }
+        for row in rows
+    ]
+
+
 def volumetrics_distribution_splits(db: Session, request: Any) -> dict[str, Any]:
     window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
 
@@ -5108,8 +5235,32 @@ def volumetrics_distribution_splits(db: Session, request: Any) -> dict[str, Any]
             ),
         }
 
+    def service_volume_group(field_name: str) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "all": volumetrics_service_volume_split_rows(
+                db,
+                request,
+                field_name=field_name,
+                ticket_type="all",
+            ),
+            "incidents": volumetrics_service_volume_split_rows(
+                db,
+                request,
+                field_name=field_name,
+                ticket_type="incident",
+            ),
+            "sc_tasks": volumetrics_service_volume_split_rows(
+                db,
+                request,
+                field_name=field_name,
+                ticket_type="sc_task",
+            ),
+        }
+
     return {
         "ranking_window": latest_complete_window_payload(window_start, window_end),
+        "ticket_volume_by_service_entitlement": service_volume_group("service_entitlement"),
+        "ticket_volume_by_service_type": service_volume_group("service_type"),
         "sap_non_sap": group("sap_non_sap"),
         "architecture_type": group("architecture_type"),
         "install_type": group("install_type"),

@@ -256,6 +256,7 @@ class ApplicationCombinedFilterCountValue(ApplicationCombinedFilterValue):
 
 class ApplicationsFilterValuesResponse(BaseModel):
     application_scope: list[str]
+    service_entitlement: list[str]
     functional_track_ams_owner: list[ApplicationCombinedFilterValue]
     assignment_group_owner: list[ApplicationCombinedFilterValue]
     parent_application_name: list[str]
@@ -273,6 +274,7 @@ class ApplicationsFilterValuesResponse(BaseModel):
 
 class ApplicationsFilters(BaseModel):
     application_scope: list[str] = Field(default_factory=list)
+    service_entitlement: list[str] = Field(default_factory=list)
     functional_track_ams_owner: list[str] = Field(default_factory=list)
     assignment_group_owner: list[str] = Field(default_factory=list)
     parent_application_name: list[str] = Field(default_factory=list)
@@ -295,6 +297,7 @@ class ApplicationsFilterValuesRequest(BaseModel):
 
 class ApplicationsFilterValueCountsResponse(BaseModel):
     application_scope: list[ApplicationFilterCountValue]
+    service_entitlement: list[ApplicationFilterCountValue]
     functional_track_ams_owner: list[ApplicationCombinedFilterCountValue]
     assignment_group_owner: list[ApplicationCombinedFilterCountValue]
     parent_application_name: list[ApplicationFilterCountValue]
@@ -401,6 +404,12 @@ class ApplicationsChartDatum(BaseModel):
     count: int
 
 
+class ApplicationsServiceSplitDatum(BaseModel):
+    label: str
+    application_count: int
+    percentage: float | None
+
+
 class ApplicationsCriticalityHostingPivotRow(BaseModel):
     business_criticality: str
     counts: dict[str, int]
@@ -433,6 +442,8 @@ class ApplicationsChartsResponse(BaseModel):
     install_type: list[ApplicationsChartDatum]
     hosting_env: list[ApplicationsChartDatum]
     strategic: list[ApplicationsChartDatum]
+    applications_by_service_entitlement: list[ApplicationsServiceSplitDatum]
+    applications_by_service_type: list[ApplicationsServiceSplitDatum]
     criticality_hosting_pivot: ApplicationsCriticalityHostingPivot
     global_local_applications: list[ApplicationsChartDatum]
 
@@ -545,6 +556,7 @@ class ApplicationsAssignmentGroupMappingResponse(BaseModel):
 
 
 class VolumetricsFilters(BaseModel):
+    service_entitlement: list[str] = Field(default_factory=list)
     functional_track_ams_owner: list[str] = Field(default_factory=list)
     assignment_group_support_lead: list[str] = Field(default_factory=list)
     parent_application_name: list[str] = Field(default_factory=list)
@@ -574,6 +586,7 @@ class VolumetricsPerformanceTrendsRequest(VolumetricsRequest):
 class VolumetricsFilterValuesResponse(BaseModel):
     scope: list[ApplicationFilterCountValue]
     ticket_type: list[ApplicationFilterCountValue]
+    service_entitlement: list[ApplicationFilterCountValue]
     functional_track_ams_owner: list[ApplicationCombinedFilterCountValue]
     assignment_group_support_lead: list[ApplicationCombinedFilterCountValue]
     parent_application_name: list[ApplicationFilterCountValue]
@@ -895,6 +908,12 @@ class VolumetricsSplitDatum(BaseModel):
     percentage: float | None
 
 
+class VolumetricsServiceVolumeDatum(BaseModel):
+    label: str
+    ticket_count: int
+    percentage: float | None
+
+
 class VolumetricsTicketTypeSplit(BaseModel):
     incidents: list[VolumetricsSplitDatum]
     sc_tasks: list[VolumetricsSplitDatum]
@@ -926,8 +945,16 @@ class VolumetricsTripleTicketTypeSplit(BaseModel):
     sc_tasks: list[VolumetricsSplitDatum]
 
 
+class VolumetricsTripleServiceVolumeSplit(BaseModel):
+    all: list[VolumetricsServiceVolumeDatum]
+    incidents: list[VolumetricsServiceVolumeDatum]
+    sc_tasks: list[VolumetricsServiceVolumeDatum]
+
+
 class VolumetricsDistributionSplitsResponse(BaseModel):
     ranking_window: VolumetricsRankingWindow
+    ticket_volume_by_service_entitlement: VolumetricsTripleServiceVolumeSplit
+    ticket_volume_by_service_type: VolumetricsTripleServiceVolumeSplit
     sap_non_sap: VolumetricsTripleTicketTypeSplit
     architecture_type: VolumetricsTripleTicketTypeSplit
     install_type: VolumetricsTripleTicketTypeSplit

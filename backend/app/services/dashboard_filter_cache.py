@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -31,6 +31,7 @@ FILTER_CACHE_STATUSES = {"missing", "refreshing", "ready", "failed", "stale"}
 
 APPLICATION_FILTER_KEYS = (
     "application_scope",
+    "service_entitlement",
     "functional_track_ams_owner",
     "assignment_group_owner",
     "parent_application_name",
@@ -49,6 +50,7 @@ APPLICATION_FILTER_KEYS = (
 VOLUMETRICS_FILTER_KEYS = (
     "scope",
     "ticket_type",
+    "service_entitlement",
     "functional_track_ams_owner",
     "assignment_group_support_lead",
     "parent_application_name",
@@ -66,6 +68,7 @@ VOLUMETRICS_FILTER_KEYS = (
 
 APPLICATION_FACT_FIELDS = {
     "application_scope": "scope",
+    "service_entitlement": "service_entitlement",
     "functional_track_ams_owner": "functional_track_ams_owner",
     "assignment_group_owner": "assignment_group_support_owner",
     "parent_application_name": "parent_business_application",
@@ -84,6 +87,7 @@ APPLICATION_FACT_FIELDS = {
 }
 
 VOLUMETRICS_FACT_FIELDS = {
+    "service_entitlement": "service_entitlement",
     "functional_track_ams_owner": "functional_track_ams_owner",
     "assignment_group_support_lead": "assignment_group_support_owner",
     "parent_application_name": "parent_business_application",
@@ -110,6 +114,8 @@ APPLICATION_PAYLOAD_KEYS = {
     ),
     "install_status": ("Install Status",),
     "install_type": ("Install type", "Install Type"),
+    "service_entitlement": ("Service Entitlement",),
+    "service_type": ("Service Type",),
     "life_cycle_stage": ("Life Cycle Stage", "Lifecycle Status"),
 }
 
@@ -322,11 +328,36 @@ def cleaned_sql(expression: str, length: int = 255) -> str:
     return f"left(NULLIF(btrim({expression}), ''), {length})"
 
 
+def dashboard_filter_fact_has_service_fields(db: Session) -> bool:
+    inspector = inspect(db.get_bind())
+    if "dashboard_filter_facts" not in inspector.get_table_names():
+        return False
+    columns = {column["name"] for column in inspector.get_columns("dashboard_filter_facts")}
+    return {"service_entitlement", "service_type"}.issubset(columns)
+
+
 def refresh_application_filter_facts(
     db: Session,
     project_id: UUID,
     data_version: str,
 ) -> int:
+    include_service_fields = dashboard_filter_fact_has_service_fields(db)
+    service_columns = (
+        """
+                service_entitlement,
+                service_type,
+"""
+        if include_service_fields
+        else ""
+    )
+    service_selects = (
+        """
+                left(NULLIF(btrim(i.service_entitlement), ''), 255),
+                left(NULLIF(btrim(i.service_type), ''), 255),
+"""
+        if include_service_fields
+        else ""
+    )
     db.execute(
         delete(DashboardFilterFact).where(
             DashboardFilterFact.project_id == project_id,
@@ -378,7 +409,7 @@ def refresh_application_filter_facts(
                 install_status,
                 install_type,
                 hosting_env,
-                global_flag,
+{service_columns}                global_flag,
                 life_cycle_stage,
                 life_cycle_stage_status,
                 data_version
@@ -421,7 +452,7 @@ def refresh_application_filter_facts(
                 {install_status},
                 {install_type},
                 left(NULLIF(btrim(i.hosting_env), ''), 255),
-                left(NULLIF(btrim(i.global_application), ''), 50),
+{service_selects}                left(NULLIF(btrim(i.global_application), ''), 50),
                 {life_cycle_stage},
                 left(NULLIF(btrim(i.lifecycle_stage_status), ''), 255),
                 :data_version
@@ -429,7 +460,7 @@ def refresh_application_filter_facts(
             JOIN projects AS p ON p.id = i.project_id
             WHERE i.project_id = CAST(:project_id AS uuid)
               AND i.is_current IS true
-              AND i.active IS true
+              AND i.scope_status = 'in_scope'
               AND NULLIF(btrim(i.business_service_ci_name), '') IS NOT NULL
             ORDER BY lower(btrim(i.business_service_ci_name)), i.id
             """
@@ -471,8 +502,11 @@ def fact_filter_expression(dashboard_area: str, filter_key: str) -> Any:
     return fact_display_expression(getattr(DashboardFilterFact, field_name))
 
 
-def filter_keys_for_area(dashboard_area: str) -> tuple[str, ...]:
-    return APPLICATION_FILTER_KEYS if dashboard_area == "applications" else VOLUMETRICS_FILTER_KEYS
+def filter_keys_for_area(dashboard_area: str, db: Session | None = None) -> tuple[str, ...]:
+    keys = APPLICATION_FILTER_KEYS if dashboard_area == "applications" else VOLUMETRICS_FILTER_KEYS
+    if db is not None and not dashboard_filter_fact_has_service_fields(db):
+        return tuple(key for key in keys if key != "service_entitlement")
+    return keys
 
 
 def catalog_sort_key(filter_key: str, value: str) -> tuple[int, str]:
@@ -524,7 +558,7 @@ def build_filter_catalog_from_facts(
     )
     refreshed_at = datetime.now(UTC)
     inserted = 0
-    for filter_key in filter_keys_for_area(dashboard_area):
+    for filter_key in filter_keys_for_area(dashboard_area, db):
         rows = baseline_rows_for_filter(db, project_id, dashboard_area, filter_key)
         for sort_order, row in enumerate(
             sorted(rows, key=lambda item: catalog_sort_key(filter_key, item["value"])),
@@ -642,7 +676,9 @@ def filter_catalog(
             DashboardFilterCatalog.display_value.asc(),
         ),
     ).all()
-    filters: dict[str, list[dict[str, Any]]] = {key: [] for key in filter_keys_for_area(area)}
+    filters: dict[str, list[dict[str, Any]]] = {
+        key: [] for key in filter_keys_for_area(area, db)
+    }
     for row in rows:
         filters.setdefault(row.filter_key, []).append(
             {
@@ -686,7 +722,7 @@ def dynamic_filter_counts(
     started = perf_counter()
     status = filter_cache_status_items(db, customer_id, project_id, area)[0]
     counts: dict[str, dict[str, int]] = {}
-    for filter_key in filter_keys_for_area(area):
+    for filter_key in filter_keys_for_area(area, db):
         rows = count_rows_for_filter(
             db,
             project_id,

@@ -246,12 +246,16 @@ def test_dashboard_filter_fact_columns_and_indexes_exist() -> None:
     assert "architecture_type" in fact_columns
     assert "install_type" in fact_columns
     assert "hosting_env" in fact_columns
+    assert "service_entitlement" in fact_columns
+    assert "service_type" in fact_columns
 
     assert "ix_dashboard_filter_facts_project_scope_type" in fact_indexes
     assert "ix_dashboard_filter_facts_project_functional" in fact_indexes
     assert "ix_dashboard_filter_facts_project_assignment" in fact_indexes
     assert "ix_dashboard_filter_facts_project_parent_app" in fact_indexes
     assert "ix_dashboard_filter_facts_project_sap" in fact_indexes
+    assert "ix_dashboard_filter_facts_project_service_entitlement" in fact_indexes
+    assert "ix_dashboard_filter_facts_project_service_type" in fact_indexes
 
 
 def test_scope_split_vendor_sla_columns_exist() -> None:

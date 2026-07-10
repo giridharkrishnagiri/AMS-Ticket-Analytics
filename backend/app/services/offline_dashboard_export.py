@@ -250,7 +250,7 @@ def application_export_rows(db: Session, project_id: UUID) -> list[dict[str, Any
         .where(
             ApplicationInventoryItem.project_id == project_id,
             ApplicationInventoryItem.is_current.is_(True),
-            ApplicationInventoryItem.active.is_(True),
+            ApplicationInventoryItem.scope_status == "in_scope",
             nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name).is_not(
                 None
             ),
@@ -341,6 +341,7 @@ def volumetrics_dimension_expressions(source: Any) -> dict[str, Any]:
     return {
         "scope": source.c.scope,
         "ticket_type": ticket_type_key_expression(source),
+        "service_entitlement": volumetrics_display_expression(source.c.service_entitlement),
         "functional_track": volumetrics_display_expression(source.c.functional_track),
         "ams_owner": volumetrics_display_expression(source.c.ams_owner),
         "functional_track_ams_owner": combined_volumetrics_display_expression(
@@ -353,10 +354,11 @@ def volumetrics_dimension_expressions(source: Any) -> dict[str, Any]:
     }
 
 
-def dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str, str]:
+def dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str, str, str]:
     return (
         str(row["scope"]),
         str(row["ticket_type"]),
+        str(row["service_entitlement"]),
         str(row["functional_track"]),
         str(row["ams_owner"]),
         str(row["functional_track_ams_owner"]),
@@ -365,15 +367,16 @@ def dimension_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str, st
     )
 
 
-def dimension_dict(key: tuple[str, str, str, str, str, str, str]) -> dict[str, str]:
+def dimension_dict(key: tuple[str, str, str, str, str, str, str, str]) -> dict[str, str]:
     return {
         "scope": key[0],
         "ticket_type": key[1],
-        "functional_track": key[2],
-        "ams_owner": key[3],
-        "functional_track_ams_owner": key[4],
-        "sap_non_sap": key[5],
-        "business_critical": key[6],
+        "service_entitlement": key[2],
+        "functional_track": key[3],
+        "ams_owner": key[4],
+        "functional_track_ams_owner": key[5],
+        "sap_non_sap": key[6],
+        "business_critical": key[7],
     }
 
 
@@ -857,6 +860,7 @@ def build_reassignment_hops_payload(monthly_rows: list[dict[str, Any]]) -> dict[
                     (
                         str(row["scope"]),
                         str(row["ticket_type"]),
+                        str(row.get("service_entitlement") or "(blank)"),
                         str(row["functional_track"]),
                         str(row["ams_owner"]),
                         str(row["functional_track_ams_owner"]),
@@ -1294,6 +1298,10 @@ def build_detailed_volume_payload(
     dimensions = volumetrics_dimension_expressions(source)
     created_period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
     application_expression = volumetrics_display_expression(source.c.business_service_ci_name)
+    service_type_expression = func.coalesce(
+        nonblank_text_expression(source.c.service_type),
+        literal("Blank"),
+    )
     architecture_expression = volumetrics_display_expression(source.c.architecture_type)
     install_expression = volumetrics_display_expression(source.c.install_type)
     hosting_env_expression = volumetrics_display_expression(source.c.hosting_env)
@@ -1313,6 +1321,7 @@ def build_detailed_volume_payload(
     grouping_expressions = (
         *dimensions.values(),
         application_expression,
+        service_type_expression,
         architecture_expression,
         install_expression,
         hosting_env_expression,
@@ -1321,6 +1330,7 @@ def build_detailed_volume_payload(
     selected_dimensions = (
         *[expression.label(name) for name, expression in dimensions.items()],
         application_expression.label("application_name"),
+        service_type_expression.label("service_type"),
         architecture_expression.label("architecture_type"),
         install_expression.label("install_type"),
         hosting_env_expression.label("hosting_env"),
@@ -1703,6 +1713,10 @@ def build_filter_values(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
         {row["functional_track_ams_owner"] for row in monthly_rows},
         key=str.casefold,
     )
+    service_entitlement_values = sorted(
+        {row["service_entitlement"] for row in monthly_rows},
+        key=str.casefold,
+    )
     sap_values = sorted(
         {row["sap_non_sap"] for row in monthly_rows},
         key=lambda value: {"SAP": 0, "Non-SAP": 1, BLANK_LABEL: 2}.get(value, 3),
@@ -1736,6 +1750,7 @@ def build_filter_values(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
                 for value in OFFLINE_TICKET_TYPE_VALUES
             ],
         ],
+        "service_entitlement": service_entitlement_values,
         "functional_track_ams_owner": functional_values,
         "sap_non_sap": sap_values,
         "business_critical": business_critical_values,
@@ -3049,12 +3064,14 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       appMappingTrack: "all",
       appFunctional: "all",
       appScope: "all",
+      appServiceEntitlement: "all",
       appSap: "all",
       appBusinessCritical: "all",
       lifecyclePlan: "Invest",
       volScope: "in_scope",
       volTicketType: "all",
       volFunctional: "all",
+      volServiceEntitlement: "all",
       volSap: "all",
       volBusinessCritical: "all",
       volAssignmentTrack: "all",
@@ -3846,6 +3863,29 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .map(([label, count]) => ({ label, count }))
         .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
     }
+    function serviceLabel(value) {
+      const text = String(value || "").trim();
+      if (text === "(blank)") return "Blank";
+      return text || "Blank";
+    }
+    function serviceCountBy(rows, field) {
+      const map = new Map();
+      rows.forEach((row) => {
+        const label = serviceLabel(row[field]);
+        map.set(label, (map.get(label) || 0) + 1);
+      });
+      return [...map.entries()]
+        .map(([label, count]) => ({ label, count }))
+        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+    }
+    function serviceSplitTable(rows, dimensionLabel, countLabel, tableId) {
+      const total = rows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+      return `<table id="${tableId}" class="applications-table"><thead><tr><th>${esc(dimensionLabel)}</th><th>${esc(countLabel)}</th><th>Percentage</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.count)}</td><td>${total ? ((Number(row.count || 0) / total) * 100).toFixed(1) : "0.0"}%</td></tr>`).join("")}</tbody></table>`;
+    }
+    function applicationServiceSplitCard(title, field, dimensionLabel, tableId, filename, commentaryKey, rows) {
+      const data = serviceCountBy(rows, field);
+      return `<section class="chart-card panel" data-commentary-key="${esc(commentaryKey)}"><h3>${esc(title)}</h3><div class="chart-frame chart-stage">${pieChart(data)}</div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll">${serviceSplitTable(data, dimensionLabel, "Application Count", tableId)}</div></section>`;
+    }
     function aggregateByPeriod(rows) {
       const agreementMode = state.slaMode === "ola" ? "ola" : "sla";
       return DASHBOARD.volumetrics.periods.map((period) => {
@@ -3889,6 +3929,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return DASHBOARD.applications.rows.filter((row) =>
         (state.appScope === "all" || row.scope_status === state.appScope) &&
         (state.appFunctional === "all" || row.functional_track_ams_owner === state.appFunctional) &&
+        (state.appServiceEntitlement === "all" || (row.service_entitlement || "(blank)") === state.appServiceEntitlement) &&
         (state.appSap === "all" || row.sap_non_sap === state.appSap) &&
         (state.appBusinessCritical === "all" || row.biz_criticality === state.appBusinessCritical)
       );
@@ -4398,6 +4439,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         { value: "in_scope", label: "In Scope" },
         { value: "out_of_scope", label: "Out of Scope" }
       ];
+      const serviceEntitlementValues = uniqueSorted(DASHBOARD.applications.rows, "service_entitlement");
       const sapValues = uniqueSorted(DASHBOARD.applications.rows, "sap_non_sap");
       const businessCriticalValues = sortCriticalityValues(uniqueSorted(DASHBOARD.applications.rows, "biz_criticality"));
       const businessCount = rows.filter((row) => ["business", "business application"].includes(String(row.app_type).toLowerCase())).length;
@@ -4423,6 +4465,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         </div>
         ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_summary", chart_key: "", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}
         <div class="chart-grid">
+          ${applicationServiceSplitCard("Applications by Service Entitlement", "service_entitlement", "Service Entitlement", "offline-app-service-entitlement", "applications_by_service_entitlement.csv", "applications_service_entitlement_split", rows)}
+          ${applicationServiceSplitCard("Applications by Service Type", "service_type", "Service Type", "offline-app-service-type", "applications_by_service_type.csv", "applications_service_type_split", rows)}
           <section class="chart-card panel" data-commentary-key="strategic"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
           <section class="chart-card panel" data-commentary-key="lifecycle_stage"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
           <section class="chart-card panel" data-commentary-key="architecture_type"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
@@ -4443,6 +4487,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         <aside class="filters filter-pane panel">
           <p class="label">Filters</p><h2>Applications</h2>
           ${renderSelect("app-scope", "Application Scope", [{ value: "all", label: "All" }, ...appScopeValues], state.appScope)}
+          ${renderSelect("app-service-entitlement", "Service Entitlement", [{ value: "all", label: "All" }, ...serviceEntitlementValues.map((value) => ({ value, label: value }))], state.appServiceEntitlement)}
           ${renderSelect("app-functional", "Functional Track / AMS Owner", [{ value: "all", label: "All" }, ...functionalValues.map((value) => ({ value, label: value }))], state.appFunctional)}
           ${renderSelect("app-sap", "SAP / Non-SAP", [{ value: "all", label: "All" }, ...sapValues.map((value) => ({ value, label: value }))], state.appSap)}
           ${renderSelect("app-business-critical", "Business Criticality", [{ value: "all", label: "All" }, ...businessCriticalValues.map((value) => ({ value, label: value }))], state.appBusinessCritical)}
@@ -4453,6 +4498,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         </section>
       </div>`;
       document.getElementById("app-scope").addEventListener("change", (event) => { state.appScope = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
+      document.getElementById("app-service-entitlement").addEventListener("change", (event) => { state.appServiceEntitlement = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.getElementById("app-functional").addEventListener("change", (event) => { state.appFunctional = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.getElementById("app-sap").addEventListener("change", (event) => { state.appSap = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.getElementById("app-business-critical").addEventListener("change", (event) => { state.appBusinessCritical = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
@@ -4498,6 +4544,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volTicketType === "all" || row.ticket_type === state.volTicketType) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volServiceEntitlement === "all" || row.service_entitlement === state.volServiceEntitlement) &&
         (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
         (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
@@ -4514,6 +4561,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return (DASHBOARD.volumetrics.overall_sla_trends?.rows || []).filter((row) =>
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volServiceEntitlement === "all" || row.service_entitlement === state.volServiceEntitlement) &&
         (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
         (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
@@ -4527,6 +4575,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${renderSelect("vol-scope", "Scope", DASHBOARD.volumetrics.filter_values.scope, state.volScope)}
           ${renderSelect("vol-ticket", "Ticket Type", DASHBOARD.volumetrics.filter_values.ticket_type, state.volTicketType)}
           ${renderSelect("vol-functional", "Functional Track / AMS Owner", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.functional_track_ams_owner.map((value) => ({ value, label: value }))], state.volFunctional)}
+          ${renderSelect("vol-service-entitlement", "Service Entitlement", [{ value: "all", label: "All" }, ...(DASHBOARD.volumetrics.filter_values.service_entitlement || []).map((value) => ({ value, label: value }))], state.volServiceEntitlement)}
           ${renderSelect("vol-sap", "SAP / Non-SAP", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.sap_non_sap.map((value) => ({ value, label: value }))], state.volSap)}
           ${renderSelect("vol-business-critical", "Business Criticality", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.business_critical.map((value) => ({ value, label: value }))], state.volBusinessCritical)}
         </aside>
@@ -4535,9 +4584,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${renderVolumetricsSubTab(periods)}
         </section>
       </div>`;
-      ["vol-scope", "vol-ticket", "vol-functional", "vol-sap", "vol-business-critical"].forEach((id) => {
+      ["vol-scope", "vol-ticket", "vol-functional", "vol-service-entitlement", "vol-sap", "vol-business-critical"].forEach((id) => {
         document.getElementById(id).addEventListener("change", (event) => {
-          const map = { "vol-scope": "volScope", "vol-ticket": "volTicketType", "vol-functional": "volFunctional", "vol-sap": "volSap", "vol-business-critical": "volBusinessCritical" };
+          const map = { "vol-scope": "volScope", "vol-ticket": "volTicketType", "vol-functional": "volFunctional", "vol-service-entitlement": "volServiceEntitlement", "vol-sap": "volSap", "vol-business-critical": "volBusinessCritical" };
           state[map[id]] = event.target.value;
           safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics);
         });
@@ -4739,6 +4788,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         row.ticket_type === "incident" &&
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volServiceEntitlement === "all" || row.service_entitlement === state.volServiceEntitlement) &&
         (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
         (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
@@ -4827,6 +4877,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         (ticketType === "all" || row.ticket_type === ticketType) &&
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volServiceEntitlement === "all" || row.service_entitlement === state.volServiceEntitlement) &&
         (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
         (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
@@ -4849,6 +4900,24 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       if (state.volTicketType === "all") return false;
       if (state.volTicketType === "incident") return ticketType !== "incident";
       return ticketType !== "sc_task";
+    }
+    function serviceVolumeItems(field, ticketType) {
+      const totals = new Map();
+      detailedVolumeRows()
+        .filter((row) => distributionTicketMatch(row, ticketType))
+        .forEach((row) => {
+          const label = serviceLabel(row[field]);
+          totals.set(label, (totals.get(label) || 0) + Number(row.created_count || 0));
+        });
+      return [...totals.entries()]
+        .map(([label, count]) => ({ label, count }))
+        .filter((row) => row.count > 0)
+        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+    }
+    function serviceVolumeSection(title, field, ticketType, dimensionLabel, metricLabel, tableId, filename) {
+      const notApplicable = distributionNotApplicable(ticketType);
+      const items = notApplicable ? [] : serviceVolumeItems(field, ticketType);
+      return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">Created tickets in the selected dashboard period.</p><div class="chart-frame chart-stage">${notApplicable ? `<p class="muted" style="padding:12px">This service split is not applicable for the selected ticket type.</p>` : pieChart(items)}</div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll">${serviceSplitTable(items, dimensionLabel, metricLabel, tableId)}</div></section>`;
     }
     function distributionPieSection(title, field, ticketType) {
       const notApplicable = distributionNotApplicable(ticketType);
@@ -4943,6 +5012,18 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         <section class="chart-card panel full" data-commentary-key="batch_related_incidents_created"><h3>Batch-related Incidents Created</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
         <section class="chart-card panel full" data-commentary-key="top_incident_batch_applications"><div class="chart-title-row"><div><h3>Top Applications with Incident Batch-Related Tickets</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("batch", state.topBatchN)}</div></div><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : paretoBarLineChart(topBatch, "Average Batch Created Count", "Average Batch Canceled Count")}</div></section>
         <section class="chart-card panel full" data-commentary-key="tickets_per_user_application"><div class="chart-title-row"><div><h3>Tickets per User per Month by Application</h3><p class="muted">Calculated as latest complete 6-month average monthly ticket volume divided by Active Users.</p></div><div class="pattern-buttons">${topToggle("tickets-user", state.ticketsPerUserN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(ticketUserPoints, { title: "Tickets per User per Month by Application", legend: "Tickets per user per month", color: COLORS.purple, digits: 2, height: state.ticketsPerUserN === "20" ? 780 : 500, emptyMessage: "No applications with non-zero Active Users are available." })}</div></section>
+        <div class="chart-grid-three">
+          ${serviceVolumeSection("Overall Ticket Volume by Service Entitlement", "service_entitlement", "all", "Service Entitlement", "Ticket Count", "offline-vol-service-entitlement-overall", "ticket_volume_by_service_entitlement_overall.csv")}
+          ${serviceVolumeSection("Incident Volume by Service Entitlement", "service_entitlement", "incident", "Service Entitlement", "Incident Count", "offline-vol-service-entitlement-incidents", "ticket_volume_by_service_entitlement_incidents.csv")}
+          ${serviceVolumeSection("SC Task Volume by Service Entitlement", "service_entitlement", "sc_task", "Service Entitlement", "SC Task Count", "offline-vol-service-entitlement-sc-tasks", "ticket_volume_by_service_entitlement_sc_tasks.csv")}
+        </div>
+        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_service_entitlement_ticket_volume_split" })}
+        <div class="chart-grid-three">
+          ${serviceVolumeSection("Overall Ticket Volume by Service Type", "service_type", "all", "Service Type", "Ticket Count", "offline-vol-service-type-overall", "ticket_volume_by_service_type_overall.csv")}
+          ${serviceVolumeSection("Incident Volume by Service Type", "service_type", "incident", "Service Type", "Incident Count", "offline-vol-service-type-incidents", "ticket_volume_by_service_type_incidents.csv")}
+          ${serviceVolumeSection("SC Task Volume by Service Type", "service_type", "sc_task", "Service Type", "SC Task Count", "offline-vol-service-type-sc-tasks", "ticket_volume_by_service_type_sc_tasks.csv")}
+        </div>
+        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_service_type_ticket_volume_split" })}
         ${scTaskCatalogSection()}
         <div class="chart-grid-three">
           ${distributionPieSection("Average Monthly Tickets by SAP / Non-SAP", "sap_non_sap", "all")}
@@ -5022,6 +5103,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         row.ticket_type === ticketType &&
         (state.volScope === "all" || row.scope === state.volScope) &&
         (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volServiceEntitlement === "all" || row.service_entitlement === state.volServiceEntitlement) &&
         (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
         (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );

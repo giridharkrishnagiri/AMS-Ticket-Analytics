@@ -352,6 +352,8 @@ def add_inventory_item(
     active_users: int | None = None,
     hosting_env: str | None = None,
     global_application: str | None = None,
+    service_entitlement: str | None = None,
+    service_type: str | None = None,
     lifecycle_stage_status: str | None = None,
     lifecycle_current: str | None = None,
     lifecycle_1_to_3_years: str | None = None,
@@ -393,6 +395,8 @@ def add_inventory_item(
         active=active,
         active_users=active_users,
         hosting_env=hosting_env,
+        service_entitlement=service_entitlement,
+        service_type=service_type,
         global_application=global_application,
         scope_status=scope_status,
         is_current=is_current,
@@ -1259,7 +1263,7 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             assignment_group="Inactive Assignment",
             application_owner="Inactive App Owner",
             parent_application_name="Inactive Parent",
-            active=False,
+            is_current=False,
         )
 
         incident = add_ticket(
@@ -2521,7 +2525,7 @@ def test_dashboard_top_active_users_groups_by_parent_business_application() -> N
             assignment_group="IT-NSA-C",
             application_owner="App Owner C",
             parent_application_name="Parent C",
-            active=False,
+            is_current=False,
             active_users=2000,
         )
         db.commit()
@@ -2854,6 +2858,118 @@ def test_dashboard_applications_filter_values_use_business_custom_sort_order() -
             "End of Life",
             "Ideation",
         ]
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_dashboard_applications_only_show_in_scope_business_service_ci_rows() -> None:
+    db, client_id, project_id, _, _, _ = create_dashboard_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "In Scope Service",
+            supported_by_vendor="Vendor A",
+            functional_track="Track A",
+            ams_owner="Owner A",
+            assignment_group="Group A",
+            application_owner="App Owner A",
+            parent_application_name="Parent A",
+            scope_status="in_scope",
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "In Scope Inactive Flag Service",
+            supported_by_vendor="Vendor A2",
+            functional_track="Track A",
+            ams_owner="Owner A",
+            assignment_group="Group A2",
+            application_owner="App Owner A2",
+            parent_application_name="Parent A",
+            scope_status="in_scope",
+            active=False,
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Out Scope Service",
+            supported_by_vendor="Vendor B",
+            functional_track="Track B",
+            ams_owner="Owner B",
+            assignment_group="Group B",
+            application_owner="App Owner B",
+            parent_application_name="Parent B",
+            scope_status="out_of_scope",
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "",
+            supported_by_vendor="Vendor C",
+            functional_track="Track C",
+            ams_owner="Owner C",
+            assignment_group="Group C",
+            application_owner="App Owner C",
+            parent_application_name="Parent C",
+            scope_status="in_scope",
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            overview_response = client.get(
+                "/api/dashboard/overview",
+                params={"project_id": str(project_id)},
+            )
+            summary_response = client.post(
+                "/api/dashboard/applications/summary",
+                json={"project_id": str(project_id), "filters": {}},
+            )
+            list_response = client.post(
+                "/api/dashboard/applications/list",
+                json={
+                    "project_id": str(project_id),
+                    "filters": {},
+                    "sort": {"column": "business_service_ci_name", "direction": "asc"},
+                    "limit": 50,
+                    "offset": 0,
+                },
+            )
+            filter_response = client.get(
+                "/api/dashboard/applications/filter-values",
+                params={"project_id": str(project_id)},
+            )
+            mapping_response = client.post(
+                "/api/dashboard/applications/assignment-group-mapping",
+                json={
+                    "project_id": str(project_id),
+                    "source": "application_inventory",
+                    "scope": "in_scope",
+                    "functional_track": "all",
+                },
+            )
+
+        assert overview_response.status_code == 200
+        assert overview_response.json()["application_inventory"]["total_applications"] == 2
+
+        assert summary_response.status_code == 200
+        assert summary_response.json()["applications"] == 2
+
+        assert list_response.status_code == 200
+        list_payload = list_response.json()
+        assert list_payload["total"] == 2
+        assert [row["business_service_ci_name"] for row in list_payload["rows"]] == [
+            "In Scope Inactive Flag Service",
+            "In Scope Service",
+        ]
+
+        assert filter_response.status_code == 200
+        assert filter_response.json()["application_scope"] == ["in_scope"]
+
+        assert mapping_response.status_code == 200
+        mapping_summary = mapping_response.json()["summary"]
+        assert mapping_summary["business_service_ci_count"] == 2
+        assert mapping_summary["mapping_count"] == 3
     finally:
         cleanup_client(db, client_id)
 
@@ -4604,6 +4720,240 @@ def test_volumetrics_reassignment_hops_trend_counts_hops_and_filters() -> None:
         assert filtered_february["total_created_tickets"] == 1
         assert filtered_february["tickets_with_2_plus_reassignments"] == 1
         assert filtered_february["total_reassignment_hops_ge_2"] == 4
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_applications_service_entitlement_and_type_charts() -> None:
+    db, client_id, project_id, _batch_id, _file_id, _ = create_dashboard_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "Order Service",
+            supported_by_vendor="Vendor A",
+            functional_track="Track A",
+            ams_owner="Owner A",
+            assignment_group="AG-A",
+            application_owner="App Owner A",
+            parent_application_name="Parent A",
+            active=False,
+            service_entitlement="Gold",
+            service_type="End-to-End",
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Billing Service",
+            supported_by_vendor="Vendor A",
+            functional_track="Track A",
+            ams_owner="Owner A",
+            assignment_group="AG-A",
+            application_owner="App Owner A",
+            parent_application_name="Parent A",
+            service_entitlement="Gold",
+            service_type="Integrator",
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Blank Service",
+            supported_by_vendor="Vendor B",
+            functional_track="Track B",
+            ams_owner="Owner B",
+            assignment_group="AG-B",
+            application_owner="App Owner B",
+            parent_application_name="Parent B",
+            service_entitlement="",
+            service_type=None,
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Out Scope Service",
+            supported_by_vendor="Vendor C",
+            functional_track="Track C",
+            ams_owner="Owner C",
+            assignment_group="AG-C",
+            application_owner="App Owner C",
+            parent_application_name="Parent C",
+            scope_status="out_of_scope",
+            service_entitlement="Silver",
+            service_type="Archived",
+        )
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "filters": {
+                "application_scope": [],
+                "service_entitlement": [],
+                "functional_track_ams_owner": [],
+                "assignment_group_owner": [],
+                "parent_application_name": [],
+                "application_owner": [],
+                "supported_by_vendor": [],
+                "sap_non_sap": [],
+                "architecture_type": [],
+                "application_type": [],
+                "business_critical": [],
+                "install_status": [],
+                "install_type": [],
+                "hosting_env": [],
+                "lifecycle_status_stage": [],
+            },
+            "sort": {"column": "business_service_ci_name", "direction": "asc"},
+            "limit": 1000,
+            "offset": 0,
+        }
+
+        with TestClient(app) as client:
+            charts_response = client.post("/api/dashboard/applications/charts", json=request_body)
+            values_response = client.get(
+                "/api/dashboard/applications/filter-values",
+                params={"project_id": str(project_id)},
+            )
+
+        assert charts_response.status_code == 200
+        payload = charts_response.json()
+        entitlement = {
+            row["label"]: row
+            for row in payload["applications_by_service_entitlement"]
+        }
+        assert entitlement["Gold"]["application_count"] == 2
+        assert entitlement["Blank"]["application_count"] == 1
+        assert "Silver" not in entitlement
+        assert round(sum(row["percentage"] or 0 for row in entitlement.values()), 1) == 100
+
+        service_type = {row["label"]: row for row in payload["applications_by_service_type"]}
+        assert service_type["End-to-End"]["application_count"] == 1
+        assert service_type["Integrator"]["application_count"] == 1
+        assert service_type["Blank"]["application_count"] == 1
+        assert "Archived" not in service_type
+
+        assert values_response.status_code == 200
+        assert "Gold" in values_response.json()["service_entitlement"]
+
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_volumetrics_service_entitlement_and_type_splits_filter_by_created_volume() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        gold_incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-SVC-GOLD",
+            "INCIDENT",
+            dt("2026-01-10T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-11T00:00:00"),
+            assignment_group="AG-GOLD",
+        )
+        gold_incident.service_entitlement = "Gold"
+        gold_incident.service_type = "End-to-End"
+        silver_task = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-SVC-SILVER",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-12T00:00:00"),
+            state="Closed Complete",
+            closed_at=dt("2026-01-13T00:00:00"),
+            assignment_group="AG-SILVER",
+        )
+        silver_task.service_entitlement = "Silver"
+        silver_task.service_type = "Integrator"
+        blank_task = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-SVC-BLANK",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-14T00:00:00"),
+            state="Closed Complete",
+            closed_at=dt("2026-01-15T00:00:00"),
+            assignment_group="AG-BLANK",
+        )
+        blank_task.service_entitlement = ""
+        blank_task.service_type = None
+        out_incident = add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-SVC-OOS",
+            "INCIDENT",
+            dt("2026-01-16T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-17T00:00:00"),
+            assignment_group="AG-OOS",
+        )
+        out_incident.service_entitlement = "Gold"
+        out_incident.service_type = "Archived"
+        db.commit()
+
+        request_body = volumetrics_request(project_id, scope="all")
+        request_body["start_datetime"] = "2026-01-01T00:00:00+00:00"
+        request_body["end_datetime"] = "2026-01-31T23:59:59+00:00"
+        request_body["filters"] = {
+            "service_entitlement": [],
+            "functional_track_ams_owner": [],
+            "assignment_group_support_lead": [],
+            "parent_application_name": [],
+            "application_owner": [],
+            "supported_by_vendor": [],
+            "sap_non_sap": [],
+            "architecture_type": [],
+            "business_critical": [],
+            "install_type": [],
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/distribution-splits",
+                json=request_body,
+            )
+            filtered_response = client.post(
+                "/api/dashboard/volumetrics/distribution-splits",
+                json={
+                    **request_body,
+                    "filters": {**request_body["filters"], "service_entitlement": ["Gold"]},
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        entitlement_rows = {
+            row["label"]: row["ticket_count"]
+            for row in payload["ticket_volume_by_service_entitlement"]["all"]
+        }
+        assert entitlement_rows == {"Gold": 2, "Silver": 1, "Blank": 1}
+        incident_type_rows = {
+            row["label"]: row["ticket_count"]
+            for row in payload["ticket_volume_by_service_type"]["incidents"]
+        }
+        assert incident_type_rows == {"Archived": 1, "End-to-End": 1}
+        sc_task_type_rows = {
+            row["label"]: row["ticket_count"]
+            for row in payload["ticket_volume_by_service_type"]["sc_tasks"]
+        }
+        assert sc_task_type_rows == {"Blank": 1, "Integrator": 1}
+        assert "normalized_payload" not in response.text
+        assert "cmdb_payload" not in response.text
+
+        assert filtered_response.status_code == 200
+        filtered_rows = {
+            row["label"]: row["ticket_count"]
+            for row in filtered_response.json()["ticket_volume_by_service_type"]["all"]
+        }
+        assert filtered_rows == {"Archived": 1, "End-to-End": 1}
+
     finally:
         cleanup_client(db, client_id)
 

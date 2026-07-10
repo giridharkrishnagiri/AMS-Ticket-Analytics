@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models import AssessmentOutOfScopeTicket, DashboardFilterFact, Project, Ticket
@@ -69,6 +69,25 @@ def dashboard_filter_fact_count(db: Session, project_id: UUID) -> int:
     )
 
 
+def dashboard_filter_fact_service_field_fragments(db: Session) -> tuple[str, str]:
+    inspector = inspect(db.get_bind())
+    if "dashboard_filter_facts" not in inspector.get_table_names():
+        return "", ""
+    columns = {column["name"] for column in inspector.get_columns("dashboard_filter_facts")}
+    if not {"service_entitlement", "service_type"}.issubset(columns):
+        return "", ""
+    return (
+        """
+                service_entitlement,
+                service_type,
+""",
+        """
+                left(NULLIF(btrim(t.service_entitlement), ''), 255),
+                left(NULLIF(btrim(t.service_type), ''), 255),
+""",
+    )
+
+
 def ensure_dashboard_filter_facts(
     db: Session,
     project_id: UUID,
@@ -120,9 +139,10 @@ def insert_in_scope_filter_facts(
     project_id: UUID,
     data_version: str | None,
 ) -> int:
+    service_columns, service_selects = dashboard_filter_fact_service_field_fragments(db)
     result = db.execute(
         text(
-            """
+            f"""
             INSERT INTO dashboard_filter_facts (
                 id,
                 customer_id,
@@ -155,7 +175,7 @@ def insert_in_scope_filter_facts(
                 install_status,
                 install_type,
                 hosting_env,
-                priority,
+{service_columns}                priority,
                 state,
                 status_group,
                 data_version
@@ -229,7 +249,7 @@ def insert_in_scope_filter_facts(
                 NULL,
                 left(NULLIF(btrim(t.install_type), ''), 255),
                 left(NULLIF(btrim(t.hosting_env), ''), 255),
-                left(NULLIF(btrim(t.priority), ''), 50),
+{service_selects}                left(NULLIF(btrim(t.priority), ''), 50),
                 left(NULLIF(btrim(t.state), ''), 100),
                 left(
                     CASE
@@ -261,9 +281,10 @@ def insert_out_of_scope_filter_facts(
     project_id: UUID,
     data_version: str | None,
 ) -> int:
+    service_columns, service_selects = dashboard_filter_fact_service_field_fragments(db)
     result = db.execute(
         text(
-            """
+            f"""
             INSERT INTO dashboard_filter_facts (
                 id,
                 customer_id,
@@ -296,7 +317,7 @@ def insert_out_of_scope_filter_facts(
                 install_status,
                 install_type,
                 hosting_env,
-                priority,
+{service_columns}                priority,
                 state,
                 status_group,
                 data_version
@@ -370,7 +391,7 @@ def insert_out_of_scope_filter_facts(
                 NULL,
                 left(NULLIF(btrim(t.install_type), ''), 255),
                 left(NULLIF(btrim(t.hosting_env), ''), 255),
-                left(NULLIF(btrim(t.priority), ''), 50),
+{service_selects}                left(NULLIF(btrim(t.priority), ''), 50),
                 left(NULLIF(btrim(t.state), ''), 100),
                 left(
                     CASE

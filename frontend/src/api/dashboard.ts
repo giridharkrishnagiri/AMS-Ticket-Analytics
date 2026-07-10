@@ -242,6 +242,7 @@ export type DashboardFilterCountsResponse = {
 
 export type DashboardApplicationsFilterValues = {
   application_scope: ApplicationFilterValue[];
+  service_entitlement: ApplicationFilterValue[];
   functional_track_ams_owner: ApplicationCombinedFilterValue[];
   assignment_group_owner: ApplicationCombinedFilterValue[];
   parent_application_name: ApplicationFilterValue[];
@@ -259,6 +260,7 @@ export type DashboardApplicationsFilterValues = {
 
 export type DashboardApplicationsFilters = {
   application_scope: string[];
+  service_entitlement: string[];
   functional_track_ams_owner: string[];
   assignment_group_owner: string[];
   parent_application_name: string[];
@@ -427,6 +429,12 @@ export type DashboardApplicationsChartDatum = {
   count: number;
 };
 
+export type DashboardApplicationsServiceSplitDatum = {
+  label: string;
+  application_count: number;
+  percentage: number | null;
+};
+
 export type DashboardApplicationsCriticalityHostingPivotRow = {
   business_criticality: string;
   counts: Record<string, number>;
@@ -447,6 +455,8 @@ export type DashboardApplicationsCharts = {
   install_type: DashboardApplicationsChartDatum[];
   hosting_env: DashboardApplicationsChartDatum[];
   strategic: DashboardApplicationsChartDatum[];
+  applications_by_service_entitlement: DashboardApplicationsServiceSplitDatum[];
+  applications_by_service_type: DashboardApplicationsServiceSplitDatum[];
   criticality_hosting_pivot: DashboardApplicationsCriticalityHostingPivot;
   global_local_applications: DashboardApplicationsChartDatum[];
 };
@@ -567,6 +577,7 @@ export type VolumetricsTimeGrain = "monthly" | "weekly";
 export type VolumetricsAgreementMode = "sla" | "ola";
 
 export type DashboardVolumetricsFilters = {
+  service_entitlement: string[];
   functional_track_ams_owner: string[];
   assignment_group_support_lead: string[];
   parent_application_name: string[];
@@ -592,6 +603,7 @@ export type DashboardVolumetricsRequest = {
 export type DashboardVolumetricsFilterValues = {
   scope: ApplicationFilterValue[];
   ticket_type: ApplicationFilterValue[];
+  service_entitlement: ApplicationFilterValue[];
   functional_track_ams_owner: ApplicationCombinedFilterValue[];
   assignment_group_support_lead: ApplicationCombinedFilterValue[];
   parent_application_name: ApplicationFilterValue[];
@@ -800,6 +812,12 @@ export type DashboardVolumetricsSplitDatum = {
   percentage: number | null;
 };
 
+export type DashboardVolumetricsServiceVolumeDatum = {
+  label: string;
+  ticket_count: number;
+  percentage: number | null;
+};
+
 export type DashboardVolumetricsTicketTypeSplit = {
   incidents: DashboardVolumetricsSplitDatum[];
   sc_tasks: DashboardVolumetricsSplitDatum[];
@@ -831,8 +849,16 @@ export type DashboardVolumetricsTripleTicketTypeSplit = {
   sc_tasks: DashboardVolumetricsSplitDatum[];
 };
 
+export type DashboardVolumetricsTripleServiceVolumeSplit = {
+  all: DashboardVolumetricsServiceVolumeDatum[];
+  incidents: DashboardVolumetricsServiceVolumeDatum[];
+  sc_tasks: DashboardVolumetricsServiceVolumeDatum[];
+};
+
 export type DashboardVolumetricsDistributionSplits = {
   ranking_window: DashboardVolumetricsRankingWindow;
+  ticket_volume_by_service_entitlement: DashboardVolumetricsTripleServiceVolumeSplit;
+  ticket_volume_by_service_type: DashboardVolumetricsTripleServiceVolumeSplit;
   sap_non_sap: DashboardVolumetricsTripleTicketTypeSplit;
   architecture_type: DashboardVolumetricsTripleTicketTypeSplit;
   install_type: DashboardVolumetricsTripleTicketTypeSplit;

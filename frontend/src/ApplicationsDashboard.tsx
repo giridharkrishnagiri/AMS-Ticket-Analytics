@@ -42,6 +42,7 @@ import type {
   DashboardApplicationsLifecyclePlanning,
   DashboardApplicationsList,
   DashboardApplicationsRequest,
+  DashboardApplicationsServiceSplitDatum,
   DashboardApplicationsSort,
   DashboardApplicationsSummary,
   DashboardApplicationsTopActiveUsers,
@@ -78,6 +79,7 @@ type AssignmentMappingSortKey =
 
 const emptyFilters: DashboardApplicationsFilters = {
   application_scope: [],
+  service_entitlement: [],
   functional_track_ams_owner: [],
   assignment_group_owner: [],
   parent_application_name: [],
@@ -95,6 +97,7 @@ const emptyFilters: DashboardApplicationsFilters = {
 
 const emptyFilterValues: DashboardApplicationsFilterValues = {
   application_scope: [],
+  service_entitlement: [],
   functional_track_ams_owner: [],
   assignment_group_owner: [],
   parent_application_name: [],
@@ -135,6 +138,8 @@ const emptyCharts: DashboardApplicationsCharts = {
   install_type: [],
   hosting_env: [],
   strategic: [],
+  applications_by_service_entitlement: [],
+  applications_by_service_type: [],
   global_local_applications: [],
   criticality_hosting_pivot: {
     rows: [],
@@ -296,6 +301,13 @@ function formatNumber(value: number | null | undefined): string {
     return "Not available";
   }
   return value.toLocaleString();
+}
+
+function formatPercentage(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "Not available";
+  }
+  return `${value.toFixed(1)}%`;
 }
 
 function formatTableValue(row: DashboardApplicationRow, column: TableColumnKey): string {
@@ -495,6 +507,12 @@ function applicationFilterValuesFromCatalog(
       counts,
       "application_scope",
       selectedFilters.application_scope
+    ),
+    service_entitlement: catalogSingleRows(
+      catalog,
+      counts,
+      "service_entitlement",
+      selectedFilters.service_entitlement
     ),
     functional_track_ams_owner: catalogCombinedRows(
       catalog,
@@ -896,6 +914,7 @@ function ApplicationsDashboard({
   const filterOptions = useMemo(
     () => ({
       application_scope: applicationScopeFilterOptions(filterValues.data.application_scope),
+      service_entitlement: singleFilterOptions(filterValues.data.service_entitlement),
       functional_track_ams_owner: combinedFilterOptions(
         filterValues.data.functional_track_ams_owner
       ),
@@ -1365,6 +1384,14 @@ function ApplicationsDashboard({
               onChange={(values) => updateFilter("application_scope", values)}
             />
           ) : null}
+          {activeSubTab !== "assignment_group_mapping" ? (
+            <ExcelMultiSelectFilter
+              label="Service Entitlement"
+              options={filterOptions.service_entitlement}
+              selectedValues={filters.service_entitlement}
+              onChange={(values) => updateFilter("service_entitlement", values)}
+            />
+          ) : null}
           <ExcelMultiSelectFilter
             label="Functional Track - AMS Owner"
             options={filterOptions.functional_track_ams_owner}
@@ -1562,6 +1589,28 @@ function ApplicationsDashboard({
         </section>
 
         <section className="applications-chart-grid">
+          <ApplicationServiceSplitChart
+            commentary={applicationCommentary(
+              "applications_service_entitlement_split",
+              "applications_by_service_entitlement",
+            )}
+            data={charts.data.applications_by_service_entitlement}
+            dimensionLabel="Service Entitlement"
+            filename="applications_by_service_entitlement.csv"
+            status={charts.status}
+            title="Applications by Service Entitlement"
+          />
+          <ApplicationServiceSplitChart
+            commentary={applicationCommentary(
+              "applications_service_type_split",
+              "applications_by_service_type",
+            )}
+            data={charts.data.applications_by_service_type}
+            dimensionLabel="Service Type"
+            filename="applications_by_service_type.csv"
+            status={charts.status}
+            title="Applications by Service Type"
+          />
           <PieApplicationChart
             title="Strategic"
             data={charts.data.strategic}
@@ -2881,6 +2930,112 @@ function PieApplicationChart({
             </div>
           </div>
         </div>
+      ) : null}
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
+    </section>
+  );
+}
+
+function ApplicationServiceSplitChart({
+  commentary,
+  data,
+  dimensionLabel,
+  filename,
+  status,
+  title,
+}: {
+  commentary?: ReactNode;
+  data: DashboardApplicationsServiceSplitDatum[];
+  dimensionLabel: string;
+  filename: string;
+  status: LoadStatus;
+  title: string;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartCopy(title);
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const chartData = data.filter((entry) => entry.application_count > 0);
+  const total = chartData.reduce((sum, entry) => sum + entry.application_count, 0);
+  const canCopy = status !== "loading" && chartData.length > 0;
+  const chartWidth = Math.max(500, plotWidth - 24);
+
+  return (
+    <section className="chart-card applications-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <h3>{title}</h3>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+      {status === "loading" ? (
+        <p className="muted-text chart-state-text">Loading chart...</p>
+      ) : null}
+      {status !== "loading" && chartData.length === 0 ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+      {status !== "loading" && chartData.length > 0 ? (
+        <>
+          <div className="applications-chart-plot" ref={chartRef}>
+            <div className="applications-chart-scroll">
+              <div className="applications-chart-stage">
+                <PieChart width={chartWidth} height={320}>
+                  <Tooltip formatter={(value) => formatNumber(Number(value))} />
+                  <Legend
+                    formatter={(value) => {
+                      const row = chartData.find((item) => item.label === value);
+                      return `${value} (${formatNumber(row?.application_count)} apps, ${formatPercentage(
+                        row?.percentage,
+                      )})`;
+                    }}
+                  />
+                  <Pie
+                    data={chartData}
+                    dataKey="application_count"
+                    label={(props) => renderApplicationPieLabel(props, total)}
+                    labelLine
+                    nameKey="label"
+                    outerRadius={104}
+                  >
+                    {chartData.map((entry, index) => (
+                      <Cell
+                        fill={chartColors[index % chartColors.length]}
+                        key={entry.label}
+                        stroke="#ffffff"
+                        strokeWidth={1.5}
+                      />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </div>
+            </div>
+          </div>
+          <TableExportActions filename={filename} label={title} tableRef={tableRef} />
+          <div className="applications-table-frame compact-table-frame">
+            <table className="applications-table compact-data-table" ref={tableRef}>
+              <thead>
+                <tr>
+                  <th>{dimensionLabel}</th>
+                  <th>Application Count</th>
+                  <th>Percentage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {chartData.map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    <td>{formatNumber(row.application_count)}</td>
+                    <td>{formatPercentage(row.percentage)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
       {commentary}

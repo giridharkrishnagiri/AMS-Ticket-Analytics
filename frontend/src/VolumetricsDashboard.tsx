@@ -84,6 +84,7 @@ import type {
   DashboardVolumetricsScTaskCatalogItemPeriod,
   DashboardVolumetricsScTaskCatalogItemProportion,
   DashboardVolumetricsScTaskCatalogItemRow,
+  DashboardVolumetricsServiceVolumeDatum,
   DashboardVolumetricsSlaTrends,
   DashboardVolumetricsSplitDatum,
   DashboardVolumetricsSummary,
@@ -150,6 +151,7 @@ const defaultEndMonth = "2026-06";
 const maxWeeklyRangeWeeks = 15;
 
 const emptyFilters: DashboardVolumetricsFilters = {
+  service_entitlement: [],
   functional_track_ams_owner: [],
   assignment_group_support_lead: [],
   parent_application_name: [],
@@ -164,6 +166,7 @@ const emptyFilters: DashboardVolumetricsFilters = {
 const emptyFilterValues: DashboardVolumetricsFilterValues = {
   scope: [],
   ticket_type: [],
+  service_entitlement: [],
   functional_track_ams_owner: [],
   assignment_group_support_lead: [],
   parent_application_name: [],
@@ -298,6 +301,8 @@ const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
     end_month: "",
     description: "Latest complete 6 months",
   },
+  ticket_volume_by_service_entitlement: emptyDistributionGroup,
+  ticket_volume_by_service_type: emptyDistributionGroup,
   sap_non_sap: emptyDistributionGroup,
   architecture_type: emptyDistributionGroup,
   install_type: emptyDistributionGroup,
@@ -765,6 +770,12 @@ function volumetricsFilterValuesFromCatalog(
   return {
     scope: catalogSingleRows(catalog, counts, "scope", [scope]),
     ticket_type: catalogSingleRows(catalog, counts, "ticket_type", [ticketType]),
+    service_entitlement: catalogSingleRows(
+      catalog,
+      counts,
+      "service_entitlement",
+      filters.service_entitlement
+    ),
     functional_track_ams_owner: catalogCombinedRows(
       catalog,
       counts,
@@ -1234,6 +1245,7 @@ function VolumetricsDashboard({
     () => ({
       scope: singleOptions(filterValues.data.scope),
       ticket_type: singleOptions(filterValues.data.ticket_type),
+      service_entitlement: singleOptions(filterValues.data.service_entitlement),
       functional_track_ams_owner: combinedOptions(filterValues.data.functional_track_ams_owner),
       assignment_group_support_lead: combinedOptions(
         filterValues.data.assignment_group_support_lead
@@ -2016,6 +2028,12 @@ function VolumetricsDashboard({
                 options={filterOptions.functional_track_ams_owner}
                 selectedValues={filters.functional_track_ams_owner}
                 onChange={(values) => updateFilter("functional_track_ams_owner", values)}
+              />
+              <ExcelMultiSelectFilter
+                label="Service Entitlement"
+                options={filterOptions.service_entitlement}
+                selectedValues={filters.service_entitlement}
+                onChange={(values) => updateFilter("service_entitlement", values)}
               />
               <ExcelMultiSelectFilter
                 label="SAP / Non-SAP"
@@ -3057,6 +3075,53 @@ function DetailedVolumeTrends({
         commentary={commentaryForChart("tickets_per_user_application")}
       />
 
+      <ServiceVolumePieRow
+        commentary={commentaryForChart("volumetrics_service_entitlement_ticket_volume_split")}
+        data={distributionSplits.ticket_volume_by_service_entitlement}
+        dimensionLabel="Service Entitlement"
+        error={distributionSplitsError}
+        filenames={{
+          all: "ticket_volume_by_service_entitlement_overall.csv",
+          incidents: "ticket_volume_by_service_entitlement_incidents.csv",
+          sc_tasks: "ticket_volume_by_service_entitlement_sc_tasks.csv",
+        }}
+        metricLabels={{
+          all: "Ticket Count",
+          incidents: "Incident Count",
+          sc_tasks: "SC Task Count",
+        }}
+        status={distributionSplitsStatus}
+        ticketType={ticketType}
+        titles={{
+          all: "Overall Ticket Volume by Service Entitlement",
+          incidents: "Incident Volume by Service Entitlement",
+          sc_tasks: "SC Task Volume by Service Entitlement",
+        }}
+      />
+      <ServiceVolumePieRow
+        commentary={commentaryForChart("volumetrics_service_type_ticket_volume_split")}
+        data={distributionSplits.ticket_volume_by_service_type}
+        dimensionLabel="Service Type"
+        error={distributionSplitsError}
+        filenames={{
+          all: "ticket_volume_by_service_type_overall.csv",
+          incidents: "ticket_volume_by_service_type_incidents.csv",
+          sc_tasks: "ticket_volume_by_service_type_sc_tasks.csv",
+        }}
+        metricLabels={{
+          all: "Ticket Count",
+          incidents: "Incident Count",
+          sc_tasks: "SC Task Count",
+        }}
+        status={distributionSplitsStatus}
+        ticketType={ticketType}
+        titles={{
+          all: "Overall Ticket Volume by Service Type",
+          incidents: "Incident Volume by Service Type",
+          sc_tasks: "SC Task Volume by Service Type",
+        }}
+      />
+
       <DistributionPieRow
         commentary={commentaryForChart("sap_non_sap_distribution_row")}
         data={distributionSplits.sap_non_sap}
@@ -3648,6 +3713,171 @@ function distributionChartNotApplicable(
     return valueTicketType !== "incidents";
   }
   return valueTicketType !== "sc_tasks";
+}
+
+function ServiceVolumePieRow({
+  commentary,
+  data,
+  dimensionLabel,
+  error,
+  filenames,
+  metricLabels,
+  status,
+  ticketType,
+  titles,
+}: {
+  commentary: ReactNode;
+  data: DashboardVolumetricsDistributionSplits["ticket_volume_by_service_entitlement"];
+  dimensionLabel: string;
+  error: string | null;
+  filenames: Record<DistributionTicketTypeKey, string>;
+  metricLabels: Record<DistributionTicketTypeKey, string>;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  titles: Record<DistributionTicketTypeKey, string>;
+}) {
+  const entries: Array<{ key: DistributionTicketTypeKey; points: DashboardVolumetricsServiceVolumeDatum[] }> = [
+    { key: "all", points: data.all },
+    { key: "incidents", points: data.incidents },
+    { key: "sc_tasks", points: data.sc_tasks },
+  ];
+  return (
+    <section className="volumetrics-row-group">
+      <div className="volumetrics-three-column-grid">
+        {entries.map((entry) => (
+          <ServiceVolumePieChart
+            data={entry.points}
+            dimensionLabel={dimensionLabel}
+            error={error}
+            filename={filenames[entry.key]}
+            key={entry.key}
+            metricLabel={metricLabels[entry.key]}
+            status={status}
+            ticketType={ticketType}
+            title={titles[entry.key]}
+            valueTicketType={entry.key}
+          />
+        ))}
+      </div>
+      {commentary}
+    </section>
+  );
+}
+
+function ServiceVolumePieChart({
+  data,
+  dimensionLabel,
+  error,
+  filename,
+  metricLabel,
+  status,
+  ticketType,
+  title,
+  valueTicketType,
+}: {
+  data: DashboardVolumetricsServiceVolumeDatum[];
+  dimensionLabel: string;
+  error: string | null;
+  filename: string;
+  metricLabel: string;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  title: string;
+  valueTicketType: DistributionTicketTypeKey;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const notApplicable = distributionChartNotApplicable(ticketType, valueTicketType);
+  const hasRows = data.length > 0;
+  const chartWidth = Math.max(360, plotWidth - 24);
+  const canCopy = status !== "loading" && hasRows && !notApplicable;
+  const total = data.reduce((sum, item) => sum + item.ticket_count, 0);
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">Created tickets in the selected dashboard period.</p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">
+          This service split is not applicable for the selected ticket type.
+        </p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && !hasRows ? (
+        <p className="muted-text chart-state-text">No chart data available.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && hasRows ? (
+        <>
+          <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+            <div className="applications-chart-stage">
+              <PieChart width={chartWidth} height={330}>
+                <Pie
+                  data={data}
+                  cx="50%"
+                  cy="45%"
+                  dataKey="ticket_count"
+                  nameKey="label"
+                  outerRadius={92}
+                >
+                  {data.map((entry, index) => (
+                    <Cell
+                      fill={chartColors.pie[index % chartColors.pie.length]}
+                      key={entry.label}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(value) => formatNumber(Number(value))} />
+                <Legend
+                  formatter={(value) => {
+                    const row = data.find((item) => item.label === value);
+                    const share = row && total ? `, ${formatPercent(row.percentage)}` : "";
+                    return `${value} (${formatNumber(row?.ticket_count)}${share})`;
+                  }}
+                />
+              </PieChart>
+            </div>
+          </div>
+          <TableExportActions filename={filename} label={title} tableRef={tableRef} />
+          <div className="applications-table-frame compact-table-frame">
+            <table className="applications-table compact-data-table" ref={tableRef}>
+              <thead>
+                <tr>
+                  <th>{dimensionLabel}</th>
+                  <th>{metricLabel}</th>
+                  <th>Percentage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    <td>{formatNumber(row.ticket_count)}</td>
+                    <td>{formatPercent(row.percentage)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
+
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
 }
 
 function DistributionPieRow({
