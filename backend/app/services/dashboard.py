@@ -4729,6 +4729,7 @@ def volumetrics_top_application_rows(
             include_date_bounds=False,
         ),
         or_(created_window_condition, cancelled_window_condition),
+        func.nullif(func.btrim(source.c.business_service_ci_name), "").is_not(None),
     ]
     if incident_batch_only:
         conditions.append(source.c.is_batch_related.is_(True))
@@ -4770,6 +4771,7 @@ def volumetrics_overall_average_created_volume(
         source.c.created_at.is_not(None),
         source.c.created_at >= window_start,
         source.c.created_at <= window_end,
+        func.nullif(func.btrim(source.c.business_service_ci_name), "").is_not(None),
     ]
     if incident_batch_only:
         conditions.append(source.c.is_batch_related.is_(True))

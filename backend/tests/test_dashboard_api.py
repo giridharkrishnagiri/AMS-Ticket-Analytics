@@ -3893,6 +3893,75 @@ def test_volumetrics_detailed_volume_trends_and_incident_batch_charts() -> None:
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_top_application_charts_exclude_blank_business_service_ci() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        window_start, _window_end = dashboard_service.rolling_six_complete_month_window()
+        current_month = window_start
+        for month_index in range(6):
+            completion_month = dashboard_service.last_moment_of_month(current_month)
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"INC-NAMED-APP-{month_index}",
+                "INCIDENT",
+                current_month,
+                state="Resolved",
+                resolved_at=completion_month,
+                short_description="Automic named app failure",
+                business_service_ci_name="Named Application",
+            )
+            for ticket_index in range(5):
+                add_ticket(
+                    db,
+                    project_id,
+                    batch_id,
+                    file_id,
+                    f"INC-BLANK-APP-{month_index}-{ticket_index}",
+                    "INCIDENT",
+                    current_month,
+                    state="Resolved",
+                    resolved_at=completion_month,
+                    short_description="Automic blank app failure",
+                    business_service_ci_name=None,
+                )
+            current_month = dashboard_service.add_month(current_month)
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "in_scope",
+            "ticket_type": "all",
+            "time_grain": "monthly",
+            "start_datetime": "2025-01-01T00:00:00+00:00",
+            "end_datetime": "2025-01-31T23:59:59+00:00",
+            "filters": {},
+            "top_n": 10,
+        }
+        with TestClient(app) as client:
+            top_apps_response = client.post(
+                "/api/dashboard/volumetrics/top-applications",
+                json=request_body,
+            )
+            top_batch_response = client.post(
+                "/api/dashboard/volumetrics/top-incident-batch-applications",
+                json=request_body,
+            )
+
+        assert top_apps_response.status_code == 200
+        assert [point["application_name"] for point in top_apps_response.json()["points"]] == [
+            "Named Application",
+        ]
+        assert top_batch_response.status_code == 200
+        assert [
+            point["application_name"] for point in top_batch_response.json()["points"]
+        ] == ["Named Application"]
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:

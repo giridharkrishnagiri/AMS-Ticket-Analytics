@@ -201,6 +201,7 @@ def add_application_inventory_scope(
     sap_non_sap: str | None = None,
     scope_status: str = "in_scope",
     row_number: int = 1,
+    cmdb_payload: dict[str, object] | None = None,
 ) -> None:
     client_id = db.scalar(select(Project.client_id).where(Project.id == project_id))
     legacy_scope_key = assignment_group.strip().lower()
@@ -240,7 +241,8 @@ def add_application_inventory_scope(
             service_entitlement=service_entitlement,
             sap_non_sap=sap_non_sap,
             scope_status=scope_status,
-            cmdb_payload={
+            cmdb_payload=cmdb_payload
+            or {
                 "Architecture type": "Vendor Managed",
                 "Install type": "Cloud",
             },
@@ -768,6 +770,48 @@ def test_apply_mapping_normalizes_incident_rows_and_is_idempotent() -> None:
         assert ticket.normalized_payload["raw_payload_json"]["number"] == "INC100"
         assert ticket.normalized_payload["raw_payload_json"]["comments"] == "User called back"
         assert ticket.normalized_payload["unmapped_fields"]["work_notes"] == "Restarted service"
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_apply_mapping_uses_cmdb_install_status_as_ticket_install_type() -> None:
+    rows = [
+        {
+            "number": "INC101",
+            "short_description": "Email unavailable",
+            "state": "Resolved",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": IN_SCOPE_BUSINESS_SERVICE,
+            "sys_created_on": "2026-06-03 09:15:00",
+        }
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(rows)
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+    }
+
+    try:
+        add_application_inventory_scope(
+            db,
+            project_id,
+            cmdb_payload={
+                "Architecture type": "Vendor Managed",
+                "Install Status": "Installed",
+            },
+        )
+        db.commit()
+
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        ticket = db.scalar(select(Ticket).where(Ticket.upload_batch_id == upload_batch_id))
+
+        assert result.normalized_ticket_count == 1
+        assert ticket is not None
+        assert ticket.install_type == "Installed"
     finally:
         cleanup_client(db, client_id)
 

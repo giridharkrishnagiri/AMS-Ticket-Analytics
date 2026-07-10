@@ -54,7 +54,12 @@ CMDB_BUSINESS_CRITICAL_KEYS = (
     "Business Criticality",
     "Business Critical",
 )
-CMDB_INSTALL_TYPE_KEYS = ("Install type", "Install Type")
+CMDB_INSTALL_TYPE_KEYS = (
+    "Install type",
+    "Install Type",
+    "Install status",
+    "Install Status",
+)
 
 NORMALIZED_FIELDS = (
     "ticket_id",
