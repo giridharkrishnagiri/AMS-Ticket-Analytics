@@ -97,7 +97,14 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "Group Manager",
         "Assignment Group Manager",
     ),
-    "functional_track": ("Functional Track", "Track", "functional_track"),
+    "functional_track": (
+        "Functional Track",
+        "Functional track",
+        "functional_track",
+        "Track",
+        "AMS Functional Track",
+        "Portfolio Track",
+    ),
     "ams_owner": ("AMS Lead", "AMS Owner", "AMS owner", "ams_owner", "Application AMS Owner"),
     "supported_by_vendor": (
         "Supported By Vendor",
@@ -170,6 +177,15 @@ CORE_ALIAS_TO_FIELD = {
     normalize_source_column_name(alias): field_name
     for field_name, aliases in CORE_FIELD_ALIASES.items()
     for alias in aliases
+}
+
+AMS_OWNER_FUNCTIONAL_TRACK_FALLBACKS = {
+    "ashwin rao": "Digital Finance",
+    "luboslav matisko": "Enterprise Apps & RPA",
+    "luis sanchez": "S/4 T2S / NALA",
+    "matyas hunyady": "Supply Chain",
+    "ravi telu": "Marketing, Sales & eCommerce",
+    "seshu avala": "Data & Analytics",
 }
 
 
@@ -445,6 +461,13 @@ def derive_inventory_scope_status(raw_scope: Any) -> str:
     return "unknown"
 
 
+def functional_track_from_ams_owner(ams_owner: Any) -> str | None:
+    ams_owner_key = normalize_match_key(ams_owner)
+    if ams_owner_key is None:
+        return None
+    return AMS_OWNER_FUNCTIONAL_TRACK_FALLBACKS.get(ams_owner_key)
+
+
 def clean_inventory_values(
     project_id: UUID,
     source_filename: str,
@@ -455,6 +478,10 @@ def clean_inventory_values(
     business_service_ci_name = text_or_none(
         get_raw_value(parsed_row.raw_data, "business_service_ci_name")
     )
+    ams_owner = text_or_none(get_raw_value(parsed_row.raw_data, "ams_owner"))
+    functional_track = text_or_none(get_raw_value(parsed_row.raw_data, "functional_track"))
+    if functional_track is None:
+        functional_track = functional_track_from_ams_owner(ams_owner)
     values: dict[str, Any] = {
         "project_id": project_id,
         "application_number_apm": text_or_none(
@@ -472,8 +499,8 @@ def clean_inventory_values(
         ),
         "business_service_ci_name": business_service_ci_name or "",
         "support_lead": text_or_none(get_raw_value(parsed_row.raw_data, "support_lead")),
-        "functional_track": text_or_none(get_raw_value(parsed_row.raw_data, "functional_track")),
-        "ams_owner": text_or_none(get_raw_value(parsed_row.raw_data, "ams_owner")),
+        "functional_track": functional_track,
+        "ams_owner": ams_owner,
         "supported_by_vendor": text_or_none(
             get_raw_value(parsed_row.raw_data, "supported_by_vendor")
         ),
@@ -1163,7 +1190,6 @@ def update_tickets_from_inventory(
                 i.business_service_ci_name,
                 i.application_owner,
                 i.support_lead,
-                i.functional_track,
                 i.ams_owner,
                 i.supported_by_vendor,
                 i.assignment_group_owner,
@@ -1206,7 +1232,6 @@ def update_tickets_from_inventory(
             business_service_ci_name = candidates.business_service_ci_name,
             application_owner = candidates.application_owner,
             support_lead = candidates.support_lead,
-            functional_track = candidates.functional_track,
             ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
             assignment_group_owner = candidates.assignment_group_owner,
@@ -1257,6 +1282,12 @@ def update_ticket_support_group_fields_from_inventory(
                     ELSE 'Multiple'
                 END AS service_entitlement,
                 CASE
+                    WHEN count(DISTINCT NULLIF(btrim(functional_track), '')) = 0 THEN NULL
+                    WHEN count(DISTINCT NULLIF(btrim(functional_track), '')) = 1
+                        THEN min(NULLIF(btrim(functional_track), ''))
+                    ELSE 'Multiple'
+                END AS functional_track,
+                CASE
                     WHEN count(DISTINCT NULLIF(btrim(sap_non_sap), '')) = 0 THEN NULL
                     WHEN count(DISTINCT NULLIF(btrim(sap_non_sap), '')) = 1
                         THEN min(NULLIF(btrim(sap_non_sap), ''))
@@ -1273,6 +1304,7 @@ def update_ticket_support_group_fields_from_inventory(
         SET
             service_type = inventory_values.service_type,
             service_entitlement = inventory_values.service_entitlement,
+            functional_track = inventory_values.functional_track,
             sap_non_sap = COALESCE(inventory_values.sap_non_sap, t.sap_non_sap)
         FROM inventory_values
         WHERE t.project_id = CAST(:project_id AS uuid)
@@ -1282,6 +1314,7 @@ def update_ticket_support_group_fields_from_inventory(
           AND (
             t.service_type IS DISTINCT FROM inventory_values.service_type
             OR t.service_entitlement IS DISTINCT FROM inventory_values.service_entitlement
+            OR t.functional_track IS DISTINCT FROM inventory_values.functional_track
             OR (
                 inventory_values.sap_non_sap IS NOT NULL
                 AND t.sap_non_sap IS DISTINCT FROM inventory_values.sap_non_sap

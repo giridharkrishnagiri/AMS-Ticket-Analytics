@@ -1387,6 +1387,10 @@ def apply_service_inventory_enrichment_to_ticket(
     ticket: Ticket,
     inventory_items: list[ApplicationInventoryItem],
 ) -> None:
+    ticket.functional_track = collapse_inventory_values_for_support_group(
+        inventory_items,
+        "functional_track",
+    )
     ticket.service_type = collapse_inventory_values_for_support_group(
         inventory_items,
         "service_type",
@@ -2127,6 +2131,16 @@ def apply_problem_or_change_mapping_to_batch(
                 inventory_items,
             )
             apply_inventory_enrichment_to_operational_record(record, inventory_item)
+            support_group_items = inventory_items_for_assignment_group(
+                inventory_items,
+                record.assignment_group,
+            )
+            support_group_track = collapse_inventory_values_for_support_group(
+                support_group_items,
+                "functional_track",
+            )
+            if support_group_track is not None:
+                record.functional_track = support_group_track
             if record.application_inventory_match_status == "unmatched":
                 unmatched_inventory_count += 1
 

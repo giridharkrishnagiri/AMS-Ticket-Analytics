@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.services.application_inventory import (
     ApplicationInventoryError,
+    functional_track_from_ams_owner,
     list_inventory_items,
     normalize_scope_status,
     update_application_inventory_active_users_from_file,
@@ -41,6 +42,17 @@ def test_scope_status_normalization_for_cmdb_scope_column() -> None:
     assert normalize_scope_status("") == "unknown"
     assert normalize_scope_status(None) == "unknown"
     assert normalize_scope_status("needs review") == "unknown"
+
+
+def test_functional_track_fallback_from_ams_owner_mapping() -> None:
+    assert functional_track_from_ams_owner("Ashwin Rao") == "Digital Finance"
+    assert functional_track_from_ams_owner("luboslav matisko") == "Enterprise Apps & RPA"
+    assert functional_track_from_ams_owner("  Luis   Sanchez ") == "S/4 T2S / NALA"
+    assert functional_track_from_ams_owner("Matyas\xa0Hunyady") == "Supply Chain"
+    assert functional_track_from_ams_owner("Ravi Telu") == "Marketing, Sales & eCommerce"
+    assert functional_track_from_ams_owner("Seshu Avala") == "Data & Analytics"
+    assert functional_track_from_ams_owner("Ashwin") is None
+    assert functional_track_from_ams_owner("") is None
 
 
 def create_project():
@@ -335,6 +347,46 @@ def test_xlsx_upload_detects_second_row_header() -> None:
         assert item.scope_status == "in_scope"
         assert item.active_users == 1234
         assert item.cmdb_payload == {"Application family": "Excel Family"}
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_cmdb_upload_imports_functional_track_and_derives_blank_from_ams_lead(
+    tmp_path,
+) -> None:
+    db, client_id, project_id, _batch_id, _file_id = create_project()
+    try:
+        path = tmp_path / "cmdb-functional-track.csv"
+        path.write_text(
+            "\n".join(
+                [
+                    "Business Service CI Name,Support group,Functional track,AMS Lead,"
+                    "In Scope / Out of Scope",
+                    "Explicit Service,IT-EXPLICIT,Custom Track,Ashwin Rao,In scope",
+                    "Fallback Service,IT-FALLBACK,,Luboslav\xa0Matisko,In scope",
+                    "Unknown Service,IT-UNKNOWN,,Unknown Owner,In scope",
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+        result = upload_application_inventory_file(db, project_id, path, path.name)
+        assert result.inserted_count == 3
+
+        rows = {
+            row.assignment_group: row
+            for row in db.scalars(
+                select(ApplicationInventoryItem).where(
+                    ApplicationInventoryItem.project_id == project_id,
+                    ApplicationInventoryItem.is_current.is_(True),
+                )
+            ).all()
+        }
+        assert rows["IT-EXPLICIT"].functional_track == "Custom Track"
+        assert rows["IT-EXPLICIT"].ams_owner == "Ashwin Rao"
+        assert rows["IT-FALLBACK"].functional_track == "Enterprise Apps & RPA"
+        assert rows["IT-FALLBACK"].ams_owner == "Luboslav\xa0Matisko"
+        assert rows["IT-UNKNOWN"].functional_track is None
     finally:
         cleanup_client(db, client_id)
 
@@ -808,7 +860,7 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
         assert "Claims Service" in filter_values["business_service_ci_names"]
         assert "Claims Parent" in filter_values["parent_application_names"]
         assert filtered_response.status_code == 200
-        assert filtered_response.json()[0]["total_tickets"] == 2
+        assert filtered_response.json()[0]["total_tickets"] == 3
     finally:
         cleanup_client(db, client_id)
 

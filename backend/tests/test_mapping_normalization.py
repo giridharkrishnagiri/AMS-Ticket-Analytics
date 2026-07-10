@@ -195,6 +195,7 @@ def add_application_inventory_scope(
     *,
     assignment_group: str = IN_SCOPE_ASSIGNMENT_GROUP,
     business_service: str = IN_SCOPE_BUSINESS_SERVICE,
+    functional_track: str | None = "Mapping Track",
     service_type: str | None = None,
     service_entitlement: str | None = None,
     sap_non_sap: str | None = None,
@@ -216,7 +217,7 @@ def add_application_inventory_scope(
                 project_id=project_id,
                 assignment_group=assignment_group,
                 assignment_group_key=legacy_scope_key,
-                functional_track="Mapping Track",
+                functional_track=functional_track,
                 source_filename="mapping-scope-reference.xlsx",
                 source_row_number=1,
                 is_active=True,
@@ -232,7 +233,7 @@ def add_application_inventory_scope(
             application_owner="Mapping Application Owner",
             business_service_ci_name=business_service,
             support_lead="Mapping Support Lead",
-            functional_track="Mapping Track",
+            functional_track=functional_track,
             ams_owner="Mapping AMS Owner",
             supported_by_vendor="HCLTech",
             service_type=service_type,
@@ -877,6 +878,7 @@ def test_apply_mapping_enriches_service_fields_for_incidents_by_support_group() 
         add_application_inventory_scope(
             db,
             project_id,
+            functional_track="Digital Finance",
             service_type="Managed Service",
             service_entitlement="Gold",
             sap_non_sap="SAP",
@@ -886,6 +888,7 @@ def test_apply_mapping_enriches_service_fields_for_incidents_by_support_group() 
             project_id,
             assignment_group="External Support",
             business_service="External CMDB Service",
+            functional_track="Supply Chain",
             service_type="External Service",
             service_entitlement="Bronze",
             sap_non_sap="Non-SAP",
@@ -911,12 +914,15 @@ def test_apply_mapping_enriches_service_fields_for_incidents_by_support_group() 
         assert in_scope_ticket is not None
         assert in_scope_ticket.service_type == "Managed Service"
         assert in_scope_ticket.service_entitlement == "Gold"
+        assert in_scope_ticket.functional_track == "Digital Finance"
         assert in_scope_ticket.sap_non_sap == "SAP"
         assert out_tickets["INC-SERVICE-OUT"].service_type == "External Service"
         assert out_tickets["INC-SERVICE-OUT"].service_entitlement == "Bronze"
+        assert out_tickets["INC-SERVICE-OUT"].functional_track == "Supply Chain"
         assert out_tickets["INC-SERVICE-OUT"].sap_non_sap == "Non-SAP"
         assert out_tickets["INC-SERVICE-NOMATCH"].service_type == "External Service"
         assert out_tickets["INC-SERVICE-NOMATCH"].service_entitlement == "Bronze"
+        assert out_tickets["INC-SERVICE-NOMATCH"].functional_track == "Supply Chain"
     finally:
         cleanup_client(db, client_id)
 
@@ -957,6 +963,7 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -
         add_application_inventory_scope(
             db,
             project_id,
+            functional_track="Data & Analytics",
             service_type="Task Service",
             service_entitlement="Silver",
         )
@@ -965,6 +972,7 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -
             project_id,
             assignment_group="External Support",
             business_service="External Task Service",
+            functional_track="Enterprise Apps & RPA",
             service_type="Out Task Service",
             service_entitlement="Bronze",
             scope_status="out_of_scope",
@@ -983,9 +991,11 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -
         assert result.normalized_ticket_count == 1
         assert result.out_of_scope_ticket_count == 1
         assert in_scope_ticket is not None
+        assert in_scope_ticket.functional_track == "Data & Analytics"
         assert in_scope_ticket.service_type == "Task Service"
         assert in_scope_ticket.service_entitlement == "Silver"
         assert out_of_scope_ticket is not None
+        assert out_of_scope_ticket.functional_track == "Enterprise Apps & RPA"
         assert out_of_scope_ticket.service_type == "Out Task Service"
         assert out_of_scope_ticket.service_entitlement == "Bronze"
     finally:
@@ -1020,6 +1030,7 @@ def test_apply_mapping_collapses_multiple_service_values_by_support_group() -> N
             db,
             project_id,
             business_service="Service A",
+            functional_track="Digital Finance",
             service_type="Integrator",
             service_entitlement="Gold",
             sap_non_sap="SAP",
@@ -1029,6 +1040,7 @@ def test_apply_mapping_collapses_multiple_service_values_by_support_group() -> N
             db,
             project_id,
             business_service="Service B",
+            functional_track="Supply Chain",
             service_type="End-to-end",
             service_entitlement="Gold",
             sap_non_sap="Non-SAP",
@@ -1043,6 +1055,7 @@ def test_apply_mapping_collapses_multiple_service_values_by_support_group() -> N
 
         assert result.normalized_ticket_count == 1
         assert ticket is not None
+        assert ticket.functional_track == "Multiple"
         assert ticket.service_type == "Multiple"
         assert ticket.service_entitlement == "Gold"
         assert ticket.sap_non_sap == "Multiple"

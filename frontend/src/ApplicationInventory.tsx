@@ -345,8 +345,9 @@ function ApplicationInventory({
             Support group marked In scope in the latest active CMDB file. Business Service CI Name
             is imported as an application attribute and is not used for ticket scope
             classification. Uploading a new file replaces the active inventory reference set for
-            this project. Enrichment updates only denormalized inventory fields and does not
-            change raw ticket fields or uploaded source data.
+            this project. Functional Track is imported from CMDB and can be derived from AMS Lead
+            when blank. Enrichment updates only denormalized inventory fields and does not change
+            raw ticket fields or uploaded source data.
           </p>
         </form>
 

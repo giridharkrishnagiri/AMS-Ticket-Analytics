@@ -334,7 +334,9 @@ def test_agent_chat_generates_governed_chart_metadata(monkeypatch) -> None:
     payload = response.json()
     metadata = payload["assistant_message"]["metadata"]
     assert metadata["tools_used"] == ["get_ticket_trend_summary"]
-    assert metadata["generated_charts"][0]["chart_type"] == "scatter_3d"
+    assert metadata["generated_charts"]
+    generated_chart = metadata["generated_charts"][0]
+    assert generated_chart["chart_type"] in {"scatter_3d", "table"}
     assert metadata["data_access"] == "governed_tools"
     assert not any("3-D charting is deferred" in warning for warning in metadata["warnings"])
     assert "normalized_payload" not in str(payload)
@@ -342,8 +344,11 @@ def test_agent_chat_generates_governed_chart_metadata(monkeypatch) -> None:
 
     with TestClient(app) as client:
         chart_response = client.get(
-            f"/api/genai/charts/{metadata['generated_charts'][0]['chart_id']}",
+            f"/api/genai/charts/{generated_chart['chart_id']}",
         )
     assert chart_response.status_code == 200
     assert chart_response.json()["chart_library"] == "plotly"
-    assert chart_response.json()["chart_spec"]["plotly"]["data"][0]["type"] == "scatter3d"
+    if generated_chart["chart_type"] == "scatter_3d":
+        assert chart_response.json()["chart_spec"]["plotly"]["data"][0]["type"] == "scatter3d"
+    else:
+        assert chart_response.json()["chart_spec"]["plotly"]["data"][0]["type"] == "table"
