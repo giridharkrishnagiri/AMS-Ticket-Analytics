@@ -452,10 +452,10 @@ def test_scope_split_and_vendor_derivation_use_application_inventory_only() -> N
         )
 
         assert result.total_raw_rows == 4
-        assert result.normalized_ticket_count == 2
-        assert result.out_of_scope_ticket_count == 2
+        assert result.normalized_ticket_count == 1
+        assert result.out_of_scope_ticket_count == 3
         assert result.blank_assignment_group_count == 1
-        assert result.assignment_group_not_in_inventory_count == 1
+        assert result.assignment_group_not_in_inventory_count == 2
 
         in_scope_ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "INC-IN"))
         assert in_scope_ticket is not None
@@ -463,12 +463,6 @@ def test_scope_split_and_vendor_derivation_use_application_inventory_only() -> N
         assert in_scope_ticket.derived_vendor == "HCLTech"
         assert in_scope_ticket.support_lead == "Support Lead"
         assert in_scope_ticket.functional_track == "Functional Track"
-        inactive_scope_ticket = db.scalar(
-            select(Ticket).where(Ticket.ticket_number == "INC-INACTIVE")
-        )
-        assert inactive_scope_ticket is not None
-        assert inactive_scope_ticket.derived_vendor is None
-
         out_tickets = {
             row.ticket_number: row
             for row in db.scalars(
@@ -477,12 +471,16 @@ def test_scope_split_and_vendor_derivation_use_application_inventory_only() -> N
                 )
             ).all()
         }
-        assert set(out_tickets) == {"INC-OUT", "INC-BLANK"}
+        assert set(out_tickets) == {"INC-OUT", "INC-BLANK", "INC-INACTIVE"}
         assert out_tickets["INC-OUT"].out_of_scope_reason == (
             "assignment_group_not_in_scope_reference"
         )
         assert out_tickets["INC-BLANK"].out_of_scope_reason == "blank_assignment_group"
+        assert out_tickets["INC-INACTIVE"].out_of_scope_reason == (
+            "assignment_group_not_in_scope_reference"
+        )
         assert out_tickets["INC-OUT"].derived_vendor == "HCLTech"
+        assert out_tickets["INC-INACTIVE"].derived_vendor is None
     finally:
         cleanup_client(db, client_id)
 

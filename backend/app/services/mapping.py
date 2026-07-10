@@ -1212,6 +1212,7 @@ def active_inventory_in_scope_assignment_group_keys(
     statement = select(ApplicationInventoryItem.assignment_group).where(
         ApplicationInventoryItem.project_id == project_id,
         ApplicationInventoryItem.is_current.is_(True),
+        ApplicationInventoryItem.active.is_not(False),
         ApplicationInventoryItem.scope_status == "in_scope",
         ApplicationInventoryItem.assignment_group.is_not(None),
     )
@@ -1351,17 +1352,53 @@ def select_inventory_item_for_business_service_ci(
     )[0]
 
 
+def inventory_items_for_assignment_group(
+    inventory_items: list[ApplicationInventoryItem],
+    assignment_group: str | None,
+) -> list[ApplicationInventoryItem]:
+    assignment_group_key = normalize_match_key(assignment_group)
+    if assignment_group_key is None:
+        return []
+    return [
+        item
+        for item in inventory_items
+        if normalize_match_key(item.assignment_group) == assignment_group_key
+    ]
+
+
+def collapse_inventory_values_for_support_group(
+    inventory_items: list[ApplicationInventoryItem],
+    field_name: str,
+) -> str | None:
+    values_by_key: dict[str, str] = {}
+    for item in inventory_items:
+        value = text_or_none(getattr(item, field_name))
+        if value is None:
+            continue
+        values_by_key.setdefault(normalize_match_key(value) or value.casefold(), value)
+    if not values_by_key:
+        return None
+    if len(values_by_key) == 1:
+        return next(iter(values_by_key.values()))
+    return "Multiple"
+
+
 def apply_service_inventory_enrichment_to_ticket(
     ticket: Ticket,
-    inventory_item: ApplicationInventoryItem | None,
+    inventory_items: list[ApplicationInventoryItem],
 ) -> None:
-    if inventory_item is None:
-        ticket.service_type = None
-        ticket.service_entitlement = None
-        return
-
-    ticket.service_type = text_or_none(inventory_item.service_type)
-    ticket.service_entitlement = text_or_none(inventory_item.service_entitlement)
+    ticket.service_type = collapse_inventory_values_for_support_group(
+        inventory_items,
+        "service_type",
+    )
+    ticket.service_entitlement = collapse_inventory_values_for_support_group(
+        inventory_items,
+        "service_entitlement",
+    )
+    ticket.sap_non_sap = (
+        collapse_inventory_values_for_support_group(inventory_items, "sap_non_sap")
+        or ticket.sap_non_sap
+    )
 
 
 def apply_inventory_enrichment_to_ticket(
@@ -2298,11 +2335,11 @@ def apply_mapping_to_batch(
 
                 inventory_item = select_inventory_item_for_ticket(ticket, inventory_items)
                 apply_inventory_enrichment_to_ticket(ticket, inventory_item)
-                service_inventory_item = select_inventory_item_for_business_service_ci(
+                service_inventory_items = inventory_items_for_assignment_group(
                     inventory_items,
-                    ticket.business_service,
+                    ticket.assignment_group,
                 )
-                apply_service_inventory_enrichment_to_ticket(ticket, service_inventory_item)
+                apply_service_inventory_enrichment_to_ticket(ticket, service_inventory_items)
                 assignment_group_key = normalize_match_key(ticket.assignment_group)
                 if assignment_group_key is None:
                     out_of_scope_reason = "blank_assignment_group"

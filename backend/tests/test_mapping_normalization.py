@@ -197,20 +197,31 @@ def add_application_inventory_scope(
     business_service: str = IN_SCOPE_BUSINESS_SERVICE,
     service_type: str | None = None,
     service_entitlement: str | None = None,
+    sap_non_sap: str | None = None,
+    scope_status: str = "in_scope",
+    row_number: int = 1,
 ) -> None:
     client_id = db.scalar(select(Project.client_id).where(Project.id == project_id))
-    db.add(
-        InScopeAssignmentGroup(
-            client_id=client_id,
-            project_id=project_id,
-            assignment_group=assignment_group,
-            assignment_group_key=assignment_group.strip().lower(),
-            functional_track="Mapping Track",
-            source_filename="mapping-scope-reference.xlsx",
-            source_row_number=1,
-            is_active=True,
+    legacy_scope_key = assignment_group.strip().lower()
+    legacy_scope_exists = db.scalar(
+        select(InScopeAssignmentGroup.id).where(
+            InScopeAssignmentGroup.project_id == project_id,
+            InScopeAssignmentGroup.assignment_group_key == legacy_scope_key,
         )
     )
+    if legacy_scope_exists is None:
+        db.add(
+            InScopeAssignmentGroup(
+                client_id=client_id,
+                project_id=project_id,
+                assignment_group=assignment_group,
+                assignment_group_key=legacy_scope_key,
+                functional_track="Mapping Track",
+                source_filename="mapping-scope-reference.xlsx",
+                source_row_number=1,
+                is_active=True,
+            )
+        )
     db.add(
         ApplicationInventoryItem(
             project_id=project_id,
@@ -226,14 +237,15 @@ def add_application_inventory_scope(
             supported_by_vendor="HCLTech",
             service_type=service_type,
             service_entitlement=service_entitlement,
-            scope_status="in_scope",
+            sap_non_sap=sap_non_sap,
+            scope_status=scope_status,
             cmdb_payload={
                 "Architecture type": "Vendor Managed",
                 "Install type": "Cloud",
             },
             active=True,
             source_filename="mapping-inventory.xlsx",
-            source_row_number=1,
+            source_row_number=row_number,
         )
     )
     db.flush()
@@ -822,7 +834,7 @@ def test_apply_mapping_normalizes_service_catalog_task_rows() -> None:
         cleanup_client(db, client_id)
 
 
-def test_apply_mapping_enriches_service_fields_for_incidents_by_business_service_ci() -> None:
+def test_apply_mapping_enriches_service_fields_for_incidents_by_support_group() -> None:
     rows = [
         {
             "number": "INC-SERVICE-IN",
@@ -867,6 +879,17 @@ def test_apply_mapping_enriches_service_fields_for_incidents_by_business_service
             project_id,
             service_type="Managed Service",
             service_entitlement="Gold",
+            sap_non_sap="SAP",
+        )
+        add_application_inventory_scope(
+            db,
+            project_id,
+            assignment_group="External Support",
+            business_service="External CMDB Service",
+            service_type="External Service",
+            service_entitlement="Bronze",
+            sap_non_sap="Non-SAP",
+            scope_status="out_of_scope",
         )
         db.commit()
         result = apply_mapping_to_batch(db, upload_batch_id, mapping)
@@ -888,15 +911,17 @@ def test_apply_mapping_enriches_service_fields_for_incidents_by_business_service
         assert in_scope_ticket is not None
         assert in_scope_ticket.service_type == "Managed Service"
         assert in_scope_ticket.service_entitlement == "Gold"
-        assert out_tickets["INC-SERVICE-OUT"].service_type == "Managed Service"
-        assert out_tickets["INC-SERVICE-OUT"].service_entitlement == "Gold"
-        assert out_tickets["INC-SERVICE-NOMATCH"].service_type is None
-        assert out_tickets["INC-SERVICE-NOMATCH"].service_entitlement is None
+        assert in_scope_ticket.sap_non_sap == "SAP"
+        assert out_tickets["INC-SERVICE-OUT"].service_type == "External Service"
+        assert out_tickets["INC-SERVICE-OUT"].service_entitlement == "Bronze"
+        assert out_tickets["INC-SERVICE-OUT"].sap_non_sap == "Non-SAP"
+        assert out_tickets["INC-SERVICE-NOMATCH"].service_type == "External Service"
+        assert out_tickets["INC-SERVICE-NOMATCH"].service_entitlement == "Bronze"
     finally:
         cleanup_client(db, client_id)
 
 
-def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_business_service_ci() -> None:
+def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -> None:
     rows = [
         {
             "number": "SCTASK-SERVICE-IN",
@@ -935,6 +960,15 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_business_service_
             service_type="Task Service",
             service_entitlement="Silver",
         )
+        add_application_inventory_scope(
+            db,
+            project_id,
+            assignment_group="External Support",
+            business_service="External Task Service",
+            service_type="Out Task Service",
+            service_entitlement="Bronze",
+            scope_status="out_of_scope",
+        )
         db.commit()
         result = apply_mapping_to_batch(db, upload_batch_id, mapping)
         in_scope_ticket = db.scalar(
@@ -952,8 +986,66 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_business_service_
         assert in_scope_ticket.service_type == "Task Service"
         assert in_scope_ticket.service_entitlement == "Silver"
         assert out_of_scope_ticket is not None
-        assert out_of_scope_ticket.service_type == "Task Service"
-        assert out_of_scope_ticket.service_entitlement == "Silver"
+        assert out_of_scope_ticket.service_type == "Out Task Service"
+        assert out_of_scope_ticket.service_entitlement == "Bronze"
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_apply_mapping_collapses_multiple_service_values_by_support_group() -> None:
+    rows = [
+        {
+            "number": "INC-SERVICE-MULTIPLE",
+            "short_description": "Multiple service values",
+            "state": "Resolved",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": "Any Ticket Service",
+            "sys_created_on": "2026-06-03 09:15:00",
+            "resolved_at": "2026-06-03 10:30:00",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(rows)
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+        "resolved_at": "resolved_at",
+    }
+
+    try:
+        add_application_inventory_scope(
+            db,
+            project_id,
+            business_service="Service A",
+            service_type="Integrator",
+            service_entitlement="Gold",
+            sap_non_sap="SAP",
+            row_number=1,
+        )
+        add_application_inventory_scope(
+            db,
+            project_id,
+            business_service="Service B",
+            service_type="End-to-end",
+            service_entitlement="Gold",
+            sap_non_sap="Non-SAP",
+            row_number=2,
+        )
+        db.commit()
+
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        ticket = db.scalar(
+            select(Ticket).where(Ticket.ticket_number == "INC-SERVICE-MULTIPLE")
+        )
+
+        assert result.normalized_ticket_count == 1
+        assert ticket is not None
+        assert ticket.service_type == "Multiple"
+        assert ticket.service_entitlement == "Gold"
+        assert ticket.sap_non_sap == "Multiple"
     finally:
         cleanup_client(db, client_id)
 

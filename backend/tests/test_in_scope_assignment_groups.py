@@ -218,7 +218,7 @@ def test_incident_scope_uses_cmdb_inventory_not_old_reference(tmp_path: Path) ->
         cleanup_client(db, client_id)
 
 
-def test_application_inventory_upload_treats_rows_as_in_scope(
+def test_application_inventory_upload_uses_explicit_cmdb_scope_column(
     tmp_path: Path,
 ) -> None:
     db, client_id, project_id = create_project()
@@ -226,10 +226,10 @@ def test_application_inventory_upload_treats_rows_as_in_scope(
     inventory_path.write_text(
         "\n".join(
             [
-                "Business Service CI Name,Support Group",
-                "In Scope App,AMS Scope Team",
-                "Out Scope App,External Team",
-                "Blank Scope App,",
+                "Business Service CI Name,Support Group,In Scope / Out of Scope",
+                "In Scope App,AMS Scope Team,In scope",
+                "Out Scope App,External Team,Out of scope",
+                "Blank Scope App,,",
             ]
         ),
         encoding="utf-8",
@@ -247,8 +247,8 @@ def test_application_inventory_upload_treats_rows_as_in_scope(
         }
 
         assert rows["In Scope App"] == "in_scope"
-        assert rows["Out Scope App"] == "in_scope"
-        assert rows["Blank Scope App"] == "in_scope"
+        assert rows["Out Scope App"] == "out_of_scope"
+        assert rows["Blank Scope App"] == "unknown"
     finally:
         cleanup_client(db, client_id)
 

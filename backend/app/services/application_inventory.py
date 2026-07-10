@@ -53,27 +53,37 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "parent_business_application",
     ),
     "assignment_group": (
-        "Support group name",
-        "Support Group Name",
         "Support group",
         "Support Group",
+        "Support group name",
+        "Support Group Name",
         "Assignment Group",
         "Assignment group",
         "Assignment Groups",
         "Assigment Groups",
-        "Group",
-        "Name",
+        "assignment_group",
+        "Managed By Group",
+        "Managed by group",
     ),
     "assignment_group_owner": (
         "Support group's owner",
         "Support group owner",
         "Assignment Group Owner",
     ),
-    "application_owner": ("Application Owner",),
+    "application_owner": (
+        "Owned by",
+        "Owned By",
+        "Application Owner",
+        "Application owner",
+        "Owner",
+        "Business Owner",
+    ),
     "business_service_ci_name": (
         "Business Service CI Name",
-        "Business Service",
         "Business Service CI",
+        "Business Service",
+        "Business_Service",
+        "Name",
         "Application",
         "Application Name",
         "business_service_ci_name",
@@ -88,8 +98,14 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "Assignment Group Manager",
     ),
     "functional_track": ("Functional Track", "Track", "functional_track"),
-    "ams_owner": ("AMS Owner", "AMS owner", "ams_owner"),
-    "supported_by_vendor": ("Supported By Vendor", "Support vendor", "Vendor"),
+    "ams_owner": ("AMS Lead", "AMS Owner", "AMS owner", "ams_owner", "Application AMS Owner"),
+    "supported_by_vendor": (
+        "Supported By Vendor",
+        "Supported by Vendor",
+        "Supported By",
+        "Support vendor",
+        "Vendor",
+    ),
     "service_type": ("Service Type", "Service type", "service_type", "ServiceType"),
     "service_entitlement": (
         "Service Entitlement",
@@ -97,16 +113,31 @@ CORE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "service_entitlement",
         "ServiceEntitlement",
     ),
-    "hosting_env": ("Hosting Env", "Hosting Environment", "hosting_env"),
+    "sap_non_sap": (
+        "Subcategory",
+        "SAP / Non-SAP",
+        "SAP Non-SAP",
+        "SAP_NonSAP",
+        "Application Subcategory",
+    ),
+    "hosting_env": (
+        "Hosting Env",
+        "Hosting Environment",
+        "hosting_env",
+        "Used for",
+        "Used For",
+        "Environment",
+        "Usage",
+    ),
     "global_application": ("Global", "Global Application", "global_application"),
     "scope_status": (
+        "In Scope / Out of Scope",
         "Scope",
+        "Scope Status",
         "Application Scope",
         "In Scope",
         "In-Scope",
-        "In Scope / Out of Scope",
         "InScope",
-        "Scope Status",
         "AMS Scope",
     ),
     "lifecycle_stage_status": (
@@ -397,13 +428,13 @@ def parse_active_users(value: Any, row_number: int, result: InventoryUploadResul
 def normalize_scope_status(value: Any) -> str:
     text = text_or_none(value)
     if text is None:
-        return "out_of_scope"
+        return "unknown"
     normalized = " ".join(text.replace("-", " ").split()).casefold()
     if normalized in {"in scope", "inscope", "yes", "y", "true"}:
         return "in_scope"
-    if normalized in {"out of scope", "outofscope", "no", "n", "false"}:
+    if normalized in {"out of scope", "out scope", "outofscope", "no", "n", "false"}:
         return "out_of_scope"
-    return "out_of_scope"
+    return "unknown"
 
 
 def derive_inventory_scope_status(raw_scope: Any) -> str:
@@ -411,7 +442,7 @@ def derive_inventory_scope_status(raw_scope: Any) -> str:
     if explicit_scope is not None:
         scope_status = normalize_scope_status(explicit_scope)
         return scope_status
-    return "in_scope"
+    return "unknown"
 
 
 def clean_inventory_values(
@@ -454,7 +485,9 @@ def clean_inventory_values(
         "global_application": text_or_none(
             get_raw_value(parsed_row.raw_data, "global_application")
         ),
-        "scope_status": "in_scope",
+        "scope_status": derive_inventory_scope_status(
+            get_raw_value(parsed_row.raw_data, "scope_status")
+        ),
         "lifecycle_stage_status": text_or_none(
             get_raw_value(parsed_row.raw_data, "lifecycle_stage_status")
         ),
@@ -467,7 +500,8 @@ def clean_inventory_values(
         "lifecycle_3_to_5_years": text_or_none(
             get_raw_value(parsed_row.raw_data, "lifecycle_3_to_5_years")
         ),
-        "sap_non_sap": derive_sap_non_sap(assignment_group),
+        "sap_non_sap": text_or_none(get_raw_value(parsed_row.raw_data, "sap_non_sap"))
+        or derive_sap_non_sap(assignment_group),
         "active": parse_active(
             get_raw_value(parsed_row.raw_data, "active"),
             parsed_row.row_number,
@@ -485,16 +519,6 @@ def clean_inventory_values(
         "replaced_at": None,
         "source_row_number": parsed_row.row_number,
     }
-
-    raw_scope_status = get_raw_value(parsed_row.raw_data, "scope_status")
-    if raw_scope_status is not None:
-        parsed_scope = derive_inventory_scope_status(raw_scope_status)
-        if parsed_scope != "in_scope":
-            append_sample_message(
-                result.warnings,
-                f"Row {parsed_row.row_number}: Application Scope value '{raw_scope_status}' "
-                "was ignored because CMDB/Application Inventory uploads are treated as in scope.",
-            )
 
     if assignment_group is None and business_service_ci_name is None:
         result.skipped_count += 1
@@ -1112,6 +1136,10 @@ def normalized_business_service_ci_sql(expression: str) -> str:
     )
 
 
+def normalized_text_key_sql(expression: str) -> str:
+    return normalized_business_service_ci_sql(expression)
+
+
 def update_tickets_from_inventory(
     db: Session,
     project_id: UUID,
@@ -1121,14 +1149,6 @@ def update_tickets_from_inventory(
 ) -> int:
     if table_name not in {"tickets", "assessment_out_of_scope_tickets"}:
         raise ApplicationInventoryError(f"Unsupported enrichment table: {table_name}")
-    service_type_expression = (
-        "NULLIF(btrim(i.service_type), '')" if ticket_column == "business_service" else "NULL"
-    )
-    service_entitlement_expression = (
-        "NULLIF(btrim(i.service_entitlement), '')"
-        if ticket_column == "business_service"
-        else "NULL"
-    )
     ticket_key_expression = normalized_business_service_ci_sql(f"t.{ticket_column}")
     inventory_key_expression = normalized_business_service_ci_sql("i.business_service_ci_name")
 
@@ -1146,8 +1166,6 @@ def update_tickets_from_inventory(
                 i.functional_track,
                 i.ams_owner,
                 i.supported_by_vendor,
-                {service_type_expression} AS service_type,
-                {service_entitlement_expression} AS service_entitlement,
                 i.assignment_group_owner,
                 i.hosting_env,
                 {business_critical_expression_sql()} AS business_critical,
@@ -1191,8 +1209,6 @@ def update_tickets_from_inventory(
             functional_track = candidates.functional_track,
             ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
-            service_type = candidates.service_type,
-            service_entitlement = candidates.service_entitlement,
             assignment_group_owner = candidates.assignment_group_owner,
             business_critical = candidates.business_critical,
             hosting_env = candidates.hosting_env,
@@ -1205,6 +1221,72 @@ def update_tickets_from_inventory(
         FROM candidates
         WHERE candidates.row_rank = 1
           AND t.id = candidates.ticket_id
+        """
+    )
+    result = db.execute(statement, {"project_id": str(project_id)})
+    return int(result.rowcount or 0)
+
+
+def update_ticket_support_group_fields_from_inventory(
+    db: Session,
+    project_id: UUID,
+    *,
+    table_name: str = "tickets",
+    only_unmatched: bool = False,
+) -> int:
+    if table_name not in {"tickets", "assessment_out_of_scope_tickets"}:
+        raise ApplicationInventoryError(f"Unsupported enrichment table: {table_name}")
+    ticket_assignment_group_key = normalized_text_key_sql("t.assignment_group")
+    inventory_assignment_group_key = normalized_text_key_sql("assignment_group")
+    unmatched_filter = "AND t.application_inventory_id IS NULL" if only_unmatched else ""
+    statement = text(
+        f"""
+        WITH inventory_values AS (
+            SELECT
+                {inventory_assignment_group_key} AS assignment_group_key,
+                CASE
+                    WHEN count(DISTINCT NULLIF(btrim(service_type), '')) = 0 THEN NULL
+                    WHEN count(DISTINCT NULLIF(btrim(service_type), '')) = 1
+                        THEN min(NULLIF(btrim(service_type), ''))
+                    ELSE 'Multiple'
+                END AS service_type,
+                CASE
+                    WHEN count(DISTINCT NULLIF(btrim(service_entitlement), '')) = 0 THEN NULL
+                    WHEN count(DISTINCT NULLIF(btrim(service_entitlement), '')) = 1
+                        THEN min(NULLIF(btrim(service_entitlement), ''))
+                    ELSE 'Multiple'
+                END AS service_entitlement,
+                CASE
+                    WHEN count(DISTINCT NULLIF(btrim(sap_non_sap), '')) = 0 THEN NULL
+                    WHEN count(DISTINCT NULLIF(btrim(sap_non_sap), '')) = 1
+                        THEN min(NULLIF(btrim(sap_non_sap), ''))
+                    ELSE 'Multiple'
+                END AS sap_non_sap
+            FROM application_inventory_items
+            WHERE project_id = CAST(:project_id AS uuid)
+              AND is_current IS true
+              AND active IS NOT false
+              AND NULLIF(btrim(assignment_group), '') IS NOT NULL
+            GROUP BY {inventory_assignment_group_key}
+        )
+        UPDATE {table_name} AS t
+        SET
+            service_type = inventory_values.service_type,
+            service_entitlement = inventory_values.service_entitlement,
+            sap_non_sap = COALESCE(inventory_values.sap_non_sap, t.sap_non_sap)
+        FROM inventory_values
+        WHERE t.project_id = CAST(:project_id AS uuid)
+          AND NULLIF(btrim(t.assignment_group), '') IS NOT NULL
+          {unmatched_filter}
+          AND {ticket_assignment_group_key} = inventory_values.assignment_group_key
+          AND (
+            t.service_type IS DISTINCT FROM inventory_values.service_type
+            OR t.service_entitlement IS DISTINCT FROM inventory_values.service_entitlement
+            OR (
+                inventory_values.sap_non_sap IS NOT NULL
+                AND t.sap_non_sap IS DISTINCT FROM inventory_values.sap_non_sap
+            )
+          )
         """
     )
     result = db.execute(statement, {"project_id": str(project_id)})
@@ -1381,6 +1463,17 @@ def enrich_tickets_from_inventory(
         reset_inventory_ticket_columns(db, project_id)
         db.flush()
 
+    update_ticket_support_group_fields_from_inventory(
+        db,
+        project_id,
+        only_unmatched=True,
+    )
+    update_ticket_support_group_fields_from_inventory(
+        db,
+        project_id,
+        table_name="assessment_out_of_scope_tickets",
+        only_unmatched=True,
+    )
     business_service_updates = update_tickets_from_inventory(
         db,
         project_id,

@@ -340,13 +340,13 @@ function ApplicationInventory({
             <span>Replace existing inventory enrichment</span>
           </label>
           <p className="scope-note">
-            Upload the CMDB application in-scope support group file here. Assignment groups in
-            this file are the source of truth for in-scope Incident and SC Task classification.
-            Uploading a new CMDB/Application Inventory file replaces the active inventory
-            reference set for this project. Assignment groups absent from the latest file will no
-            longer be considered in scope after operational data is reprocessed.
-            Enrichment updates only denormalized inventory fields and does not change raw ticket
-            fields or uploaded source data.
+            Application Inventory / CMDB upload is the source of truth for ticket scope
+            classification. Tickets are in scope only when their Assignment Group matches a
+            Support group marked In scope in the latest active CMDB file. Business Service CI Name
+            is imported as an application attribute and is not used for ticket scope
+            classification. Uploading a new file replaces the active inventory reference set for
+            this project. Enrichment updates only denormalized inventory fields and does not
+            change raw ticket fields or uploaded source data.
           </p>
         </form>
 

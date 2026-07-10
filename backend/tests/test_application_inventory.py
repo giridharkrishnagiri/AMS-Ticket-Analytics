@@ -23,11 +23,24 @@ from app.models import (
 from app.services.application_inventory import (
     ApplicationInventoryError,
     list_inventory_items,
+    normalize_scope_status,
     update_application_inventory_active_users_from_file,
     update_application_inventory_hosting_env_from_file,
     upload_application_inventory_file,
 )
 from app.services.mapping import active_inventory_in_scope_assignment_group_keys
+
+
+def test_scope_status_normalization_for_cmdb_scope_column() -> None:
+    assert normalize_scope_status("In scope") == "in_scope"
+    assert normalize_scope_status("In-Scope") == "in_scope"
+    assert normalize_scope_status("yes") == "in_scope"
+    assert normalize_scope_status("Out of scope") == "out_of_scope"
+    assert normalize_scope_status("Out-Scope") == "out_of_scope"
+    assert normalize_scope_status("false") == "out_of_scope"
+    assert normalize_scope_status("") == "unknown"
+    assert normalize_scope_status(None) == "unknown"
+    assert normalize_scope_status("needs review") == "unknown"
 
 
 def create_project():
@@ -166,19 +179,20 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
     try:
         csv_payload = "\n".join(
             [
-                "Application Number (APM),Parent Business Application,Support group name,"
-                "Support group's owner,Application Owner,Business Service CI Name,"
-                "Support Lead (Managed by),Functional Track,AMS Owner,Supported By Vendor,"
-                "Service Type,Service Entitlement,Active,Active Users,Application family,"
+                "Application Number (APM),Parent Business Application,Support group,"
+                "Support group's owner,Owned by,Business Service CI Name,"
+                "Support Lead (Managed by),Functional Track,AMS Lead,Supported By Vendor,"
+                "Service Type,Service Entitlement,Subcategory,In Scope / Out of Scope,"
+                "Active,Active Users,Application family,"
                 "Business criticality,Total USD$",
                 " APM-1 , Parent App , IT-SAP-Claims , Group Owner , Owner One , "
                 "Claims Service , Lead One , Claims , AMS Owner , Vendor A , Gold , "
-                "Entitled , true , 100, Claims Family , High , #N/A",
+                "Entitled , SAP , In scope , true , 100, Claims Family , High , #N/A",
                 "APM-1,Parent App,IT-SAP-Claims,Group Owner,Owner Two,Claims Service,"
-                "Lead Two,Claims,AMS Owner,Vendor A,Platinum,Premium,true,250,"
+                "Lead Two,Claims,AMS Owner,Vendor A,Platinum,Premium,SAP,In Scope,true,250,"
                 "Claims Family,#N/A,#N/A",
                 "APM-2,Parent App,IT-SAP-Claims,Group Owner,Owner Missing,,Lead,Claims,"
-                "AMS Owner,Vendor A,,,true,15,Family,Low,#N/A",
+                "AMS Owner,Vendor A,,,Non-SAP,Out of scope,true,15,Family,Low,#N/A",
             ]
         )
 
@@ -208,6 +222,7 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
         assert item is not None
         assert item.application_owner == "Owner Two"
         assert item.assignment_group == "IT-SAP-Claims"
+        assert item.ams_owner == "AMS Owner"
         assert item.sap_non_sap == "SAP"
         assert item.business_service_ci_name == "Claims Service"
         assert item.service_type == "Platinum"
@@ -227,9 +242,11 @@ def test_csv_upload_preserves_extra_cmdb_payload_and_updates_duplicate() -> None
         )
         assert scope_only_item is not None
         assert scope_only_item.assignment_group == "IT-SAP-Claims"
+        assert scope_only_item.application_owner == "Owner Missing"
         assert scope_only_item.service_type is None
         assert scope_only_item.service_entitlement is None
-        assert scope_only_item.scope_status == "in_scope"
+        assert scope_only_item.sap_non_sap == "Non-SAP"
+        assert scope_only_item.scope_status == "out_of_scope"
     finally:
         cleanup_client(db, client_id)
 
@@ -255,6 +272,8 @@ def test_xlsx_upload_detects_second_row_header() -> None:
                 "Supported By Vendor",
                 "service_type",
                 "Service entitlement",
+                "Subcategory",
+                "In Scope / Out of Scope",
                 "Active",
                 "Active Users",
                 "Application family",
@@ -274,6 +293,8 @@ def test_xlsx_upload_detects_second_row_header() -> None:
                 "Vendor Excel",
                 "Standard",
                 "Included",
+                "Non-SAP",
+                "yes",
                 "Yes",
                 1234,
                 "Excel Family",
@@ -310,6 +331,8 @@ def test_xlsx_upload_detects_second_row_header() -> None:
         assert item.source_row_number == 3
         assert item.service_type == "Standard"
         assert item.service_entitlement == "Included"
+        assert item.sap_non_sap == "Non-SAP"
+        assert item.scope_status == "in_scope"
         assert item.active_users == 1234
         assert item.cmdb_payload == {"Application family": "Excel Family"}
     finally:
@@ -323,11 +346,11 @@ def test_cmdb_upload_replaces_current_inventory_reference_set(tmp_path) -> None:
         first_path.write_text(
             "\n".join(
                 [
-                    "Support group name,Business Service CI Name,Parent Business Application,"
-                    "Support Lead (Managed by),Functional Track,AMS Owner",
+                    "Support group,Business Service CI Name,Parent Business Application,"
+                    "Support Lead,Functional Track,AMS Lead,In Scope / Out of Scope",
                     "IT-NSA-UK-RSSL,Legacy Service,Legacy Parent,Legacy Lead,Legacy Track,"
-                    "Legacy Owner",
-                    "IT-KEEP,Keep Service,Keep Parent,Keep Lead,Keep Track,Keep Owner",
+                    "Legacy Owner,In scope",
+                    "IT-KEEP,Keep Service,Keep Parent,Keep Lead,Keep Track,Keep Owner,In scope",
                 ],
             ),
             encoding="utf-8",
@@ -344,10 +367,11 @@ def test_cmdb_upload_replaces_current_inventory_reference_set(tmp_path) -> None:
         second_path.write_text(
             "\n".join(
                 [
-                    "Support group name,Business Service CI Name,Parent Business Application,"
-                    "Support Lead (Managed by),Functional Track,AMS Owner",
-                    "IT-KEEP,Keep Service,Keep Parent,Keep Lead Current,Keep Track,Keep Owner",
-                    "IT-NEW,,New Parent,New Lead,New Track,New Owner",
+                    "Support group,Business Service CI Name,Parent Business Application,"
+                    "Support Lead,Functional Track,AMS Lead,In Scope / Out of Scope",
+                    "IT-KEEP,Keep Service,Keep Parent,Keep Lead Current,Keep Track,"
+                    "Keep Owner,In scope",
+                    "IT-NEW,,New Parent,New Lead,New Track,New Owner,In scope",
                 ],
             ),
             encoding="utf-8",
@@ -392,8 +416,9 @@ def test_failed_cmdb_upload_preserves_current_inventory_reference_set(tmp_path) 
         first_path.write_text(
             "\n".join(
                 [
-                    "Support group name,Business Service CI Name,Parent Business Application",
-                    "IT-CURRENT,Current Service,Current Parent",
+                    "Support group,Business Service CI Name,Parent Business Application,"
+                    "In Scope / Out of Scope",
+                    "IT-CURRENT,Current Service,Current Parent,In scope",
                 ],
             ),
             encoding="utf-8",
@@ -745,8 +770,8 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
         assert preserved_ticket.support_lead == "Do Not Replace"
         assert preserved_ticket.service_type is None
         assert preserved_ticket.service_entitlement is None
-        assert out_of_scope_ticket.service_type == "Run"
-        assert out_of_scope_ticket.service_entitlement == "Bronze"
+        assert out_of_scope_ticket.service_type is None
+        assert out_of_scope_ticket.service_entitlement is None
 
         with TestClient(app) as client:
             replace_response = client.post(
