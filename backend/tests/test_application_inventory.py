@@ -156,7 +156,9 @@ def add_ticket(
     file_id: UUID,
     ticket_number: str,
     *,
+    ticket_type: str = "INCIDENT",
     business_service: str | None = None,
+    cmdb_ci: str | None = None,
     application: str | None = None,
     assignment_group: str | None = "AMS Claims",
     application_inventory_id: UUID | None = None,
@@ -169,7 +171,7 @@ def add_ticket(
             upload_batch_id=batch_id,
             uploaded_file_id=file_id,
             ticket_number=ticket_number,
-            ticket_type="INCIDENT",
+            ticket_type=ticket_type,
             month_key="2026-06",
             created_at=datetime(2026, 6, 1, tzinfo=UTC),
             short_description=f"{ticket_number} title",
@@ -178,6 +180,7 @@ def add_ticket(
             assignment_group=assignment_group,
             application=application,
             business_service=business_service,
+            cmdb_ci=cmdb_ci,
             application_inventory_id=application_inventory_id,
             support_lead=support_lead,
             reopen_count=0,
@@ -861,6 +864,67 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
         assert "Claims Parent" in filter_values["parent_application_names"]
         assert filtered_response.status_code == 200
         assert filtered_response.json()[0]["total_tickets"] == 3
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_inventory_enrichment_uses_cmdb_ci_for_sc_tasks() -> None:
+    db, client_id, project_id, batch_id, file_id = create_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "Task CI Service",
+            assignment_group="AMS Tasks",
+            service_type="Task Service",
+            service_entitlement="Silver",
+            row_number=10,
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-CMDB-ENRICH",
+            ticket_type="SERVICE_CATALOG_TASK",
+            business_service="Wrong Service",
+            cmdb_ci="Task CI Service",
+            assignment_group="AMS Tasks",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-BUSINESS-IGNORED",
+            ticket_type="SERVICE_CATALOG_TASK",
+            business_service="Task CI Service",
+            cmdb_ci="Wrong CI",
+            assignment_group="AMS Tasks",
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/application-inventory/enrich-tickets",
+                json={"project_id": str(project_id), "replace_existing": False},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["updated_tickets"] == 1
+        matched = db.scalar(select(Ticket).where(Ticket.ticket_number == "SCTASK-CMDB-ENRICH"))
+        ignored = db.scalar(
+            select(Ticket).where(Ticket.ticket_number == "SCTASK-BUSINESS-IGNORED")
+        )
+        assert matched is not None
+        assert matched.business_service_ci_name == "Task CI Service"
+        assert matched.service_type == "Task Service"
+        assert matched.service_entitlement == "Silver"
+        assert ignored is not None
+        assert ignored.business_service_ci_name is None
+        assert ignored.service_type is None
+        assert ignored.service_entitlement is None
     finally:
         cleanup_client(db, client_id)
 

@@ -1354,10 +1354,15 @@ def select_inventory_item_for_ticket(
     ticket: Ticket,
     inventory_items: list[ApplicationInventoryItem],
 ) -> ApplicationInventoryItem | None:
+    business_service_match_value = (
+        ticket.cmdb_ci
+        if normalize_ticket_type_value(ticket.ticket_type) == "SERVICE_CATALOG_TASK"
+        else ticket.business_service
+    )
     return select_inventory_item_for_assignment_group_and_business_service(
         inventory_items,
         assignment_group=ticket.assignment_group,
-        business_service=ticket.business_service,
+        business_service=business_service_match_value,
     )
 
 
@@ -1691,6 +1696,7 @@ def build_out_of_scope_ticket(
         impact=ticket.impact,
         application=ticket.application,
         business_service=ticket.business_service,
+        cmdb_ci=ticket.cmdb_ci,
         assignment_group=ticket.assignment_group,
         assigned_to=ticket.assigned_to,
         requester=ticket.requester,

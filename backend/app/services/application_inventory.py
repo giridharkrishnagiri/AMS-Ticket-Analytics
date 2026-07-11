@@ -1185,6 +1185,7 @@ def update_tickets_from_inventory(
     *,
     ticket_column: str,
     table_name: str = "tickets",
+    ticket_type: str | None = None,
 ) -> int:
     if table_name not in {"tickets", "assessment_out_of_scope_tickets"}:
         raise ApplicationInventoryError(f"Unsupported enrichment table: {table_name}")
@@ -1192,6 +1193,11 @@ def update_tickets_from_inventory(
     inventory_key_expression = normalized_business_service_ci_sql("i.business_service_ci_name")
     ticket_assignment_group_key = normalized_text_key_sql("t.assignment_group")
     inventory_assignment_group_key = normalized_text_key_sql("i.assignment_group")
+    ticket_type_filter = ""
+    parameters = {"project_id": str(project_id)}
+    if ticket_type is not None:
+        ticket_type_filter = "AND t.ticket_type = :ticket_type"
+        parameters["ticket_type"] = ticket_type
     architecture_expression = cmdb_payload_text_expression_sql(
         "i",
         "Architecture type",
@@ -1257,6 +1263,7 @@ def update_tickets_from_inventory(
              AND {ticket_key_expression} = {inventory_key_expression}
              AND {ticket_assignment_group_key} = {inventory_assignment_group_key}
             WHERE t.project_id = CAST(:project_id AS uuid)
+              {ticket_type_filter}
               AND t.application_inventory_id IS NULL
         )
         UPDATE {table_name} AS t
@@ -1284,7 +1291,7 @@ def update_tickets_from_inventory(
           AND t.id = candidates.ticket_id
         """
     )
-    result = db.execute(statement, {"project_id": str(project_id)})
+    result = db.execute(statement, parameters)
     return int(result.rowcount or 0)
 
 
@@ -1536,23 +1543,40 @@ def enrich_tickets_from_inventory(
         db,
         project_id,
         ticket_column="business_service",
+        ticket_type="INCIDENT",
+    )
+    sc_task_cmdb_ci_updates = update_tickets_from_inventory(
+        db,
+        project_id,
+        ticket_column="cmdb_ci",
+        ticket_type="SERVICE_CATALOG_TASK",
     )
     application_updates = update_tickets_from_inventory(
         db,
         project_id,
         ticket_column="application",
+        ticket_type="INCIDENT",
     )
     out_business_service_updates = update_tickets_from_inventory(
         db,
         project_id,
         ticket_column="business_service",
         table_name="assessment_out_of_scope_tickets",
+        ticket_type="INCIDENT",
+    )
+    out_sc_task_cmdb_ci_updates = update_tickets_from_inventory(
+        db,
+        project_id,
+        ticket_column="cmdb_ci",
+        table_name="assessment_out_of_scope_tickets",
+        ticket_type="SERVICE_CATALOG_TASK",
     )
     out_application_updates = update_tickets_from_inventory(
         db,
         project_id,
         ticket_column="application",
         table_name="assessment_out_of_scope_tickets",
+        ticket_type="INCIDENT",
     )
     recompute_application_ticket_user_metrics(db, project_id)
     db.commit()
@@ -1562,8 +1586,10 @@ def enrich_tickets_from_inventory(
         project_id,
         updated_tickets=(
             business_service_updates
+            + sc_task_cmdb_ci_updates
             + application_updates
             + out_business_service_updates
+            + out_sc_task_cmdb_ci_updates
             + out_application_updates
         ),
         matched_by_business_service_count=business_service_updates,

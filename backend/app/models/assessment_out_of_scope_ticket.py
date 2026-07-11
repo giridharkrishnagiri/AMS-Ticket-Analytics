@@ -38,6 +38,7 @@ class AssessmentOutOfScopeTicket(Base):
         Index("ix_oos_tickets_ticket_type", "ticket_type"),
         Index("ix_oos_tickets_assignment_group", "assignment_group"),
         Index("ix_oos_tickets_business_service", "business_service"),
+        Index("ix_oos_tickets_project_cmdb_ci", "project_id", "cmdb_ci"),
         Index("ix_oos_tickets_vendor", "vendor"),
         Index("ix_oos_tickets_derived_vendor", "derived_vendor"),
         Index("ix_oos_tickets_functional_track", "functional_track"),
@@ -99,6 +100,7 @@ class AssessmentOutOfScopeTicket(Base):
     impact: Mapped[str | None] = mapped_column(String(80), nullable=True)
     application: Mapped[str | None] = mapped_column(String(255), nullable=True)
     business_service: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cmdb_ci: Mapped[str | None] = mapped_column(String(255), nullable=True)
     assignment_group: Mapped[str | None] = mapped_column(String(255), nullable=True)
     assigned_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
     requester: Mapped[str | None] = mapped_column(String(255), nullable=True)

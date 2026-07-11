@@ -274,6 +274,7 @@ def test_scope_split_vendor_sla_columns_exist() -> None:
     assert "out_of_scope_reason" in out_of_scope_columns
     assert "vendor" in out_of_scope_columns
     assert "derived_vendor" in out_of_scope_columns
+    assert "cmdb_ci" in out_of_scope_columns
     assert "functional_track" in out_of_scope_columns
     assert "ams_owner" in out_of_scope_columns
     assert "business_service_ci_name" in out_of_scope_columns

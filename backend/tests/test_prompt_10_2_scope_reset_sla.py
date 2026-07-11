@@ -502,14 +502,15 @@ def test_service_catalog_vendor_maps_from_u_vendor() -> None:
             batch_id,
             file_id,
             1,
-            {
-                "number": "SCTASK-IN",
-                "short_description": "request",
-                "assignment_group": "AMS In Scope",
-                "business_service": "Request Service",
-                "u_vendor": "Infosys",
-                "sys_created_on": "2026-06-01",
-            },
+                {
+                    "number": "SCTASK-IN",
+                    "short_description": "request",
+                    "assignment_group": "AMS In Scope",
+                    "business_service": "",
+                    "cmdb_ci": "Request Service",
+                    "u_vendor": "Infosys",
+                    "sys_created_on": "2026-06-01",
+                },
             ticket_type="SERVICE_CATALOG_TASK",
         )
         db.commit()
@@ -522,6 +523,7 @@ def test_service_catalog_vendor_maps_from_u_vendor() -> None:
                 "title": "short_description",
                 "assignment_group": "assignment_group",
                 "business_service": "business_service",
+                "configuration_item": "cmdb_ci",
                 "application": "business_service",
                 "created_at": "sys_created_on",
                 "vendor": "u_vendor",

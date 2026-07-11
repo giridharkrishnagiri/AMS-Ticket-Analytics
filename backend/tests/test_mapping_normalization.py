@@ -979,7 +979,8 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -
             "short_description": "Matched in-scope task",
             "state": "Closed Complete",
             "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
-            "business_service": "Mapping Service",
+            "business_service": "",
+            "cmdb_ci": "Mapping Service",
             "sys_created_on": "2026-06-03 09:15:00",
         },
         {
@@ -987,7 +988,8 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -
             "short_description": "Matched out-of-scope task",
             "state": "Open",
             "assignment_group": "External Support",
-            "business_service": "mapping service",
+            "business_service": "Mapping Service",
+            "cmdb_ci": "External Task Service",
             "sys_created_on": "2026-06-04 09:15:00",
         },
     ]
@@ -1001,6 +1003,7 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -
         "status": "state",
         "assignment_group": "assignment_group",
         "business_service": "business_service",
+        "configuration_item": "cmdb_ci",
         "created_at": "sys_created_on",
     }
 
@@ -1039,10 +1042,12 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -
         assert in_scope_ticket.functional_track == "Data & Analytics"
         assert in_scope_ticket.service_type == "Task Service"
         assert in_scope_ticket.service_entitlement == "Silver"
+        assert in_scope_ticket.cmdb_ci == "Mapping Service"
         assert out_of_scope_ticket is not None
+        assert out_of_scope_ticket.cmdb_ci == "External Task Service"
         assert out_of_scope_ticket.functional_track == "Enterprise Apps & RPA"
-        assert out_of_scope_ticket.service_type is None
-        assert out_of_scope_ticket.service_entitlement is None
+        assert out_of_scope_ticket.service_type == "Out Task Service"
+        assert out_of_scope_ticket.service_entitlement == "Bronze"
     finally:
         cleanup_client(db, client_id)
 
@@ -1123,6 +1128,56 @@ def test_apply_mapping_uses_business_service_for_service_attribute_enrichment() 
         assert mismatch_ticket.service_type is None
         assert mismatch_ticket.service_entitlement is None
         assert mismatch_ticket.sap_non_sap is None
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_sc_task_inventory_enrichment_ignores_business_service_and_uses_cmdb_ci() -> None:
+    rows = [
+        {
+            "number": "SCTASK-CMDBCI-ONLY",
+            "short_description": "SC Task should use cmdb ci",
+            "state": "Closed Complete",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": "Mapping Service",
+            "cmdb_ci": "Not In Inventory",
+            "sys_created_on": "2026-06-03 09:15:00",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(
+        rows,
+        ticket_type="SERVICE_CATALOG_TASK",
+    )
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "configuration_item": "cmdb_ci",
+        "created_at": "sys_created_on",
+    }
+
+    try:
+        add_application_inventory_scope(
+            db,
+            project_id,
+            business_service="Mapping Service",
+            service_type="Task Service",
+            service_entitlement="Silver",
+        )
+        db.commit()
+
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        ticket = db.scalar(select(Ticket).where(Ticket.ticket_number == "SCTASK-CMDBCI-ONLY"))
+
+        assert result.normalized_ticket_count == 1
+        assert ticket is not None
+        assert ticket.business_service == "Mapping Service"
+        assert ticket.cmdb_ci == "Not In Inventory"
+        assert ticket.business_service_ci_name is None
+        assert ticket.service_type is None
+        assert ticket.service_entitlement is None
     finally:
         cleanup_client(db, client_id)
 
