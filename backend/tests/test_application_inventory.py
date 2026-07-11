@@ -790,10 +790,10 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
         assert preserve_response.status_code == 200
         payload = preserve_response.json()
         assert payload["total_tickets"] == 4
-        assert payload["updated_tickets"] == 3
-        assert payload["matched_tickets"] == 3
+        assert payload["updated_tickets"] == 1
+        assert payload["matched_tickets"] == 2
         assert payload["matched_by_business_service_count"] == 1
-        assert payload["matched_by_application_count"] == 1
+        assert payload["matched_by_application_count"] == 0
         assert not any(
             "select" in statement
             and "normalized_payload" in statement.split("from", maxsplit=1)[0]
@@ -816,7 +816,7 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
         assert business_ticket.support_lead == "Claims Lead Two"
         assert business_ticket.service_type == "Run"
         assert business_ticket.service_entitlement == "Gold"
-        assert fallback_ticket.business_service_ci_name == "Fallback Service"
+        assert fallback_ticket.business_service_ci_name is None
         assert fallback_ticket.service_type is None
         assert fallback_ticket.service_entitlement is None
         assert preserved_ticket.support_lead == "Do Not Replace"
@@ -845,7 +845,7 @@ def test_inventory_enrichment_priority_replace_and_dashboard_filters() -> None:
             )
 
         assert replace_response.status_code == 200
-        assert replace_response.json()["updated_tickets"] == 4
+        assert replace_response.json()["updated_tickets"] == 2
         db.refresh(preserved_ticket)
         assert preserved_ticket.support_lead == "Claims Lead One"
         assert preserved_ticket.service_type == "Run"

@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     http_proxy: str | None = None
     https_proxy: str | None = None
     no_proxy: str | None = None
+    ams_processing_pipeline_version: str = "v1"
+    ams_processing_bulk_chunk_size: int = 2000
 
     @property
     def cors_origins(self) -> list[str]:

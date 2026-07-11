@@ -479,7 +479,7 @@ def test_scope_split_and_vendor_derivation_use_application_inventory_only() -> N
         assert out_tickets["INC-INACTIVE"].out_of_scope_reason == (
             "assignment_group_not_in_scope_reference"
         )
-        assert out_tickets["INC-OUT"].derived_vendor == "HCLTech"
+        assert out_tickets["INC-OUT"].derived_vendor is None
         assert out_tickets["INC-INACTIVE"].derived_vendor is None
     finally:
         cleanup_client(db, client_id)

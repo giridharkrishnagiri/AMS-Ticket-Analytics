@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import (
     ApplicationInventoryItem,
     AssessmentChangeRecord,
@@ -1318,15 +1319,45 @@ def select_inventory_item_for_values(
     return None
 
 
+def select_inventory_item_for_assignment_group_and_business_service(
+    inventory_items: list[ApplicationInventoryItem],
+    *,
+    assignment_group: str | None,
+    business_service: str | None,
+) -> ApplicationInventoryItem | None:
+    assignment_group_key = normalize_match_key(assignment_group)
+    business_service_key = normalize_match_key(business_service)
+    if assignment_group_key is None or business_service_key is None:
+        return None
+
+    matches = [
+        item
+        for item in inventory_items
+        if normalize_match_key(item.assignment_group) == assignment_group_key
+        and normalize_match_key(item.business_service_ci_name) == business_service_key
+    ]
+    if not matches:
+        return None
+
+    return sorted(
+        matches,
+        key=lambda item: (
+            0 if item.active is True else 1,
+            item.source_row_number or 999_999_999,
+            item.created_at,
+            str(item.id),
+        ),
+    )[0]
+
+
 def select_inventory_item_for_ticket(
     ticket: Ticket,
     inventory_items: list[ApplicationInventoryItem],
 ) -> ApplicationInventoryItem | None:
-    return select_inventory_item_for_values(
+    return select_inventory_item_for_assignment_group_and_business_service(
         inventory_items,
         assignment_group=ticket.assignment_group,
         business_service=ticket.business_service,
-        application=ticket.application,
     )
 
 
@@ -1385,29 +1416,26 @@ def collapse_inventory_values_for_support_group(
         return None
     if len(values_by_key) == 1:
         return next(iter(values_by_key.values()))
-    return "Multiple"
+    return None
 
 
 def apply_service_inventory_enrichment_to_ticket(
     ticket: Ticket,
     inventory_items: list[ApplicationInventoryItem],
 ) -> None:
-    ticket.functional_track = collapse_inventory_values_for_support_group(
+    functional_track = collapse_inventory_values_for_support_group(
         inventory_items,
         "functional_track",
     )
-    ticket.service_type = collapse_inventory_values_for_support_group(
-        inventory_items,
-        "service_type",
-    )
-    ticket.service_entitlement = collapse_inventory_values_for_support_group(
-        inventory_items,
-        "service_entitlement",
-    )
-    ticket.sap_non_sap = (
-        collapse_inventory_values_for_support_group(inventory_items, "sap_non_sap")
-        or ticket.sap_non_sap
-    )
+    ams_owner = collapse_inventory_values_for_support_group(inventory_items, "ams_owner")
+    support_lead = collapse_inventory_values_for_support_group(inventory_items, "support_lead")
+
+    if functional_track is not None:
+        ticket.functional_track = functional_track
+    if ams_owner is not None:
+        ticket.ams_owner = ams_owner
+    if support_lead is not None:
+        ticket.support_lead = support_lead
 
 
 def apply_inventory_enrichment_to_ticket(
@@ -1429,6 +1457,7 @@ def apply_inventory_enrichment_to_ticket(
     ticket.service_type = text_or_none(inventory_item.service_type)
     ticket.service_entitlement = text_or_none(inventory_item.service_entitlement)
     ticket.assignment_group_owner = inventory_item.assignment_group_owner
+    ticket.sap_non_sap = text_or_none(inventory_item.sap_non_sap)
     ticket.derived_vendor = inventory_item.supported_by_vendor
     ticket.hosting_env = inventory_item.hosting_env
     ticket.architecture_type = cmdb_payload_text(
@@ -2229,6 +2258,17 @@ def apply_mapping_to_batch(
     upload_batch = get_upload_batch_or_raise(db, upload_batch_id)
     batch_ticket_type = get_batch_ticket_type(db, upload_batch_id)
     resolved_mapping = resolve_apply_mapping(db, upload_batch, mapping)
+    pipeline_version = get_settings().ams_processing_pipeline_version.strip().lower()
+    if pipeline_version == "v2" and batch_ticket_type not in PROBLEM_CHANGE_TICKET_TYPES:
+        from app.services.mapping_v2 import apply_mapping_to_batch_v2
+
+        return apply_mapping_to_batch_v2(
+            db=db,
+            upload_batch=upload_batch,
+            upload_batch_id=upload_batch_id,
+            resolved_mapping=resolved_mapping,
+            delete_existing=delete_existing,
+        )
 
     if batch_ticket_type in PROBLEM_CHANGE_TICKET_TYPES:
         try:
@@ -2354,6 +2394,8 @@ def apply_mapping_to_batch(
 
                 inventory_item = select_inventory_item_for_ticket(ticket, inventory_items)
                 apply_inventory_enrichment_to_ticket(ticket, inventory_item)
+                if inventory_item is None:
+                    ticket.sap_non_sap = None
                 service_inventory_items = inventory_items_for_assignment_group(
                     inventory_items,
                     ticket.assignment_group,

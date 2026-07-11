@@ -1089,7 +1089,9 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             service_entitlement=None,
             assignment_group_owner=None,
             sap_non_sap=None,
+            architecture_type=None,
             business_critical=None,
+            install_type=None,
             hosting_env=None,
             derived_vendor=None,
         )
@@ -1111,7 +1113,9 @@ def reset_inventory_ticket_columns(db: Session, project_id: UUID) -> None:
             service_entitlement=None,
             assignment_group_owner=None,
             sap_non_sap=None,
+            architecture_type=None,
             business_critical=None,
+            install_type=None,
             hosting_env=None,
             derived_vendor=None,
         )
@@ -1154,6 +1158,14 @@ def business_critical_expression_sql(alias: str = "i") -> str:
     return f"COALESCE({', '.join(expressions)})"
 
 
+def cmdb_payload_text_expression_sql(alias: str, *keys: str) -> str:
+    expressions = []
+    for key in keys:
+        escaped_key = key.replace("'", "''")
+        expressions.append(f"NULLIF(btrim({alias}.cmdb_payload ->> '{escaped_key}'), '')")
+    return f"COALESCE({', '.join(expressions)})"
+
+
 def normalized_business_service_ci_sql(expression: str) -> str:
     return (
         "lower(regexp_replace("
@@ -1178,6 +1190,20 @@ def update_tickets_from_inventory(
         raise ApplicationInventoryError(f"Unsupported enrichment table: {table_name}")
     ticket_key_expression = normalized_business_service_ci_sql(f"t.{ticket_column}")
     inventory_key_expression = normalized_business_service_ci_sql("i.business_service_ci_name")
+    ticket_assignment_group_key = normalized_text_key_sql("t.assignment_group")
+    inventory_assignment_group_key = normalized_text_key_sql("i.assignment_group")
+    architecture_expression = cmdb_payload_text_expression_sql(
+        "i",
+        "Architecture type",
+        "Architecture Type",
+    )
+    install_type_expression = cmdb_payload_text_expression_sql(
+        "i",
+        "Install type",
+        "Install Type",
+        "Install status",
+        "Install Status",
+    )
 
     statement = text(
         f"""
@@ -1190,9 +1216,15 @@ def update_tickets_from_inventory(
                 i.business_service_ci_name,
                 i.application_owner,
                 i.support_lead,
+                i.functional_track,
                 i.ams_owner,
                 i.supported_by_vendor,
+                i.service_type,
+                i.service_entitlement,
                 i.assignment_group_owner,
+                i.sap_non_sap,
+                {architecture_expression} AS architecture_type,
+                {install_type_expression} AS install_type,
                 i.hosting_env,
                 {business_critical_expression_sql()} AS business_critical,
                 row_number() OVER (
@@ -1220,7 +1252,10 @@ def update_tickets_from_inventory(
              AND i.is_current IS true
              AND i.active IS NOT false
              AND nullif(btrim(t.{ticket_column}), '') IS NOT NULL
+             AND nullif(btrim(t.assignment_group), '') IS NOT NULL
+             AND nullif(btrim(i.assignment_group), '') IS NOT NULL
              AND {ticket_key_expression} = {inventory_key_expression}
+             AND {ticket_assignment_group_key} = {inventory_assignment_group_key}
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.application_inventory_id IS NULL
         )
@@ -1232,16 +1267,17 @@ def update_tickets_from_inventory(
             business_service_ci_name = candidates.business_service_ci_name,
             application_owner = candidates.application_owner,
             support_lead = candidates.support_lead,
+            functional_track = candidates.functional_track,
             ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
+            service_type = candidates.service_type,
+            service_entitlement = candidates.service_entitlement,
             assignment_group_owner = candidates.assignment_group_owner,
             business_critical = candidates.business_critical,
             hosting_env = candidates.hosting_env,
-            sap_non_sap = CASE
-                WHEN upper(btrim(coalesce(t.assignment_group, ''))) LIKE 'IT-SAP%' THEN 'SAP'
-                WHEN upper(btrim(coalesce(t.assignment_group, ''))) LIKE 'IT-NSA%' THEN 'Non-SAP'
-                ELSE NULL
-            END,
+            sap_non_sap = candidates.sap_non_sap,
+            architecture_type = candidates.architecture_type,
+            install_type = candidates.install_type,
             derived_vendor = candidates.supported_by_vendor
         FROM candidates
         WHERE candidates.row_rank = 1
@@ -1270,29 +1306,23 @@ def update_ticket_support_group_fields_from_inventory(
             SELECT
                 {inventory_assignment_group_key} AS assignment_group_key,
                 CASE
-                    WHEN count(DISTINCT NULLIF(btrim(service_type), '')) = 0 THEN NULL
-                    WHEN count(DISTINCT NULLIF(btrim(service_type), '')) = 1
-                        THEN min(NULLIF(btrim(service_type), ''))
-                    ELSE 'Multiple'
-                END AS service_type,
-                CASE
-                    WHEN count(DISTINCT NULLIF(btrim(service_entitlement), '')) = 0 THEN NULL
-                    WHEN count(DISTINCT NULLIF(btrim(service_entitlement), '')) = 1
-                        THEN min(NULLIF(btrim(service_entitlement), ''))
-                    ELSE 'Multiple'
-                END AS service_entitlement,
-                CASE
                     WHEN count(DISTINCT NULLIF(btrim(functional_track), '')) = 0 THEN NULL
                     WHEN count(DISTINCT NULLIF(btrim(functional_track), '')) = 1
                         THEN min(NULLIF(btrim(functional_track), ''))
-                    ELSE 'Multiple'
+                    ELSE NULL
                 END AS functional_track,
                 CASE
-                    WHEN count(DISTINCT NULLIF(btrim(sap_non_sap), '')) = 0 THEN NULL
-                    WHEN count(DISTINCT NULLIF(btrim(sap_non_sap), '')) = 1
-                        THEN min(NULLIF(btrim(sap_non_sap), ''))
-                    ELSE 'Multiple'
-                END AS sap_non_sap
+                    WHEN count(DISTINCT NULLIF(btrim(ams_owner), '')) = 0 THEN NULL
+                    WHEN count(DISTINCT NULLIF(btrim(ams_owner), '')) = 1
+                        THEN min(NULLIF(btrim(ams_owner), ''))
+                    ELSE NULL
+                END AS ams_owner,
+                CASE
+                    WHEN count(DISTINCT NULLIF(btrim(support_lead), '')) = 0 THEN NULL
+                    WHEN count(DISTINCT NULLIF(btrim(support_lead), '')) = 1
+                        THEN min(NULLIF(btrim(support_lead), ''))
+                    ELSE NULL
+                END AS support_lead
             FROM application_inventory_items
             WHERE project_id = CAST(:project_id AS uuid)
               AND is_current IS true
@@ -1302,23 +1332,18 @@ def update_ticket_support_group_fields_from_inventory(
         )
         UPDATE {table_name} AS t
         SET
-            service_type = inventory_values.service_type,
-            service_entitlement = inventory_values.service_entitlement,
             functional_track = inventory_values.functional_track,
-            sap_non_sap = COALESCE(inventory_values.sap_non_sap, t.sap_non_sap)
+            ams_owner = inventory_values.ams_owner,
+            support_lead = inventory_values.support_lead
         FROM inventory_values
         WHERE t.project_id = CAST(:project_id AS uuid)
           AND NULLIF(btrim(t.assignment_group), '') IS NOT NULL
           {unmatched_filter}
           AND {ticket_assignment_group_key} = inventory_values.assignment_group_key
           AND (
-            t.service_type IS DISTINCT FROM inventory_values.service_type
-            OR t.service_entitlement IS DISTINCT FROM inventory_values.service_entitlement
-            OR t.functional_track IS DISTINCT FROM inventory_values.functional_track
-            OR (
-                inventory_values.sap_non_sap IS NOT NULL
-                AND t.sap_non_sap IS DISTINCT FROM inventory_values.sap_non_sap
-            )
+            t.functional_track IS DISTINCT FROM inventory_values.functional_track
+            OR t.ams_owner IS DISTINCT FROM inventory_values.ams_owner
+            OR t.support_lead IS DISTINCT FROM inventory_values.support_lead
           )
         """
     )
