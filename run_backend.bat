@@ -6,9 +6,11 @@ cd /d "%~dp0backend"
 if "%AMS_BACKEND_PORT%"=="" set "AMS_BACKEND_PORT=8001"
 if "%AMS_BACKEND_RELOAD%"=="" set "AMS_BACKEND_RELOAD=0"
 if "%AMS_BACKEND_SHUTDOWN_TIMEOUT%"=="" set "AMS_BACKEND_SHUTDOWN_TIMEOUT=10"
+if "%AMS_PROCESSING_PIPELINE_VERSION%"=="" set "AMS_PROCESSING_PIPELINE_VERSION=v2"
 
 set UV_CACHE_DIR=%CD%\.uv-cache
 
+echo Using processing pipeline version: %AMS_PROCESSING_PIPELINE_VERSION%
 echo Installing or updating backend dependencies with uv...
 uv sync --dev
 if errorlevel 1 (
