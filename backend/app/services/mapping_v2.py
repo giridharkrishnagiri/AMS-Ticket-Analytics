@@ -11,9 +11,18 @@ from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import AssessmentOutOfScopeTicket, Ticket, TicketRawRow, UploadBatch
+from app.models import (
+    ApplicationInventoryItem,
+    AssessmentOutOfScopeTicket,
+    Ticket,
+    TicketRawRow,
+    UploadBatch,
+)
 from app.services.ingestion import INGESTION_BATCH_SIZE
 from app.services.mapping import (
+    CMDB_ARCHITECTURE_TYPE_KEYS,
+    CMDB_BUSINESS_CRITICAL_KEYS,
+    CMDB_INSTALL_TYPE_KEYS,
     MAX_ERROR_SAMPLES,
     MAX_WARNING_SAMPLES,
     OUT_OF_SCOPE_SCOPE_REFERENCE_DESTINATION,
@@ -21,14 +30,13 @@ from app.services.mapping import (
     MappingError,
     NormalizationErrorSample,
     active_inventory_in_scope_assignment_group_keys,
-    apply_inventory_enrichment_to_ticket,
-    apply_service_inventory_enrichment_to_ticket,
     build_out_of_scope_ticket,
     build_ticket_from_raw_row,
-    inventory_items_for_assignment_group,
+    cmdb_payload_text,
     load_active_inventory_items,
     normalize_match_key,
-    select_inventory_item_for_ticket,
+    normalize_ticket_type_value,
+    text_or_none,
 )
 from app.services.upload_lifecycle import (
     mark_upload_batch_normalization_failed,
@@ -37,6 +45,19 @@ from app.services.upload_lifecycle import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GroupEnrichment:
+    functional_track: str | None = None
+    ams_owner: str | None = None
+    support_lead: str | None = None
+
+
+@dataclass(frozen=True)
+class InventoryReferenceIndex:
+    exact_by_group_service: dict[tuple[str, str], ApplicationInventoryItem]
+    group_enrichment_by_group: dict[str, GroupEnrichment]
 
 
 @dataclass
@@ -64,6 +85,123 @@ class _StageMeasurement:
 
 def chunked[T](values: list[T], chunk_size: int) -> list[list[T]]:
     return [values[index : index + chunk_size] for index in range(0, len(values), chunk_size)]
+
+
+def unique_text_value(values: list[str | None]) -> str | None:
+    values_by_key: dict[str, str] = {}
+    for value in values:
+        text = text_or_none(value)
+        if text is None:
+            continue
+        values_by_key.setdefault(normalize_match_key(text) or text.casefold(), text)
+    if len(values_by_key) == 1:
+        return next(iter(values_by_key.values()))
+    return None
+
+
+def inventory_item_sort_key(item: ApplicationInventoryItem) -> tuple[int, int, object, str]:
+    return (
+        0 if item.active is True else 1,
+        item.source_row_number or 999_999_999,
+        item.created_at,
+        str(item.id),
+    )
+
+
+def build_inventory_reference_index(
+    inventory_items: list[ApplicationInventoryItem],
+) -> InventoryReferenceIndex:
+    exact_candidates: dict[tuple[str, str], list[ApplicationInventoryItem]] = {}
+    group_candidates: dict[str, list[ApplicationInventoryItem]] = {}
+
+    for item in inventory_items:
+        assignment_group_key = normalize_match_key(item.assignment_group)
+        if assignment_group_key is None:
+            continue
+        group_candidates.setdefault(assignment_group_key, []).append(item)
+        business_service_key = normalize_match_key(item.business_service_ci_name)
+        if business_service_key is not None:
+            exact_candidates.setdefault((assignment_group_key, business_service_key), []).append(
+                item
+            )
+
+    exact_by_group_service = {
+        key: sorted(candidates, key=inventory_item_sort_key)[0]
+        for key, candidates in exact_candidates.items()
+    }
+    group_enrichment_by_group = {
+        group_key: GroupEnrichment(
+            functional_track=unique_text_value(
+                [item.functional_track for item in group_inventory_items]
+            ),
+            ams_owner=unique_text_value([item.ams_owner for item in group_inventory_items]),
+            support_lead=unique_text_value([item.support_lead for item in group_inventory_items]),
+        )
+        for group_key, group_inventory_items in group_candidates.items()
+    }
+    return InventoryReferenceIndex(
+        exact_by_group_service=exact_by_group_service,
+        group_enrichment_by_group=group_enrichment_by_group,
+    )
+
+
+def ticket_business_service_match_value(ticket: Ticket) -> str | None:
+    if normalize_ticket_type_value(ticket.ticket_type) == "SERVICE_CATALOG_TASK":
+        return ticket.cmdb_ci
+    return ticket.business_service
+
+
+def enrich_ticket_from_index(ticket: Ticket, reference_index: InventoryReferenceIndex) -> None:
+    assignment_group_key = normalize_match_key(ticket.assignment_group)
+    business_service_key = normalize_match_key(ticket_business_service_match_value(ticket))
+    inventory_item = None
+    if assignment_group_key is not None and business_service_key is not None:
+        inventory_item = reference_index.exact_by_group_service.get(
+            (assignment_group_key, business_service_key)
+        )
+
+    if inventory_item is not None:
+        ticket.application_inventory_id = inventory_item.id
+        ticket.parent_application_number = inventory_item.application_number_apm
+        ticket.parent_application_name = inventory_item.parent_application_name
+        ticket.business_service_ci_name = inventory_item.business_service_ci_name
+        ticket.application_owner = inventory_item.application_owner
+        ticket.support_lead = inventory_item.support_lead
+        ticket.functional_track = inventory_item.functional_track
+        ticket.ams_owner = inventory_item.ams_owner
+        ticket.supported_by_vendor = inventory_item.supported_by_vendor
+        ticket.service_type = text_or_none(inventory_item.service_type)
+        ticket.service_entitlement = text_or_none(inventory_item.service_entitlement)
+        ticket.assignment_group_owner = inventory_item.assignment_group_owner
+        ticket.sap_non_sap = text_or_none(inventory_item.sap_non_sap)
+        ticket.derived_vendor = inventory_item.supported_by_vendor
+        ticket.hosting_env = inventory_item.hosting_env
+        ticket.architecture_type = cmdb_payload_text(
+            inventory_item.cmdb_payload,
+            *CMDB_ARCHITECTURE_TYPE_KEYS,
+        )
+        ticket.business_critical = cmdb_payload_text(
+            inventory_item.cmdb_payload,
+            *CMDB_BUSINESS_CRITICAL_KEYS,
+        )
+        ticket.install_type = cmdb_payload_text(
+            inventory_item.cmdb_payload,
+            *CMDB_INSTALL_TYPE_KEYS,
+        )
+    else:
+        ticket.sap_non_sap = None
+
+    if assignment_group_key is None:
+        return
+    group_enrichment = reference_index.group_enrichment_by_group.get(assignment_group_key)
+    if group_enrichment is None:
+        return
+    if ticket.functional_track is None and group_enrichment.functional_track is not None:
+        ticket.functional_track = group_enrichment.functional_track
+    if ticket.ams_owner is None and group_enrichment.ams_owner is not None:
+        ticket.ams_owner = group_enrichment.ams_owner
+    if ticket.support_lead is None and group_enrichment.support_lead is not None:
+        ticket.support_lead = group_enrichment.support_lead
 
 
 def model_insert_dict(model: Any, *, out_of_scope: bool = False) -> dict[str, Any]:
@@ -152,6 +290,8 @@ def apply_mapping_to_batch_v2(
             db,
             upload_batch.project_id,
         )
+    with timer.measure("build_reference_indexes"):
+        reference_index = build_inventory_reference_index(inventory_items)
     if not active_assignment_groups:
         warnings.append(
             "No active CMDB/Application Inventory in-scope assignment groups were found "
@@ -171,14 +311,7 @@ def apply_mapping_to_batch_v2(
             total_raw_rows += 1
             try:
                 ticket = build_ticket_from_raw_row(raw_row, upload_batch, resolved_mapping)
-                inventory_item = select_inventory_item_for_ticket(ticket, inventory_items)
-                apply_inventory_enrichment_to_ticket(ticket, inventory_item)
-                if inventory_item is None:
-                    ticket.sap_non_sap = None
-                apply_service_inventory_enrichment_to_ticket(
-                    ticket,
-                    inventory_items_for_assignment_group(inventory_items, ticket.assignment_group),
-                )
+                enrich_ticket_from_index(ticket, reference_index)
 
                 assignment_group_key = normalize_match_key(ticket.assignment_group)
                 if assignment_group_key is None:
