@@ -3594,7 +3594,6 @@ function DetailedVolumeTrends({
         window={distributionSplits.ranking_window}
       />
       <DistributionPieRow
-        commentary={commentaryForChart("assignment_group_sap_non_sap_distribution_row")}
         data={distributionSplits.assignment_group_sap_non_sap}
         error={distributionSplitsError}
         status={distributionSplitsStatus}
@@ -3607,6 +3606,7 @@ function DetailedVolumeTrends({
         window={distributionSplits.ranking_window}
       />
       <ServiceTypeAssignmentGroupSapNonSapPivotTables
+        commentary={commentaryForChart("assignment_group_sap_non_sap_distribution_row")}
         data={distributionSplits.service_type_by_assignment_group_sap_non_sap}
         error={distributionSplitsError}
         status={distributionSplitsStatus}
@@ -4451,7 +4451,7 @@ function DistributionPieRow({
   titles,
   window,
 }: {
-  commentary: ReactNode;
+  commentary?: ReactNode;
   data: DashboardVolumetricsDistributionSplits["sap_non_sap"];
   error: string | null;
   status: LoadStatus;
@@ -4580,12 +4580,14 @@ type AssignmentGroupSapPivotRows =
   DashboardVolumetricsDistributionSplits["service_type_by_assignment_group_sap_non_sap"]["all"];
 
 function ServiceTypeAssignmentGroupSapNonSapPivotTables({
+  commentary,
   data,
   error,
   status,
   ticketType,
   window,
 }: {
+  commentary: ReactNode;
   data: DashboardVolumetricsDistributionSplits["service_type_by_assignment_group_sap_non_sap"];
   error: string | null;
   status: LoadStatus;
@@ -4639,6 +4641,7 @@ function ServiceTypeAssignmentGroupSapNonSapPivotTables({
           />
         ))}
       </div>
+      {commentary}
     </section>
   );
 }
