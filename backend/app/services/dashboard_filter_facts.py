@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.orm import Session
 
-from app.models import AssessmentOutOfScopeTicket, DashboardFilterFact, Project, Ticket
+from app.models import DashboardFilterFact, Project, Ticket
 
 GENERIC_TICKET_TYPES = ("INCIDENT", "SERVICE_CATALOG_TASK")
 
@@ -33,24 +33,12 @@ def clear_dashboard_filter_facts(db: Session, project_id: UUID) -> int:
 
 
 def project_has_generic_ticket_rows(db: Session, project_id: UUID) -> bool:
-    has_in_scope_rows = bool(
+    return bool(
         db.scalar(
             select(Ticket.id)
             .where(
                 Ticket.project_id == project_id,
                 Ticket.ticket_type.in_(GENERIC_TICKET_TYPES),
-            )
-            .limit(1),
-        ),
-    )
-    if has_in_scope_rows:
-        return True
-    return bool(
-        db.scalar(
-            select(AssessmentOutOfScopeTicket.id)
-            .where(
-                AssessmentOutOfScopeTicket.project_id == project_id,
-                AssessmentOutOfScopeTicket.ticket_type.in_(GENERIC_TICKET_TYPES),
             )
             .limit(1),
         ),
@@ -204,17 +192,17 @@ def insert_in_scope_filter_facts(
                     WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN t.closed_at
                     ELSE COALESCE(t.resolved_at, t.closed_at)
                 END,
-                CAST(date_trunc('month', t.created_at) AS date),
+                CAST(date_trunc('month', timezone('UTC', t.created_at)) AS date),
                 CAST(date_trunc(
                     'month',
-                    CASE
+                    timezone('UTC', CASE
                         WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%cancel%' THEN NULL
                         WHEN t.ticket_type = 'SERVICE_CATALOG_TASK'
                              AND lower(btrim(COALESCE(t.state, ''))) = 'closed incomplete' THEN NULL
                         WHEN t.ticket_type = 'INCIDENT' THEN t.resolved_at
                         WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN t.closed_at
                         ELSE COALESCE(t.resolved_at, t.closed_at)
-                    END
+                    END)
                 ) AS date),
                 left(NULLIF(btrim(t.functional_track), ''), 255),
                 left(NULLIF(btrim(t.ams_owner), ''), 255),
@@ -269,6 +257,7 @@ def insert_in_scope_filter_facts(
             JOIN projects AS p ON p.id = t.project_id
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.ticket_type IN ('INCIDENT', 'SERVICE_CATALOG_TASK')
+              AND t.is_in_scope IS true
             """
         ),
         {"project_id": str(project_id), "data_version": data_version},
@@ -323,12 +312,12 @@ def insert_out_of_scope_filter_facts(
                 data_version
             )
             SELECT
-                md5('assessment_out_of_scope_tickets:' || t.id::text)::uuid,
+                md5('tickets:out_of_scope:' || t.id::text)::uuid,
                 p.client_id,
                 t.project_id,
                 'volumetrics',
                 'ticket',
-                'assessment_out_of_scope_tickets',
+                'tickets',
                 CASE
                     WHEN t.ticket_type = 'INCIDENT' THEN 'incident'
                     WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN 'sc_task'
@@ -346,17 +335,17 @@ def insert_out_of_scope_filter_facts(
                     WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN t.closed_at
                     ELSE COALESCE(t.resolved_at, t.closed_at)
                 END,
-                CAST(date_trunc('month', t.created_at) AS date),
+                CAST(date_trunc('month', timezone('UTC', t.created_at)) AS date),
                 CAST(date_trunc(
                     'month',
-                    CASE
+                    timezone('UTC', CASE
                         WHEN lower(btrim(COALESCE(t.state, ''))) LIKE '%cancel%' THEN NULL
                         WHEN t.ticket_type = 'SERVICE_CATALOG_TASK'
                              AND lower(btrim(COALESCE(t.state, ''))) = 'closed incomplete' THEN NULL
                         WHEN t.ticket_type = 'INCIDENT' THEN t.resolved_at
                         WHEN t.ticket_type = 'SERVICE_CATALOG_TASK' THEN t.closed_at
                         ELSE COALESCE(t.resolved_at, t.closed_at)
-                    END
+                    END)
                 ) AS date),
                 left(NULLIF(btrim(t.functional_track), ''), 255),
                 left(NULLIF(btrim(t.ams_owner), ''), 255),
@@ -407,10 +396,11 @@ def insert_out_of_scope_filter_facts(
                     100
                 ),
                 :data_version
-            FROM assessment_out_of_scope_tickets AS t
+            FROM tickets AS t
             JOIN projects AS p ON p.id = t.project_id
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.ticket_type IN ('INCIDENT', 'SERVICE_CATALOG_TASK')
+              AND t.is_in_scope IS false
             """
         ),
         {"project_id": str(project_id), "data_version": data_version},

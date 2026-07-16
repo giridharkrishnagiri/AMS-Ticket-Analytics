@@ -37,6 +37,7 @@ export type DashboardFilterCacheRefreshResponse = {
 export type InScopeAssignmentGroupPreviewRow = {
   assignment_group: string;
   functional_track: string | null;
+  is_in_scope: boolean;
   source_row_number: number | null;
 };
 
@@ -59,6 +60,42 @@ export type InScopeAssignmentGroupsStatusResponse = {
   active_count: number;
   last_imported_at: string | null;
   preview_rows: InScopeAssignmentGroupPreviewRow[];
+};
+
+export type InScopeAssignmentGroupRow = {
+  id: string;
+  project_id: string;
+  assignment_group: string;
+  assignment_group_key: string;
+  functional_track: string | null;
+  is_in_scope: boolean;
+  source_filename: string | null;
+  source_row_number: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InScopeAssignmentGroupChange = {
+  id: string;
+  assignment_group: string;
+  previous_functional_track: string | null;
+  next_functional_track: string | null;
+  previous_is_in_scope: boolean;
+  next_is_in_scope: boolean;
+  tickets_updated: number;
+};
+
+export type InScopeAssignmentGroupsUpdateResponse = {
+  project_id: string;
+  submitted_count: number;
+  changed_count: number;
+  unchanged_count: number;
+  tickets_updated_count: number;
+  inventory_rows_updated_count: number;
+  missing_count: number;
+  warnings: string[];
+  changes: InScopeAssignmentGroupChange[];
 };
 
 export type AssignmentGroupMasterPreviewRow = {
@@ -161,6 +198,40 @@ export function getInScopeAssignmentGroupsStatus(
   const query = new URLSearchParams({ project_id: projectId.trim() });
   return requestJson<InScopeAssignmentGroupsStatusResponse>(
     `/admin/in-scope-assignment-groups/status?${query.toString()}`
+  );
+}
+
+export function listInScopeAssignmentGroups(
+  projectId: string,
+  limit = 5000
+): Promise<InScopeAssignmentGroupRow[]> {
+  const query = new URLSearchParams({
+    project_id: projectId.trim(),
+    limit: String(limit),
+  });
+  return requestJson<InScopeAssignmentGroupRow[]>(
+    `/admin/in-scope-assignment-groups?${query.toString()}`
+  );
+}
+
+export function updateInScopeAssignmentGroups(
+  projectId: string,
+  rows: Array<{
+    id: string;
+    functional_track: string | null;
+    is_in_scope: boolean;
+  }>
+): Promise<InScopeAssignmentGroupsUpdateResponse> {
+  return requestJson<InScopeAssignmentGroupsUpdateResponse>(
+    "/admin/in-scope-assignment-groups/update",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_id: projectId.trim(),
+        rows,
+      }),
+    }
   );
 }
 

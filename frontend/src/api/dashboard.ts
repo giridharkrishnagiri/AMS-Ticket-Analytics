@@ -181,9 +181,13 @@ export type DashboardOverview = {
     incident_sla_rows: number;
   };
   tickets: {
+    total_tickets: number;
     total_in_scope_tickets: number;
+    total_out_of_scope_tickets: number;
     incident_count: number;
     sc_task_count: number;
+    out_of_scope_incident_count: number;
+    out_of_scope_sc_task_count: number;
     completion_date_min: string | null;
     completion_date_max: string | null;
     applications_80pct_monthly_volume_count: number;
@@ -622,6 +626,20 @@ export type DashboardVolumetricsSummaryMetric = {
   average_per_period: number | null;
 };
 
+export type DashboardVolumetricsCreatedMetric = DashboardVolumetricsSummaryMetric & {
+  incident_count: number;
+  incident_average_per_period: number | null;
+  sc_task_count: number;
+  sc_task_average_per_period: number | null;
+};
+
+export type DashboardVolumetricsResolvedClosedMetric = DashboardVolumetricsSummaryMetric & {
+  incident_count: number;
+  incident_average_per_period: number | null;
+  sc_task_count: number;
+  sc_task_average_per_period: number | null;
+};
+
 export type DashboardVolumetricsCancelledMetric = DashboardVolumetricsSummaryMetric & {
   cancelled_pct_of_resolved_cancelled: number | null;
 };
@@ -634,8 +652,8 @@ export type DashboardVolumetricsSlaMetric = {
 
 export type DashboardVolumetricsSummary = {
   period_count: number;
-  created: DashboardVolumetricsSummaryMetric;
-  resolved_closed: DashboardVolumetricsSummaryMetric;
+  created: DashboardVolumetricsCreatedMetric;
+  resolved_closed: DashboardVolumetricsResolvedClosedMetric;
   cancelled: DashboardVolumetricsCancelledMetric;
   response_sla: DashboardVolumetricsSlaMetric;
   resolution_sla: DashboardVolumetricsSlaMetric;
@@ -815,6 +833,8 @@ export type DashboardVolumetricsSplitDatum = {
 export type DashboardVolumetricsServiceVolumeDatum = {
   label: string;
   ticket_count: number;
+  average_monthly_count: number;
+  display_count: number;
   percentage: number | null;
 };
 
@@ -855,11 +875,27 @@ export type DashboardVolumetricsTripleServiceVolumeSplit = {
   sc_tasks: DashboardVolumetricsServiceVolumeDatum[];
 };
 
+export type DashboardVolumetricsServiceTypeAssignmentGroupSapNonSapPivotRow = {
+  service_type: string;
+  sap_average_monthly_count: number;
+  non_sap_average_monthly_count: number;
+  others_average_monthly_count: number;
+  total_average_monthly_count: number;
+};
+
+export type DashboardVolumetricsTripleServiceTypeAssignmentGroupSapNonSapPivot = {
+  all: DashboardVolumetricsServiceTypeAssignmentGroupSapNonSapPivotRow[];
+  incidents: DashboardVolumetricsServiceTypeAssignmentGroupSapNonSapPivotRow[];
+  sc_tasks: DashboardVolumetricsServiceTypeAssignmentGroupSapNonSapPivotRow[];
+};
+
 export type DashboardVolumetricsDistributionSplits = {
   ranking_window: DashboardVolumetricsRankingWindow;
   ticket_volume_by_service_entitlement: DashboardVolumetricsTripleServiceVolumeSplit;
   ticket_volume_by_service_type: DashboardVolumetricsTripleServiceVolumeSplit;
   sap_non_sap: DashboardVolumetricsTripleTicketTypeSplit;
+  assignment_group_sap_non_sap: DashboardVolumetricsTripleTicketTypeSplit;
+  service_type_by_assignment_group_sap_non_sap: DashboardVolumetricsTripleServiceTypeAssignmentGroupSapNonSapPivot;
   architecture_type: DashboardVolumetricsTripleTicketTypeSplit;
   install_type: DashboardVolumetricsTripleTicketTypeSplit;
   hosting_env: DashboardVolumetricsTripleTicketTypeSplit;
@@ -1107,6 +1143,34 @@ export type DashboardVolumetricsAssignmentGroupVolumetrics = {
     basis_security_incidents?: DashboardVolumetricsAssignmentGroupTable;
     basis_security_sc_tasks?: DashboardVolumetricsAssignmentGroupTable;
     basis_security_overall?: DashboardVolumetricsAssignmentGroupTable;
+  };
+  available_functional_tracks: string[];
+  data_notes: string[];
+  warnings: string[];
+};
+
+export type DashboardVolumetricsBusinessServiceCiRow = {
+  business_service_ci_name: string;
+  functional_track: string;
+  assignment_group: string;
+  months: Record<string, DashboardVolumetricsAssignmentGroupMonthMetrics>;
+  totals: DashboardVolumetricsAssignmentGroupMonthMetrics;
+};
+
+export type DashboardVolumetricsBusinessServiceCiTable = {
+  title: string;
+  rows: DashboardVolumetricsBusinessServiceCiRow[];
+  grand_totals: DashboardVolumetricsAssignmentGroupMonthMetrics;
+};
+
+export type DashboardVolumetricsBusinessServiceCiVolumetrics = {
+  scope: VolumetricsScope;
+  functional_track: string;
+  months: DashboardVolumetricsAssignmentGroupMonth[];
+  tables: {
+    incidents: DashboardVolumetricsBusinessServiceCiTable;
+    sc_tasks: DashboardVolumetricsBusinessServiceCiTable;
+    overall: DashboardVolumetricsBusinessServiceCiTable;
   };
   available_functional_tracks: string[];
   data_notes: string[];
@@ -1628,6 +1692,19 @@ export function getDashboardVolumetricsAssignmentGroupVolumetrics(
 ): Promise<DashboardVolumetricsAssignmentGroupVolumetrics> {
   return requestJson<DashboardVolumetricsAssignmentGroupVolumetrics>(
     "/dashboard/volumetrics/assignment-group-volumetrics",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export function getDashboardVolumetricsBusinessServiceCiVolumetrics(
+  input: DashboardVolumetricsAssignmentGroupRequest
+): Promise<DashboardVolumetricsBusinessServiceCiVolumetrics> {
+  return requestJson<DashboardVolumetricsBusinessServiceCiVolumetrics>(
+    "/dashboard/volumetrics/business-service-ci-volumetrics",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

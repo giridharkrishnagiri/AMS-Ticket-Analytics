@@ -21,10 +21,8 @@ import {
   getDashboardApplicationsCharts,
   getDashboardFilterCatalog,
   getDashboardFilterCounts,
-  getDashboardApplicationsLifecyclePlanning,
   getDashboardApplicationsList,
   getDashboardApplicationsSummary,
-  getDashboardApplicationsTopActiveUsers,
 } from "./api/dashboard";
 import type {
   ApplicationsAssignmentGroupMappingScope,
@@ -70,7 +68,7 @@ type ApplicationsDashboardProps = {
 type TopNSelection = 10 | 20;
 type FilterKey = keyof DashboardApplicationsFilters;
 type TableColumnKey = keyof DashboardApplicationRow;
-type ApplicationsSubTab = "overview" | "lifecycle_planning" | "assignment_group_mapping";
+type ApplicationsSubTab = "overview" | "assignment_group_mapping";
 type AssignmentMappingSortKey =
   | keyof DashboardApplicationsAssignmentGroupMappingRow
   | "incident_count"
@@ -148,12 +146,6 @@ const emptyCharts: DashboardApplicationsCharts = {
     column_totals: {},
     grand_total: 0,
   },
-};
-
-const emptyTopActiveUsers: DashboardApplicationsTopActiveUsers = {
-  top_n: 10,
-  duplicate_parent_active_user_count: 0,
-  points: [],
 };
 
 const lifecyclePlans: DashboardApplicationsLifecyclePlan[] = [
@@ -254,7 +246,6 @@ const tableColumns: Array<{ key: TableColumnKey; label: string }> = [
   { key: "org_unit_level_2", label: "Org Unit Level 2" },
   { key: "org_unit_level_3", label: "Org Unit Level 3" },
   { key: "app_type", label: "App Type" },
-  { key: "architecture_type", label: "Architecture Type" },
   { key: "biz_capabilities", label: "Biz Capabilities" },
   {
     key: "business_reason_for_maintain_applications",
@@ -265,7 +256,6 @@ const tableColumns: Array<{ key: TableColumnKey; label: string }> = [
   { key: "biz_owner", label: "Biz Owner" },
   { key: "company", label: "Company" },
   { key: "install_status", label: "Install Status" },
-  { key: "install_type", label: "Install Type" },
   { key: "lifecycle_status", label: "Lifecycle Status" },
   { key: "operating_system", label: "Operating System" },
   { key: "sox_audited", label: "SOX Audited" },
@@ -885,16 +875,7 @@ function ApplicationsDashboard({
   const [charts, setCharts] = useState<LoadState<DashboardApplicationsCharts>>(
     createLoadState(emptyCharts)
   );
-  const [topActiveUsersN, setTopActiveUsersN] = useState<TopNSelection>(10);
-  const [topActiveUsers, setTopActiveUsers] = useState<
-    LoadState<DashboardApplicationsTopActiveUsers>
-  >(createLoadState(emptyTopActiveUsers));
   const [activeSubTab, setActiveSubTab] = useState<ApplicationsSubTab>("overview");
-  const [selectedLifecyclePlan, setSelectedLifecyclePlan] =
-    useState<DashboardApplicationsLifecyclePlan>("Invest");
-  const [lifecyclePlanning, setLifecyclePlanning] = useState<
-    LoadState<DashboardApplicationsLifecyclePlanning>
-  >(createLoadState(emptyLifecyclePlanning));
   const [assignmentMappingSource, setAssignmentMappingSource] =
     useState<ApplicationsAssignmentGroupMappingSource>("application_inventory");
   const [assignmentMappingScope, setAssignmentMappingScope] =
@@ -1042,50 +1023,22 @@ function ApplicationsDashboard({
     setSummary(createLoadState(emptySummary, "loading"));
     setApplicationList(createLoadState(emptyList, "loading"));
     setCharts(createLoadState(emptyCharts, "loading"));
-    setTopActiveUsers(createLoadState(emptyTopActiveUsers, "loading"));
     try {
-      const [nextSummary, nextList, nextCharts, nextTopActiveUsers] = await Promise.all([
+      const [nextSummary, nextList, nextCharts] = await Promise.all([
         getDashboardApplicationsSummary(requestBody),
         getDashboardApplicationsList(requestBody),
         getDashboardApplicationsCharts(requestBody),
-        getDashboardApplicationsTopActiveUsers(requestBody, topActiveUsersN),
       ]);
       setSummary({ status: "success", data: nextSummary, error: null });
       setApplicationList({ status: "success", data: nextList, error: null });
       setCharts({ status: "success", data: nextCharts, error: null });
-      setTopActiveUsers({ status: "success", data: nextTopActiveUsers, error: null });
     } catch (error) {
       const message = errorMessage(error, "Unable to load Application dashboard data");
       setSummary({ status: "error", data: emptySummary, error: message });
       setApplicationList({ status: "error", data: emptyList, error: message });
       setCharts({ status: "error", data: emptyCharts, error: message });
-      setTopActiveUsers({ status: "error", data: emptyTopActiveUsers, error: message });
     }
-  }, [requestBody, topActiveUsersN]);
-
-  const loadLifecyclePlanningData = useCallback(async () => {
-    if (!requestBody) {
-      return;
-    }
-    setLifecyclePlanning(createLoadState(emptyLifecyclePlanning, "loading"));
-    try {
-      const nextLifecyclePlanning = await getDashboardApplicationsLifecyclePlanning(
-        requestBody,
-        selectedLifecyclePlan
-      );
-      setLifecyclePlanning({
-        status: "success",
-        data: nextLifecyclePlanning,
-        error: null,
-      });
-    } catch (error) {
-      setLifecyclePlanning({
-        status: "error",
-        data: emptyLifecyclePlanning,
-        error: errorMessage(error, "Unable to load lifecycle planning data"),
-      });
-    }
-  }, [requestBody, selectedLifecyclePlan]);
+  }, [requestBody]);
 
   const loadAssignmentGroupMapping = useCallback(async () => {
     const cleanedProjectId = projectId.trim();
@@ -1142,11 +1095,7 @@ function ApplicationsDashboard({
       setSummary(createLoadState(emptySummary));
       setApplicationList(createLoadState(emptyList));
       setCharts(createLoadState(emptyCharts));
-      setTopActiveUsersN(10);
-      setTopActiveUsers(createLoadState(emptyTopActiveUsers));
       setActiveSubTab("overview");
-      setSelectedLifecyclePlan("Invest");
-      setLifecyclePlanning(createLoadState(emptyLifecyclePlanning));
       setAssignmentMappingSource("application_inventory");
       setAssignmentMappingScope("in_scope");
       setAssignmentMappingTrack("all");
@@ -1197,20 +1146,6 @@ function ApplicationsDashboard({
       void loadApplicationsData();
     }
   }, [hasActiveProjectContext, isActive, loadApplicationsData, requestBody, requestSignature]);
-
-  useEffect(() => {
-    if (isActive && activeSubTab === "lifecycle_planning" && hasActiveProjectContext && requestBody) {
-      void loadLifecyclePlanningData();
-    }
-  }, [
-    activeSubTab,
-    hasActiveProjectContext,
-    isActive,
-    loadLifecyclePlanningData,
-    requestBody,
-    requestSignature,
-    selectedLifecyclePlan,
-  ]);
 
   useEffect(() => {
     if (isActive && activeSubTab === "assignment_group_mapping" && hasActiveProjectContext) {
@@ -1347,12 +1282,6 @@ function ApplicationsDashboard({
       functional_track_ams_owner={commentaryFunctional}
     />
   );
-  const lifecyclePlanCommentary = applicationCommentary(
-    "lifecycle_planning_selected_plan",
-    lifecyclePlanCommentaryKey(selectedLifecyclePlan),
-    "lifecycle_planning"
-  );
-
   return (
     <section className="applications-dashboard-layout" aria-labelledby="applications-tab-heading">
       <aside className="applications-filter-pane panel" aria-label="Applications filters">
@@ -1429,12 +1358,6 @@ function ApplicationsDashboard({
             onChange={(values) => updateFilter("supported_by_vendor", values)}
           />
           <ExcelMultiSelectFilter
-            label="Architecture Type"
-            options={filterOptions.architecture_type}
-            selectedValues={filters.architecture_type}
-            onChange={(values) => updateFilter("architecture_type", values)}
-          />
-          <ExcelMultiSelectFilter
             label="Application Type"
             options={filterOptions.application_type}
             selectedValues={filters.application_type}
@@ -1451,12 +1374,6 @@ function ApplicationsDashboard({
             options={filterOptions.install_status}
             selectedValues={filters.install_status}
             onChange={(values) => updateFilter("install_status", values)}
-          />
-          <ExcelMultiSelectFilter
-            label="Install Type"
-            options={filterOptions.install_type}
-            selectedValues={filters.install_type}
-            onChange={(values) => updateFilter("install_type", values)}
           />
           <ExcelMultiSelectFilter
             label="Hosting Env"
@@ -1483,15 +1400,6 @@ function ApplicationsDashboard({
             onClick={() => setActiveSubTab("overview")}
           >
             Overview
-          </button>
-          <button
-            aria-selected={activeSubTab === "lifecycle_planning"}
-            className={activeSubTab === "lifecycle_planning" ? "active" : ""}
-            role="tab"
-            type="button"
-            onClick={() => setActiveSubTab("lifecycle_planning")}
-          >
-            Lifecycle Planning
           </button>
           <button
             aria-selected={activeSubTab === "assignment_group_mapping"}
@@ -1611,12 +1519,6 @@ function ApplicationsDashboard({
             status={charts.status}
             title="Applications by Service Type"
           />
-          <PieApplicationChart
-            title="Strategic"
-            data={charts.data.strategic}
-            status={charts.status}
-            commentary={applicationCommentary("applications_charts", "strategic")}
-          />
           <BarApplicationChart
             title="Lifecycle Stage"
             data={charts.data.lifecycle_stage}
@@ -1629,28 +1531,10 @@ function ApplicationsDashboard({
             commentary={applicationCommentary("applications_charts", "lifecycle_stage")}
           />
           <BarApplicationChart
-            title="Architecture Type"
-            data={charts.data.architecture_type}
-            status={charts.status}
-            commentary={applicationCommentary("applications_charts", "architecture_type")}
-          />
-          <BarApplicationChart
-            title="Install Type"
-            data={charts.data.install_type}
-            status={charts.status}
-            commentary={applicationCommentary("applications_charts", "install_type")}
-          />
-          <BarApplicationChart
             title="Hosting Env"
             data={charts.data.hosting_env}
             status={charts.status}
             commentary={applicationCommentary("applications_charts", "hosting_env")}
-          />
-          <PieApplicationChart
-            title="Global vs Local Applications"
-            data={charts.data.global_local_applications}
-            status={charts.status}
-            commentary={applicationCommentary("applications_charts", "applications_global_local")}
           />
         </section>
         {charts.status === "error" ? <p className="error-text">{charts.error}</p> : null}
@@ -1665,25 +1549,7 @@ function ApplicationsDashboard({
           )}
         />
 
-        <TopActiveUsersChart
-          data={topActiveUsers.data}
-          error={topActiveUsers.error}
-          onTopNChange={setTopActiveUsersN}
-          status={topActiveUsers.status}
-          topN={topActiveUsersN}
-          commentary={applicationCommentary("applications_charts", "top_active_users")}
-        />
           </>
-        ) : null}
-        {activeSubTab === "lifecycle_planning" ? (
-          <LifecyclePlanningPanel
-            commentary={lifecyclePlanCommentary}
-            data={lifecyclePlanning.data}
-            error={lifecyclePlanning.error}
-            onPlanChange={setSelectedLifecyclePlan}
-            selectedPlan={selectedLifecyclePlan}
-            status={lifecyclePlanning.status}
-          />
         ) : null}
         {activeSubTab === "assignment_group_mapping" ? (
           <AssignmentGroupMappingPanel
@@ -2589,9 +2455,7 @@ const lifecycleDetailColumns: Array<{
   { key: "ams_owner", label: "AMS Owner" },
   { key: "application_owner", label: "Application Owner" },
   { key: "supported_by_vendor", label: "Supported By Vendor" },
-  { key: "install_type", label: "Install Type" },
   { key: "business_criticality", label: "Business Criticality" },
-  { key: "architecture_type", label: "Architecture Type" },
   { key: "application_type", label: "Application Type" },
   { key: "hosting_env", label: "Hosting Env" },
   { key: "global_application", label: "Global" },
@@ -2691,7 +2555,7 @@ function ApplicationsCriticalityHostingPivotTable({
         <div>
           <h3>{title}</h3>
           <p className="muted-text">
-            Count of unique Business Service CI Names with Lifecycle Stage/Status = In use.
+            Count of unique Business Service CI Names with Install Status = Installed.
           </p>
         </div>
       </div>
@@ -2913,10 +2777,11 @@ function PieApplicationChart({
                   data={chartData}
                   dataKey="count"
                   label={(props) => renderApplicationPieLabel(props, total)}
-                  labelLine
+                  labelLine={false}
                   nameKey="label"
                   outerRadius={104}
                 >
+                  <LabelList content={(props) => renderApplicationPiePercentage(props, total)} dataKey="count" />
                   {chartData.map((entry, index) => (
                     <Cell
                       fill={chartColors[index % chartColors.length]}
@@ -2996,11 +2861,15 @@ function ApplicationServiceSplitChart({
                   <Pie
                     data={chartData}
                     dataKey="application_count"
-                    label={(props) => renderApplicationPieLabel(props, total)}
-                    labelLine
+                    label={(props) => renderApplicationPieLabel(props, total, 0)}
+                    labelLine={false}
                     nameKey="label"
                     outerRadius={104}
                   >
+                    <LabelList
+                      content={(props) => renderApplicationPiePercentage(props, total, 0)}
+                      dataKey="application_count"
+                    />
                     {chartData.map((entry, index) => (
                       <Cell
                         fill={chartColors[index % chartColors.length]}
@@ -3044,19 +2913,67 @@ function ApplicationServiceSplitChart({
 }
 
 function renderApplicationPieLabel(
-  props: { x?: number | string; y?: number | string; value?: number | string },
+  props: {
+    cx?: number | string;
+    cy?: number | string;
+    midAngle?: number | string;
+    name?: string;
+    outerRadius?: number | string;
+    value?: number | string;
+  },
   total: number,
+  minimumPercentage = 10,
 ) {
-  const x = Number(props.x);
-  const y = Number(props.y);
   const value = Number(props.value);
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(value) || value <= 0) {
-    return null;
+  const percentage = total > 0 ? (value / total) * 100 : 0;
+  if (!Number.isFinite(value) || percentage < minimumPercentage) {
+    return <g />;
   }
-  const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
+  const radius = Number(props.outerRadius ?? 0) + 14;
+  const angle = -Number(props.midAngle ?? 0) * (Math.PI / 180);
+  const cx = Number(props.cx ?? 0);
+  const x = cx + radius * Math.cos(angle);
+  const y = Number(props.cy ?? 0) + radius * Math.sin(angle);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return <g />;
+  }
   return (
-    <text fill="#0f172a" fontSize={11} fontWeight={800} textAnchor="middle" x={x} y={y}>
-      {`${formatNumber(value)} (${percentage}%)`}
+    <text
+      className="pie-slice-label pie-slice-label-outside"
+      dominantBaseline="central"
+      textAnchor={x > cx ? "start" : "end"}
+      x={x}
+      y={y}
+    >
+      {props.name}
+    </text>
+  );
+}
+
+function renderApplicationPiePercentage(
+  props: { x?: number | string; y?: number | string; value?: unknown },
+  total: number,
+  minimumPercentage = 10,
+) {
+  const value = Number(props.value);
+  const percentage = total > 0 ? (value / total) * 100 : 0;
+  if (!Number.isFinite(value) || percentage < minimumPercentage) {
+    return <g />;
+  }
+  const x = Number(props.x ?? 0);
+  const y = Number(props.y ?? 0);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return <g />;
+  }
+  return (
+    <text
+      className="pie-slice-label pie-slice-label-inside"
+      dominantBaseline="central"
+      textAnchor="middle"
+      x={x}
+      y={y}
+    >
+      {formatPercentage(percentage)}
     </text>
   );
 }

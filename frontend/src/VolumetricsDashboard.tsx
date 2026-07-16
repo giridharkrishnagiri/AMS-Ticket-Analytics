@@ -36,11 +36,11 @@ import {
   getDashboardVolumetricsKpiProblemManagementTrend,
   getDashboardVolumetricsKpiReassignmentHopsTrend,
   getDashboardVolumetricsAssignmentGroupVolumetrics,
+  getDashboardVolumetricsBusinessServiceCiVolumetrics,
   getDashboardVolumetricsPriorityDistribution,
   getDashboardVolumetricsScTaskCatalogItemProportion,
   getDashboardVolumetricsSlaTrends,
   getDashboardVolumetricsSummary,
-  getDashboardVolumetricsTicketsPerUser,
   getDashboardVolumetricsTopApplications,
   getDashboardVolumetricsTopIncidentBatchApplications,
 } from "./api/dashboard";
@@ -73,6 +73,8 @@ import type {
   DashboardVolumetricsAssignmentGroupMonthMetrics,
   DashboardVolumetricsAssignmentGroupTable,
   DashboardVolumetricsAssignmentGroupVolumetrics,
+  DashboardVolumetricsBusinessServiceCiTable,
+  DashboardVolumetricsBusinessServiceCiVolumetrics,
   DashboardVolumetricsProblemManagementPoint,
   DashboardVolumetricsProblemManagementTrend,
   DashboardVolumetricsPriorityDistribution,
@@ -128,8 +130,8 @@ type VolumetricsSubTab =
   | "detailed_volume"
   | "kpi"
   | "performance"
-  | "category"
-  | "assignment_group_volumetrics";
+  | "assignment_group_volumetrics"
+  | "business_service_ci_volumetrics";
 type PriorityDistributionView = "graph" | "table";
 type TopNSelection = 10 | 20;
 type PerformanceLookbackMonths = 1 | 2 | 3;
@@ -140,14 +142,16 @@ const subTabCommentaryKeys: Record<VolumetricsSubTab, string> = {
   detailed_volume: "detailed_volume_trends",
   kpi: "kpi_trends",
   performance: "performance_trends",
-  category: "category_wise_trends",
   assignment_group_volumetrics: "assignment_group_volumetrics",
+  business_service_ci_volumetrics: "business_service_ci_volumetrics",
 };
 
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const defaultStartMonth = "2025-01";
-const defaultEndMonth = "2026-06";
+const defaultEndMonth = "2026-05";
+const reportingDataStartDate = "2025-01-01";
+const reportingDataEndDate = "2026-05-31";
 const maxWeeklyRangeWeeks = 15;
 
 const emptyFilters: DashboardVolumetricsFilters = {
@@ -180,8 +184,22 @@ const emptyFilterValues: DashboardVolumetricsFilterValues = {
 
 const emptySummary: DashboardVolumetricsSummary = {
   period_count: 0,
-  created: { total: 0, average_per_period: null },
-  resolved_closed: { total: 0, average_per_period: null },
+  created: {
+    total: 0,
+    average_per_period: null,
+    incident_count: 0,
+    incident_average_per_period: null,
+    sc_task_count: 0,
+    sc_task_average_per_period: null,
+  },
+  resolved_closed: {
+    total: 0,
+    average_per_period: null,
+    incident_count: 0,
+    incident_average_per_period: null,
+    sc_task_count: 0,
+    sc_task_average_per_period: null,
+  },
   cancelled: {
     total: 0,
     average_per_period: null,
@@ -283,16 +301,6 @@ const emptyDetailedSplits: DashboardVolumetricsDetailedArchitectureInstallSplits
   install_type: { incidents: [], sc_tasks: [] },
 };
 
-const emptyTicketsPerUser: DashboardVolumetricsTicketsPerUser = {
-  ranking_window: {
-    start_month: "",
-    end_month: "",
-    description: "Latest complete 6 months",
-  },
-  top_n: 10,
-  points: [],
-};
-
 const emptyDistributionGroup = { all: [], incidents: [], sc_tasks: [] };
 
 const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
@@ -304,6 +312,8 @@ const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
   ticket_volume_by_service_entitlement: emptyDistributionGroup,
   ticket_volume_by_service_type: emptyDistributionGroup,
   sap_non_sap: emptyDistributionGroup,
+  assignment_group_sap_non_sap: emptyDistributionGroup,
+  service_type_by_assignment_group_sap_non_sap: emptyDistributionGroup,
   architecture_type: emptyDistributionGroup,
   install_type: emptyDistributionGroup,
   hosting_env: emptyDistributionGroup,
@@ -431,6 +441,26 @@ const emptyAssignmentGroupVolumetrics: DashboardVolumetricsAssignmentGroupVolume
   warnings: [],
 };
 
+const emptyBusinessServiceCiTable: DashboardVolumetricsBusinessServiceCiTable = {
+  title: "",
+  rows: [],
+  grand_totals: emptyAssignmentGroupMetrics,
+};
+
+const emptyBusinessServiceCiVolumetrics: DashboardVolumetricsBusinessServiceCiVolumetrics = {
+  scope: "in_scope",
+  functional_track: "all",
+  months: [],
+  tables: {
+    incidents: { ...emptyBusinessServiceCiTable, title: "Incidents" },
+    sc_tasks: { ...emptyBusinessServiceCiTable, title: "SC Tasks" },
+    overall: { ...emptyBusinessServiceCiTable, title: "Overall" },
+  },
+  available_functional_tracks: [],
+  data_notes: [],
+  warnings: [],
+};
+
 const chartColors = {
   created: "#0f766e",
   resolved: "#2563eb",
@@ -523,7 +553,11 @@ function formatRoundedNumber(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "N/A";
   }
-  return Math.ceil(value).toLocaleString();
+  return Math.round(value).toLocaleString();
+}
+
+function formatAverageCount(value: number | null | undefined): string {
+  return formatRoundedNumber(value);
 }
 
 function formatPercent(value: number | null | undefined): string {
@@ -562,8 +596,8 @@ function formatDataAvailabilityRange(dataRange: DashboardVolumetricsDataRange): 
     return "Data availability: Not available";
   }
   return `Data available from ${formatApiDateLong(
-    dataRange.completion_date_min
-  )} to ${formatApiDateLong(dataRange.completion_date_max)}`;
+    reportingDataStartDate
+  )} to ${formatApiDateLong(reportingDataEndDate)}`;
 }
 
 function trendChartWidth(
@@ -1119,6 +1153,8 @@ function VolumetricsDashboard({
   const [timeGrain, setTimeGrain] = useState<VolumetricsTimeGrain>("monthly");
   const [agreementMode, setAgreementMode] = useState<VolumetricsAgreementMode>("sla");
   const [assignmentGroupVolumetricsTrack, setAssignmentGroupVolumetricsTrack] = useState("all");
+  const [businessServiceCiVolumetricsTrack, setBusinessServiceCiVolumetricsTrack] =
+    useState("all");
   const [startMonth, setStartMonth] = useState(defaultStartMonth);
   const [endMonth, setEndMonth] = useState(defaultEndMonth);
   const [startWeek, setStartWeek] = useState(() => defaultWeeklyRange().start);
@@ -1130,7 +1166,6 @@ function VolumetricsDashboard({
   const [priorityView, setPriorityView] = useState<PriorityDistributionView>("graph");
   const [topApplicationsN, setTopApplicationsN] = useState<TopNSelection>(10);
   const [topBatchApplicationsN, setTopBatchApplicationsN] = useState<TopNSelection>(10);
-  const [ticketsPerUserN, setTicketsPerUserN] = useState<TopNSelection>(10);
   const [performanceLookbackMonths, setPerformanceLookbackMonths] =
     useState<PerformanceLookbackMonths>(3);
   const [filters, setFilters] = useState<DashboardVolumetricsFilters>(emptyFilters);
@@ -1175,9 +1210,6 @@ function VolumetricsDashboard({
   const [detailedSplits, setDetailedSplits] = useState<
     LoadState<DashboardVolumetricsDetailedArchitectureInstallSplits>
   >(createLoadState(emptyDetailedSplits));
-  const [ticketsPerUser, setTicketsPerUser] = useState<
-    LoadState<DashboardVolumetricsTicketsPerUser>
-  >(createLoadState(emptyTicketsPerUser));
   const [distributionSplits, setDistributionSplits] = useState<
     LoadState<DashboardVolumetricsDistributionSplits>
   >(createLoadState(emptyDistributionSplits));
@@ -1205,6 +1237,9 @@ function VolumetricsDashboard({
   const [assignmentGroupVolumetrics, setAssignmentGroupVolumetrics] = useState<
     LoadState<DashboardVolumetricsAssignmentGroupVolumetrics>
   >(createLoadState(emptyAssignmentGroupVolumetrics));
+  const [businessServiceCiVolumetrics, setBusinessServiceCiVolumetrics] = useState<
+    LoadState<DashboardVolumetricsBusinessServiceCiVolumetrics>
+  >(createLoadState(emptyBusinessServiceCiVolumetrics));
   const [loadedProjectId, setLoadedProjectId] = useState("");
   const [rangeInitializedProjectId, setRangeInitializedProjectId] = useState("");
   const filterCountsRequestRef = useRef(0);
@@ -1232,8 +1267,18 @@ function VolumetricsDashboard({
       selectedLabel: `${formatDateShort(startDate)} to ${formatDateShort(endDate)}`,
     };
   }, [endMonth, endWeek, startMonth, startWeek, timeGrain]);
-  const availableStartDate = parseApiDateValue(dataRange.data.completion_date_min);
-  const availableEndDate = parseApiDateValue(dataRange.data.completion_date_max);
+  const reportingStartDate = parseApiDateValue(reportingDataStartDate);
+  const reportingEndDate = parseApiDateValue(reportingDataEndDate);
+  const rawAvailableStartDate = parseApiDateValue(dataRange.data.completion_date_min);
+  const rawAvailableEndDate = parseApiDateValue(dataRange.data.completion_date_max);
+  const availableStartDate =
+    rawAvailableStartDate && reportingStartDate
+      ? new Date(Math.max(rawAvailableStartDate.getTime(), reportingStartDate.getTime()))
+      : reportingStartDate ?? rawAvailableStartDate;
+  const availableEndDate =
+    rawAvailableEndDate && reportingEndDate
+      ? new Date(Math.min(rawAvailableEndDate.getTime(), reportingEndDate.getTime()))
+      : reportingEndDate ?? rawAvailableEndDate;
   const availableStartMonth = availableStartDate ? monthInputValue(availableStartDate) : undefined;
   const availableEndMonth = availableEndDate ? monthInputValue(availableEndDate) : undefined;
   const availableStartWeek = availableStartDate
@@ -1415,7 +1460,6 @@ function VolumetricsDashboard({
     setIncidentBatchTrend(createLoadState(emptyIncidentBatchTrend, "loading"));
     setTopIncidentBatchApplications(createLoadState(emptyTopIncidentBatchApplications, "loading"));
     setDetailedSplits(createLoadState(emptyDetailedSplits, "loading"));
-    setTicketsPerUser(createLoadState(emptyTicketsPerUser, "loading"));
     setDistributionSplits(createLoadState(emptyDistributionSplits, "loading"));
     setScTaskCatalogItemProportion(
       createLoadState(emptyScTaskCatalogItemProportion, "loading")
@@ -1578,18 +1622,6 @@ function VolumetricsDashboard({
         });
       });
 
-    void getDashboardVolumetricsTicketsPerUser(requestBody, ticketsPerUserN)
-      .then((nextTicketsPerUser) => {
-        setTicketsPerUser({ status: "success", data: nextTicketsPerUser, error: null });
-      })
-      .catch((error) => {
-        setTicketsPerUser({
-          status: "error",
-          data: emptyTicketsPerUser,
-          error: errorMessage(error, "Unable to load tickets per user"),
-        });
-      });
-
     void getDashboardVolumetricsDistributionSplits(requestBody)
       .then((nextDistributionSplits) => {
         setDistributionSplits({ status: "success", data: nextDistributionSplits, error: null });
@@ -1715,7 +1747,6 @@ function VolumetricsDashboard({
     hourlyDayType,
     performanceLookbackMonths,
     requestBody,
-    ticketsPerUserN,
     topApplicationsN,
     topBatchApplicationsN,
   ]);
@@ -1758,6 +1789,44 @@ function VolumetricsDashboard({
     }
   }, [assignmentGroupVolumetricsTrack, projectId, scope]);
 
+  const loadBusinessServiceCiVolumetrics = useCallback(async () => {
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedProjectId) {
+      return;
+    }
+    setBusinessServiceCiVolumetrics((current) => ({
+      status: "loading",
+      data: current.data,
+      error: null,
+    }));
+    try {
+      const nextVolumetrics = await getDashboardVolumetricsBusinessServiceCiVolumetrics({
+        project_id: cleanedProjectId,
+        scope,
+        functional_track: businessServiceCiVolumetricsTrack,
+        from_month: "2025-12",
+        to_month: "2026-05",
+      });
+      setBusinessServiceCiVolumetrics({
+        status: "success",
+        data: nextVolumetrics,
+        error: nextVolumetrics.warnings[0] ?? null,
+      });
+      if (
+        businessServiceCiVolumetricsTrack !== "all" &&
+        !nextVolumetrics.available_functional_tracks.includes(businessServiceCiVolumetricsTrack)
+      ) {
+        setBusinessServiceCiVolumetricsTrack("all");
+      }
+    } catch (error) {
+      setBusinessServiceCiVolumetrics({
+        status: "error",
+        data: emptyBusinessServiceCiVolumetrics,
+        error: errorMessage(error, "Unable to load Business Service CI Volumetrics"),
+      });
+    }
+  }, [businessServiceCiVolumetricsTrack, projectId, scope]);
+
   useEffect(() => {
     if (projectId !== loadedProjectId) {
       filterCountsRequestRef.current = 0;
@@ -1765,13 +1834,13 @@ function VolumetricsDashboard({
       setScope("in_scope");
       setTicketType("all");
       setAssignmentGroupVolumetricsTrack("all");
+      setBusinessServiceCiVolumetricsTrack("all");
       setFilters(emptyFilters);
       setActiveSubTab("overall_volume");
       setHourlyDayType("weekdays");
       setPriorityView("graph");
       setTopApplicationsN(10);
       setTopBatchApplicationsN(10);
-      setTicketsPerUserN(10);
       setPerformanceLookbackMonths(3);
       setFilterValues(createLoadState(emptyFilterValues));
       setFilterCatalog(null);
@@ -1788,7 +1857,6 @@ function VolumetricsDashboard({
       setIncidentBatchTrend(createLoadState(emptyIncidentBatchTrend));
       setTopIncidentBatchApplications(createLoadState(emptyTopIncidentBatchApplications));
       setDetailedSplits(createLoadState(emptyDetailedSplits));
-      setTicketsPerUser(createLoadState(emptyTicketsPerUser));
       setDistributionSplits(createLoadState(emptyDistributionSplits));
       setScTaskCatalogItemProportion(createLoadState(emptyScTaskCatalogItemProportion));
       setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
@@ -1798,6 +1866,7 @@ function VolumetricsDashboard({
       setReassignmentHopsTrend(createLoadState(emptyReassignmentHopsTrend));
       setProblemManagementTrend(createLoadState(emptyProblemManagementTrend));
       setAssignmentGroupVolumetrics(createLoadState(emptyAssignmentGroupVolumetrics));
+      setBusinessServiceCiVolumetrics(createLoadState(emptyBusinessServiceCiVolumetrics));
       setRangeInitializedProjectId("");
     }
   }, [loadedProjectId, projectId]);
@@ -1817,8 +1886,18 @@ function VolumetricsDashboard({
       return;
     }
 
-    const availableStart = parseApiDateValue(dataRange.data.completion_date_min);
-    const availableEnd = parseApiDateValue(dataRange.data.completion_date_max);
+    const rawAvailableStart = parseApiDateValue(dataRange.data.completion_date_min);
+    const rawAvailableEnd = parseApiDateValue(dataRange.data.completion_date_max);
+    const reportingStart = parseApiDateValue(reportingDataStartDate);
+    const reportingEnd = parseApiDateValue(reportingDataEndDate);
+    const availableStart =
+      rawAvailableStart && reportingStart
+        ? new Date(Math.max(rawAvailableStart.getTime(), reportingStart.getTime()))
+        : reportingStart ?? rawAvailableStart;
+    const availableEnd =
+      rawAvailableEnd && reportingEnd
+        ? new Date(Math.min(rawAvailableEnd.getTime(), reportingEnd.getTime()))
+        : reportingEnd ?? rawAvailableEnd;
     if (!availableStart || !availableEnd) {
       setRangeInitializedProjectId(projectId);
       return;
@@ -1871,6 +1950,21 @@ function VolumetricsDashboard({
     hasActiveProjectContext,
     isActive,
     loadAssignmentGroupVolumetrics,
+  ]);
+
+  useEffect(() => {
+    if (
+      isActive &&
+      activeSubTab === "business_service_ci_volumetrics" &&
+      hasActiveProjectContext
+    ) {
+      void loadBusinessServiceCiVolumetrics();
+    }
+  }, [
+    activeSubTab,
+    hasActiveProjectContext,
+    isActive,
+    loadBusinessServiceCiVolumetrics,
   ]);
 
   useEffect(() => {
@@ -1934,6 +2028,7 @@ function VolumetricsDashboard({
     setScope("in_scope");
     setTicketType("all");
     setAssignmentGroupVolumetricsTrack("all");
+    setBusinessServiceCiVolumetricsTrack("all");
     setFilters(emptyFilters);
   }
 
@@ -1957,8 +2052,11 @@ function VolumetricsDashboard({
   const canceledMetricLabel = cancellationMetricLabel(ticketType);
   const agreementModeLabel = agreementMode === "ola" ? "OLA" : "SLA";
   const commentaryFunctional = commentaryFunctionalContext(filters.functional_track_ams_owner);
-  const isAssignmentGroupVolumetricsSubTab =
-    activeSubTab === "assignment_group_volumetrics";
+  const isAssignmentGroupVolumetricsSubTab = activeSubTab === "assignment_group_volumetrics";
+  const isBusinessServiceCiVolumetricsSubTab =
+    activeSubTab === "business_service_ci_volumetrics";
+  const isVolumetricsValidationSubTab =
+    isAssignmentGroupVolumetricsSubTab || isBusinessServiceCiVolumetricsSubTab;
   const volumetricsCommentary = (
     subTab: VolumetricsSubTab,
     sectionKey: string,
@@ -2007,10 +2105,10 @@ function VolumetricsDashboard({
             selectionMode="single"
             onChange={(values) => setScope((values[0] as VolumetricsScope) ?? "in_scope")}
           />
-          {isAssignmentGroupVolumetricsSubTab ? (
+          {isVolumetricsValidationSubTab ? (
             <p className="muted-text">
-              Assignment Group Volumetrics uses only Scope here. Choose Functional Track inside
-              the validation table section.
+              This volumetrics validation view uses only Scope here. Choose Functional Track inside
+              the table section.
             </p>
           ) : (
             <>
@@ -2175,28 +2273,21 @@ function VolumetricsDashboard({
                 <MetricCard
                   label="Created"
                   primary={`Total: ${formatNumber(summary.data.created.total)}`}
-                  secondary={`${averageLabel}: ${formatNumber(
-                    summary.data.created.average_per_period,
-                    1
-                  )}`}
+                  secondary={`${averageLabel}: ${formatAverageCount(summary.data.created.average_per_period)}`}
                   index={0}
                 />
-                <MetricCard
-                  label="Resolved / Closed"
-                  primary={`Total: ${formatNumber(summary.data.resolved_closed.total)}`}
-                  secondary={`${averageLabel}: ${formatNumber(
-                    summary.data.resolved_closed.average_per_period,
-                    1
-                  )}`}
+                <CreatedSplitMetricCard
+                  averageLabel={averageLabel}
+                  incidentAverage={summary.data.created.incident_average_per_period}
+                  incidentCount={summary.data.created.incident_count}
                   index={1}
+                  scTaskAverage={summary.data.created.sc_task_average_per_period}
+                  scTaskCount={summary.data.created.sc_task_count}
                 />
                 <MetricCard
                   label={canceledMetricLabel}
                   primary={`Total: ${formatNumber(summary.data.cancelled.total)}`}
-                  secondary={`${averageLabel}: ${formatNumber(
-                    summary.data.cancelled.average_per_period,
-                    1
-                  )}`}
+                  secondary={`${averageLabel}: ${formatAverageCount(summary.data.cancelled.average_per_period)}`}
                   tertiary={`% of Resolved+${canceledMetricLabel}: ${formatPercent(
                     summary.data.cancelled.cancelled_pct_of_resolved_cancelled
                   )}`}
@@ -2329,15 +2420,10 @@ function VolumetricsDashboard({
             incidentBatchTrendStatus={incidentBatchTrend.status}
             onTopApplicationsNChange={setTopApplicationsN}
             onTopBatchApplicationsNChange={setTopBatchApplicationsN}
-            onTicketsPerUserNChange={setTicketsPerUserN}
             ticketType={ticketType}
             scTaskCatalogItemProportion={scTaskCatalogItemProportion.data}
             scTaskCatalogItemProportionError={scTaskCatalogItemProportion.error}
             scTaskCatalogItemProportionStatus={scTaskCatalogItemProportion.status}
-            ticketsPerUser={ticketsPerUser.data}
-            ticketsPerUserError={ticketsPerUser.error}
-            ticketsPerUserN={ticketsPerUserN}
-            ticketsPerUserStatus={ticketsPerUser.status}
             topApplications={topApplications.data}
             topApplicationsError={topApplications.error}
             topApplicationsN={topApplicationsN}
@@ -2385,12 +2471,6 @@ function VolumetricsDashboard({
             status={performanceTrends.status}
           />
         ) : null}
-        {activeSubTab === "category" ? (
-          <VolumetricsPlaceholder
-            title="Category-wise Trends"
-            commentary={volumetricsCommentary("category", "category_wise_trends")}
-          />
-        ) : null}
         {activeSubTab === "assignment_group_volumetrics" ? (
           <AssignmentGroupVolumetricsPanel
             commentary={volumetricsCommentary(
@@ -2403,6 +2483,20 @@ function VolumetricsDashboard({
             onTrackChange={setAssignmentGroupVolumetricsTrack}
             selectedTrack={assignmentGroupVolumetricsTrack}
             status={assignmentGroupVolumetrics.status}
+          />
+        ) : null}
+        {activeSubTab === "business_service_ci_volumetrics" ? (
+          <BusinessServiceCiVolumetricsPanel
+            commentary={volumetricsCommentary(
+              "business_service_ci_volumetrics",
+              "volumetrics_business_service_ci_volumetrics",
+              "business_service_ci_volumetrics"
+            )}
+            data={businessServiceCiVolumetrics.data}
+            error={businessServiceCiVolumetrics.error}
+            onTrackChange={setBusinessServiceCiVolumetricsTrack}
+            selectedTrack={businessServiceCiVolumetricsTrack}
+            status={businessServiceCiVolumetrics.status}
           />
         ) : null}
       </div>
@@ -2451,14 +2545,50 @@ function MetricCard({
   );
 }
 
+function CreatedSplitMetricCard({
+  averageLabel,
+  incidentAverage,
+  incidentCount,
+  index,
+  scTaskAverage,
+  scTaskCount,
+}: {
+  averageLabel: string;
+  incidentAverage: number | null;
+  incidentCount: number;
+  index: number;
+  scTaskAverage: number | null;
+  scTaskCount: number;
+}) {
+  return (
+    <div className={summaryTileToneClass(index, 5)}>
+      <p className="label">Created Ticket Split</p>
+      <div className="created-ticket-split">
+        <div>
+          <strong>Incidents: {formatNumber(incidentCount)}</strong>
+          <span>
+            {averageLabel}: {formatAverageCount(incidentAverage)}
+          </span>
+        </div>
+        <div>
+          <strong>SC Tasks: {formatNumber(scTaskCount)}</strong>
+          <span>
+            {averageLabel}: {formatAverageCount(scTaskAverage)}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const volumetricsSubTabs: Array<{ value: VolumetricsSubTab; label: string }> = [
   { value: "overall_volume", label: "Overall Volume Trends" },
   { value: "overall_sla", label: "Overall SLA Trends" },
   { value: "detailed_volume", label: "Detailed Volume Trends" },
   { value: "kpi", label: "KPI Trends" },
   { value: "performance", label: "Performance Trends" },
-  { value: "category", label: "Category-wise Trends" },
   { value: "assignment_group_volumetrics", label: "Assignment Group Volumetrics" },
+  { value: "business_service_ci_volumetrics", label: "Business Service CI Volumetrics" },
 ];
 
 function VolumetricsSubTabs({
@@ -2635,6 +2765,107 @@ function AssignmentGroupVolumetricsPanel({
   );
 }
 
+function BusinessServiceCiVolumetricsPanel({
+  commentary,
+  data,
+  error,
+  onTrackChange,
+  selectedTrack,
+  status,
+}: {
+  commentary?: ReactNode;
+  data: DashboardVolumetricsBusinessServiceCiVolumetrics;
+  error: string | null;
+  onTrackChange: (value: string) => void;
+  selectedTrack: string;
+  status: LoadStatus;
+}) {
+  const [search, setSearch] = useState("");
+  const monthRangeLabel =
+    data.months.length > 0
+      ? `${data.months[0].month_label} to ${data.months[data.months.length - 1].month_label}`
+      : "Dec-25 to May-26";
+
+  return (
+    <div className="validation-stack">
+      <section className="panel validation-intro-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Volumetrics &amp; SLA</p>
+            <h2>Business Service CI Volumetrics</h2>
+            <p className="muted-text">
+              Monthly created, resolved, and cancelled generic ticket volumes by Business Service
+              CI, Functional Track, and Assignment Group. This validation view includes Incidents
+              and SC Tasks only.
+            </p>
+          </div>
+          <span className="volumetrics-selected-range">{monthRangeLabel}</span>
+        </div>
+        <div className="validation-table-toolbar">
+          <label className="validation-search">
+            <span>Search Business Service CI</span>
+            <input
+              type="search"
+              value={search}
+              placeholder="Search business service CI, track, or assignment group"
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="track-button-row" aria-label="Functional Track selector">
+          <button
+            className={selectedTrack === "all" ? "active" : ""}
+            type="button"
+            onClick={() => onTrackChange("all")}
+          >
+            All Tracks
+          </button>
+          {data.available_functional_tracks.map((track) => (
+            <button
+              className={selectedTrack === track ? "active" : ""}
+              key={track}
+              type="button"
+              onClick={() => onTrackChange(track)}
+            >
+              {track}
+            </button>
+          ))}
+        </div>
+        {status === "loading" ? (
+          <p className="muted-text chart-state-text">Loading Business Service CI volumetrics...</p>
+        ) : null}
+        {status === "error" ? <p className="error-text">{error}</p> : null}
+        {data.warnings.length > 0 ? <p className="error-text">{data.warnings[0]}</p> : null}
+        {data.data_notes.map((note) => (
+          <p className="muted-text validation-note" key={note}>
+            {note}
+          </p>
+        ))}
+        {commentary}
+      </section>
+
+      <BusinessServiceCiVolumetricsTable
+        months={data.months}
+        search={search}
+        status={status}
+        table={data.tables.incidents}
+      />
+      <BusinessServiceCiVolumetricsTable
+        months={data.months}
+        search={search}
+        status={status}
+        table={data.tables.sc_tasks}
+      />
+      <BusinessServiceCiVolumetricsTable
+        months={data.months}
+        search={search}
+        status={status}
+        table={data.tables.overall}
+      />
+    </div>
+  );
+}
+
 function metricsForMonth(
   row: { months: Record<string, DashboardVolumetricsAssignmentGroupMonthMetrics> },
   month: DashboardVolumetricsAssignmentGroupMonth
@@ -2691,6 +2922,46 @@ function assignmentGroupVolumetricsExportRows(
     [
       "Grand Total",
       "",
+      "",
+      "",
+      ...months.flatMap((month) => {
+        const metrics = summedMetrics(rows, month);
+        return assignmentGroupMetricLabels.map((metric) => metrics[metric.key]);
+      }),
+    ],
+    ...visibleRows,
+  ];
+}
+
+function businessServiceCiVolumetricsHeaders(
+  months: DashboardVolumetricsAssignmentGroupMonth[]
+): string[] {
+  return [
+    "Business Service CI",
+    "Functional Track",
+    "Assignment Group",
+    ...months.flatMap((month) =>
+      assignmentGroupMetricLabels.map((metric) => `${month.month_label} ${metric.label}`)
+    ),
+  ];
+}
+
+function businessServiceCiVolumetricsExportRows(
+  rows: DashboardVolumetricsBusinessServiceCiTable["rows"],
+  months: DashboardVolumetricsAssignmentGroupMonth[]
+): Array<Array<string | number>> {
+  const visibleRows = rows.map((row) => [
+    row.business_service_ci_name,
+    row.functional_track,
+    row.assignment_group,
+    ...months.flatMap((month) => {
+      const metrics = metricsForMonth(row, month);
+      return assignmentGroupMetricLabels.map((metric) => metrics[metric.key]);
+    }),
+  ]);
+  return [
+    [
+      "Grand Total",
       "",
       "",
       ...months.flatMap((month) => {
@@ -2913,6 +3184,212 @@ function AssignmentGroupVolumetricsTable({
   );
 }
 
+function BusinessServiceCiVolumetricsTable({
+  months,
+  search,
+  status,
+  table,
+}: {
+  months: DashboardVolumetricsAssignmentGroupMonth[];
+  search: string;
+  status: LoadStatus;
+  table: DashboardVolumetricsBusinessServiceCiTable;
+}) {
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const searchTerm = search.trim().toLowerCase();
+  const rows = useMemo(
+    () =>
+      searchTerm
+        ? table.rows.filter((row) =>
+            [row.business_service_ci_name, row.functional_track, row.assignment_group].some(
+              (value) => value.toLowerCase().includes(searchTerm)
+            )
+          )
+        : table.rows,
+    [searchTerm, table.rows]
+  );
+  const headers = businessServiceCiVolumetricsHeaders(months);
+  const exportRows = businessServiceCiVolumetricsExportRows(rows, months);
+
+  async function handleCopyTable() {
+    const tsv = [headers, ...exportRows].map((row) => row.join("\t")).join("\n");
+    try {
+      await copyTextToClipboard(tsv);
+      setCopyMessage(`Copied ${rows.length.toLocaleString()} ${table.title} rows.`);
+    } catch (copyError) {
+      setCopyMessage(errorMessage(copyError, "Unable to copy table."));
+    }
+  }
+
+  function handleDownloadCsv() {
+    downloadCsv(
+      `${table.title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_business_service_ci_volumetrics.csv`,
+      headers,
+      exportRows
+    );
+    setCopyMessage("CSV downloaded.");
+  }
+
+  function handleScrollKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const scrollStep = event.shiftKey ? 240 : 80;
+    if (event.key === "ArrowRight") {
+      event.currentTarget.scrollLeft += scrollStep;
+      event.preventDefault();
+    } else if (event.key === "ArrowLeft") {
+      event.currentTarget.scrollLeft -= scrollStep;
+      event.preventDefault();
+    } else if (event.key === "PageDown") {
+      event.currentTarget.scrollLeft += 480;
+      event.preventDefault();
+    } else if (event.key === "PageUp") {
+      event.currentTarget.scrollLeft -= 480;
+      event.preventDefault();
+    } else if (event.key === "Home") {
+      event.currentTarget.scrollLeft = 0;
+      event.preventDefault();
+    } else if (event.key === "End") {
+      event.currentTarget.scrollLeft = event.currentTarget.scrollWidth;
+      event.preventDefault();
+    }
+  }
+
+  return (
+    <section className="panel validation-table-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="label">Business Service CI Volumetrics</p>
+          <h2>{table.title}</h2>
+          <p className="muted-text">
+            Showing {rows.length.toLocaleString()} of {table.rows.length.toLocaleString()} Business
+            Service CI rows.
+          </p>
+        </div>
+        <div className="validation-actions">
+          <button
+            className="secondary-button"
+            disabled={status === "loading" || months.length === 0}
+            type="button"
+            onClick={handleCopyTable}
+          >
+            Copy Table
+          </button>
+          <button
+            className="secondary-button"
+            disabled={status === "loading" || months.length === 0}
+            type="button"
+            onClick={handleDownloadCsv}
+          >
+            Download CSV
+          </button>
+        </div>
+      </div>
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      <div className="validation-table-card volumetrics-validation-card">
+        <div
+          aria-label={`${table.title} scrollable Business Service CI Volumetrics table`}
+          className="validation-table-scroll assignment-volumetrics-scroll"
+          role="region"
+          tabIndex={0}
+          onKeyDown={handleScrollKeyDown}
+        >
+          <table className="validation-table assignment-group-volumetrics-table">
+            <thead>
+              <tr>
+                <th className="assignment-group-column" rowSpan={2} scope="col">
+                  Business Service CI
+                </th>
+                <th className="reference-column" rowSpan={2} scope="col">
+                  Functional Track
+                </th>
+                <th className="assignment-group-column" rowSpan={2} scope="col">
+                  Assignment Group
+                </th>
+                {months.map((month, monthIndex) => (
+                  <th
+                    className={`month-group-header month-group-${monthIndex % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right`}
+                    colSpan={3}
+                    key={month.month_key}
+                    scope="colgroup"
+                  >
+                    {month.month_label}
+                  </th>
+                ))}
+              </tr>
+              <tr>
+                {months.flatMap((month, monthIndex) =>
+                  assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                    <th
+                      className={`month-subheader month-group-${monthIndex % 2 === 0 ? "a" : "b"} metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === assignmentGroupMetricLabels.length - 1 ? "month-boundary-right" : ""}`}
+                      key={`${month.month_key}-${metric.key}`}
+                      scope="col"
+                    >
+                      {metric.label}
+                    </th>
+                  ))
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {status !== "loading" && rows.length === 0 ? (
+                <tr>
+                  <td colSpan={3 + months.length * 3}>
+                    No Business Service CI rows match the selected controls.
+                  </td>
+                </tr>
+              ) : (
+                <>
+                  {rows.length > 0 ? (
+                    <tr className="pivot-total-row assignment-volumetrics-total-row">
+                      <th className="assignment-group-column" scope="row">
+                        Grand Total
+                      </th>
+                      <td className="reference-column"></td>
+                      <td className="assignment-group-column"></td>
+                      {months.flatMap((month, monthIndex) => {
+                        const metrics = summedMetrics(rows, month);
+                        return assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                          <td
+                            className={`numeric-cell total-cell month-group-${monthIndex % 2 === 0 ? "a" : "b"} metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === assignmentGroupMetricLabels.length - 1 ? "month-boundary-right" : ""}`}
+                            key={`grand-${month.month_key}-${metric.key}`}
+                          >
+                            {formatNumber(metrics[metric.key])}
+                          </td>
+                        ));
+                      })}
+                    </tr>
+                  ) : null}
+                  {rows.map((row) => (
+                    <tr
+                      key={`${table.title}-${row.business_service_ci_name}-${row.functional_track}-${row.assignment_group}`}
+                    >
+                      <th className="assignment-group-column" scope="row">
+                        {row.business_service_ci_name}
+                      </th>
+                      <td className="reference-column">{row.functional_track}</td>
+                      <td className="assignment-group-column">{row.assignment_group}</td>
+                      {months.flatMap((month, monthIndex) => {
+                        const metrics = metricsForMonth(row, month);
+                        return assignmentGroupMetricLabels.map((metric, metricIndex) => (
+                          <td
+                            className={`numeric-cell month-group-${monthIndex % 2 === 0 ? "a" : "b"} metric-${metric.key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === assignmentGroupMetricLabels.length - 1 ? "month-boundary-right" : ""}`}
+                            key={`${row.business_service_ci_name}-${row.assignment_group}-${month.month_key}-${metric.key}`}
+                          >
+                            {formatNumber(metrics[metric.key])}
+                          </td>
+                        ));
+                      })}
+                    </tr>
+                  ))}
+                </>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function VolumetricsPlaceholder({
   commentary,
   title,
@@ -2974,15 +3451,10 @@ function DetailedVolumeTrends({
   incidentBatchTrendStatus,
   onTopApplicationsNChange,
   onTopBatchApplicationsNChange,
-  onTicketsPerUserNChange,
   scTaskCatalogItemProportion,
   scTaskCatalogItemProportionError,
   scTaskCatalogItemProportionStatus,
   ticketType,
-  ticketsPerUser,
-  ticketsPerUserError,
-  ticketsPerUserN,
-  ticketsPerUserStatus,
   topApplications,
   topApplicationsError,
   topApplicationsN,
@@ -3004,15 +3476,10 @@ function DetailedVolumeTrends({
   incidentBatchTrendStatus: LoadStatus;
   onTopApplicationsNChange: (value: TopNSelection) => void;
   onTopBatchApplicationsNChange: (value: TopNSelection) => void;
-  onTicketsPerUserNChange: (value: TopNSelection) => void;
   scTaskCatalogItemProportion: DashboardVolumetricsScTaskCatalogItemProportion;
   scTaskCatalogItemProportionError: string | null;
   scTaskCatalogItemProportionStatus: LoadStatus;
   ticketType: VolumetricsTicketType;
-  ticketsPerUser: DashboardVolumetricsTicketsPerUser;
-  ticketsPerUserError: string | null;
-  ticketsPerUserN: TopNSelection;
-  ticketsPerUserStatus: LoadStatus;
   topApplications: DashboardVolumetricsTopApplications;
   topApplicationsError: string | null;
   topApplicationsN: TopNSelection;
@@ -3066,15 +3533,6 @@ function DetailedVolumeTrends({
         commentary={commentaryForChart("top_incident_batch_applications")}
       />
 
-      <TicketsPerUserChart
-        data={ticketsPerUser}
-        error={ticketsPerUserError}
-        onTopNChange={onTicketsPerUserNChange}
-        status={ticketsPerUserStatus}
-        topN={ticketsPerUserN}
-        commentary={commentaryForChart("tickets_per_user_application")}
-      />
-
       <ServiceVolumePieRow
         commentary={commentaryForChart("volumetrics_service_entitlement_ticket_volume_split")}
         data={distributionSplits.ticket_volume_by_service_entitlement}
@@ -3086,16 +3544,16 @@ function DetailedVolumeTrends({
           sc_tasks: "ticket_volume_by_service_entitlement_sc_tasks.csv",
         }}
         metricLabels={{
-          all: "Ticket Count",
-          incidents: "Incident Count",
-          sc_tasks: "SC Task Count",
+          all: "Avg Monthly Tickets",
+          incidents: "Avg Monthly Incidents",
+          sc_tasks: "Avg Monthly SC Tasks",
         }}
         status={distributionSplitsStatus}
         ticketType={ticketType}
         titles={{
-          all: "Overall Ticket Volume by Service Entitlement",
-          incidents: "Incident Volume by Service Entitlement",
-          sc_tasks: "SC Task Volume by Service Entitlement",
+          all: "Average Monthly Tickets by Service Entitlement",
+          incidents: "Average Monthly Incidents by Service Entitlement",
+          sc_tasks: "Average Monthly SC Tasks by Service Entitlement",
         }}
       />
       <ServiceVolumePieRow
@@ -3109,16 +3567,16 @@ function DetailedVolumeTrends({
           sc_tasks: "ticket_volume_by_service_type_sc_tasks.csv",
         }}
         metricLabels={{
-          all: "Ticket Count",
-          incidents: "Incident Count",
-          sc_tasks: "SC Task Count",
+          all: "Avg Monthly Tickets",
+          incidents: "Avg Monthly Incidents",
+          sc_tasks: "Avg Monthly SC Tasks",
         }}
         status={distributionSplitsStatus}
         ticketType={ticketType}
         titles={{
-          all: "Overall Ticket Volume by Service Type",
-          incidents: "Incident Volume by Service Type",
-          sc_tasks: "SC Task Volume by Service Type",
+          all: "Average Monthly Tickets by Service Type",
+          incidents: "Average Monthly Incidents by Service Type",
+          sc_tasks: "Average Monthly SC Tasks by Service Type",
         }}
       />
 
@@ -3136,29 +3594,23 @@ function DetailedVolumeTrends({
         window={distributionSplits.ranking_window}
       />
       <DistributionPieRow
-        commentary={commentaryForChart("architecture_type_distribution_row")}
-        data={distributionSplits.architecture_type}
+        commentary={commentaryForChart("assignment_group_sap_non_sap_distribution_row")}
+        data={distributionSplits.assignment_group_sap_non_sap}
         error={distributionSplitsError}
         status={distributionSplitsStatus}
         ticketType={ticketType}
         titles={{
-          all: "Average Monthly Tickets by Architecture Type",
-          incidents: "Average Monthly Incidents by Architecture Type",
-          sc_tasks: "Average Monthly SC Tasks by Architecture Type",
+          all: "Average Monthly Tickets by Assignment Group SAP / Non-SAP",
+          incidents: "Average Monthly Incidents by Assignment Group SAP / Non-SAP",
+          sc_tasks: "Average Monthly SC Tasks by Assignment Group SAP / Non-SAP",
         }}
         window={distributionSplits.ranking_window}
       />
-      <DistributionPieRow
-        commentary={commentaryForChart("install_type_distribution_row")}
-        data={distributionSplits.install_type}
+      <ServiceTypeAssignmentGroupSapNonSapPivotTables
+        data={distributionSplits.service_type_by_assignment_group_sap_non_sap}
         error={distributionSplitsError}
         status={distributionSplitsStatus}
         ticketType={ticketType}
-        titles={{
-          all: "Average Monthly Tickets by Install Type",
-          incidents: "Average Monthly Incidents by Install Type",
-          sc_tasks: "Average Monthly SC Tasks by Install Type",
-        }}
         window={distributionSplits.ranking_window}
       />
       <DistributionPieRow
@@ -3208,13 +3660,13 @@ function ScTaskCatalogTooltip({
     <div className="chart-tooltip">
       <strong>{row.catalog_item_name}</strong>
       <span>SC Task Count: {formatNumber(row.sc_task_count)}</span>
-      <span>Average Monthly Volume: {formatNumber(row.avg_monthly_volume, 1)}</span>
+      <span>Average Monthly Volume: {formatAverageCount(row.avg_monthly_volume)}</span>
       <span>Proportion: {formatPercent(row.proportion_pct)}</span>
     </div>
   );
 }
 
-function ScTaskCatalogPie({
+function ScTaskCatalogBar({
   period,
 }: {
   period: DashboardVolumetricsScTaskCatalogItemPeriod;
@@ -3222,15 +3674,15 @@ function ScTaskCatalogPie({
   const chartTitle = `${period.period_label} Catalog Item Proportion`;
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(chartTitle);
   const hasRows = period.pie_rows.length > 0;
-  const chartWidth = Math.max(320, plotWidth - 8);
-  const outerRadius = Math.min(76, Math.max(58, Math.floor(chartWidth * 0.17)));
+  const chartWidth = Math.max(760, plotWidth - 8);
+  const chartHeight = Math.max(300, period.pie_rows.length * 38 + 88);
   return (
     <section className="sc-task-catalog-card">
       <div className="applications-chart-header">
         <div>
           <h4>{period.period_label} Catalog Item Proportion</h4>
           <p className="muted-text">
-        {period.from_date} to {period.to_date} · {formatNumber(period.total_sc_tasks)} SC Tasks
+        {period.from_date} to {period.to_date} - {formatNumber(period.total_sc_tasks)} SC Tasks
           </p>
         </div>
         <button
@@ -3243,44 +3695,71 @@ function ScTaskCatalogPie({
         </button>
       </div>
       {hasRows ? (
-        <div className="sc-task-catalog-pie-stage" ref={chartRef}>
-          <PieChart
+        <div className="applications-chart-scroll sc-task-catalog-bar-stage" ref={chartRef}>
+          <BarChart
+            data={period.pie_rows}
+            height={chartHeight}
+            layout="vertical"
+            margin={{ top: 18, right: 92, bottom: 20, left: 210 }}
             width={chartWidth}
-            height={190}
-            margin={{ top: 10, right: 8, bottom: 8, left: 8 }}
           >
-            <Pie
-              data={period.pie_rows}
-              cx="50%"
-              cy="50%"
-              dataKey="sc_task_count"
-              isAnimationActive={false}
-              minAngle={1}
-              nameKey="catalog_item_name"
-              outerRadius={outerRadius}
-              paddingAngle={1}
-              stroke="#ffffff"
-              strokeWidth={2}
-            >
-              {period.pie_rows.map((entry, index) => (
-                <Cell
-                  fill={chartColors.pie[index % chartColors.pie.length]}
-                  key={`${period.period_key}-${entry.catalog_item_name}`}
-                />
-              ))}
-            </Pie>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis type="number" />
+            <YAxis
+              dataKey="catalog_item_name"
+              interval={0}
+              tick={{ fontSize: 11, fontWeight: 800 }}
+              tickFormatter={(value) => truncateLabel(String(value), 28)}
+              type="category"
+              width={200}
+            />
             <Tooltip content={<ScTaskCatalogTooltip />} />
-          </PieChart>
+            <Bar dataKey="avg_monthly_volume" fill={chartColors.created} name="Average Monthly SC Tasks">
+              <LabelList
+                content={(props: unknown) => {
+                  const labelProps = props as {
+                    height?: number | string;
+                    payload?: DashboardVolumetricsScTaskCatalogItemRow;
+                    width?: number | string;
+                    x?: number | string;
+                    y?: number | string;
+                  };
+                  const row = labelProps.payload;
+                  const x = Number(labelProps.x ?? 0);
+                  const y = Number(labelProps.y ?? 0);
+                  const width = Number(labelProps.width ?? 0);
+                  const height = Number(labelProps.height ?? 0);
+                  if (!row) {
+                    return <g />;
+                  }
+                  return (
+                    <text
+                      fill="#334155"
+                      fontSize={11}
+                      fontWeight={800}
+                      textAnchor="start"
+                      x={x + width + 8}
+                      y={y + height / 2 + 4}
+                    >
+                      {formatAverageCount(row.avg_monthly_volume)} ({formatPercent(row.proportion_pct)})
+                    </text>
+                  );
+                }}
+                dataKey="avg_monthly_volume"
+              />
+            </Bar>
+          </BarChart>
           <ol className="sc-task-catalog-legend" aria-label={`${period.period_label} legend`}>
-            {period.pie_rows.map((row, index) => (
+            {period.pie_rows.map((row) => (
               <li key={`${period.period_key}-legend-${row.catalog_item_name}`}>
                 <span
                   aria-hidden="true"
                   className="sc-task-catalog-legend-swatch"
-                  style={{ backgroundColor: chartColors.pie[index % chartColors.pie.length] }}
+                  style={{ backgroundColor: chartColors.created }}
                 />
                 <span>
-                  {row.catalog_item_name} ({formatPercent(row.proportion_pct)})
+                  {row.catalog_item_name}: {formatAverageCount(row.avg_monthly_volume)} avg (
+                  {formatPercent(row.proportion_pct)})
                 </span>
               </li>
             ))}
@@ -3364,8 +3843,7 @@ function ScTaskCatalogItemProportionSection({
         <div>
           <h3>SC Task Catalog Item Proportion</h3>
           <p className="muted-text">
-            Shows the proportion of SC Tasks by catalog item across selected half-year periods.
-            Values are based on created SC Task volume.
+            Shows average monthly SC Tasks by catalog item for Dec-25 through May-26.
           </p>
         </div>
       </div>
@@ -3383,7 +3861,7 @@ function ScTaskCatalogItemProportionSection({
         <>
           <div className="sc-task-catalog-grid">
             {data.periods.map((period) => (
-              <ScTaskCatalogPie key={period.period_key} period={period} />
+              <ScTaskCatalogBar key={period.period_key} period={period} />
             ))}
           </div>
           <div className="sc-task-catalog-grid sc-task-catalog-table-grid">
@@ -3410,6 +3888,72 @@ function splitWindowText(window: DashboardVolumetricsRankingWindow): string {
     return "Uses the latest complete 6 months and excludes the current partial month.";
   }
   return `Uses average monthly created volume for ${window.start_month} to ${window.end_month}.`;
+}
+
+function truncateLabel(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, Math.max(0, maxLength - 3))}...` : value;
+}
+
+function pieSlicePercentage(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const payloadObject = payload as { percentage?: unknown; proportion_pct?: unknown };
+  const percentageValue = Number(payloadObject.percentage ?? payloadObject.proportion_pct);
+  return Number.isFinite(percentageValue) ? percentageValue : null;
+}
+
+function renderOutsidePieLabel(props: {
+  cx?: number;
+  cy?: number;
+  midAngle?: number;
+  outerRadius?: number;
+  name?: string;
+  payload?: unknown;
+}, minimumPercentage = 10) {
+  const percentageValue = pieSlicePercentage(props.payload);
+  if (percentageValue === null || percentageValue < minimumPercentage) {
+    return null;
+  }
+  const radius = Number(props.outerRadius ?? 0) + 14;
+  const angle = -Number(props.midAngle ?? 0) * (Math.PI / 180);
+  const x = Number(props.cx ?? 0) + radius * Math.cos(angle);
+  const y = Number(props.cy ?? 0) + radius * Math.sin(angle);
+  return (
+    <text
+      className="pie-slice-label pie-slice-label-outside"
+      dominantBaseline="central"
+      textAnchor={x > Number(props.cx ?? 0) ? "start" : "end"}
+      x={x}
+      y={y}
+    >
+      {props.name}
+    </text>
+  );
+}
+
+function renderInsidePiePercentage(props: {
+  x?: number | string;
+  y?: number | string;
+  payload?: unknown;
+}, minimumPercentage = 10) {
+  const percentageValue = pieSlicePercentage(props.payload);
+  if (percentageValue === null || percentageValue < minimumPercentage) {
+    return <g />;
+  }
+  const x = Number(props.x ?? 0);
+  const y = Number(props.y ?? 0);
+  return (
+    <text
+      className="pie-slice-label pie-slice-label-inside"
+      dominantBaseline="central"
+      textAnchor="middle"
+      x={x}
+      y={y}
+    >
+      {formatPercent(percentageValue)}
+    </text>
+  );
 }
 
 function SplitPieChart({
@@ -3485,12 +4029,12 @@ function SplitPieChart({
                   />
                 ))}
               </Pie>
-              <Tooltip formatter={(value) => formatNumber(Number(value), 1)} />
+              <Tooltip formatter={(value) => formatAverageCount(Number(value))} />
               <Legend
                 formatter={(value) => {
                   const row = data.find((item) => item.label === value);
                   const share = row && total ? `, ${formatPercent(row.percentage)}` : "";
-                  return `${value} (${formatNumber(row?.average_monthly_count, 1)} avg${share})`;
+                  return `${value} (${formatAverageCount(row?.average_monthly_count)} avg${share})`;
                 }}
               />
             </PieChart>
@@ -3577,7 +4121,7 @@ function TopApplicationsHorizontalChart({
                 <Tooltip
                   formatter={(value, name) =>
                     name === "Average monthly created tickets"
-                      ? formatNumber(Number(value), 1)
+                      ? formatAverageCount(Number(value))
                       : String(value)
                   }
                 />
@@ -3791,14 +4335,26 @@ function ServiceVolumePieChart({
   const hasRows = data.length > 0;
   const chartWidth = Math.max(360, plotWidth - 24);
   const canCopy = status !== "loading" && hasRows && !notApplicable;
-  const total = data.reduce((sum, item) => sum + item.ticket_count, 0);
+  const chartData = data.map((item) => {
+    const averageMonthlyCount = Number.isFinite(Number(item.average_monthly_count))
+      ? Number(item.average_monthly_count)
+      : Number(item.ticket_count || 0) / 6;
+    return {
+      ...item,
+      average_monthly_count: averageMonthlyCount,
+      display_count: Number.isFinite(Number(item.display_count))
+        ? Number(item.display_count)
+        : Math.round(averageMonthlyCount),
+    };
+  });
+  const total = chartData.reduce((sum, item) => sum + item.average_monthly_count, 0);
 
   return (
     <section className="chart-card volumetrics-chart-card" aria-label={title}>
       <div className="applications-chart-header">
         <div>
           <h3>{title}</h3>
-          <p className="muted-text">Created tickets in the selected dashboard period.</p>
+          <p className="muted-text">{splitWindowText({ start_month: "2025-12", end_month: "2026-05", description: "" })}</p>
         </div>
         <button
           className="secondary-button chart-copy-button"
@@ -3826,26 +4382,32 @@ function ServiceVolumePieChart({
             <div className="applications-chart-stage">
               <PieChart width={chartWidth} height={330}>
                 <Pie
-                  data={data}
+                  data={chartData}
                   cx="50%"
                   cy="45%"
-                  dataKey="ticket_count"
+                  dataKey="average_monthly_count"
                   nameKey="label"
                   outerRadius={92}
+                  label={(props) => renderOutsidePieLabel(props, 0)}
+                  labelLine={false}
                 >
-                  {data.map((entry, index) => (
+                  <LabelList
+                    content={(props) => renderInsidePiePercentage(props, 0)}
+                    dataKey="percentage"
+                  />
+                  {chartData.map((entry, index) => (
                     <Cell
                       fill={chartColors.pie[index % chartColors.pie.length]}
                       key={entry.label}
                     />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value) => formatNumber(Number(value))} />
+                <Tooltip formatter={(value) => formatAverageCount(Number(value))} />
                 <Legend
                   formatter={(value) => {
-                    const row = data.find((item) => item.label === value);
+                    const row = chartData.find((item) => item.label === value);
                     const share = row && total ? `, ${formatPercent(row.percentage)}` : "";
-                    return `${value} (${formatNumber(row?.ticket_count)}${share})`;
+                    return `${value} (${formatAverageCount(row?.average_monthly_count)} avg${share})`;
                   }}
                 />
               </PieChart>
@@ -3862,10 +4424,10 @@ function ServiceVolumePieChart({
                 </tr>
               </thead>
               <tbody>
-                {data.map((row) => (
+                {chartData.map((row) => (
                   <tr key={row.label}>
                     <td>{row.label}</td>
-                    <td>{formatNumber(row.ticket_count)}</td>
+                    <td>{formatAverageCount(row.average_monthly_count)}</td>
                     <td>{formatPercent(row.percentage)}</td>
                   </tr>
                 ))}
@@ -3985,7 +4547,10 @@ function DistributionPieChart({
                 dataKey="average_monthly_count"
                 nameKey="label"
                 outerRadius={92}
+                label={renderOutsidePieLabel}
+                labelLine={false}
               >
+                <LabelList content={renderInsidePiePercentage} dataKey="percentage" />
                 {data.map((entry, index) => (
                   <Cell
                     fill={chartColors.pie[index % chartColors.pie.length]}
@@ -3993,12 +4558,12 @@ function DistributionPieChart({
                   />
                 ))}
               </Pie>
-              <Tooltip formatter={(value) => formatNumber(Number(value), 1)} />
+              <Tooltip formatter={(value) => formatAverageCount(Number(value))} />
               <Legend
                 formatter={(value) => {
                   const row = data.find((item) => item.label === value);
                   const share = row && total ? `, ${formatPercent(row.percentage)}` : "";
-                  return `${value} (${formatNumber(row?.average_monthly_count, 1)} avg${share})`;
+                  return `${value} (${formatAverageCount(row?.average_monthly_count)} avg${share})`;
                 }}
               />
             </PieChart>
@@ -4007,6 +4572,151 @@ function DistributionPieChart({
       ) : null}
 
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+    </section>
+  );
+}
+
+type AssignmentGroupSapPivotRows =
+  DashboardVolumetricsDistributionSplits["service_type_by_assignment_group_sap_non_sap"]["all"];
+
+function ServiceTypeAssignmentGroupSapNonSapPivotTables({
+  data,
+  error,
+  status,
+  ticketType,
+  window,
+}: {
+  data: DashboardVolumetricsDistributionSplits["service_type_by_assignment_group_sap_non_sap"];
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  window: DashboardVolumetricsRankingWindow;
+}) {
+  const entries: Array<{
+    filename: string;
+    key: DistributionTicketTypeKey;
+    metricLabel: string;
+    rows: AssignmentGroupSapPivotRows;
+    title: string;
+  }> = [
+    {
+      filename: "service_type_by_assignment_group_sap_non_sap_overall.csv",
+      key: "all",
+      metricLabel: "Avg Monthly Tickets",
+      rows: data.all,
+      title: "Service Type vs Assignment Group SAP / Non-SAP - Overall",
+    },
+    {
+      filename: "service_type_by_assignment_group_sap_non_sap_incidents.csv",
+      key: "incidents",
+      metricLabel: "Avg Monthly Incidents",
+      rows: data.incidents,
+      title: "Service Type vs Assignment Group SAP / Non-SAP - Incidents",
+    },
+    {
+      filename: "service_type_by_assignment_group_sap_non_sap_sc_tasks.csv",
+      key: "sc_tasks",
+      metricLabel: "Avg Monthly SC Tasks",
+      rows: data.sc_tasks,
+      title: "Service Type vs Assignment Group SAP / Non-SAP - SC Tasks",
+    },
+  ];
+  return (
+    <section className="volumetrics-row-group">
+      <div className="volumetrics-three-column-grid">
+        {entries.map((entry) => (
+          <ServiceTypeAssignmentGroupSapNonSapPivotTable
+            error={error}
+            filename={entry.filename}
+            key={entry.key}
+            metricLabel={entry.metricLabel}
+            rows={entry.rows}
+            status={status}
+            ticketType={ticketType}
+            title={entry.title}
+            valueTicketType={entry.key}
+            window={window}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ServiceTypeAssignmentGroupSapNonSapPivotTable({
+  error,
+  filename,
+  metricLabel,
+  rows,
+  status,
+  ticketType,
+  title,
+  valueTicketType,
+  window,
+}: {
+  error: string | null;
+  filename: string;
+  metricLabel: string;
+  rows: AssignmentGroupSapPivotRows;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+  title: string;
+  valueTicketType: DistributionTicketTypeKey;
+  window: DashboardVolumetricsRankingWindow;
+}) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const notApplicable = distributionChartNotApplicable(ticketType, valueTicketType);
+  const hasRows = rows.length > 0;
+  const showOthers = rows.some((row) => row.others_average_monthly_count > 0);
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">{splitWindowText(window)}</p>
+        </div>
+      </div>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading table...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">
+          This pivot table is not applicable for the selected ticket type.
+        </p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && !hasRows ? (
+        <p className="muted-text chart-state-text">No pivot data available.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && hasRows ? (
+        <>
+          <TableExportActions filename={filename} label={title} tableRef={tableRef} />
+          <div className="applications-table-frame compact-table-frame">
+            <table className="applications-table compact-data-table" ref={tableRef}>
+              <thead>
+                <tr>
+                  <th>Service Type</th>
+                  <th>SAP</th>
+                  <th>Non-SAP</th>
+                  {showOthers ? <th>Others</th> : null}
+                  <th>{metricLabel}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.service_type}>
+                    <td>{row.service_type}</td>
+                    <td>{formatAverageCount(row.sap_average_monthly_count)}</td>
+                    <td>{formatAverageCount(row.non_sap_average_monthly_count)}</td>
+                    {showOthers ? (
+                      <td>{formatAverageCount(row.others_average_monthly_count)}</td>
+                    ) : null}
+                    <td>{formatAverageCount(row.total_average_monthly_count)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -4111,7 +4821,7 @@ function TopApplicationsParetoChart({
                   formatter={(value, name) =>
                     name === "Pareto cumulative %"
                       ? formatPercent(Number(value))
-                      : formatNumber(Number(value), 1)
+                      : formatAverageCount(Number(value))
                   }
                 />
                 <Legend />
@@ -4526,7 +5236,7 @@ function PerformanceProductivityTable({
     <section className="chart-card volumetrics-chart-card">
       <div className="applications-chart-header">
         <div>
-          <h3>Full Support Engineer Productivity</h3>
+          <h3>Support Engineer Productivity</h3>
           <p className="muted-text">Sorted from top to bottom performers.</p>
         </div>
         <TableExportActions
@@ -5065,9 +5775,9 @@ function ReassignmentHopsTrendChart({
       point.tickets_with_2_plus_reassignments > 0
         ? String(point.tickets_with_2_plus_reassignments)
         : null,
-    hops_pct_label:
-      point.reassignment_hops_pct_of_created !== null
-        ? formatPercent(point.reassignment_hops_pct_of_created)
+    tickets_pct_label:
+      point.pct_tickets_with_2_plus_reassignments !== null
+        ? formatPercent(point.pct_tickets_with_2_plus_reassignments)
         : null,
   }));
   const hasRows = rows.length > 0;
@@ -5087,7 +5797,7 @@ function ReassignmentHopsTrendChart({
           <p className="label">KPI Trends</p>
           <h3>{title}</h3>
           <p className="muted-text">
-            Monthly tickets with 2+ reassignments and reassignment hops as % of created volume.
+            Monthly tickets with 2+ reassignments and their share of created ticket volume.
           </p>
         </div>
         <button
@@ -5102,7 +5812,7 @@ function ReassignmentHopsTrendChart({
 
       <p className="muted-text">
         Tickets with 2+ reassignments indicate handoffs between support teams. The percentage
-        shows reassignment hops as a share of monthly created ticket volume.
+        shows the share of monthly created tickets that had 2+ reassignments.
       </p>
 
       {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
@@ -5144,7 +5854,7 @@ function ReassignmentHopsTrendChart({
                     yAxisId="percentage"
                     orientation="right"
                     label={{
-                      value: "Hops % of created",
+                      value: "% tickets with 2+ reassignments",
                       angle: 90,
                       position: "insideRight",
                     }}
@@ -5152,7 +5862,7 @@ function ReassignmentHopsTrendChart({
                   />
                   <Tooltip
                     formatter={(value, name) => {
-                      if (name === "Hops % of created") {
+                      if (name === "% Tickets with 2+ reassignments") {
                         return [formatPercent(Number(value)), name];
                       }
                       return [formatNumber(Number(value)), name];
@@ -5181,9 +5891,9 @@ function ReassignmentHopsTrendChart({
                   </Line>
                   <Line
                     connectNulls
-                    dataKey="reassignment_hops_pct_of_created"
+                    dataKey="pct_tickets_with_2_plus_reassignments"
                     dot={{ r: 3 }}
-                    name="Hops % of created"
+                    name="% Tickets with 2+ reassignments"
                     stroke={chartColors.reassignmentPct}
                     strokeWidth={2.5}
                     type="monotone"
@@ -5196,7 +5906,7 @@ function ReassignmentHopsTrendChart({
                           verticalOffset: 24,
                         })
                       }
-                      dataKey="hops_pct_label"
+                      dataKey="tickets_pct_label"
                     />
                   </Line>
                 </ComposedChart>
@@ -5255,7 +5965,6 @@ function ReassignmentHopsTable({
               <th>Tickets with 2+ Reassignments</th>
               <th>Total Reassignment Hops for 2+ Reassignment Tickets</th>
               <th>% Tickets with 2+ Reassignments</th>
-              <th>% Reassignment Hops to Created Volume</th>
             </tr>
           </thead>
           <tbody>
@@ -5266,7 +5975,6 @@ function ReassignmentHopsTable({
                 <td>{formatNumber(point.tickets_with_2_plus_reassignments)}</td>
                 <td>{formatNumber(point.total_reassignment_hops_ge_2)}</td>
                 <td>{formatPercent(point.pct_tickets_with_2_plus_reassignments)}</td>
-                <td>{formatPercent(point.reassignment_hops_pct_of_created)}</td>
               </tr>
             ))}
           </tbody>
@@ -6300,7 +7008,7 @@ function HourlyCreatedResolvedChart({
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="hour" height={56} interval={0} tickMargin={12} />
                 <YAxis hide />
-                <Tooltip formatter={(value) => formatNumber(Number(value), 1)} />
+                <Tooltip formatter={(value) => formatAverageCount(Number(value))} />
                 <Legend />
                 <Bar
                   dataKey="average_created"
@@ -6653,6 +7361,9 @@ function OverallSlaTrends({
           <div>
             <p className="label">Overall SLA Trends</p>
             <h3>Agreement Mode</h3>
+            <p className="muted-text">
+              Cancelled incidents are excluded from Response and Resolution SLA/OLA adherence.
+            </p>
           </div>
           <div className="segmented-control" role="group" aria-label="Agreement mode">
             {(["sla", "ola"] as VolumetricsAgreementMode[]).map((mode) => (
@@ -6719,7 +7430,7 @@ function SlaTrendSection({
           <h3>{title}</h3>
           <p className="muted-text">
             Adherence is calculated as {tableMetricLabel} adhered count divided by{" "}
-            {tableMetricLabel} captured count.
+            {tableMetricLabel} captured count. Cancelled incidents are excluded.
           </p>
         </div>
         <button

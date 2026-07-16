@@ -50,6 +50,7 @@ from app.schemas.dashboard import (
     VolumetricsAssignmentGroupRequest,
     VolumetricsAssignmentGroupResponse,
     VolumetricsBacklogResponse,
+    VolumetricsBusinessServiceCiResponse,
     VolumetricsCreatedPatternRequest,
     VolumetricsCreatedPatternResponse,
     VolumetricsCreatedResolvedBacklogResponse,
@@ -104,6 +105,7 @@ from app.services.dashboard import (
     technical_functional_breakdown,
     volumetrics_assignment_group_volumetrics,
     volumetrics_backlog,
+    volumetrics_business_service_ci_volumetrics,
     volumetrics_created_pattern,
     volumetrics_created_resolved_backlog,
     volumetrics_created_resolved_cancelled,
@@ -414,6 +416,20 @@ def get_dashboard_volumetrics_assignment_group_volumetrics(
 ) -> dict[str, object]:
     try:
         return volumetrics_assignment_group_volumetrics(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/business-service-ci-volumetrics",
+    response_model=VolumetricsBusinessServiceCiResponse,
+)
+def get_dashboard_volumetrics_business_service_ci_volumetrics(
+    request: VolumetricsAssignmentGroupRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_business_service_ci_volumetrics(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

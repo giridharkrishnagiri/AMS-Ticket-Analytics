@@ -102,7 +102,7 @@ const futureUploadTypes = ["Problem SLAs", "Change SLAs", "SC Task SLAs"];
 const workflowSteps: WorkflowStep[] = [
   { id: "upload", label: "Upload", helper: "Select type and files" },
   { id: "ingest", label: "Ingest", helper: "Stage source rows" },
-  { id: "normalize", label: "Normalize", helper: "Split in-scope data" },
+  { id: "normalize", label: "Normalize", helper: "Scope and enrich tickets" },
   { id: "mapping", label: "Column Mapping", helper: "Map source columns" },
   { id: "apply", label: "Apply / Enrich", helper: "Finalize processing" },
   { id: "summary", label: "Summary", helper: "Review results" },
@@ -503,6 +503,100 @@ type WorkflowBatchRow = {
   remarks: string | null;
 };
 
+function combineIngestResponses(
+  projectId: string,
+  responses: UploadBatchIngestMultipleResponse[]
+): UploadBatchIngestMultipleResponse {
+  const batches = responses.flatMap((response) => response.batches);
+  return {
+    project_id: projectId,
+    batches,
+    totals: {
+      batches_requested: batches.length,
+      batches_ingested: batches.filter((batch) =>
+        ["INGESTED", "NORMALIZED"].includes(batch.status)
+      ).length,
+      batches_failed: batches.filter((batch) => batch.status === "FAILED").length,
+      raw_rows_inserted: batches.reduce(
+        (total, batch) => total + batch.raw_rows_inserted,
+        0
+      ),
+    },
+  };
+}
+
+function combineNormalizeResponses(
+  projectId: string,
+  ticketType: TicketUploadType,
+  responses: UploadBatchNormalizeMultipleResponse[]
+): UploadBatchNormalizeMultipleResponse {
+  const batches = responses.flatMap((response) => response.batches);
+  return {
+    project_id: projectId,
+    ticket_type: ticketType,
+    batches,
+    totals: {
+      raw_rows: batches.reduce((total, batch) => total + batch.raw_rows, 0),
+      in_scope_inserted: batches.reduce(
+        (total, batch) => total + batch.in_scope_inserted,
+        0
+      ),
+      out_of_scope_inserted: batches.reduce(
+        (total, batch) => total + batch.out_of_scope_inserted,
+        0
+      ),
+      assignment_group_not_in_inventory_rows: batches.reduce(
+        (total, batch) => total + batch.assignment_group_not_in_inventory_rows,
+        0
+      ),
+      duplicate_skipped_rows: batches.reduce(
+        (total, batch) => total + batch.duplicate_skipped_rows,
+        0
+      ),
+      failed_batches: batches.filter(
+        (batch) => batch.status === "NORMALIZATION_FAILED" || batch.failed_rows > 0
+      ).length,
+    },
+  };
+}
+
+function combineApplyResponses(
+  projectId: string,
+  ticketType: TicketUploadType,
+  responses: UploadBatchApplyMappingMultipleResponse[]
+): UploadBatchApplyMappingMultipleResponse {
+  const files = responses.flatMap((response) => response.files);
+  return {
+    project_id: projectId,
+    ticket_type: ticketType,
+    files,
+    totals: {
+      total_files: files.length,
+      applied: files.filter((file) => file.status === "APPLIED").length,
+      skipped: files.filter((file) => file.status === "SKIPPED_ALREADY_APPLIED").length,
+      failed: files.filter((file) =>
+        ["FAILED", "FAILED_PARTIAL_OUTPUT"].includes(file.status)
+      ).length,
+      input_rows: files.reduce((total, file) => total + file.input_rows, 0),
+      in_scope_rows: files.reduce((total, file) => total + file.in_scope_rows, 0),
+      out_of_scope_rows: files.reduce((total, file) => total + file.out_of_scope_rows, 0),
+      blank_assignment_group_rows: files.reduce(
+        (total, file) => total + file.blank_assignment_group_rows,
+        0
+      ),
+      assignment_group_not_in_inventory_rows: files.reduce(
+        (total, file) => total + file.assignment_group_not_in_inventory_rows,
+        0
+      ),
+      duplicate_skipped_rows: files.reduce(
+        (total, file) => total + file.duplicate_skipped_rows,
+        0
+      ),
+      failed_rows: files.reduce((total, file) => total + file.failed_rows, 0),
+    },
+  };
+}
+
 function TicketDetailsWorkflow({
   projectId,
   selectedProject,
@@ -514,6 +608,7 @@ function TicketDetailsWorkflow({
   const [activeStep, setActiveStep] = useState<WorkflowStepId>("upload");
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isRefreshingBatchesRef = useRef(false);
 
   const [batches, setBatches] = useState<UploadBatch[]>([]);
   const [historicalBatches, setHistoricalBatches] = useState<UploadBatch[]>([]);
@@ -683,6 +778,7 @@ function TicketDetailsWorkflow({
       const normalize = normalizeByBatchId.get(batchId);
       const apply = applyByBatchId.get(batchId);
       const batchStatus = batch?.status ?? upload?.status ?? null;
+      const batchHasNormalizedOutput = (batch?.normalized_ticket_count ?? 0) > 0;
 
       return {
         batchId,
@@ -712,9 +808,16 @@ function TicketDetailsWorkflow({
         inScopeRows:
           apply?.in_scope_rows ??
           normalize?.in_scope_inserted ??
-          batch?.normalized_ticket_count ??
+          (batchHasNormalizedOutput ? batch?.in_scope_ticket_count : null) ??
+          (usesProblemChangeWorkflow && batchHasNormalizedOutput
+            ? batch?.normalized_ticket_count
+            : null) ??
           null,
-        outOfScopeRows: apply?.out_of_scope_rows ?? normalize?.out_of_scope_inserted ?? null,
+        outOfScopeRows:
+          apply?.out_of_scope_rows ??
+          normalize?.out_of_scope_inserted ??
+          (batchHasNormalizedOutput ? batch?.out_of_scope_ticket_count : null) ??
+          null,
         duplicateSkippedRows:
           apply?.duplicate_skipped_rows ?? normalize?.duplicate_skipped_rows ?? null,
         remarks:
@@ -810,15 +913,22 @@ function TicketDetailsWorkflow({
     summary: hasSummary,
   };
 
-  const refreshBatches = useCallback(async () => {
+  const refreshBatches = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!projectId.trim() || isSlaUpload) {
       setBatches([]);
       setHistoricalBatches([]);
       return;
     }
 
-    setIsLoadingBatches(true);
-    setError(null);
+    if (isRefreshingBatchesRef.current) {
+      return;
+    }
+
+    isRefreshingBatchesRef.current = true;
+    if (!options.silent) {
+      setIsLoadingBatches(true);
+      setError(null);
+    }
     try {
       const [nextBatches, nextHistoricalBatches] = await Promise.all([
         listUploadBatches(projectId.trim(), "active"),
@@ -827,9 +937,14 @@ function TicketDetailsWorkflow({
       setBatches(nextBatches);
       setHistoricalBatches(nextHistoricalBatches);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Unable to load batches");
+      if (!options.silent) {
+        setError(requestError instanceof Error ? requestError.message : "Unable to load batches");
+      }
     } finally {
-      setIsLoadingBatches(false);
+      isRefreshingBatchesRef.current = false;
+      if (!options.silent) {
+        setIsLoadingBatches(false);
+      }
     }
   }, [isSlaUpload, projectId]);
 
@@ -891,6 +1006,39 @@ function TicketDetailsWorkflow({
     [agreementLabel, agreementType, isSlaUpload, projectId]
   );
 
+  const refreshTrackedIngestionJobs = useCallback(async () => {
+    const jobIds = (uploadResult?.files ?? [])
+      .map((fileResult) => fileResult.ingestion_job_id)
+      .filter((jobId): jobId is string => Boolean(jobId));
+    if (jobIds.length === 0) {
+      return;
+    }
+
+    try {
+      const refreshedJobs = await Promise.all(jobIds.map((jobId) => getIngestionJob(jobId)));
+      setTrackedJobs(refreshedJobs);
+    } catch {
+      // Progress refresh is best-effort; the main action will surface hard failures.
+    }
+  }, [uploadResult]);
+
+  const withProcessingRefresh = useCallback(
+    async <T,>(operation: Promise<T>): Promise<T> => {
+      const intervalId = window.setInterval(() => {
+        void refreshBatches({ silent: true });
+        void refreshTrackedIngestionJobs();
+      }, 2000);
+      try {
+        return await operation;
+      } finally {
+        window.clearInterval(intervalId);
+        await refreshBatches({ silent: true });
+        await refreshTrackedIngestionJobs();
+      }
+    },
+    [refreshBatches, refreshTrackedIngestionJobs]
+  );
+
   useEffect(() => {
     void refreshBatches();
   }, [refreshBatches]);
@@ -902,6 +1050,31 @@ function TicketDetailsWorkflow({
   useEffect(() => {
     void refreshSlaContext(false);
   }, [refreshSlaContext]);
+
+  useEffect(() => {
+    if (!projectId.trim() || isSlaUpload || !(isIngesting || isNormalizing || isApplyingMapping)) {
+      return;
+    }
+
+    void refreshBatches({ silent: true });
+    void refreshTrackedIngestionJobs();
+    const intervalId = window.setInterval(() => {
+      void refreshBatches({ silent: true });
+      void refreshTrackedIngestionJobs();
+    }, 2000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    isApplyingMapping,
+    isIngesting,
+    isNormalizing,
+    isSlaUpload,
+    projectId,
+    refreshBatches,
+    refreshTrackedIngestionJobs,
+  ]);
 
   useEffect(() => {
     setSelectedActionBatchIds(targetBatchIds);
@@ -1073,8 +1246,27 @@ function TicketDetailsWorkflow({
     }
 
     setIsIngesting(true);
+    setMessage("Ingestion started. Files will process sequentially with progress refreshes.");
     try {
-      const result = await ingestUploadBatches(projectId.trim(), actionBatchIds);
+      const projectKey = projectId.trim();
+      const responses: UploadBatchIngestMultipleResponse[] = [];
+      for (const [index, batchId] of actionBatchIds.entries()) {
+        const batch = visibleBatches.find((candidate) => candidate.id === batchId);
+        setSelectedBatchId(batchId);
+        setMessage(
+          `Ingesting file ${formatNumber(index + 1)} of ${formatNumber(
+            actionBatchIds.length
+          )}: ${batch?.batch_name ?? "selected batch"}.`
+        );
+        const partialResult = await withProcessingRefresh(
+          ingestUploadBatches(projectKey, [batchId])
+        );
+        responses.push(partialResult);
+        const combinedResult = combineIngestResponses(projectKey, responses);
+        setIngestResult(combinedResult);
+        await refreshBatches({ silent: true });
+      }
+      const result = combineIngestResponses(projectKey, responses);
       setIngestResult(result);
       setNormalizeResult(null);
       setMessage(
@@ -1123,22 +1315,32 @@ function TicketDetailsWorkflow({
     }
 
     setIsNormalizing(true);
+    setMessage("Normalization started. Files will process sequentially with progress refreshes.");
     try {
-      const result = await normalizeUploadBatches(projectId.trim(), ticketType, actionBatchIds, true);
-      setNormalizeResult(result);
-      if (usesProblemChangeWorkflow) {
+      const projectKey = projectId.trim();
+      const responses: UploadBatchNormalizeMultipleResponse[] = [];
+      for (const [index, batchId] of actionBatchIds.entries()) {
+        const batch = visibleBatches.find((candidate) => candidate.id === batchId);
+        setSelectedBatchId(batchId);
         setMessage(
-          `Normalized ${formatNumber(result.totals.in_scope_inserted)} ${recordLabelPlural.toLowerCase()}, skipped ${formatNumber(
-            result.totals.duplicate_skipped_rows
-          )} duplicate row(s).`
+          `Normalizing file ${formatNumber(index + 1)} of ${formatNumber(
+            actionBatchIds.length
+          )}: ${batch?.batch_name ?? "selected batch"}.`
         );
-      } else {
-        setMessage(
-          `Normalized ${formatNumber(result.totals.in_scope_inserted)} in-scope and ${formatNumber(
-            result.totals.out_of_scope_inserted
-          )} out-of-scope ticket(s).`
+        const partialResult = await withProcessingRefresh(
+          normalizeUploadBatches(projectKey, ticketType, [batchId], true)
         );
+        responses.push(partialResult);
+        setNormalizeResult(combineNormalizeResponses(projectKey, ticketType, responses));
+        await refreshBatches({ silent: true });
       }
+      const result = combineNormalizeResponses(projectKey, ticketType, responses);
+      setNormalizeResult(result);
+      setMessage(
+        `Normalized ${formatNumber(result.totals.in_scope_inserted)} in-scope and ${formatNumber(
+          result.totals.out_of_scope_inserted
+        )} out-of-scope ticket(s).`
+      );
       await refreshBatches();
       setActiveStep("mapping");
     } catch (requestError) {
@@ -1247,36 +1449,42 @@ function TicketDetailsWorkflow({
 
     setIsApplyingMapping(true);
     setError(null);
-    setMessage(null);
+    setMessage("Apply mapping started. Files will process sequentially with progress refreshes.");
     try {
-      const result = await applyMappingToUploadBatches(
-        projectId.trim(),
-        ticketType,
-        actionBatchIds,
-        cleanMapping(mapping),
-        true,
-        true
-      );
-      setApplyResult(result);
-      if (usesProblemChangeWorkflow) {
+      const projectKey = projectId.trim();
+      const cleanedMapping = cleanMapping(mapping);
+      const responses: UploadBatchApplyMappingMultipleResponse[] = [];
+      for (const [index, batchId] of actionBatchIds.entries()) {
+        const batch = visibleBatches.find((candidate) => candidate.id === batchId);
+        setSelectedBatchId(batchId);
         setMessage(
-          `Applied mapping to ${formatNumber(result.totals.applied)} batch(es), skipped ${formatNumber(
-            result.totals.skipped
-          )} already-applied batch(es), produced ${formatNumber(
-            result.totals.in_scope_rows
-          )} ${recordLabelPlural.toLowerCase()}, and skipped ${formatNumber(
-            result.totals.duplicate_skipped_rows
-          )} duplicate row(s).`
+          `Applying mapping to file ${formatNumber(index + 1)} of ${formatNumber(
+            actionBatchIds.length
+          )}: ${batch?.batch_name ?? "selected batch"}.`
         );
-      } else {
-        setMessage(
-          `Applied mapping to ${formatNumber(result.totals.applied)} batch(es), skipped ${formatNumber(
-            result.totals.skipped
-          )} already-applied batch(es), and produced ${formatNumber(
-            result.totals.in_scope_rows
-          )} in-scope ticket(s).`
+        const partialResult = await withProcessingRefresh(
+          applyMappingToUploadBatches(
+            projectKey,
+            ticketType,
+            [batchId],
+            cleanedMapping,
+            true,
+            true
+          )
         );
+        responses.push(partialResult);
+        setApplyResult(combineApplyResponses(projectKey, ticketType, responses));
+        await refreshBatches({ silent: true });
       }
+      const result = combineApplyResponses(projectKey, ticketType, responses);
+      setApplyResult(result);
+      setMessage(
+        `Applied mapping to ${formatNumber(result.totals.applied)} batch(es), skipped ${formatNumber(
+          result.totals.skipped
+        )} already-applied batch(es), produced ${formatNumber(
+          result.totals.in_scope_rows
+        )} in-scope and ${formatNumber(result.totals.out_of_scope_rows)} out-of-scope row(s).`
+      );
       await refreshBatches();
       setActiveStep("summary");
     } catch (requestError) {
@@ -1359,8 +1567,8 @@ function TicketDetailsWorkflow({
                   <th>Normalize</th>
                   <th>Apply Mapping</th>
                   <th>Input Rows</th>
-                  <th>{usesProblemChangeWorkflow ? "Records" : "In-Scope"}</th>
-                  <th>{usesProblemChangeWorkflow ? "Unmatched" : "Out-of-Scope"}</th>
+                  <th>In-Scope</th>
+                  <th>Out-of-Scope</th>
                   <th>Duplicates</th>
                   <th>Remarks</th>
                 </tr>
@@ -1385,17 +1593,7 @@ function TicketDetailsWorkflow({
                     <td>{formatApplyStatus(row.applyStatus)}</td>
                     <td>{formatNumber(row.inputRows)}</td>
                     <td>{formatNumber(row.inScopeRows)}</td>
-                    <td>
-                      {formatNumber(
-                        usesProblemChangeWorkflow
-                          ? applyResult?.files.find((file) => file.upload_batch_id === row.batchId)
-                              ?.assignment_group_not_in_inventory_rows ??
-                            normalizeResult?.batches.find(
-                              (batch) => batch.upload_batch_id === row.batchId
-                            )?.assignment_group_not_in_inventory_rows
-                          : row.outOfScopeRows
-                      )}
-                    </td>
+                    <td>{formatNumber(row.outOfScopeRows)}</td>
                     <td>{formatNumber(row.duplicateSkippedRows)}</td>
                     <td>{row.remarks ?? "-"}</td>
                   </tr>
@@ -1623,28 +1821,21 @@ function TicketDetailsWorkflow({
           <div className="summary-grid summary-block">
             <MetricCard label="Raw Rows" value={formatNumber(normalizeResult.totals.raw_rows)} />
             <MetricCard
-              label={usesProblemChangeWorkflow ? "Records" : "In Scope"}
+              label="In Scope"
               value={formatNumber(normalizeResult.totals.in_scope_inserted)}
             />
-            {usesProblemChangeWorkflow ? (
-              <>
-                <MetricCard
-                  label="Not in Scope Reference"
-                  value={formatNumber(
-                    normalizeResult.totals.assignment_group_not_in_inventory_rows
-                  )}
-                />
-                <MetricCard
-                  label="Duplicates Skipped"
-                  value={formatNumber(normalizeResult.totals.duplicate_skipped_rows)}
-                />
-              </>
-            ) : (
-              <MetricCard
-                label="Out of Scope"
-                value={formatNumber(normalizeResult.totals.out_of_scope_inserted)}
-              />
-            )}
+            <MetricCard
+              label="Out of Scope"
+              value={formatNumber(normalizeResult.totals.out_of_scope_inserted)}
+            />
+            <MetricCard
+              label="Not in Scope Reference"
+              value={formatNumber(normalizeResult.totals.assignment_group_not_in_inventory_rows)}
+            />
+            <MetricCard
+              label="Duplicates Skipped"
+              value={formatNumber(normalizeResult.totals.duplicate_skipped_rows)}
+            />
             <MetricCard label="Failed Batches" value={formatNumber(normalizeResult.totals.failed_batches)} />
           </div>
         ) : null}
@@ -1863,26 +2054,21 @@ function TicketDetailsWorkflow({
             <MetricCard label="Failed" value={formatNumber(applyResult.totals.failed)} />
             <MetricCard label="Raw Rows" value={formatNumber(applyResult.totals.input_rows)} />
             <MetricCard
-              label={usesProblemChangeWorkflow ? "Records" : "In Scope"}
+              label="In Scope"
               value={formatNumber(applyResult.totals.in_scope_rows)}
             />
-            {usesProblemChangeWorkflow ? (
-              <>
-                <MetricCard
-                  label="Not in Scope Reference"
-                  value={formatNumber(applyResult.totals.assignment_group_not_in_inventory_rows)}
-                />
-                <MetricCard
-                  label="Duplicates Skipped"
-                  value={formatNumber(applyResult.totals.duplicate_skipped_rows)}
-                />
-              </>
-            ) : (
-              <MetricCard
-                label="Out of Scope"
-                value={formatNumber(applyResult.totals.out_of_scope_rows)}
-              />
-            )}
+            <MetricCard
+              label="Out of Scope"
+              value={formatNumber(applyResult.totals.out_of_scope_rows)}
+            />
+            <MetricCard
+              label="Not in Scope Reference"
+              value={formatNumber(applyResult.totals.assignment_group_not_in_inventory_rows)}
+            />
+            <MetricCard
+              label="Duplicates Skipped"
+              value={formatNumber(applyResult.totals.duplicate_skipped_rows)}
+            />
             <MetricCard label="Failed Rows" value={formatNumber(applyResult.totals.failed_rows)} />
           </div>
         ) : null}
@@ -1998,28 +2184,24 @@ function TicketDetailsWorkflow({
             )}
           />
           <MetricCard
-            label={usesProblemChangeWorkflow ? "Records Output" : "In-Scope Output"}
+            label="In-Scope Output"
             value={formatNumber(
               applyResult?.totals.in_scope_rows ?? normalizeResult?.totals.in_scope_inserted
             )}
           />
-          {usesProblemChangeWorkflow ? (
-            <MetricCard
-              label="Duplicates Skipped"
-              value={formatNumber(
-                applyResult?.totals.duplicate_skipped_rows ??
-                  normalizeResult?.totals.duplicate_skipped_rows
-              )}
-            />
-          ) : (
-            <MetricCard
-              label="Out-of-Scope Output"
-              value={formatNumber(
-                applyResult?.totals.out_of_scope_rows ??
-                  normalizeResult?.totals.out_of_scope_inserted
-              )}
-            />
-          )}
+          <MetricCard
+            label="Out-of-Scope Output"
+            value={formatNumber(
+              applyResult?.totals.out_of_scope_rows ?? normalizeResult?.totals.out_of_scope_inserted
+            )}
+          />
+          <MetricCard
+            label="Duplicates Skipped"
+            value={formatNumber(
+              applyResult?.totals.duplicate_skipped_rows ??
+                normalizeResult?.totals.duplicate_skipped_rows
+            )}
+          />
           <MetricCard
             label="Blank Assignment Group"
             value={formatNumber(applyResult?.totals.blank_assignment_group_rows)}
@@ -2030,8 +2212,8 @@ function TicketDetailsWorkflow({
           />
           <MetricCard label="Vendor Populated" value="Covered" helper="Derived during mapping/enrichment." />
           <MetricCard label="Derived Vendor Populated" value="Covered" helper="Uses Application Inventory." />
-          <MetricCard label="Functional Track Populated" value="Covered" helper="Uses Application Inventory." />
-          <MetricCard label="AMS Owner Populated" value="Covered" helper="Uses Application Inventory." />
+          <MetricCard label="Functional Track Populated" value="Covered" helper="Uses Assignment Group Scope." />
+          <MetricCard label="In Scope Flag Populated" value="Covered" helper="Uses Assignment Group Scope." />
           <MetricCard
             label="Parent Business Application Populated"
             value="Covered"

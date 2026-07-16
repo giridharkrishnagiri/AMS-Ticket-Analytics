@@ -961,10 +961,13 @@ def test_apply_mapping_enriches_service_fields_for_incidents_by_support_group() 
         assert in_scope_ticket.service_entitlement == "Gold"
         assert in_scope_ticket.functional_track == "Digital Finance"
         assert in_scope_ticket.sap_non_sap == "SAP"
-        assert out_tickets["INC-SERVICE-OUT"].service_type is None
-        assert out_tickets["INC-SERVICE-OUT"].service_entitlement is None
+        assert in_scope_ticket.business_service_ci_name == "mapping\xa0 SERVICE"
+        assert out_tickets["INC-SERVICE-OUT"].business_service_ci_name == "Mapping   Service"
+        assert out_tickets["INC-SERVICE-OUT"].service_type == "Managed Service"
+        assert out_tickets["INC-SERVICE-OUT"].service_entitlement == "Gold"
         assert out_tickets["INC-SERVICE-OUT"].functional_track == "Supply Chain"
-        assert out_tickets["INC-SERVICE-OUT"].sap_non_sap is None
+        assert out_tickets["INC-SERVICE-OUT"].sap_non_sap == "SAP"
+        assert out_tickets["INC-SERVICE-NOMATCH"].business_service_ci_name == "Unknown Service"
         assert out_tickets["INC-SERVICE-NOMATCH"].service_type is None
         assert out_tickets["INC-SERVICE-NOMATCH"].service_entitlement is None
         assert out_tickets["INC-SERVICE-NOMATCH"].functional_track == "Supply Chain"
@@ -1043,8 +1046,10 @@ def test_apply_mapping_enriches_service_fields_for_sc_tasks_by_support_group() -
         assert in_scope_ticket.service_type == "Task Service"
         assert in_scope_ticket.service_entitlement == "Silver"
         assert in_scope_ticket.cmdb_ci == "Mapping Service"
+        assert in_scope_ticket.business_service_ci_name == "Mapping Service"
         assert out_of_scope_ticket is not None
         assert out_of_scope_ticket.cmdb_ci == "External Task Service"
+        assert out_of_scope_ticket.business_service_ci_name == "External Task Service"
         assert out_of_scope_ticket.functional_track == "Enterprise Apps & RPA"
         assert out_of_scope_ticket.service_type == "Out Task Service"
         assert out_of_scope_ticket.service_entitlement == "Bronze"
@@ -1098,6 +1103,7 @@ def test_apply_mapping_uses_business_service_for_service_attribute_enrichment() 
         add_application_inventory_scope(
             db,
             project_id,
+            assignment_group="Other Support",
             business_service="Service B",
             functional_track="Supply Chain",
             service_type="End-to-end",
@@ -1120,11 +1126,13 @@ def test_apply_mapping_uses_business_service_for_service_attribute_enrichment() 
         assert result.normalized_ticket_count == 2
         exact_ticket = tickets["INC-SERVICE-EXACT"]
         mismatch_ticket = tickets["INC-SERVICE-MISMATCH"]
+        assert exact_ticket.business_service_ci_name == "Service A"
         assert exact_ticket.functional_track == "Digital Finance"
         assert exact_ticket.service_type == "Integrator"
         assert exact_ticket.service_entitlement == "Gold"
         assert exact_ticket.sap_non_sap == "SAP"
-        assert mismatch_ticket.functional_track is None
+        assert mismatch_ticket.business_service_ci_name == "Missing Service"
+        assert mismatch_ticket.functional_track == "Digital Finance"
         assert mismatch_ticket.service_type is None
         assert mismatch_ticket.service_entitlement is None
         assert mismatch_ticket.sap_non_sap is None
@@ -1175,9 +1183,72 @@ def test_sc_task_inventory_enrichment_ignores_business_service_and_uses_cmdb_ci(
         assert ticket is not None
         assert ticket.business_service == "Mapping Service"
         assert ticket.cmdb_ci == "Not In Inventory"
-        assert ticket.business_service_ci_name is None
+        assert ticket.business_service_ci_name == "Not In Inventory"
         assert ticket.service_type is None
         assert ticket.service_entitlement is None
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_service_attributes_use_business_service_ci_while_group_fields_use_support_group() -> None:
+    rows = [
+        {
+            "number": "INC-SERVICE-BSCI-ONLY",
+            "short_description": "Service fields use business service",
+            "state": "Resolved",
+            "assignment_group": IN_SCOPE_ASSIGNMENT_GROUP,
+            "business_service": "Shared Service",
+            "sys_created_on": "2026-06-03 09:15:00",
+            "resolved_at": "2026-06-03 10:30:00",
+        },
+    ]
+    db, client_id, project_id, upload_batch_id, _, _ = create_raw_batch_fixture(rows)
+    mapping = {
+        "ticket_id": "number",
+        "title": "short_description",
+        "status": "state",
+        "assignment_group": "assignment_group",
+        "business_service": "business_service",
+        "created_at": "sys_created_on",
+        "resolved_at": "resolved_at",
+    }
+
+    try:
+        add_application_inventory_scope(
+            db,
+            project_id,
+            business_service="Different Service",
+            functional_track="Group Track",
+            service_type="Wrong Service Type",
+            service_entitlement="Bronze",
+            sap_non_sap="Non-SAP",
+            row_number=1,
+        )
+        add_application_inventory_scope(
+            db,
+            project_id,
+            assignment_group="Other Support",
+            business_service="Shared Service",
+            functional_track="Wrong Track",
+            service_type="Integrator",
+            service_entitlement="Gold",
+            sap_non_sap="SAP",
+            row_number=2,
+        )
+        db.commit()
+
+        result = apply_mapping_to_batch(db, upload_batch_id, mapping)
+        ticket = db.scalar(
+            select(Ticket).where(Ticket.ticket_number == "INC-SERVICE-BSCI-ONLY")
+        )
+
+        assert result.normalized_ticket_count == 1
+        assert ticket is not None
+        assert ticket.business_service_ci_name == "Shared Service"
+        assert ticket.functional_track == "Group Track"
+        assert ticket.service_type == "Integrator"
+        assert ticket.service_entitlement == "Gold"
+        assert ticket.sap_non_sap == "SAP"
     finally:
         cleanup_client(db, client_id)
 
@@ -1238,8 +1309,10 @@ def test_apply_mapping_v2_routes_generic_tickets_with_feature_flag(monkeypatch) 
         assert result.out_of_scope_ticket_count == 1
         assert any("pipeline version: v2" in warning for warning in result.warnings)
         assert in_scope_ticket is not None
+        assert in_scope_ticket.business_service_ci_name == IN_SCOPE_BUSINESS_SERVICE
         assert in_scope_ticket.service_type == "Integrator"
         assert out_of_scope_ticket is not None
+        assert out_of_scope_ticket.business_service_ci_name == "External Service"
     finally:
         monkeypatch.setattr(settings, "ams_processing_pipeline_version", original_version)
         cleanup_client(db, client_id)

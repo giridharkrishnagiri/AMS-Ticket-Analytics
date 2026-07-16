@@ -1105,6 +1105,7 @@ def count_matched_incident_tickets_for_model(
     project_id: UUID,
     model,
     agreement_type: str = AGREEMENT_TYPE_OLA,
+    scope_filter: bool | None = None,
 ) -> int:
     agreement_type = normalize_agreement_type(agreement_type)
     statement = (
@@ -1120,19 +1121,68 @@ def count_matched_incident_tickets_for_model(
             IncidentSlaRow.agreement_type == agreement_type,
         )
     )
+    if scope_filter is not None and hasattr(model, "is_in_scope"):
+        statement = statement.where(model.is_in_scope.is_(scope_filter))
     return int(db.scalar(statement) or 0)
 
 
-def count_incidents(db: Session, project_id: UUID, model) -> int:
-    return int(
-        db.scalar(
-            select(func.count(model.id)).where(
-                model.project_id == project_id,
-                model.ticket_type == INCIDENT_TICKET_TYPE,
-            )
-        )
-        or 0
+def count_incidents(
+    db: Session,
+    project_id: UUID,
+    model,
+    scope_filter: bool | None = None,
+) -> int:
+    statement = select(func.count(model.id)).where(
+        model.project_id == project_id,
+        model.ticket_type == INCIDENT_TICKET_TYPE,
     )
+    if scope_filter is not None and hasattr(model, "is_in_scope"):
+        statement = statement.where(model.is_in_scope.is_(scope_filter))
+    return int(db.scalar(statement) or 0)
+
+
+def scope_filter_conditions(model, scope_filter: bool | None) -> list[Any]:
+    if scope_filter is None or not hasattr(model, "is_in_scope"):
+        return []
+    return [model.is_in_scope.is_(scope_filter)]
+
+
+def legacy_out_of_scope_scope_filter(scope_filter: bool | None) -> bool:
+    return scope_filter is None or scope_filter is False
+
+
+def count_incidents_for_scope(
+    db: Session,
+    project_id: UUID,
+    scope_filter: bool | None,
+) -> int:
+    count = count_incidents(db, project_id, Ticket, scope_filter)
+    if legacy_out_of_scope_scope_filter(scope_filter):
+        count += count_incidents(db, project_id, AssessmentOutOfScopeTicket)
+    return count
+
+
+def count_matched_incident_tickets_for_scope(
+    db: Session,
+    project_id: UUID,
+    agreement_type: str,
+    scope_filter: bool | None,
+) -> int:
+    count = count_matched_incident_tickets_for_model(
+        db,
+        project_id,
+        Ticket,
+        agreement_type,
+        scope_filter,
+    )
+    if legacy_out_of_scope_scope_filter(scope_filter):
+        count += count_matched_incident_tickets_for_model(
+            db,
+            project_id,
+            AssessmentOutOfScopeTicket,
+            agreement_type,
+        )
+    return count
 
 
 def count_enriched_incidents(
@@ -1141,30 +1191,75 @@ def count_enriched_incidents(
     model,
     response_name_column,
     resolution_name_column,
+    scope_filter: bool | None = None,
 ) -> int:
-    return int(
-        db.scalar(
-            select(func.count(model.id)).where(
-                model.project_id == project_id,
-                model.ticket_type == INCIDENT_TICKET_TYPE,
-                (response_name_column.is_not(None)) | (resolution_name_column.is_not(None)),
-            )
-        )
-        or 0
+    statement = select(func.count(model.id)).where(
+        model.project_id == project_id,
+        model.ticket_type == INCIDENT_TICKET_TYPE,
+        (response_name_column.is_not(None)) | (resolution_name_column.is_not(None)),
     )
+    for condition in scope_filter_conditions(model, scope_filter):
+        statement = statement.where(condition)
+    return int(db.scalar(statement) or 0)
 
 
-def count_named_sla(db: Session, project_id: UUID, model, column) -> int:
-    return int(
-        db.scalar(
-            select(func.count(model.id)).where(
-                model.project_id == project_id,
-                model.ticket_type == INCIDENT_TICKET_TYPE,
-                column.is_not(None),
-            )
-        )
-        or 0
+def count_enriched_incidents_for_scope(
+    db: Session,
+    project_id: UUID,
+    response_name_column,
+    resolution_name_column,
+    agreement_type: str,
+    scope_filter: bool | None,
+) -> int:
+    count = count_enriched_incidents(
+        db,
+        project_id,
+        Ticket,
+        response_name_column,
+        resolution_name_column,
+        scope_filter,
     )
+    if legacy_out_of_scope_scope_filter(scope_filter):
+        legacy_response_columns = agreement_columns(agreement_type, SLA_TARGET_RESPONSE)
+        legacy_resolution_columns = agreement_columns(agreement_type, SLA_TARGET_RESOLUTION)
+        count += count_enriched_incidents(
+            db,
+            project_id,
+            AssessmentOutOfScopeTicket,
+            getattr(AssessmentOutOfScopeTicket, legacy_response_columns["name"]),
+            getattr(AssessmentOutOfScopeTicket, legacy_resolution_columns["name"]),
+        )
+    return count
+
+
+def count_named_sla(
+    db: Session,
+    project_id: UUID,
+    model,
+    column,
+    scope_filter: bool | None = None,
+) -> int:
+    statement = select(func.count(model.id)).where(
+        model.project_id == project_id,
+        model.ticket_type == INCIDENT_TICKET_TYPE,
+        column.is_not(None),
+    )
+    for condition in scope_filter_conditions(model, scope_filter):
+        statement = statement.where(condition)
+    return int(db.scalar(statement) or 0)
+
+
+def count_named_sla_for_scope(
+    db: Session,
+    project_id: UUID,
+    column,
+    legacy_column,
+    scope_filter: bool | None,
+) -> int:
+    count = count_named_sla(db, project_id, Ticket, column, scope_filter)
+    if legacy_out_of_scope_scope_filter(scope_filter):
+        count += count_named_sla(db, project_id, AssessmentOutOfScopeTicket, legacy_column)
+    return count
 
 
 def count_sla_selection_source(
@@ -1173,114 +1268,154 @@ def count_sla_selection_source(
     model,
     column,
     sources: tuple[str, ...],
+    scope_filter: bool | None = None,
 ) -> int:
-    return int(
-        db.scalar(
-            select(func.count(model.id)).where(
-                model.project_id == project_id,
-                model.ticket_type == INCIDENT_TICKET_TYPE,
-                column.in_(sources),
-            )
-        )
-        or 0
+    statement = select(func.count(model.id)).where(
+        model.project_id == project_id,
+        model.ticket_type == INCIDENT_TICKET_TYPE,
+        column.in_(sources),
     )
+    for condition in scope_filter_conditions(model, scope_filter):
+        statement = statement.where(condition)
+    return int(db.scalar(statement) or 0)
+
+
+def count_sla_selection_source_for_scope(
+    db: Session,
+    project_id: UUID,
+    column,
+    legacy_column,
+    sources: tuple[str, ...],
+    scope_filter: bool | None,
+) -> int:
+    count = count_sla_selection_source(db, project_id, Ticket, column, sources, scope_filter)
+    if legacy_out_of_scope_scope_filter(scope_filter):
+        count += count_sla_selection_source(
+            db,
+            project_id,
+            AssessmentOutOfScopeTicket,
+            legacy_column,
+            sources,
+        )
+    return count
 
 
 def build_scope_stats(
     db: Session,
     project_id: UUID,
-    model,
     agreement_type: str = AGREEMENT_TYPE_OLA,
+    scope_filter: bool | None = None,
 ) -> IncidentSlaScopeStats:
     agreement_type = normalize_agreement_type(agreement_type)
     response_columns = agreement_columns(agreement_type, SLA_TARGET_RESPONSE)
     resolution_columns = agreement_columns(agreement_type, SLA_TARGET_RESOLUTION)
-    response_name_column = getattr(model, response_columns["name"])
-    resolution_name_column = getattr(model, resolution_columns["name"])
-    response_selection_column = getattr(model, response_columns["selection_source"])
-    resolution_selection_column = getattr(model, resolution_columns["selection_source"])
+    response_name_column = getattr(Ticket, response_columns["name"])
+    resolution_name_column = getattr(Ticket, resolution_columns["name"])
+    response_selection_column = getattr(Ticket, response_columns["selection_source"])
+    resolution_selection_column = getattr(Ticket, resolution_columns["selection_source"])
+    legacy_response_name_column = getattr(AssessmentOutOfScopeTicket, response_columns["name"])
+    legacy_resolution_name_column = getattr(AssessmentOutOfScopeTicket, resolution_columns["name"])
+    legacy_response_selection_column = getattr(
+        AssessmentOutOfScopeTicket,
+        response_columns["selection_source"],
+    )
+    legacy_resolution_selection_column = getattr(
+        AssessmentOutOfScopeTicket,
+        resolution_columns["selection_source"],
+    )
     return IncidentSlaScopeStats(
-        incident_tickets_considered=count_incidents(db, project_id, model),
-        incident_tickets_matched_to_sla_rows=count_matched_incident_tickets_for_model(
+        incident_tickets_considered=count_incidents_for_scope(db, project_id, scope_filter),
+        incident_tickets_matched_to_sla_rows=count_matched_incident_tickets_for_scope(
             db,
             project_id,
-            model,
             agreement_type,
+            scope_filter,
         ),
-        incident_tickets_enriched=count_enriched_incidents(
+        incident_tickets_enriched=count_enriched_incidents_for_scope(
             db,
             project_id,
-            model,
             response_name_column,
             resolution_name_column,
+            agreement_type,
+            scope_filter,
         ),
-        response_sla_enriched=count_named_sla(
+        response_sla_enriched=count_named_sla_for_scope(
             db,
             project_id,
-            model,
             response_name_column,
+            legacy_response_name_column,
+            scope_filter,
         ),
-        resolution_sla_enriched=count_named_sla(
+        resolution_sla_enriched=count_named_sla_for_scope(
             db,
             project_id,
-            model,
             resolution_name_column,
+            legacy_resolution_name_column,
+            scope_filter,
         ),
-        response_vendor_specific=count_sla_selection_source(
+        response_vendor_specific=count_sla_selection_source_for_scope(
             db,
             project_id,
-            model,
             response_selection_column,
+            legacy_response_selection_column,
             ("ticket_vendor", "derived_vendor"),
+            scope_filter,
         ),
-        response_default=count_sla_selection_source(
+        response_default=count_sla_selection_source_for_scope(
             db,
             project_id,
-            model,
             response_selection_column,
+            legacy_response_selection_column,
             ("default",),
+            scope_filter,
         ),
-        response_fallback_default=count_sla_selection_source(
+        response_fallback_default=count_sla_selection_source_for_scope(
             db,
             project_id,
-            model,
             response_selection_column,
+            legacy_response_selection_column,
             ("fallback_default",),
+            scope_filter,
         ),
-        response_not_found=count_sla_selection_source(
+        response_not_found=count_sla_selection_source_for_scope(
             db,
             project_id,
-            model,
             response_selection_column,
+            legacy_response_selection_column,
             ("not_found",),
+            scope_filter,
         ),
-        resolution_vendor_specific=count_sla_selection_source(
+        resolution_vendor_specific=count_sla_selection_source_for_scope(
             db,
             project_id,
-            model,
             resolution_selection_column,
+            legacy_resolution_selection_column,
             ("ticket_vendor", "derived_vendor"),
+            scope_filter,
         ),
-        resolution_default=count_sla_selection_source(
+        resolution_default=count_sla_selection_source_for_scope(
             db,
             project_id,
-            model,
             resolution_selection_column,
+            legacy_resolution_selection_column,
             ("default",),
+            scope_filter,
         ),
-        resolution_fallback_default=count_sla_selection_source(
+        resolution_fallback_default=count_sla_selection_source_for_scope(
             db,
             project_id,
-            model,
             resolution_selection_column,
+            legacy_resolution_selection_column,
             ("fallback_default",),
+            scope_filter,
         ),
-        resolution_not_found=count_sla_selection_source(
+        resolution_not_found=count_sla_selection_source_for_scope(
             db,
             project_id,
-            model,
             resolution_selection_column,
+            legacy_resolution_selection_column,
             ("not_found",),
+            scope_filter,
         ),
     )
 
@@ -1330,14 +1465,21 @@ def count_incidents_without_sla_rows(
     project_id: UUID,
     table_name: str,
     agreement_type: str = AGREEMENT_TYPE_OLA,
+    scope_filter: bool | None = None,
 ) -> int:
     agreement_type = normalize_agreement_type(agreement_type)
+    scope_predicate = ""
+    if table_name == "tickets" and scope_filter is not None:
+        scope_predicate = (
+            "AND t.is_in_scope IS true" if scope_filter else "AND t.is_in_scope IS false"
+        )
     statement = text(
         f"""
         SELECT count(*)
         FROM {table_name} AS t
         WHERE t.project_id = CAST(:project_id AS uuid)
           AND t.ticket_type = 'INCIDENT'
+          {scope_predicate}
           AND NOT EXISTS (
               SELECT 1
               FROM incident_sla_rows AS s
@@ -1403,6 +1545,18 @@ def build_unmatched_stats(
     agreement_type: str = AGREEMENT_TYPE_OLA,
 ) -> IncidentSlaUnmatchedStats:
     agreement_type = normalize_agreement_type(agreement_type)
+    out_of_scope_without_sla_rows = count_incidents_without_sla_rows(
+        db,
+        project_id,
+        "tickets",
+        agreement_type,
+        scope_filter=False,
+    ) + count_incidents_without_sla_rows(
+        db,
+        project_id,
+        "assessment_out_of_scope_tickets",
+        agreement_type,
+    )
     return IncidentSlaUnmatchedStats(
         sla_ticket_numbers_not_found_in_scope_or_out_of_scope=count_unmatched_sla_ticket_numbers(
             db,
@@ -1414,13 +1568,9 @@ def build_unmatched_stats(
             project_id,
             "tickets",
             agreement_type,
+            scope_filter=True,
         ),
-        out_of_scope_incidents_without_sla_rows=count_incidents_without_sla_rows(
-            db,
-            project_id,
-            "assessment_out_of_scope_tickets",
-            agreement_type,
-        ),
+        out_of_scope_incidents_without_sla_rows=out_of_scope_without_sla_rows,
     )
 
 
@@ -1542,12 +1692,12 @@ def enrich_incident_sla(
         warnings = [
             "SLA selection is end-to-end and vendor-agnostic; it matches by Incident number only."
         ]
-    in_scope_stats = build_scope_stats(db, project_id, Ticket, agreement_type)
+    in_scope_stats = build_scope_stats(db, project_id, agreement_type, scope_filter=True)
     out_of_scope_stats = build_scope_stats(
         db,
         project_id,
-        AssessmentOutOfScopeTicket,
         agreement_type,
+        scope_filter=False,
     )
     return IncidentSlaEnrichResult(
         project_id=project_id,

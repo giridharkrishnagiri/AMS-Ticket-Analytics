@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -36,6 +37,7 @@ class Ticket(Base):
     __tablename__ = "tickets"
     __table_args__ = (
         Index("ix_tickets_project_type_created_at", "project_id", "ticket_type", "created_at"),
+        Index("ix_tickets_project_type_is_in_scope", "project_id", "ticket_type", "is_in_scope"),
         Index("ix_tickets_project_type_resolved_at", "project_id", "ticket_type", "resolved_at"),
         Index("ix_tickets_project_type_closed_at", "project_id", "ticket_type", "closed_at"),
         Index("ix_tickets_project_type_priority", "project_id", "ticket_type", "priority"),
@@ -154,6 +156,13 @@ class Ticket(Base):
 
     ticket_number: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     ticket_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    is_in_scope: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=true(),
+        index=True,
+    )
     month_key: Mapped[str | None] = mapped_column(String(7), nullable=True, index=True)
     source_system: Mapped[str | None] = mapped_column(String(120), nullable=True)
 

@@ -11,7 +11,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models import (
     ApplicationInventoryItem,
     AssessmentChangeRecord,
@@ -27,6 +26,7 @@ from app.models import (
     UploadedFile,
 )
 from app.services.batch_classification import derive_is_batch_related
+from app.services.in_scope_assignment_groups import assignment_group_scope_map
 from app.services.ingestion import INGESTION_BATCH_SIZE, normalize_source_column_name
 from app.services.sap_classification import derive_sap_non_sap
 from app.services.upload_lifecycle import (
@@ -1215,17 +1215,10 @@ def active_inventory_in_scope_assignment_group_keys(
     db: Session,
     project_id: UUID,
 ) -> set[str]:
-    statement = select(ApplicationInventoryItem.assignment_group).where(
-        ApplicationInventoryItem.project_id == project_id,
-        ApplicationInventoryItem.is_current.is_(True),
-        ApplicationInventoryItem.active.is_not(False),
-        ApplicationInventoryItem.scope_status == "in_scope",
-        ApplicationInventoryItem.assignment_group.is_not(None),
-    )
     return {
         key
-        for assignment_group in db.scalars(statement).all()
-        if (key := normalize_match_key(assignment_group)) is not None
+        for key, scope in assignment_group_scope_map(db, project_id).items()
+        if scope.is_in_scope
     }
 
 
@@ -1354,15 +1347,9 @@ def select_inventory_item_for_ticket(
     ticket: Ticket,
     inventory_items: list[ApplicationInventoryItem],
 ) -> ApplicationInventoryItem | None:
-    business_service_match_value = (
-        ticket.cmdb_ci
-        if normalize_ticket_type_value(ticket.ticket_type) == "SERVICE_CATALOG_TASK"
-        else ticket.business_service
-    )
-    return select_inventory_item_for_assignment_group_and_business_service(
+    return select_inventory_item_for_business_service_ci(
         inventory_items,
-        assignment_group=ticket.assignment_group,
-        business_service=business_service_match_value,
+        ticket.business_service_ci_name,
     )
 
 
@@ -1453,11 +1440,7 @@ def apply_inventory_enrichment_to_ticket(
     ticket.application_inventory_id = inventory_item.id
     ticket.parent_application_number = inventory_item.application_number_apm
     ticket.parent_application_name = inventory_item.parent_application_name
-    ticket.business_service_ci_name = inventory_item.business_service_ci_name
     ticket.application_owner = inventory_item.application_owner
-    ticket.support_lead = inventory_item.support_lead
-    ticket.functional_track = inventory_item.functional_track
-    ticket.ams_owner = inventory_item.ams_owner
     ticket.supported_by_vendor = inventory_item.supported_by_vendor
     ticket.service_type = text_or_none(inventory_item.service_type)
     ticket.service_entitlement = text_or_none(inventory_item.service_entitlement)
@@ -1494,7 +1477,6 @@ def apply_inventory_enrichment_to_operational_record(
 
     record.application_inventory_id = inventory_item.id
     record.functional_track = inventory_item.functional_track
-    record.ams_owner = inventory_item.ams_owner
     record.parent_business_application = inventory_item.parent_application_name
     record.supported_by_vendor = inventory_item.supported_by_vendor
     record.sap_non_sap = inventory_item.sap_non_sap or record.sap_non_sap
@@ -1829,6 +1811,13 @@ def build_ticket_from_raw_row(
         text_or_none(normalized_values.get("source_system")) or upload_batch.source_system
     )
     short_description = text_or_none(normalized_values.get("title"))
+    business_service = text_or_none(normalized_values.get("business_service"))
+    cmdb_ci = text_or_none(normalized_values.get("configuration_item"))
+    business_service_ci_name = (
+        cmdb_ci
+        if normalize_ticket_type_value(ticket_type) == "SERVICE_CATALOG_TASK"
+        else business_service
+    )
 
     return Ticket(
         project_id=raw_row.project_id,
@@ -1851,8 +1840,9 @@ def build_ticket_from_raw_row(
         urgency=text_or_none(normalized_values.get("urgency")),
         impact=text_or_none(normalized_values.get("impact")),
         application=text_or_none(normalized_values.get("application")),
-        business_service=text_or_none(normalized_values.get("business_service")),
-        cmdb_ci=text_or_none(normalized_values.get("configuration_item")),
+        business_service=business_service,
+        cmdb_ci=cmdb_ci,
+        business_service_ci_name=business_service_ci_name,
         assignment_group=text_or_none(normalized_values.get("assignment_group")),
         sap_non_sap=derive_sap_non_sap(normalized_values.get("assignment_group")),
         is_batch_related=derive_is_batch_related(ticket_type, short_description),
@@ -2069,18 +2059,16 @@ def select_inventory_item_for_operational_record(
     record: OperationalRecord,
     inventory_items: list[ApplicationInventoryItem],
 ) -> ApplicationInventoryItem | None:
-    application = first_text_value(
-        getattr(record, "business_application", None),
+    business_service_ci_name = first_text_value(
         getattr(record, "business_service", None),
         getattr(record, "configuration_item", None),
-        getattr(record, "application_name", None),
         getattr(record, "affected_ci_service", None),
+        getattr(record, "application_name", None),
+        getattr(record, "business_application", None),
     )
-    return select_inventory_item_for_values(
+    return select_inventory_item_for_business_service_ci(
         inventory_items,
-        assignment_group=record.assignment_group,
-        business_service=record.business_service,
-        application=application,
+        business_service_ci_name,
     )
 
 
@@ -2127,6 +2115,7 @@ def apply_problem_or_change_mapping_to_batch(
         db.flush()
 
     inventory_items = load_active_inventory_items(db, upload_batch.project_id)
+    scope_by_assignment_group = assignment_group_scope_map(db, upload_batch.project_id)
     active_assignment_groups = active_inventory_in_scope_assignment_group_keys(
         db,
         upload_batch.project_id,
@@ -2171,16 +2160,14 @@ def apply_problem_or_change_mapping_to_batch(
                 inventory_items,
             )
             apply_inventory_enrichment_to_operational_record(record, inventory_item)
-            support_group_items = inventory_items_for_assignment_group(
-                inventory_items,
-                record.assignment_group,
+            assignment_group_key = normalize_match_key(record.assignment_group)
+            scope = (
+                scope_by_assignment_group.get(assignment_group_key)
+                if assignment_group_key is not None
+                else None
             )
-            support_group_track = collapse_inventory_values_for_support_group(
-                support_group_items,
-                "functional_track",
-            )
-            if support_group_track is not None:
-                record.functional_track = support_group_track
+            if scope is not None:
+                record.functional_track = scope.functional_track
             if record.application_inventory_match_status == "unmatched":
                 unmatched_inventory_count += 1
 
@@ -2264,11 +2251,10 @@ def apply_mapping_to_batch(
     upload_batch = get_upload_batch_or_raise(db, upload_batch_id)
     batch_ticket_type = get_batch_ticket_type(db, upload_batch_id)
     resolved_mapping = resolve_apply_mapping(db, upload_batch, mapping)
-    pipeline_version = get_settings().ams_processing_pipeline_version.strip().lower()
-    if pipeline_version == "v2" and batch_ticket_type not in PROBLEM_CHANGE_TICKET_TYPES:
-        from app.services.mapping_v2 import apply_mapping_to_batch_v2
+    if batch_ticket_type not in PROBLEM_CHANGE_TICKET_TYPES:
+        from app.services.mapping_single_table import apply_mapping_to_batch_single_table
 
-        return apply_mapping_to_batch_v2(
+        return apply_mapping_to_batch_single_table(
             db=db,
             upload_batch=upload_batch,
             upload_batch_id=upload_batch_id,

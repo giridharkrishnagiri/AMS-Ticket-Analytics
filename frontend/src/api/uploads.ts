@@ -17,6 +17,8 @@ export type UploadBatch = {
   uploaded_file_count: number | null;
   raw_row_count: number | null;
   normalized_ticket_count: number | null;
+  in_scope_ticket_count: number | null;
+  out_of_scope_ticket_count: number | null;
   normalized_at: string | null;
   archived_at: string | null;
   deleted_at: string | null;

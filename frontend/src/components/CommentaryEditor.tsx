@@ -304,7 +304,6 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
             ref={editorRef}
             role="textbox"
             suppressContentEditableWarning
-            onInput={() => setDraftHtml(editorRef.current?.innerHTML ?? "")}
             onKeyDown={handleEditorKeyDown}
           />
         </div>

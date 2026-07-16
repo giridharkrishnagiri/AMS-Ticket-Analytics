@@ -886,6 +886,23 @@ h2 {
   font-weight: 700;
 }
 
+.pie-slice-label {
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.pie-slice-label-outside {
+  fill: #334155;
+}
+
+.pie-slice-label-inside {
+  fill: #ffffff;
+  paint-order: stroke;
+  stroke: rgba(15, 23, 42, 0.45);
+  stroke-width: 2px;
+}
+
 .chart-grid-line {
   stroke: #e2e8f0;
   stroke-width: 1;
@@ -1262,6 +1279,31 @@ h2 {
   font-size: 0.76rem;
   font-weight: 800;
   line-height: 1.25;
+}
+
+.created-ticket-split {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.created-ticket-split strong {
+  margin-top: 0;
+  font-size: 1.03rem;
+  line-height: 1.15;
+}
+
+.created-ticket-split span {
+  display: block;
+  margin-top: 3px;
+  color: #475569;
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.summary-grid > .summary-tile-dark .created-ticket-split span {
+  color: #d9f99d;
 }
 
 .overview-date-note {
@@ -2484,9 +2526,10 @@ h2 {
 
 .sc-task-catalog-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   min-width: 0;
+  width: 100%;
 }
 
 .sc-task-catalog-card {
@@ -2494,6 +2537,7 @@ h2 {
   align-content: start;
   gap: 8px;
   min-width: 0;
+  width: 100%;
   padding: 12px;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
@@ -2511,6 +2555,17 @@ h2 {
   min-width: 0;
   height: 360px;
   overflow: hidden;
+}
+
+.sc-task-catalog-bar-stage {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 330px;
+  border: 1px solid #cfe0ef;
+  border-radius: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .sc-task-catalog-legend {
@@ -2884,7 +2939,7 @@ h2 {
   }
 
   .sc-task-catalog-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -2975,6 +3030,6 @@ h2 {
 
 @media (max-width: 640px) {
   .sc-task-catalog-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }

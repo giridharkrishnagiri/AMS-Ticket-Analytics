@@ -480,8 +480,6 @@ def clean_inventory_values(
     )
     ams_owner = text_or_none(get_raw_value(parsed_row.raw_data, "ams_owner"))
     functional_track = text_or_none(get_raw_value(parsed_row.raw_data, "functional_track"))
-    if functional_track is None:
-        functional_track = functional_track_from_ams_owner(ams_owner)
     values: dict[str, Any] = {
         "project_id": project_id,
         "application_number_apm": text_or_none(
@@ -512,9 +510,7 @@ def clean_inventory_values(
         "global_application": text_or_none(
             get_raw_value(parsed_row.raw_data, "global_application")
         ),
-        "scope_status": derive_inventory_scope_status(
-            get_raw_value(parsed_row.raw_data, "scope_status")
-        ),
+        "scope_status": "unknown",
         "lifecycle_stage_status": text_or_none(
             get_raw_value(parsed_row.raw_data, "lifecycle_stage_status")
         ),
@@ -1013,6 +1009,8 @@ def upload_application_inventory_file(
         for values in replacement_rows.values():
             db.add(ApplicationInventoryItem(**values))
 
+        db.flush()
+        sync_application_inventory_scope_from_assignment_groups(db, project_id)
         db.commit()
     except SQLAlchemyError as exc:
         db.rollback()
@@ -1179,6 +1177,55 @@ def normalized_text_key_sql(expression: str) -> str:
     return normalized_business_service_ci_sql(expression)
 
 
+def sync_application_inventory_scope_from_assignment_groups(
+    db: Session,
+    project_id: UUID,
+) -> int:
+    inventory_assignment_group_key = normalized_text_key_sql("i.assignment_group")
+    scope_assignment_group_key = normalized_text_key_sql("s.assignment_group")
+    db.execute(
+        text(
+            """
+            UPDATE application_inventory_items
+            SET scope_status = 'unknown'
+            WHERE project_id = CAST(:project_id AS uuid)
+              AND is_current IS true
+            """
+        ),
+        {"project_id": str(project_id)},
+    )
+    result = db.execute(
+        text(
+            f"""
+            WITH scope_rows AS (
+                SELECT
+                    {scope_assignment_group_key} AS assignment_group_key,
+                    functional_track,
+                    is_in_scope
+                FROM in_scope_assignment_groups AS s
+                WHERE s.project_id = CAST(:project_id AS uuid)
+                  AND s.is_active IS true
+                  AND NULLIF(btrim(s.assignment_group), '') IS NOT NULL
+            )
+            UPDATE application_inventory_items AS i
+            SET
+                scope_status = CASE
+                    WHEN scope_rows.is_in_scope IS true THEN 'in_scope'
+                    ELSE 'out_of_scope'
+                END,
+                functional_track = scope_rows.functional_track
+            FROM scope_rows
+            WHERE i.project_id = CAST(:project_id AS uuid)
+              AND i.is_current IS true
+              AND NULLIF(btrim(i.assignment_group), '') IS NOT NULL
+              AND {inventory_assignment_group_key} = scope_rows.assignment_group_key
+            """
+        ),
+        {"project_id": str(project_id)},
+    )
+    return int(result.rowcount or 0)
+
+
 def update_tickets_from_inventory(
     db: Session,
     project_id: UUID,
@@ -1191,8 +1238,6 @@ def update_tickets_from_inventory(
         raise ApplicationInventoryError(f"Unsupported enrichment table: {table_name}")
     ticket_key_expression = normalized_business_service_ci_sql(f"t.{ticket_column}")
     inventory_key_expression = normalized_business_service_ci_sql("i.business_service_ci_name")
-    ticket_assignment_group_key = normalized_text_key_sql("t.assignment_group")
-    inventory_assignment_group_key = normalized_text_key_sql("i.assignment_group")
     ticket_type_filter = ""
     parameters = {"project_id": str(project_id)}
     if ticket_type is not None:
@@ -1222,8 +1267,6 @@ def update_tickets_from_inventory(
                 i.business_service_ci_name,
                 i.application_owner,
                 i.support_lead,
-                i.functional_track,
-                i.ams_owner,
                 i.supported_by_vendor,
                 i.service_type,
                 i.service_entitlement,
@@ -1258,10 +1301,7 @@ def update_tickets_from_inventory(
              AND i.is_current IS true
              AND i.active IS NOT false
              AND nullif(btrim(t.{ticket_column}), '') IS NOT NULL
-             AND nullif(btrim(t.assignment_group), '') IS NOT NULL
-             AND nullif(btrim(i.assignment_group), '') IS NOT NULL
              AND {ticket_key_expression} = {inventory_key_expression}
-             AND {ticket_assignment_group_key} = {inventory_assignment_group_key}
             WHERE t.project_id = CAST(:project_id AS uuid)
               {ticket_type_filter}
               AND t.application_inventory_id IS NULL
@@ -1274,8 +1314,6 @@ def update_tickets_from_inventory(
             business_service_ci_name = candidates.business_service_ci_name,
             application_owner = candidates.application_owner,
             support_lead = candidates.support_lead,
-            functional_track = candidates.functional_track,
-            ams_owner = candidates.ams_owner,
             supported_by_vendor = candidates.supported_by_vendor,
             service_type = candidates.service_type,
             service_entitlement = candidates.service_entitlement,
@@ -1305,53 +1343,28 @@ def update_ticket_support_group_fields_from_inventory(
     if table_name not in {"tickets", "assessment_out_of_scope_tickets"}:
         raise ApplicationInventoryError(f"Unsupported enrichment table: {table_name}")
     ticket_assignment_group_key = normalized_text_key_sql("t.assignment_group")
-    inventory_assignment_group_key = normalized_text_key_sql("assignment_group")
+    scope_assignment_group_key = normalized_text_key_sql("assignment_group")
     unmatched_filter = "AND t.application_inventory_id IS NULL" if only_unmatched else ""
     statement = text(
         f"""
-        WITH inventory_values AS (
+        WITH scope_values AS (
             SELECT
-                {inventory_assignment_group_key} AS assignment_group_key,
-                CASE
-                    WHEN count(DISTINCT NULLIF(btrim(functional_track), '')) = 0 THEN NULL
-                    WHEN count(DISTINCT NULLIF(btrim(functional_track), '')) = 1
-                        THEN min(NULLIF(btrim(functional_track), ''))
-                    ELSE NULL
-                END AS functional_track,
-                CASE
-                    WHEN count(DISTINCT NULLIF(btrim(ams_owner), '')) = 0 THEN NULL
-                    WHEN count(DISTINCT NULLIF(btrim(ams_owner), '')) = 1
-                        THEN min(NULLIF(btrim(ams_owner), ''))
-                    ELSE NULL
-                END AS ams_owner,
-                CASE
-                    WHEN count(DISTINCT NULLIF(btrim(support_lead), '')) = 0 THEN NULL
-                    WHEN count(DISTINCT NULLIF(btrim(support_lead), '')) = 1
-                        THEN min(NULLIF(btrim(support_lead), ''))
-                    ELSE NULL
-                END AS support_lead
-            FROM application_inventory_items
+                {scope_assignment_group_key} AS assignment_group_key,
+                functional_track
+            FROM in_scope_assignment_groups
             WHERE project_id = CAST(:project_id AS uuid)
-              AND is_current IS true
-              AND active IS NOT false
+              AND is_active IS true
               AND NULLIF(btrim(assignment_group), '') IS NOT NULL
-            GROUP BY {inventory_assignment_group_key}
         )
         UPDATE {table_name} AS t
         SET
-            functional_track = inventory_values.functional_track,
-            ams_owner = inventory_values.ams_owner,
-            support_lead = inventory_values.support_lead
-        FROM inventory_values
+            functional_track = scope_values.functional_track
+        FROM scope_values
         WHERE t.project_id = CAST(:project_id AS uuid)
           AND NULLIF(btrim(t.assignment_group), '') IS NOT NULL
           {unmatched_filter}
-          AND {ticket_assignment_group_key} = inventory_values.assignment_group_key
-          AND (
-            t.functional_track IS DISTINCT FROM inventory_values.functional_track
-            OR t.ams_owner IS DISTINCT FROM inventory_values.ams_owner
-            OR t.support_lead IS DISTINCT FROM inventory_values.support_lead
-          )
+          AND {ticket_assignment_group_key} = scope_values.assignment_group_key
+          AND t.functional_track IS DISTINCT FROM scope_values.functional_track
         """
     )
     result = db.execute(statement, {"project_id": str(project_id)})
@@ -1704,16 +1717,33 @@ def count_distinct_nonblank(db: Session, project_id: UUID, model: Any, column: A
     return int(db.scalar(statement) or 0)
 
 
+def count_distinct_ticket_scope_nonblank(
+    db: Session,
+    project_id: UUID,
+    column: Any,
+    *,
+    is_in_scope: bool,
+) -> int:
+    statement = select(func.count(func.distinct(func.lower(func.btrim(column))))).where(
+        Ticket.project_id == project_id,
+        Ticket.is_in_scope.is_(is_in_scope),
+        column.is_not(None),
+        func.btrim(column) != "",
+    )
+    return int(db.scalar(statement) or 0)
+
+
 def top_out_of_scope_values(db: Session, project_id: UUID, column: Any) -> list[ValueCount]:
     statement = (
-        select(column, func.count(AssessmentOutOfScopeTicket.id))
+        select(column, func.count(Ticket.id))
         .where(
-            AssessmentOutOfScopeTicket.project_id == project_id,
+            Ticket.project_id == project_id,
+            Ticket.is_in_scope.is_(False),
             column.is_not(None),
             func.btrim(column) != "",
         )
         .group_by(column)
-        .order_by(func.count(AssessmentOutOfScopeTicket.id).desc(), column.asc())
+        .order_by(func.count(Ticket.id).desc(), column.asc())
         .limit(TOP_UNMATCHED_LIMIT)
     )
     return [
@@ -1725,11 +1755,20 @@ def top_out_of_scope_values(db: Session, project_id: UUID, column: Any) -> list[
 
 def build_scope_summary(db: Session, project_id: UUID) -> ScopeSummary:
     ensure_project_exists(db, project_id)
-    in_scope_tickets = count_tickets(db, project_id, matched=None)
+    in_scope_tickets = int(
+        db.scalar(
+            select(func.count(Ticket.id)).where(
+                Ticket.project_id == project_id,
+                Ticket.is_in_scope.is_(True),
+            )
+        )
+        or 0
+    )
     out_of_scope_tickets = int(
         db.scalar(
-            select(func.count(AssessmentOutOfScopeTicket.id)).where(
-                AssessmentOutOfScopeTicket.project_id == project_id
+            select(func.count(Ticket.id)).where(
+                Ticket.project_id == project_id,
+                Ticket.is_in_scope.is_(False),
             )
         )
         or 0
@@ -1743,26 +1782,26 @@ def build_scope_summary(db: Session, project_id: UUID) -> ScopeSummary:
         total_classified_tickets=total_classified_tickets,
         in_scope_pct=calculate_rate(in_scope_tickets, total_classified_tickets),
         out_of_scope_pct=calculate_rate(out_of_scope_tickets, total_classified_tickets),
-        distinct_in_scope_assignment_groups=count_distinct_nonblank(
+        distinct_in_scope_assignment_groups=count_distinct_ticket_scope_nonblank(
             db,
             project_id,
-            Ticket,
             Ticket.assignment_group,
+            is_in_scope=True,
         ),
-        distinct_out_of_scope_assignment_groups=count_distinct_nonblank(
+        distinct_out_of_scope_assignment_groups=count_distinct_ticket_scope_nonblank(
             db,
             project_id,
-            AssessmentOutOfScopeTicket,
-            AssessmentOutOfScopeTicket.assignment_group,
+            Ticket.assignment_group,
+            is_in_scope=False,
         ),
         top_out_of_scope_assignment_groups=top_out_of_scope_values(
             db,
             project_id,
-            AssessmentOutOfScopeTicket.assignment_group,
+            Ticket.assignment_group,
         ),
         top_out_of_scope_business_services=top_out_of_scope_values(
             db,
             project_id,
-            AssessmentOutOfScopeTicket.business_service,
+            Ticket.business_service,
         ),
     )

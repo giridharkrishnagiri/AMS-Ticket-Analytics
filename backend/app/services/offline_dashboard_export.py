@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session
 from app.models import (
     ApplicationInventoryItem,
     AssessmentOutOfScopeProblemRecord,
-    AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Client,
     Project,
@@ -37,6 +36,7 @@ from app.services.dashboard import (
     applications_assignment_group_mapping,
     applications_charts,
     applications_summary,
+    assignment_group_sap_non_sap_expression,
     build_volumetrics_periods,
     combined_volumetrics_display_expression,
     date_counts_by_day_of_month,
@@ -53,6 +53,7 @@ from app.services.dashboard import (
     ranking_window_payload,
     volumetrics_assignment_group_volumetrics,
     volumetrics_base_conditions,
+    volumetrics_business_service_ci_volumetrics,
     volumetrics_cancelled_count_date_expression,
     volumetrics_cancelled_expression,
     volumetrics_data_range,
@@ -77,6 +78,18 @@ OFFLINE_SCOPE_VALUES = ("in_scope", "out_of_scope")
 OFFLINE_TICKET_TYPE_VALUES = ("incident", "sc_task")
 OFFLINE_VOLUMETRICS_START_MONTH = (2025, 1)
 OFFLINE_VOLUMETRICS_END_MONTH = (2026, 5)
+OFFLINE_VOLUMETRICS_END_DATETIME = datetime(
+    2026,
+    5,
+    31,
+    23,
+    59,
+    59,
+    999999,
+    tzinfo=UTC,
+)
+OFFLINE_DETAILED_VOLUME_START_MONTH = (2025, 12)
+OFFLINE_DETAILED_VOLUME_END_MONTH = (2026, 5)
 OFFLINE_PERFORMANCE_START_MONTH = (2026, 3)
 OFFLINE_PERFORMANCE_END_MONTH = (2026, 5)
 MONDELEZ_LOGO_FILENAMES = ("MDLZlogo_smr.webp", "MDLZlogo.webp")
@@ -282,10 +295,41 @@ def application_export_rows(db: Session, project_id: UUID) -> list[dict[str, Any
     return rows
 
 
+def application_support_group_export_rows(db: Session, project_id: UUID) -> list[dict[str, Any]]:
+    columns = [
+        application_display_expression("scope_status").label("scope_status"),
+        application_display_expression("assignment_group").label("assignment_group"),
+        application_display_expression("functional_track").label("functional_track"),
+        application_display_expression("ams_owner").label("ams_owner"),
+        application_display_expression("service_entitlement").label("service_entitlement"),
+        application_display_expression("sap_non_sap").label("sap_non_sap"),
+        application_display_expression("biz_criticality").label("biz_criticality"),
+    ]
+    statement = (
+        select(*columns)
+        .where(
+            ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.is_current.is_(True),
+            nonblank_text_expression(ApplicationInventoryItem.assignment_group).is_not(None),
+        )
+        .order_by(application_display_expression("assignment_group").asc())
+    )
+    rows = []
+    for row in db.execute(statement).mappings().all():
+        next_row = dict(row)
+        next_row["functional_track_ams_owner"] = (
+            f"{display_value(next_row.get('functional_track'))} - "
+            f"{display_value(next_row.get('ams_owner'))}"
+        )
+        rows.append(next_row)
+    return rows
+
+
 def build_applications_payload(db: Session, project_id: UUID) -> dict[str, Any]:
     request = empty_application_request(project_id)
     return {
         "rows": application_export_rows(db, project_id),
+        "support_group_rows": application_support_group_export_rows(db, project_id),
         "summary": applications_summary(db, request),
         "charts": applications_charts(db, request),
         "assignment_group_mapping": build_assignment_group_mapping_payload(db, project_id),
@@ -337,6 +381,22 @@ def build_assignment_group_volumetrics_payload(db: Session, project_id: UUID) ->
     }
 
 
+def build_business_service_ci_volumetrics_payload(db: Session, project_id: UUID) -> dict[str, Any]:
+    return {
+        scope: volumetrics_business_service_ci_volumetrics(
+            db,
+            SimpleNamespace(
+                project_id=project_id,
+                scope=scope,
+                functional_track="all",
+                from_month="2025-12",
+                to_month="2026-05",
+            ),
+        )
+        for scope in ("in_scope", "out_of_scope", "all")
+    }
+
+
 def build_performance_trends_payload(db: Session, project_id: UUID) -> dict[str, Any]:
     data_range = volumetrics_data_range(db, project_id)
     data_end = data_range.get("completion_date_max")
@@ -355,8 +415,8 @@ def build_performance_trends_payload(db: Session, project_id: UUID) -> dict[str,
 
 def build_volumetrics_source(project_id: UUID) -> Any:
     return union_all(
-        volumetrics_source_select(Ticket, "in_scope", project_id),
-        volumetrics_source_select(AssessmentOutOfScopeTicket, "out_of_scope", project_id),
+        volumetrics_source_select(Ticket, "in_scope", project_id, ticket_scope=True),
+        volumetrics_source_select(Ticket, "out_of_scope", project_id, ticket_scope=False),
     ).subquery("offline_volumetrics_source")
 
 
@@ -472,7 +532,7 @@ def offline_sla_rows(
     source: Any,
 ) -> dict[tuple[tuple[str, str, str, str, str, str, str], str], dict[str, int]]:
     dimensions = volumetrics_dimension_expressions(source)
-    period_expression = volumetrics_period_start_expression(source.c.created_at, "monthly")
+    period_expression = volumetrics_period_start_expression(source.c.closed_at, "monthly")
     statement = (
         select(
             *[expression.label(name) for name, expression in dimensions.items()],
@@ -507,8 +567,13 @@ def offline_sla_rows(
             *volumetrics_base_conditions(
                 source,
                 SimpleNamespace(**{**request.__dict__, "ticket_type": "incident"}),
+                include_date_bounds=False,
             ),
-            source.c.created_at.is_not(None),
+            source.c.closed_at.is_not(None),
+            volumetrics_resolved_closed_state_expression(source.c),
+            ~volumetrics_cancelled_expression(source),
+            source.c.closed_at >= normalize_dashboard_datetime(request.start_datetime),
+            source.c.closed_at <= normalize_dashboard_datetime(request.end_datetime),
         )
         .group_by(*dimensions.values(), period_expression)
     )
@@ -777,8 +842,19 @@ def build_monthly_volumetrics_rows(
     cancelled_condition = volumetrics_cancelled_expression(source)
     resolved_closed_condition = volumetrics_resolved_closed_state_expression(source.c)
     cancelled_date_expression = volumetrics_cancelled_count_date_expression(source.c)
+    incident_batch_condition = (
+        (source.c.ticket_type == "INCIDENT") & source.c.is_batch_related.is_(True)
+    )
 
     created_rows = offline_period_rows(db, request, source, source.c.created_at, "created_count")
+    incident_batch_created_rows = offline_period_rows(
+        db,
+        request,
+        source,
+        source.c.created_at,
+        "incident_batch_created_count",
+        [incident_batch_condition],
+    )
     completed_rows = offline_period_rows(
         db,
         request,
@@ -804,6 +880,7 @@ def build_monthly_volumetrics_rows(
     dimension_keys = distinct_dimension_keys(db, request, source)
     for row_key, _period_key in [
         *created_rows.keys(),
+        *incident_batch_created_rows.keys(),
         *completed_rows.keys(),
         *cancelled_rows.keys(),
         *exit_rows.keys(),
@@ -829,6 +906,10 @@ def build_monthly_volumetrics_rows(
                     "period_key": period_key,
                     "period_label": period.label,
                     "created_count": created_count,
+                    "incident_batch_created_count": incident_batch_created_rows.get(
+                        (key, period_key),
+                        0,
+                    ),
                     "tickets_with_2_plus_reassignments": reassignment_values.get(
                         "tickets_with_2_plus_reassignments",
                         0,
@@ -1233,7 +1314,7 @@ def build_sla_trends_payload(
     )
     source = build_volumetrics_source(project_id)
     dimensions = volumetrics_dimension_expressions(source)
-    period_expression = volumetrics_period_start_expression(source.c.resolved_at, "monthly")
+    period_expression = volumetrics_period_start_expression(source.c.closed_at, "monthly")
     statement = (
         select(
             *[expression.label(name) for name, expression in dimensions.items()],
@@ -1267,10 +1348,11 @@ def build_sla_trends_payload(
         .select_from(source)
         .where(
             *volumetrics_base_conditions(source, request, include_date_bounds=False),
-            source.c.resolved_at.is_not(None),
+            source.c.closed_at.is_not(None),
             volumetrics_resolved_closed_state_expression(source.c),
-            source.c.resolved_at >= normalize_dashboard_datetime(start_datetime),
-            source.c.resolved_at <= normalize_dashboard_datetime(end_datetime),
+            ~volumetrics_cancelled_expression(source),
+            source.c.closed_at >= normalize_dashboard_datetime(start_datetime),
+            source.c.closed_at <= normalize_dashboard_datetime(end_datetime),
         )
         .group_by(*dimensions.values(), period_expression)
     )
@@ -1304,7 +1386,9 @@ def build_sla_trends_payload(
             "resolution_adherence_formula": (
                 "resolution_sla_adhered_count / resolution_sla_captured_count * 100"
             ),
-            "captured_definition": "sla_breached IS NOT NULL",
+            "captured_definition": (
+                "sla_breached IS NOT NULL; cancelled incidents are excluded"
+            ),
             "supported_modes": ["sla", "ola"],
         },
     }
@@ -1324,6 +1408,9 @@ def build_detailed_volume_payload(
     service_type_expression = func.coalesce(
         nonblank_text_expression(source.c.service_type),
         literal("Blank"),
+    )
+    assignment_group_sap_expression = assignment_group_sap_non_sap_expression(
+        source.c.assignment_group,
     )
     architecture_expression = volumetrics_display_expression(source.c.architecture_type)
     install_expression = volumetrics_display_expression(source.c.install_type)
@@ -1345,6 +1432,7 @@ def build_detailed_volume_payload(
         *dimensions.values(),
         application_expression,
         service_type_expression,
+        assignment_group_sap_expression,
         architecture_expression,
         install_expression,
         hosting_env_expression,
@@ -1354,6 +1442,7 @@ def build_detailed_volume_payload(
         *[expression.label(name) for name, expression in dimensions.items()],
         application_expression.label("application_name"),
         service_type_expression.label("service_type"),
+        assignment_group_sap_expression.label("assignment_group_sap_non_sap"),
         architecture_expression.label("architecture_type"),
         install_expression.label("install_type"),
         hosting_env_expression.label("hosting_env"),
@@ -1406,6 +1495,8 @@ def build_detailed_volume_payload(
         return (
             dimension_key(row),
             str(row["application_name"]),
+            str(row["service_type"]),
+            str(row["assignment_group_sap_non_sap"]),
             str(row["architecture_type"]),
             str(row["install_type"]),
             str(row["hosting_env"]),
@@ -1418,6 +1509,8 @@ def build_detailed_volume_payload(
         return {
             **dimension_dict(dimension_key(row)),
             "application_name": str(row["application_name"]),
+            "service_type": str(row["service_type"]),
+            "assignment_group_sap_non_sap": str(row["assignment_group_sap_non_sap"]),
             "architecture_type": str(row["architecture_type"]),
             "install_type": str(row["install_type"]),
             "hosting_env": str(row["hosting_env"]),
@@ -1457,6 +1550,8 @@ def build_detailed_volume_payload(
         key=lambda row: (
             row["period_key"],
             row["application_name"].casefold(),
+            row["service_type"].casefold(),
+            row["assignment_group_sap_non_sap"].casefold(),
             row["architecture_type"].casefold(),
             row["install_type"].casefold(),
             row["hosting_env"].casefold(),
@@ -1490,8 +1585,16 @@ def build_detailed_split_rows(
     dimensions = volumetrics_dimension_expressions(source)
     rows: list[dict[str, Any]] = []
 
-    for split_type in ("architecture_type", "install_type", "hosting_env"):
-        split_expression = volumetrics_display_expression(getattr(source.c, split_type))
+    split_expressions = {
+        "architecture_type": volumetrics_display_expression(source.c.architecture_type),
+        "install_type": volumetrics_display_expression(source.c.install_type),
+        "hosting_env": volumetrics_display_expression(source.c.hosting_env),
+        "assignment_group_sap_non_sap": assignment_group_sap_non_sap_expression(
+            source.c.assignment_group,
+        ),
+    }
+
+    for split_type, split_expression in split_expressions.items():
         statement = (
             select(
                 *[expression.label(name) for name, expression in dimensions.items()],
@@ -1804,9 +1907,8 @@ def build_volumetrics_payload(
                 "overall_sla_trends",
                 "detailed_volume_trends",
                 "kpi_trends",
-                "performance_trends",
-                "category_wise_trends",
                 "assignment_group_volumetrics",
+                "business_service_ci_volumetrics",
             ],
             "overall_volume_trends": {
                 "created_resolved_by_hour": {"rows": [], "denominators": {}},
@@ -1827,11 +1929,9 @@ def build_volumetrics_payload(
                 "reassignment_hops": {"rows": []},
                 "problem_management": {"rows": [], "data_notes": []},
             },
-            "performance_trends": {},
-            "placeholders": {
-                "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
-            },
+            "placeholders": {},
             "assignment_group_volumetrics": {},
+            "business_service_ci_volumetrics": {},
             "complete_month_from": None,
             "complete_month_to": None,
         }
@@ -1853,9 +1953,8 @@ def build_volumetrics_payload(
                 "overall_sla_trends",
                 "detailed_volume_trends",
                 "kpi_trends",
-                "performance_trends",
-                "category_wise_trends",
                 "assignment_group_volumetrics",
+                "business_service_ci_volumetrics",
             ],
             "overall_volume_trends": {
                 "created_resolved_by_hour": {"rows": [], "denominators": {}},
@@ -1876,11 +1975,9 @@ def build_volumetrics_payload(
                 "reassignment_hops": {"rows": []},
                 "problem_management": {"rows": [], "data_notes": []},
             },
-            "performance_trends": {},
-            "placeholders": {
-                "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
-            },
+            "placeholders": {},
             "assignment_group_volumetrics": {},
+            "business_service_ci_volumetrics": {},
             "complete_month_from": None,
             "complete_month_to": None,
         }
@@ -1896,6 +1993,11 @@ def build_volumetrics_payload(
         for period in build_volumetrics_periods(request)
     ]
     monthly_rows = build_monthly_volumetrics_rows(db, project_id, start_datetime, end_datetime)
+    detailed_start_datetime, detailed_end_datetime = fixed_month_window(
+        OFFLINE_DETAILED_VOLUME_START_MONTH,
+        OFFLINE_DETAILED_VOLUME_END_MONTH,
+        tzinfo=start_datetime.tzinfo,
+    )
     return {
         "filter_values": build_filter_values(monthly_rows),
         "periods": periods,
@@ -1911,9 +2013,8 @@ def build_volumetrics_payload(
             "overall_sla_trends",
             "detailed_volume_trends",
             "kpi_trends",
-            "performance_trends",
-            "category_wise_trends",
             "assignment_group_volumetrics",
+            "business_service_ci_volumetrics",
         ],
         "overall_volume_trends": {
             "created_resolved_by_hour": build_hourly_created_resolved_payload(
@@ -1938,8 +2039,8 @@ def build_volumetrics_payload(
         "detailed_volume_trends": build_detailed_volume_payload(
             db,
             project_id,
-            start_datetime,
-            end_datetime,
+            detailed_start_datetime,
+            detailed_end_datetime,
         ),
         "kpi_trends": {
             "mttr": build_kpi_mttr_payload(db, project_id, start_datetime, end_datetime),
@@ -1966,11 +2067,12 @@ def build_volumetrics_payload(
                 end_datetime,
             ),
         },
-        "performance_trends": build_performance_trends_payload(db, project_id),
-        "placeholders": {
-            "category_wise_trends": "Detailed requirements for this section will be added in the next prompts.",
-        },
+        "placeholders": {},
         "assignment_group_volumetrics": build_assignment_group_volumetrics_payload(
+            db,
+            project_id,
+        ),
+        "business_service_ci_volumetrics": build_business_service_ci_volumetrics_payload(
             db,
             project_id,
         ),
@@ -1983,6 +2085,12 @@ def build_offline_dashboard_payload(db: Session, project_id: UUID) -> dict[str, 
     project, client = get_project_metadata(db, project_id)
     exported_at = datetime.now(UTC)
     data_range = volumetrics_data_range(db, project_id)
+    data_available_to = data_range["completion_date_max"]
+    if data_available_to is not None:
+        data_available_to = min(
+            normalize_dashboard_datetime(data_available_to),
+            OFFLINE_VOLUMETRICS_END_DATETIME,
+        )
     overview = overview_summary(db, project_id)
     volumetrics = build_volumetrics_payload(db, project_id, data_range)
     return {
@@ -1994,7 +2102,7 @@ def build_offline_dashboard_payload(db: Session, project_id: UUID) -> dict[str, 
             "project_name": project.name,
             "project_id": str(project.id),
             "data_available_from": data_range["completion_date_min"],
-            "data_available_to": data_range["completion_date_max"],
+            "data_available_to": data_available_to,
             "complete_month_from": volumetrics["complete_month_from"],
             "complete_month_to": volumetrics["complete_month_to"],
             "time_grain": "monthly",
@@ -2237,6 +2345,25 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     .tile strong { display: block; margin-top: 6px; font-size: 1.08rem; }
     .tile .muted { margin: 7px 0 0; font-size: 0.78rem; }
+    .tile .metric-line {
+      display: block;
+      margin-top: 7px;
+      line-height: 1.22;
+    }
+    .tile .metric-line strong {
+      display: inline;
+      margin: 0;
+      font-size: 1.08rem;
+    }
+    .tile .metric-line .metric-helper {
+      display: block;
+      margin-top: 4px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .tile.tile-dark .metric-line .metric-helper {
+      color: #d9f99d;
+    }
     .overview-summary-grid .tile {
       min-height: 124px;
       padding: 16px;
@@ -2489,6 +2616,21 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       min-width: 2600px;
       max-width: none;
       border-collapse: collapse;
+    }
+    .compact-export-table {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      table-layout: auto;
+    }
+    .compact-export-table th,
+    .compact-export-table td {
+      white-space: normal;
+    }
+    .compact-table-frame {
+      min-height: 0;
+      max-height: none;
+      overflow-x: hidden;
     }
     .assignment-mapping-ticket-table thead th {
       z-index: 5;
@@ -2998,14 +3140,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     .sc-task-catalog-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr);
       gap: 12px;
+      width: 100%;
       min-width: 0;
     }
     .sc-task-catalog-card {
       display: grid;
       align-content: start;
       gap: 8px;
+      width: 100%;
       min-width: 0;
       padding: 12px;
       border: 1px solid #dbe3ef;
@@ -3020,7 +3164,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     @media (max-width: 1100px) {
       .chart-grid { grid-template-columns: 1fr; }
       .chart-grid-three { grid-template-columns: 1fr; }
-      .sc-task-catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .sc-task-catalog-grid { grid-template-columns: minmax(0, 1fr); }
       .duration-grid { grid-template-columns: 1fr; }
       #volumetrics .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .offline-validation-scroll {
@@ -3096,7 +3240,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       orange: "#d97706",
       purple: "#7c3aed",
       green: "#16a34a",
-      slate: "#64748b"
+      slate: "#64748b",
+      pie: ["#2563eb", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#dc2626", "#64748b"]
     };
     const state = {
       tab: "overview",
@@ -3117,6 +3262,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       volSap: "all",
       volBusinessCritical: "all",
       volAssignmentTrack: "all",
+      volBusinessServiceTrack: "all",
       pattern: "day_of_month",
       volSubTab: "overall_volume_trends",
       hourlyDayType: "weekdays",
@@ -3124,8 +3270,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       slaMode: "sla",
       topVolumeN: "10",
       topBatchN: "10",
-      topActiveUsersN: "10",
-      ticketsPerUserN: "10"
+      topActiveUsersN: "10"
     };
     function fmt(value, digits = 0) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "N/A";
@@ -3157,7 +3302,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return `${dateText(value)} ${time}`;
     }
     function rounded(value) {
-      return Math.ceil(Number(value || 0)).toLocaleString();
+      return Math.round(Number(value || 0)).toLocaleString();
     }
     function esc(value) {
       return String(value ?? "")
@@ -3389,7 +3534,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return [...baseCommentaryMap().values()];
     }
     function safeJsonForScript(payload) {
-      return JSON.stringify(payload).replace(/<\//g, "<\\/");
+      return JSON.stringify(payload).replace(/<[/]/g, "<\\\\/");
     }
     function editedDashboardFilename() {
       const now = new Date();
@@ -3445,6 +3590,22 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       }
       return `<div class="tile ${tone}"><p class="label">${esc(label)}</p><strong>${esc(value)}</strong><p class="muted">${esc(helper)}</p></div>`;
     }
+    function splitTile(label, metrics, index = null, columns = null) {
+      let tone = "";
+      if (index !== null) {
+        const columnCount = columns || 2;
+        const row = Math.floor(index / columnCount);
+        const column = index % columnCount;
+        tone = (row + column) % 2 === 0 ? "tile-dark" : "tile-light";
+      }
+      const metricLines = metrics.map((metric) => `
+        <span class="metric-line">
+          <strong>${esc(metric.label)}: ${esc(metric.value)}</strong>
+          <span class="metric-helper">${esc(metric.helper)}</span>
+        </span>
+      `).join("");
+      return `<div class="tile ${tone}"><p class="label">${esc(label)}</p>${metricLines}</div>`;
+    }
     function option(value, label, selected) {
       return `<option value="${esc(value)}" ${selected === value ? "selected" : ""}>${esc(label)}</option>`;
     }
@@ -3461,15 +3622,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const width = Math.max(640, Math.min(options.width || 960, 1120));
       const isApplicationChart = Boolean(options.applicationChart);
       const isDurationBucketChart = Boolean(options.durationBucketChart);
-      const height = options.height || (isApplicationChart ? 380 : isDurationBucketChart ? 340 : 360);
+      const height = options.height || (isApplicationChart ? 340 : isDurationBucketChart ? 340 : 360);
       const margin = isApplicationChart
-        ? { top: 46, right: 28, bottom: 96, left: 42 }
+        ? { top: 40, right: 28, bottom: 114, left: 42 }
         : isDurationBucketChart
           ? { top: 52, right: 30, bottom: 92, left: 40 }
         : { top: 42, right: 28, bottom: 86, left: 36 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
-      const maxValue = Math.max(1, ...data.flatMap((row) => series.map((item) => Number(row[item.key] || 0))));
+      const rawMaxValue = Math.max(1, ...data.flatMap((row) => series.map((item) => Number(row[item.key] || 0))));
+      const maxValue = rawMaxValue * 1.12;
       const categoryCount = Math.max(1, data.length);
       const activePlotWidth = isApplicationChart && categoryCount <= 5
         ? Math.min(plotWidth, categoryCount * 140)
@@ -3486,7 +3648,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       } else if (isDurationBucketChart) {
         barWidth = Math.max(28, Math.min(58, (groupWidth - 16) / series.length));
       } else {
-        barWidth = Math.max(5, Math.min(18, (groupWidth - 8) / series.length));
+        barWidth = Math.max(10, Math.min(30, (groupWidth - 8) / series.length));
       }
       const dataLabelFontSize = isApplicationChart ? 14 : isDurationBucketChart ? 14 : 10;
       const axisLabelFontSize = isApplicationChart ? 13 : isDurationBucketChart ? 13 : 10;
@@ -3498,7 +3660,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           const barHeight = (value / maxValue) * plotHeight;
           const x = margin.left + plotOffsetX + index * groupWidth + (groupWidth - barWidth * series.length) / 2 + seriesIndex * barWidth;
           const y = margin.top + plotHeight - barHeight;
-          bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${item.color}" rx="3"></rect>`);
+          const fill = options.colorByIndex ? COLORS.pie[(index + seriesIndex) % COLORS.pie.length] : item.color;
+          bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${fill}" rx="3"></rect>`);
           if (value > 0) {
             const labelY = Math.max(margin.top + dataLabelFontSize, y - 7);
             bars.push(`<text x="${x + barWidth / 2}" y="${labelY}" text-anchor="middle" font-size="${dataLabelFontSize}" font-weight="${labelFontWeight}" fill="#334155">${options.roundLabels ? rounded(value) : fmt(value)}</text>`);
@@ -3507,12 +3670,20 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
       const labels = data.map((row, index) => {
         const x = margin.left + plotOffsetX + index * groupWidth + groupWidth / 2;
+        if (options.wrapAxisLabels) {
+          const words = String(row.label || "").split(/\\s+/).filter(Boolean);
+          const lines = words.length <= 2
+            ? words
+            : [words.slice(0, Math.ceil(words.length / 2)).join(" "), words.slice(Math.ceil(words.length / 2)).join(" ")];
+          const y = margin.top + plotHeight + 24;
+          return `<text x="${x}" y="${y}" text-anchor="middle" font-size="${axisLabelFontSize}" font-weight="${labelFontWeight}" fill="#334155">${lines.slice(0, 3).map((line, lineIndex) => `<tspan x="${x}" dy="${lineIndex === 0 ? 0 : axisLabelFontSize + 4}">${esc(line)}</tspan>`).join("")}</text>`;
+        }
         return `<text x="${x}" y="${height - 42}" text-anchor="end" transform="rotate(-38 ${x} ${height - 42})" font-size="${axisLabelFontSize}" font-weight="${labelFontWeight}" fill="#334155">${esc(row.label)}</text>`;
       });
       return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${options.title || "Bar chart"}">
         <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
         ${bars.join("")}${labels.join("")}
-      </svg>${legend(series)}`;
+      </svg>${options.hideLegend ? "" : legend(series)}`;
     }
     function horizontalBarChart(data, options = {}) {
       if (!data.length) return `<p class="muted" style="padding:12px">${esc(options.emptyMessage || "No chart data available.")}</p>`;
@@ -3605,7 +3776,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ${pointLabels}${xLabels}
       </svg>${legend([{ name: `${plan} applications`, color }])}`;
     }
-    function pieChart(items) {
+    function pieChart(items, options = {}) {
       const visibleItems = items.filter((item) => Number(item.count || 0) > 0);
       const total = visibleItems.reduce((sum, item) => sum + item.count, 0);
       if (!total) return `<p class="muted">No chart data available.</p>`;
@@ -3620,9 +3791,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         const endAngle = startAngle + angle;
         const start = polar(cx, cy, radius, endAngle);
         const end = polar(cx, cy, radius, startAngle);
-        const labelPoint = polar(cx, cy, radius + 34, startAngle + angle / 2);
-        if (angle >= 10) {
-          labels.push(`<text x="${labelPoint.x}" y="${labelPoint.y}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="900" fill="#0f172a">${fmt(item.count)} (${Math.round((item.count / total) * 100)}%)</text>`);
+        const midAngle = startAngle + angle / 2;
+        const pctValue = (item.count / total) * 100;
+        const labelPoint = polar(cx, cy, radius + 26, midAngle);
+        const percentPoint = polar(cx, cy, radius * 0.58, midAngle);
+        if (options.labelAll || pctValue >= 10) {
+          labels.push(`<text x="${labelPoint.x}" y="${labelPoint.y}" text-anchor="middle" dominant-baseline="middle" font-size="10" font-weight="900" fill="#334155">${esc(item.label)}</text>`);
+          labels.push(`<text x="${percentPoint.x}" y="${percentPoint.y}" text-anchor="middle" dominant-baseline="middle" font-size="10" font-weight="900" fill="#ffffff" stroke="rgba(15,23,42,.45)" stroke-width="2" paint-order="stroke">${pctValue.toFixed(1)}%</text>`);
         }
         const large = angle > 180 ? 1 : 0;
         const path = `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${large} 0 ${end.x} ${end.y} Z`;
@@ -3672,7 +3847,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function chartSvgSize(svg) {
       const viewBoxText = svg.getAttribute("viewBox") || "";
-      const viewBox = viewBoxText.trim().split(/\s+/).map(Number);
+      const viewBox = viewBoxText.trim().split(/\\s+/).map(Number);
       const rect = svg.getBoundingClientRect();
       const attrWidth = Number(svg.getAttribute("width"));
       const attrHeight = Number(svg.getAttribute("height"));
@@ -3731,7 +3906,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       }).filter((item) => item.name);
     }
     function wrapExportText(value, maxLength = 128) {
-      const words = String(value || "").trim().split(/\s+/).filter(Boolean);
+      const words = String(value || "").trim().split(/\\s+/).filter(Boolean);
       const lines = [];
       let current = "";
       words.forEach((word) => {
@@ -3925,11 +4100,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function serviceSplitTable(rows, dimensionLabel, countLabel, tableId) {
       const total = rows.reduce((sum, row) => sum + Number(row.count || 0), 0);
-      return `<table id="${tableId}" class="applications-table"><thead><tr><th>${esc(dimensionLabel)}</th><th>${esc(countLabel)}</th><th>Percentage</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.count)}</td><td>${total ? ((Number(row.count || 0) / total) * 100).toFixed(1) : "0.0"}%</td></tr>`).join("")}</tbody></table>`;
+      return `<table id="${tableId}" class="applications-table compact-export-table"><thead><tr><th>${esc(dimensionLabel)}</th><th>${esc(countLabel)}</th><th>Percentage</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.count)}</td><td>${total ? ((Number(row.count || 0) / total) * 100).toFixed(1) : "0.0"}%</td></tr>`).join("")}</tbody></table>`;
     }
     function applicationServiceSplitCard(title, field, dimensionLabel, tableId, filename, commentaryKey, rows) {
       const data = serviceCountBy(rows, field);
-      return `<section class="chart-card panel" data-commentary-key="${esc(commentaryKey)}"><h3>${esc(title)}</h3><div class="chart-frame chart-stage">${pieChart(data)}</div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll">${serviceSplitTable(data, dimensionLabel, "Application Count", tableId)}</div></section>`;
+      return `<section class="chart-card panel" data-commentary-key="${esc(commentaryKey)}"><h3>${esc(title)}</h3><div class="chart-frame chart-stage">${pieChart(data, { labelAll: true })}</div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll compact-table-frame">${serviceSplitTable(data, dimensionLabel, "Application Count", tableId)}</div></section>`;
     }
     function aggregateByPeriod(rows) {
       const agreementMode = state.slaMode === "ola" ? "ola" : "sla";
@@ -3938,7 +4113,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         return {
           label: period.period_label,
           created: sum(matching, "created_count"),
+          createdIncidents: sum(matching.filter((row) => row.ticket_type === "incident"), "created_count"),
+          createdScTasks: sum(matching.filter((row) => row.ticket_type === "sc_task"), "created_count"),
           resolved: sum(matching, "resolved_closed_count"),
+          resolvedIncidents: sum(matching.filter((row) => row.ticket_type === "incident"), "resolved_closed_count"),
+          resolvedScTasks: sum(matching.filter((row) => row.ticket_type === "sc_task"), "resolved_closed_count"),
           canceled: sum(matching, "canceled_closed_incomplete_count"),
           backlog: sum(matching, "backlog_open"),
           responseMet: sum(matching, `${agreementMode}_response_sla_met_count`),
@@ -3960,18 +4139,27 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${tile("Functional Tracks / AMS Owners", fmt(overview.application_inventory.functional_track_count), `AMS Owners: ${fmt(overview.application_inventory.ams_owner_count)}`, 1, 4)}
           ${tile("Assignment Groups", fmt(overview.application_inventory.assignment_group_count), "", 2, 4)}
           ${tile("Supported Vendors", fmt(overview.application_inventory.supported_vendor_count), "", 3, 4)}
-          ${tile("In-Scope Tickets", fmt(overview.tickets.total_in_scope_tickets), "", 4, 4)}
-          ${tile("Incidents", fmt(overview.tickets.incident_count), `${pct(overview.tickets.incident_count, overview.tickets.total_in_scope_tickets)} of in-scope tickets`, 5, 4)}
-          ${tile("SC Tasks", fmt(overview.tickets.sc_task_count), `${pct(overview.tickets.sc_task_count, overview.tickets.total_in_scope_tickets)} of in-scope tickets`, 6, 4)}
+          ${tile("In-Scope Tickets", fmt(overview.tickets.total_in_scope_tickets), `Out-of-scope: ${fmt(overview.tickets.total_out_of_scope_tickets)}\nTotal scoped: ${fmt(overview.tickets.total_tickets)}`, 4, 4)}
+          ${tile("In-Scope Incidents", fmt(overview.tickets.incident_count), `${pct(overview.tickets.incident_count, overview.tickets.total_in_scope_tickets)} of in-scope tickets\nOut-of-scope: ${fmt(overview.tickets.out_of_scope_incident_count)}`, 5, 4)}
+          ${tile("In-Scope SC Tasks", fmt(overview.tickets.sc_task_count), `${pct(overview.tickets.sc_task_count, overview.tickets.total_in_scope_tickets)} of in-scope tickets\nOut-of-scope: ${fmt(overview.tickets.out_of_scope_sc_task_count)}`, 6, 4)}
           ${tile("Apps Driving 80% Volume", fmt(overview.tickets.applications_80pct_monthly_volume_count), "Based on avg monthly ticket volume", 7, 4)}
         </div>
-        <p class="overview-date-note">Tickets data range: ${dateText(overview.tickets.completion_date_min)} to ${dateText(overview.tickets.completion_date_max)}</p>
+        <p class="overview-date-note">Tickets data range: 01-Jan-2025 to 31-May-2026</p>
         ${commentaryMarkup({ dashboard_area: "dashboard", tab_name: "overview", sub_tab_name: "", section_key: "overview_summary", chart_key: "", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: "all" })}
       </section>`;
       installCommentaryEditors(document.getElementById("overview"));
     }
     function filteredApplications() {
       return DASHBOARD.applications.rows.filter((row) =>
+        (state.appScope === "all" || row.scope_status === state.appScope) &&
+        (state.appFunctional === "all" || row.functional_track_ams_owner === state.appFunctional) &&
+        (state.appServiceEntitlement === "all" || (row.service_entitlement || "(blank)") === state.appServiceEntitlement) &&
+        (state.appSap === "all" || row.sap_non_sap === state.appSap) &&
+        (state.appBusinessCritical === "all" || row.biz_criticality === state.appBusinessCritical)
+      );
+    }
+    function filteredApplicationSupportGroups() {
+      return (DASHBOARD.applications.support_group_rows || DASHBOARD.applications.rows).filter((row) =>
         (state.appScope === "all" || row.scope_status === state.appScope) &&
         (state.appFunctional === "all" || row.functional_track_ams_owner === state.appFunctional) &&
         (state.appServiceEntitlement === "all" || (row.service_entitlement || "(blank)") === state.appServiceEntitlement) &&
@@ -4013,7 +4201,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
     }
     function normalizeApplicationDimension(value) {
-      return String(value ?? "").trim().replace(/\s+/g, " ");
+      return String(value ?? "").trim().replace(/\\s+/g, " ");
     }
     function applicationServiceKey(row) {
       return normalizeApplicationDimension(row.business_service_ci_name).toLowerCase();
@@ -4042,8 +4230,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       rows.forEach((row) => {
         const serviceKey = applicationServiceKey(row);
         if (!serviceKey) return;
-        const lifecycleStageStatus = normalizeApplicationDimension(row.lifecycle_stage_status).toLowerCase();
-        if (lifecycleStageStatus !== "in use") return;
+        const installStatus = normalizeApplicationDimension(row.install_status).toLowerCase();
+        if (installStatus !== "installed") return;
         const criticality = normalizeApplicationDimension(row.biz_criticality);
         const hostingEnv = normalizeApplicationDimension(row.hosting_env);
         if (!criticality || !hostingEnv) return;
@@ -4136,7 +4324,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return `applications_lifecycle_plan_${String(plan || "Invest").toLowerCase()}`;
     }
     function inUseLifecycleApplication(row) {
-      return normalizeApplicationDimension(row.lifecycle_stage_status).toLowerCase() === "in use" && !!applicationServiceKey(row);
+      return normalizeApplicationDimension(row.install_status).toLowerCase() === "installed" && !!applicationServiceKey(row);
     }
     function lifecyclePlanningData(rows, selectedPlan) {
       const cellSets = new Map();
@@ -4220,9 +4408,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ["AMS Owner", "ams_owner"],
         ["Application Owner", "application_owner"],
         ["Supported By Vendor", "supported_by_vendor"],
-        ["Install Type", "install_type"],
         ["Business Criticality", "biz_criticality"],
-        ["Architecture Type", "architecture_type"],
         ["Application Type", "app_type"],
         ["Hosting Env", "hosting_env"],
         ["Global", "global_application"],
@@ -4476,10 +4662,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function renderApplications() {
       const rows = filteredApplications();
-      const topActiveUsers = topActiveUsersPoints(rows);
-      const globalLocalData = globalLocalApplications(rows);
+      const supportGroupRows = filteredApplicationSupportGroups();
       const criticalityPivot = criticalityHostingPivot(rows);
-      const lifecycleData = lifecyclePlanningData(rows, state.lifecyclePlan);
       const functionalValues = uniqueSorted(DASHBOARD.applications.rows, "functional_track_ams_owner");
       const appScopeValues = [
         { value: "in_scope", label: "In Scope" },
@@ -4492,43 +4676,30 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const technicalCount = rows.filter((row) => ["technical", "technical application"].includes(String(row.app_type).toLowerCase())).length;
       const criticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "critical").length;
       const veryCriticalCount = rows.filter((row) => String(row.biz_criticality).toLowerCase() === "very critical").length;
-      const applicationsSubtabs = ["overview", "lifecycle_planning", "assignment_group_mapping"].map((tab) => {
+      const applicationsSubtabs = ["overview", "assignment_group_mapping"].map((tab) => {
         const label = tab === "overview"
           ? "Overview"
-          : tab === "lifecycle_planning"
-            ? "Lifecycle Planning"
-            : "Assignment Group Mapping";
+          : "Assignment Group Mapping";
         return `<button type="button" data-app-subtab="${tab}" class="${state.appSubTab === tab ? "active" : ""}">${label}</button>`;
       }).join("");
       const overviewMarkup = `
         <div class="summary-grid cards-grid">
           ${tile("Applications", fmt(new Set(rows.map((row) => row.business_service_ci_name)).size), "", 0, 6)}
           ${tile("Functional Groups", fmt(new Set(rows.map((row) => row.functional_track)).size), "", 1, 6)}
-          ${tile("Assignment Groups", fmt(new Set(rows.map((row) => row.assignment_group)).size), "", 2, 6)}
+          ${tile("Assignment Groups", fmt(new Set(supportGroupRows.map((row) => row.assignment_group)).size), "", 2, 6)}
           ${tile("Parent Business Apps", fmt(new Set(rows.map((row) => row.parent_application_name)).size), "", 3, 6)}
           ${tile("Application Type", `Business: ${fmt(businessCount)}`, `Technical: ${fmt(technicalCount)}`, 4, 6)}
           ${tile("Criticality", `Very Critical: ${fmt(veryCriticalCount)}`, `Critical: ${fmt(criticalCount)}`, 5, 6)}
         </div>
         ${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "", section_key: "applications_summary", chart_key: "", scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}
+        <section class="panel table-card" data-commentary-key="application_list" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>
         <div class="chart-grid">
           ${applicationServiceSplitCard("Applications by Service Entitlement", "service_entitlement", "Service Entitlement", "offline-app-service-entitlement", "applications_by_service_entitlement.csv", "applications_service_entitlement_split", rows)}
           ${applicationServiceSplitCard("Applications by Service Type", "service_type", "Service Type", "offline-app-service-type", "applications_by_service_type.csv", "applications_service_type_split", rows)}
-          <section class="chart-card panel" data-commentary-key="strategic"><h3>Strategic</h3><div class="chart-frame chart-stage">${pieChart(countBy(rows, "strategic"))}</div></section>
-          <section class="chart-card panel" data-commentary-key="lifecycle_stage"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 820, applicationChart: true })}</div></section>
-          <section class="chart-card panel" data-commentary-key="architecture_type"><h3>Architecture Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "architecture_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.teal }], { width: 820, applicationChart: true })}</div></section>
-          <section class="chart-card panel" data-commentary-key="install_type"><h3>Install Type</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "install_type").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.purple }], { width: 820, applicationChart: true })}</div></section>
-          <section class="chart-card panel" data-commentary-key="hosting_env"><h3>Hosting Env</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "hosting_env").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.orange }], { width: 820, applicationChart: true })}</div></section>
-          <section class="chart-card panel" data-commentary-key="applications_global_local"><h3>Global vs Local Applications</h3><div class="chart-frame chart-stage">${pieChart(globalLocalData)}</div></section>
+          <section class="chart-card panel" data-commentary-key="lifecycle_stage"><h3>Lifecycle Stage</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "lifecycle_stage_status").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.blue }], { width: 920, height: 330, applicationChart: true, colorByIndex: true, hideLegend: true, wrapAxisLabels: true })}</div></section>
+          <section class="chart-card panel" data-commentary-key="hosting_env"><h3>Hosting Env</h3><div class="chart-frame chart-stage">${barChart(countBy(rows, "hosting_env").map((row) => ({ label: row.label, count: row.count })), [{ key: "count", name: "Applications", color: COLORS.orange }], { width: 920, height: 330, applicationChart: true, colorByIndex: true, hideLegend: true, wrapAxisLabels: true })}</div></section>
         </div>
-        <section class="chart-card panel full" data-commentary-key="applications_criticality_hosting_pivot"><h3>Application Criticality by Hosting Environment</h3><p class="muted">Count of unique Business Service CI Names with Life Cycle Stage Status = In Use.</p><div class="table-frame table-scroll">${criticalityHostingPivotTable(criticalityPivot)}</div></section>
-        <section class="chart-card panel full" data-commentary-key="top_active_users"><div class="chart-title-row"><div><h3>Top Parent Business Applications by Active Users</h3><p class="muted">Application Inventory only. One row per Parent Business Application, using the highest Active Users value when duplicates exist.</p></div><div class="pattern-buttons">${topActiveUsersToggle()}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topActiveUsers, { title: "Top Parent Business Applications by Active Users", legend: "Active Users", color: COLORS.teal, height: state.topActiveUsersN === "20" ? 720 : 470, emptyMessage: "Active Users data is not available yet." })}</div></section>
-        <section class="panel table-card" data-commentary-key="application_list" style="padding:14px"><h3>Application List</h3><div class="table-frame table-scroll">${applicationTable(rows)}</div></section>`;
-      const lifecycleMarkup = `
-        <section class="panel lifecycle-planning-intro"><p class="label">Applications</p><h2>Lifecycle Planning</h2><p class="muted">Lifecycle planning shows In Use applications across Current, 1 to 3 years, and 3 to 5 years planning horizons.</p></section>
-        <section class="panel lifecycle-matrix-panel"><p class="label">Lifecycle Planning Matrix</p><h2>Application Lifecycle Planning Matrix</h2><p class="muted">Counts represent distinct Business Service CI Names per planning horizon. The same application can appear in multiple horizons.</p><div class="table-frame table-scroll">${lifecyclePlanningMatrixTable(lifecycleData)}</div></section>
-        <section class="panel lifecycle-plan-panel"><div class="chart-title-row"><div><p class="label">Plan Focus</p><h2>${esc(lifecyclePlanTitle(state.lifecyclePlan))}</h2></div><div class="pattern-buttons">${lifecyclePlanToggle()}</div></div>${commentaryMarkup({ dashboard_area: "applications", tab_name: "applications", sub_tab_name: "lifecycle_planning", section_key: "lifecycle_planning_selected_plan", chart_key: lifecyclePlanCommentaryKey(state.lifecyclePlan), scope_filter: "all", ticket_type_filter: "all", functional_track_ams_owner: state.appFunctional })}</section>
-        <section class="chart-card panel full"><h3>${esc(lifecyclePlanTitle(state.lifecyclePlan))}</h3><p class="muted">Count of unique Business Service CI Names by planning horizon.</p><div class="chart-frame chart-stage">${lifecyclePlanLineChart(lifecycleData.selected_plan.chart, state.lifecyclePlan)}</div></section>
-        <section class="panel table-card" style="padding:14px"><h3>${esc(lifecyclePlanTitle(state.lifecyclePlan))} - Details</h3><p class="muted">Showing ${fmt(lifecycleData.selected_plan.application_count)} applications with ${esc(state.lifecyclePlan)} plan across one or more lifecycle horizons.</p><div class="table-frame table-scroll">${lifecycleDetailTable(lifecycleData.selected_plan.applications)}</div></section>`;
+        <section class="chart-card panel full" data-commentary-key="applications_criticality_hosting_pivot"><h3>Application Criticality by Hosting Environment</h3><p class="muted">Count of unique Business Service CI Names with Install Status = Installed.</p><div class="table-frame table-scroll">${criticalityHostingPivotTable(criticalityPivot)}</div></section>`;
       document.getElementById("applications").innerHTML = `<div class="layout dashboard-layout">
         <aside class="filters filter-pane panel">
           <p class="label">Filters</p><h2>Applications</h2>
@@ -4540,7 +4711,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         </aside>
         <section class="main main-content">
           <div class="pattern-buttons application-subtabs">${applicationsSubtabs}</div>
-          ${state.appSubTab === "overview" ? overviewMarkup : state.appSubTab === "lifecycle_planning" ? lifecycleMarkup : renderAssignmentGroupMapping()}
+          ${state.appSubTab === "overview" ? overviewMarkup : renderAssignmentGroupMapping()}
         </section>
       </div>`;
       document.getElementById("app-scope").addEventListener("change", (event) => { state.appScope = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
@@ -4550,12 +4721,6 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.getElementById("app-business-critical").addEventListener("change", (event) => { state.appBusinessCritical = event.target.value; safeRenderSection("applications", "Applications", renderApplications); });
       document.querySelectorAll("[data-app-subtab]").forEach((button) => {
         button.addEventListener("click", () => { state.appSubTab = button.dataset.appSubtab; safeRenderSection("applications", "Applications", renderApplications); });
-      });
-      document.querySelectorAll("[data-top-active-users]").forEach((button) => {
-        button.addEventListener("click", () => { state.topActiveUsersN = button.dataset.topActiveUsers; safeRenderSection("applications", "Applications", renderApplications); });
-      });
-      document.querySelectorAll("[data-lifecycle-plan]").forEach((button) => {
-        button.addEventListener("click", () => { state.lifecyclePlan = button.dataset.lifecyclePlan; safeRenderSection("applications", "Applications", renderApplications); });
       });
       document.querySelectorAll("[data-app-mapping-source]").forEach((button) => {
         button.addEventListener("click", () => { state.appMappingSource = button.dataset.appMappingSource; state.appMappingTrack = "all"; safeRenderSection("applications", "Applications", renderApplications); });
@@ -4574,7 +4739,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       installScrollableTableKeyboard(document.getElementById("applications"));
     }
     function applicationTable(rows) {
-      const columns = ["business_service_ci_name", "scope_status", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "lifecycle_stage_status", "lifecycle_current", "lifecycle_1_to_3_years", "lifecycle_3_to_5_years", "active_users", "app_type", "architecture_type", "biz_criticality", "install_status", "install_type", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
+      const columns = ["business_service_ci_name", "scope_status", "parent_application_name", "assignment_group", "sap_non_sap", "application_owner", "support_lead", "functional_track", "ams_owner", "supported_by_vendor", "hosting_env", "global_application", "lifecycle_stage_status", "lifecycle_current", "lifecycle_1_to_3_years", "lifecycle_3_to_5_years", "active_users", "app_type", "biz_criticality", "install_status", "lifecycle_status", "operating_system", "sox_scope", "strategic"];
       return `<table class="applications-table"><thead><tr>${columns.map((column) => `<th>${esc(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${esc(column === "active_users" && row[column] !== null && row[column] !== undefined ? fmt(row[column]) : (row[column] ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     }
     function filteredVolumetricsRows() {
@@ -4626,7 +4791,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${renderSelect("vol-business-critical", "Business Criticality", [{ value: "all", label: "All" }, ...DASHBOARD.volumetrics.filter_values.business_critical.map((value) => ({ value, label: value }))], state.volBusinessCritical)}
         </aside>
         <section class="main main-content">
-          <section class="panel" style="padding:14px"><p class="muted"><strong>Monthly dashboard based on complete uploaded months.</strong> Charts use ${dateText(DASHBOARD.metadata.complete_month_from)} to ${dateText(DASHBOARD.metadata.complete_month_to)}. Data available from ${dateText(DASHBOARD.metadata.data_available_from)} to ${dateText(DASHBOARD.metadata.data_available_to)}.</p><div class="subtabs">${volSubTabs()}</div></section>
+          <section class="panel" style="padding:14px"><p class="muted"><strong>Monthly dashboard based on complete uploaded months.</strong> Charts use 01-Jan-2025 to 31-May-2026. Data available from 01-Jan-2025 to 31-May-2026.</p><div class="subtabs">${volSubTabs()}</div></section>
           ${renderVolumetricsSubTab(periods)}
         </section>
       </div>`;
@@ -4658,11 +4823,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       document.querySelectorAll("[data-top-batch]").forEach((button) => {
         button.addEventListener("click", () => { state.topBatchN = button.dataset.topBatch; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
-      document.querySelectorAll("[data-top-tickets-user]").forEach((button) => {
-        button.addEventListener("click", () => { state.ticketsPerUserN = button.dataset.topTicketsUser; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
-      });
       document.querySelectorAll("[data-vol-assignment-track]").forEach((button) => {
         button.addEventListener("click", () => { state.volAssignmentTrack = button.dataset.volAssignmentTrack; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
+      });
+      document.querySelectorAll("[data-vol-business-service-track]").forEach((button) => {
+        button.addEventListener("click", () => { state.volBusinessServiceTrack = button.dataset.volBusinessServiceTrack; safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics); });
       });
       attachDefaultCommentaries(document.getElementById("volumetrics"), currentVolumetricsCommentaryContext());
       installChartCopyButtons(document.getElementById("volumetrics"));
@@ -4676,9 +4841,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         overall_sla_trends: "Overall SLA Trends",
         detailed_volume_trends: "Detailed Volume Trends",
         kpi_trends: "KPI Trends",
-        performance_trends: "Performance Trends",
-        category_wise_trends: "Category-wise Trends",
-        assignment_group_volumetrics: "Assignment Group Volumetrics"
+        assignment_group_volumetrics: "Assignment Group Volumetrics",
+        business_service_ci_volumetrics: "Business Service CI Volumetrics"
       };
       return Object.entries(labels).map(([value, label]) => `<button type="button" data-vol-subtab="${esc(value)}" class="${state.volSubTab === value ? "active" : ""}">${esc(label)}</button>`).join("");
     }
@@ -4692,6 +4856,17 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return state.volAssignmentTrack === "all"
         ? rows
         : rows.filter((row) => row.functional_track === state.volAssignmentTrack);
+    }
+    function businessServiceCiVolumetricsPayload() {
+      return DASHBOARD.volumetrics.business_service_ci_volumetrics?.[state.volScope] ||
+        DASHBOARD.volumetrics.business_service_ci_volumetrics?.in_scope ||
+        { months: [], tables: { incidents: { rows: [] }, sc_tasks: { rows: [] }, overall: { rows: [] } }, available_functional_tracks: [] };
+    }
+    function businessServiceCiVolumetricsRows(table) {
+      const rows = table?.rows || [];
+      return state.volBusinessServiceTrack === "all"
+        ? rows
+        : rows.filter((row) => row.functional_track === state.volBusinessServiceTrack);
     }
     const ASSIGNMENT_METRICS = [
       ["created", "Created"],
@@ -4725,6 +4900,22 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       ].filter(([, table]) => (table?.rows || []).length > 0);
       const basisSection = basisTables.length ? `<section class="panel full"><p class="label">Confirmed Out-of-Scope</p><h2>BASIS and SECURITY Assignment Group Volumetrics</h2><p class="muted">Confirmed out-of-scope BASIS/SECURITY assignment groups shown separately for validation.</p></section>${basisTables.map(([key, table]) => assignmentVolumetricsTable(table, payload.months || [], key)).join("")}` : "";
       return `<section class="panel full"><p class="label">Volumetrics &amp; SLA</p><h2>Assignment Group-wise Volumetrics</h2><p class="muted">Monthly created, resolved, and cancelled generic ticket volumes by Assignment Group for Dec-25 through May-26. Problems and Changes are excluded.</p><div class="validation-toolbar">${trackButtons}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "assignment_group_volumetrics" })}</section>${assignmentVolumetricsTable(payload.tables?.incidents, payload.months || [], "incidents")}${assignmentVolumetricsTable(payload.tables?.sc_tasks, payload.months || [], "sc-tasks")}${assignmentVolumetricsTable(payload.tables?.overall, payload.months || [], "overall")}${basisSection}`;
+    }
+    function businessServiceCiVolumetricsTable(table, months, tableKey) {
+      const rows = businessServiceCiVolumetricsRows(table);
+      const tableId = `offline-business-service-ci-vol-${tableKey}`;
+      const header1 = `<tr><th class="assignment-group-column" rowspan="2">Business Service CI</th><th class="reference-column" rowspan="2">Functional Track</th><th class="assignment-group-column" rowspan="2">Assignment Group</th>${months.map((month, index) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} month-boundary-left month-boundary-right" colspan="3">${esc(month.month_label)}</th>`).join("")}</tr>`;
+      const header2 = `<tr>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key, label], metricIndex) => `<th class="month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${label}</th>`)).join("")}</tr>`;
+      const bodyRows = rows.map((row) => `<tr><th class="assignment-group-column">${esc(row.business_service_ci_name)}</th><td class="reference-column">${esc(row.functional_track)}</td><td class="assignment-group-column">${esc(row.assignment_group)}</td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMetric(row, month, key))}</td>`)).join("")}</tr>`).join("");
+      const totalRow = `<tr class="pivot-total-row assignment-volumetrics-total-row"><th class="assignment-group-column">Grand Total</th><td class="reference-column"></td><td class="assignment-group-column"></td>${months.flatMap((month, index) => ASSIGNMENT_METRICS.map(([key], metricIndex) => `<td class="numeric-cell total-cell month-group-${index % 2 === 0 ? "a" : "b"} metric-${key} ${metricIndex === 0 ? "month-boundary-left" : ""} ${metricIndex === 2 ? "month-boundary-right" : ""}">${fmt(assignmentMonthTotals(rows, month, key))}</td>`)).join("")}</tr>`;
+      const csvFilename = `${safeCsvFilename(table?.title || tableKey)}_business_service_ci_volumetrics.csv`;
+      return `<section class="panel full assignment-volumetrics-panel"><div class="chart-title-row"><div><p class="label">Business Service CI Volumetrics</p><h3>${esc(table?.title || tableKey)}</h3><p class="muted">Showing ${fmt(rows.length)} Business Service CI rows.</p></div></div><div class="validation-actions table-export-actions assignment-volumetrics-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${csvFilename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll validation-table-frame offline-validation-scroll assignment-volumetrics-frame" role="region" tabindex="0" aria-label="${esc(table?.title || tableKey)} scrollable Business Service CI Volumetrics table"><table id="${tableId}" class="validation-table assignment-volumetrics-table"><thead>${header1}${header2}</thead><tbody>${rows.length ? totalRow + bodyRows : `<tr><td colspan="${3 + months.length * 3}">No Business Service CI rows match the selected controls.</td></tr>`}</tbody></table></div></section>`;
+    }
+    function renderBusinessServiceCiVolumetrics() {
+      const payload = businessServiceCiVolumetricsPayload();
+      const tracks = payload.available_functional_tracks || [];
+      const trackButtons = [`<button type="button" data-vol-business-service-track="all" class="${state.volBusinessServiceTrack === "all" ? "active" : ""}">All Tracks</button>`, ...tracks.map((track) => `<button type="button" data-vol-business-service-track="${esc(track)}" class="${state.volBusinessServiceTrack === track ? "active" : ""}">${esc(track)}</button>`)].join("");
+      return `<section class="panel full"><p class="label">Volumetrics &amp; SLA</p><h2>Business Service CI Volumetrics</h2><p class="muted">Monthly created, resolved, and cancelled generic ticket volumes by Business Service CI, Functional Track, and Assignment Group for Dec-25 through May-26. Problems and Changes are excluded.</p><div class="validation-toolbar">${trackButtons}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "business_service_ci_volumetrics" })}</section>${businessServiceCiVolumetricsTable(payload.tables?.incidents, payload.months || [], "incidents")}${businessServiceCiVolumetricsTable(payload.tables?.sc_tasks, payload.months || [], "sc-tasks")}${businessServiceCiVolumetricsTable(payload.tables?.overall, payload.months || [], "overall")}`;
     }
     function performancePayload() {
       return DASHBOARD.volumetrics.performance_trends || {
@@ -4780,7 +4971,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       </svg>${legend([{ name: "Average Monthly Productivity", color: COLORS.teal }, { name: "Cumulative productivity %", color: COLORS.purple }])}`;
     }
     function performanceProductivityTable(rows, tableId, filename) {
-      return `<section class="panel full table-card"><div class="chart-title-row"><div><p class="label">Performance Trends</p><h3>Full Support Engineer Productivity</h3><p class="muted">Sorted from top to bottom performers.</p></div></div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll"><table id="${tableId}" class="applications-table"><thead><tr><th>Rank</th><th>Support Engineer</th><th>Primary Assignment Group</th><th>Functional Track</th><th>Resolved Ticket Count</th><th>Average Monthly Productivity</th><th>Performance Period Months</th><th>Performance Period Label</th><th>Working Days</th><th>Tickets Resolved Per Working Day</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${fmt(row.rank)}</td><td>${esc(row.support_engineer)}</td><td>${esc(row.primary_assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${fmt(row.resolved_ticket_count)}</td><td>${fmt(row.average_monthly_productivity)}</td><td>${fmt(row.performance_period_months)}</td><td>${esc(row.performance_period_label)}</td><td>${fmt(row.working_days)}</td><td>${fmt(row.tickets_resolved_per_working_day, 2)}</td></tr>`).join("")}</tbody></table></div></section>`;
+      return `<section class="panel full table-card"><div class="chart-title-row"><div><p class="label">Performance Trends</p><h3>Support Engineer Productivity</h3><p class="muted">Sorted from top to bottom performers.</p></div></div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll"><table id="${tableId}" class="applications-table"><thead><tr><th>Rank</th><th>Support Engineer</th><th>Primary Assignment Group</th><th>Functional Track</th><th>Resolved Ticket Count</th><th>Average Monthly Productivity</th><th>Performance Period Months</th><th>Performance Period Label</th><th>Working Days</th><th>Tickets Resolved Per Working Day</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${fmt(row.rank)}</td><td>${esc(row.support_engineer)}</td><td>${esc(row.primary_assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${fmt(row.resolved_ticket_count)}</td><td>${fmt(row.average_monthly_productivity)}</td><td>${fmt(row.performance_period_months)}</td><td>${esc(row.performance_period_label)}</td><td>${fmt(row.working_days)}</td><td>${fmt(row.tickets_resolved_per_working_day, 2)}</td></tr>`).join("")}</tbody></table></div></section>`;
     }
     function performanceDurationTable(rows, tableId, filename) {
       return `<section class="panel full table-card"><div class="chart-title-row"><div><p class="label">Performance Trends</p><h3>Support Engineer Resolved Duration Breakdown</h3><p class="muted">Resolved-ticket duration buckets by support engineer.</p></div></div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll"><table id="${tableId}" class="applications-table"><thead><tr><th>Support Engineer</th><th>Primary Assignment Group</th><th>Functional Track</th><th>Resolved Ticket Count</th><th>0-1 Day Resolved</th><th>1-3 Days Resolved</th><th>3-10 Days Resolved</th><th>&gt;10 Days Resolved</th><th>Working Days</th><th>Tickets Resolved Per Working Day</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.support_engineer)}</td><td>${esc(row.primary_assignment_group)}</td><td>${esc(row.functional_track)}</td><td>${fmt(row.resolved_ticket_count)}</td><td>${fmt(row.resolved_0_1_day)}</td><td>${fmt(row.resolved_1_3_days)}</td><td>${fmt(row.resolved_3_10_days)}</td><td>${fmt(row.resolved_gt_10_days)}</td><td>${fmt(row.working_days)}</td><td>${fmt(row.tickets_resolved_per_working_day, 2)}</td></tr>`).join("")}</tbody></table></div></section>`;
@@ -4805,9 +4996,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       if (state.volSubTab === "overall_sla_trends") return renderSlaTrends();
       if (state.volSubTab === "detailed_volume_trends") return renderDetailedVolumeTrends();
       if (state.volSubTab === "kpi_trends") return renderKpiTrends();
-      if (state.volSubTab === "performance_trends") return renderPerformanceTrends();
       if (state.volSubTab === "assignment_group_volumetrics") return renderAssignmentGroupVolumetrics();
-      if (state.volSubTab === "category_wise_trends") return placeholder("Category-wise Trends");
+      if (state.volSubTab === "business_service_ci_volumetrics") return renderBusinessServiceCiVolumetrics();
       return renderOverallVolume(periods);
     }
     function rankingWindowText() {
@@ -4841,6 +5031,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function inRankingWindow(row) {
       const window = DASHBOARD.volumetrics.detailed_volume_trends?.ranking_window || {};
+      return !window.start_month || !window.end_month || (row.period_key >= window.start_month && row.period_key <= window.end_month);
+    }
+    function inSplitWindow(row) {
+      const window = DASHBOARD.volumetrics.detailed_volume_trends?.split_window || {};
       return !window.start_month || !window.end_month || (row.period_key >= window.start_month && row.period_key <= window.end_month);
     }
     function topApplicationPoints(options) {
@@ -4942,6 +5136,19 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .filter((row) => row.count > 0)
         .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
     }
+    function compactPieItems(items, thresholdPct = 10, maxSlices = 5) {
+      const sortedItems = [...items].sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+      const total = sortedItems.reduce((sum, row) => sum + Number(row.count || 0), 0);
+      if (!total || sortedItems.length <= 1) return sortedItems;
+      let visible = sortedItems.filter((row) => (Number(row.count || 0) / total) * 100 >= thresholdPct);
+      if (!visible.length && sortedItems.length > maxSlices) visible = sortedItems.slice(0, maxSlices - 1);
+      if (visible.length >= maxSlices) visible = visible.slice(0, maxSlices - 1);
+      const visibleSet = new Set(visible.map((row) => row.label));
+      const otherCount = sortedItems
+        .filter((row) => !visibleSet.has(row.label))
+        .reduce((sum, row) => sum + Number(row.count || 0), 0);
+      return otherCount > 0 ? [...visible, { label: "Others", count: otherCount }] : visible;
+    }
     function distributionNotApplicable(ticketType) {
       if (state.volTicketType === "all") return false;
       if (state.volTicketType === "incident") return ticketType !== "incident";
@@ -4950,31 +5157,71 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function serviceVolumeItems(field, ticketType) {
       const totals = new Map();
       detailedVolumeRows()
+        .filter(inSplitWindow)
         .filter((row) => distributionTicketMatch(row, ticketType))
         .forEach((row) => {
           const label = serviceLabel(row[field]);
           totals.set(label, (totals.get(label) || 0) + Number(row.created_count || 0));
         });
       return [...totals.entries()]
-        .map(([label, count]) => ({ label, count }))
+        .map(([label, count]) => ({ label, count: count / 6 }))
         .filter((row) => row.count > 0)
         .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
     }
     function serviceVolumeSection(title, field, ticketType, dimensionLabel, metricLabel, tableId, filename) {
       const notApplicable = distributionNotApplicable(ticketType);
       const items = notApplicable ? [] : serviceVolumeItems(field, ticketType);
-      return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">Created tickets in the selected dashboard period.</p><div class="chart-frame chart-stage">${notApplicable ? `<p class="muted" style="padding:12px">This service split is not applicable for the selected ticket type.</p>` : pieChart(items)}</div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll">${serviceSplitTable(items, dimensionLabel, metricLabel, tableId)}</div></section>`;
+      return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">${splitWindowText()}</p><div class="chart-frame chart-stage">${notApplicable ? `<p class="muted" style="padding:12px">This service split is not applicable for the selected ticket type.</p>` : pieChart(items, { labelAll: true })}</div><div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll">${serviceSplitTable(items, dimensionLabel, metricLabel, tableId)}</div></section>`;
     }
     function distributionPieSection(title, field, ticketType) {
       const notApplicable = distributionNotApplicable(ticketType);
-      const items = distributionItems(field, ticketType);
+      const rawItems = distributionItems(field, ticketType);
+      const items = field === "assignment_group_sap_non_sap"
+        ? rawItems
+        : compactPieItems(rawItems, field === "hosting_env" ? 5 : 10);
       return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">${splitWindowText()}</p><div class="chart-frame chart-stage">${notApplicable ? `<p class="muted" style="padding:12px">This distribution chart is not applicable for the selected ticket type.</p>` : pieChart(items)}</div></section>`;
+    }
+    function serviceTypeAssignmentGroupSapPivotRows(ticketType) {
+      const byServiceType = new Map();
+      detailedVolumeRows()
+        .filter(inSplitWindow)
+        .filter((row) => distributionTicketMatch(row, ticketType))
+        .forEach((row) => {
+          const serviceType = serviceLabel(row.service_type);
+          const split = row.assignment_group_sap_non_sap || "Others";
+          const createdCount = Number(row.created_count || 0);
+          if (!byServiceType.has(serviceType)) {
+            byServiceType.set(serviceType, { service_type: serviceType, sap: 0, non_sap: 0, others: 0, total: 0 });
+          }
+          const outputRow = byServiceType.get(serviceType);
+          if (split === "SAP") outputRow.sap += createdCount;
+          else if (split === "Non-SAP") outputRow.non_sap += createdCount;
+          else outputRow.others += createdCount;
+          outputRow.total += createdCount;
+        });
+      return [...byServiceType.values()]
+        .map((row) => ({
+          service_type: row.service_type,
+          sap: row.sap / 6,
+          non_sap: row.non_sap / 6,
+          others: row.others / 6,
+          total: row.total / 6
+        }))
+        .filter((row) => row.total > 0)
+        .sort((left, right) => right.total - left.total || left.service_type.localeCompare(right.service_type));
+    }
+    function serviceTypeAssignmentGroupSapPivotTable(rows, tableId, metricLabel) {
+      const showOthers = rows.some((row) => Number(row.others || 0) > 0);
+      return `<table id="${tableId}" class="applications-table compact-export-table"><thead><tr><th>Service Type</th><th>SAP</th><th>Non-SAP</th>${showOthers ? "<th>Others</th>" : ""}<th>${esc(metricLabel)}</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.service_type)}</td><td>${fmt(row.sap)}</td><td>${fmt(row.non_sap)}</td>${showOthers ? `<td>${fmt(row.others)}</td>` : ""}<td>${fmt(row.total)}</td></tr>`).join("")}</tbody></table>`;
+    }
+    function serviceTypeAssignmentGroupSapPivotSection(title, ticketType, tableId, filename, metricLabel) {
+      const notApplicable = distributionNotApplicable(ticketType);
+      const rows = notApplicable ? [] : serviceTypeAssignmentGroupSapPivotRows(ticketType);
+      return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">${splitWindowText()}</p>${notApplicable ? `<p class="muted" style="padding:12px">This pivot table is not applicable for the selected ticket type.</p>` : rows.length ? `<div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${filename}">Download CSV</button></div><div class="table-frame table-scroll compact-table-frame">${serviceTypeAssignmentGroupSapPivotTable(rows, tableId, metricLabel)}</div>` : `<p class="muted" style="padding:12px">No pivot data available.</p>`}</section>`;
     }
     function scTaskCatalogPeriodDefinitions() {
       return [
-        { key: "H1_2025", label: "H1 2025", title: "H1 2025 Catalog Item Proportion", start: "2025-01", end: "2025-06", from: "2025-01-01", to: "2025-06-30", months: 6 },
-        { key: "H2_2025", label: "H2 2025", title: "H2 2025 Catalog Item Proportion", start: "2025-07", end: "2025-12", from: "2025-07-01", to: "2025-12-31", months: 6 },
-        { key: "JAN_MAY_2026", label: "Jan-May 2026", title: "Jan-May 2026 Catalog Item Proportion", start: "2026-01", end: "2026-05", from: "2026-01-01", to: "2026-05-31", months: 5 }
+        { key: "DEC_2025_MAY_2026", label: "Dec-25 to May-26", title: "Dec-25 to May-26 Catalog Item Proportion", start: "2025-12", end: "2026-05", from: "2025-12-01", to: "2026-05-31", months: 6 }
       ];
     }
     function scTaskCatalogPeriodData(period) {
@@ -5001,39 +5248,45 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         avg: row.count / Math.max(1, monthCount),
         pct: total > 0 ? (row.count / total) * 100 : null
       }));
-      const visiblePieRows = [];
-      let otherCount = 0;
-      allRows.forEach((row) => {
-        const pct = total > 0 ? (row.count / total) * 100 : null;
-        if (pct !== null && pct < 2) {
-          otherCount += row.count;
-        } else {
-          visiblePieRows.push({ label: row.label, count: row.count });
-        }
-      });
-      if (otherCount > 0) {
-        visiblePieRows.push({ label: "Others", count: otherCount });
-      }
-      const pieRows = visiblePieRows.sort((left, right) =>
-        right.count - left.count || left.label.localeCompare(right.label)
-      );
+      const pieRows = compactPieItems(allRows, 2, 40);
       return { period, total, pieRows, topRows };
+    }
+    function scTaskCatalogBarChart(items) {
+      if (!items.length) return `<p class="muted" style="padding:12px">No catalog item data available.</p>`;
+      const width = Math.max(820, items.length * 48);
+      const height = Math.max(300, items.length * 38 + 86);
+      const margin = { top: 18, right: 96, bottom: 24, left: 230 };
+      const plotWidth = width - margin.left - margin.right;
+      const rowHeight = (height - margin.top - margin.bottom) / Math.max(1, items.length);
+      const totalCount = items.reduce((sum, row) => sum + Number(row.count || 0), 0);
+      const maxAvg = Math.max(1, ...items.map((row) => Number(row.count || 0) / 6));
+      const bars = items.map((row, index) => {
+        const avg = Number(row.count || 0) / 6;
+        const pctValue = totalCount > 0 ? (Number(row.count || 0) / totalCount) * 100 : null;
+        const barWidth = (avg / maxAvg) * plotWidth;
+        const y = margin.top + index * rowHeight + 6;
+        const barHeight = Math.max(16, rowHeight - 12);
+        const label = truncateLabel(row.label, 30);
+        const valueLabel = `${fmt(avg)} (${pctValue === null ? "N/A" : `${pctValue.toFixed(1)}%`})`;
+        return `<text x="${margin.left - 10}" y="${y + barHeight / 2 + 4}" text-anchor="end" font-size="11" font-weight="800" fill="#334155"><title>${esc(row.label)}</title>${esc(label)}</text><rect x="${margin.left}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${COLORS.teal}" rx="4"><title>${esc(row.label)} | Avg monthly ${fmt(avg)} | ${pctValue === null ? "N/A" : `${pctValue.toFixed(1)}%`}</title></rect><text x="${margin.left + barWidth + 8}" y="${y + barHeight / 2 + 4}" font-size="11" font-weight="800" fill="#334155">${esc(valueLabel)}</text>`;
+      }).join("");
+      return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMid meet" role="img" aria-label="SC Task catalog item average monthly volume">${bars}</svg>${legend([{ name: "Average Monthly SC Tasks", color: COLORS.teal }])}`;
     }
     function scTaskCatalogTable(periodData) {
       if (!periodData.topRows.length) {
         return `<p class="muted" style="padding:12px">No data available for ${esc(periodData.period.label)}.</p>`;
       }
-      return `<div class="table-scroll"><table class="applications-table"><thead><tr><th>Rank</th><th>Catalog Item</th><th>Average Monthly Volume</th></tr></thead><tbody>${periodData.topRows.map((row) => `<tr><td>${fmt(row.rank)}</td><td>${esc(row.label)}</td><td>${Math.round(row.avg)} (${row.pct === null ? "N/A" : `${row.pct.toFixed(1)}%`})</td></tr>`).join("")}</tbody></table></div>`;
+      return `<div class="table-scroll compact-table-frame"><table class="applications-table compact-export-table"><thead><tr><th>Rank</th><th>Catalog Item</th><th>Average Monthly Volume</th></tr></thead><tbody>${periodData.topRows.map((row) => `<tr><td>${fmt(row.rank)}</td><td>${esc(row.label)}</td><td>${Math.round(row.avg)} (${row.pct === null ? "N/A" : `${row.pct.toFixed(1)}%`})</td></tr>`).join("")}</tbody></table></div>`;
     }
     function scTaskCatalogSection() {
       if (state.volTicketType === "incident") {
         return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">SC Task Catalog Item Proportion is available for SC Tasks only. Change Ticket Type to All or SC Tasks.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
       }
       const periods = scTaskCatalogPeriodDefinitions().map(scTaskCatalogPeriodData);
-      return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows the proportion of SC Tasks by catalog item across selected periods. Values are based on created SC Task volume through May-26.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage">${pieChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Catalog items below 2% are grouped into Others. Average monthly volume is calculated over the months shown for each period.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
+      return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows average monthly SC Tasks by catalog item for Dec-25 through May-26.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage table-scroll">${scTaskCatalogBarChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Catalog items below 2% are grouped into Others.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
     }
     function incidentBatchTrendPoints() {
-      const rows = detailedVolumeRows().filter(incidentBatchFilterMatch);
+      const rows = filteredVolumetricsRows().filter(incidentBatchFilterMatch);
       return DASHBOARD.volumetrics.periods.map((period) => ({
         label: period.period_label,
         batch_created: sum(rows.filter((row) => row.period_key === period.period_key), "incident_batch_created_count")
@@ -5050,25 +5303,23 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         ? []
         : topApplicationPoints({ topN: state.topBatchN, batch: true });
       const batchTrend = state.volTicketType === "sc_task" ? [] : incidentBatchTrendPoints();
-      const ticketUserPoints = ticketsPerUserPoints();
       const batchMessage = state.volTicketType === "sc_task"
         ? "Batch-related ticket charts are applicable only for Incidents. SC Task catalog item charts will be added separately."
         : "Batch-related charts are Incident-only and use Incident tickets within the selected filters.";
       return `
         <section class="chart-card panel full" data-commentary-key="top_high_volume_applications"><div class="chart-title-row"><div><h3>Top High-Volume Applications</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("volume", state.topVolumeN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(topVolume.map((row) => ({ label: row.label, value: row.created, displayLabel: row.displayLabel })), { title: "Top High-Volume Applications", legend: "Average monthly tickets", color: COLORS.teal, height: state.topVolumeN === "20" ? 820 : 520 })}</div></section>
-        <section class="chart-card panel full" data-commentary-key="batch_related_incidents_created"><h3>Batch-related Incidents Created</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1040 })}</div></section>
+        <section class="chart-card panel full" data-commentary-key="batch_related_incidents_created"><h3>Batch-related Incidents Created</h3><p class="muted">${esc(batchMessage)}</p><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : barChart(batchTrend, [{ key: "batch_created", name: "Batch Created", color: COLORS.orange }], { width: 1080, height: 340 })}</div></section>
         <section class="chart-card panel full" data-commentary-key="top_incident_batch_applications"><div class="chart-title-row"><div><h3>Top Applications with Incident Batch-Related Tickets</h3><p class="muted">${rankingWindowText()}</p></div><div class="pattern-buttons">${topToggle("batch", state.topBatchN)}</div></div><div class="chart-frame chart-stage">${state.volTicketType === "sc_task" ? `<p class="muted" style="padding:12px">${esc(batchMessage)}</p>` : paretoBarLineChart(topBatch, "Average Batch Created Count", "Average Batch Canceled Count")}</div></section>
-        <section class="chart-card panel full" data-commentary-key="tickets_per_user_application"><div class="chart-title-row"><div><h3>Tickets per User per Month by Application</h3><p class="muted">Calculated as latest complete 6-month average monthly ticket volume divided by Active Users.</p></div><div class="pattern-buttons">${topToggle("tickets-user", state.ticketsPerUserN)}</div></div><div class="chart-frame chart-stage">${horizontalBarChart(ticketUserPoints, { title: "Tickets per User per Month by Application", legend: "Tickets per user per month", color: COLORS.purple, digits: 2, height: state.ticketsPerUserN === "20" ? 780 : 500, emptyMessage: "No applications with non-zero Active Users are available." })}</div></section>
         <div class="chart-grid-three">
-          ${serviceVolumeSection("Overall Ticket Volume by Service Entitlement", "service_entitlement", "all", "Service Entitlement", "Ticket Count", "offline-vol-service-entitlement-overall", "ticket_volume_by_service_entitlement_overall.csv")}
-          ${serviceVolumeSection("Incident Volume by Service Entitlement", "service_entitlement", "incident", "Service Entitlement", "Incident Count", "offline-vol-service-entitlement-incidents", "ticket_volume_by_service_entitlement_incidents.csv")}
-          ${serviceVolumeSection("SC Task Volume by Service Entitlement", "service_entitlement", "sc_task", "Service Entitlement", "SC Task Count", "offline-vol-service-entitlement-sc-tasks", "ticket_volume_by_service_entitlement_sc_tasks.csv")}
+          ${serviceVolumeSection("Average Monthly Tickets by Service Entitlement", "service_entitlement", "all", "Service Entitlement", "Avg Monthly Tickets", "offline-vol-service-entitlement-overall", "ticket_volume_by_service_entitlement_overall.csv")}
+          ${serviceVolumeSection("Average Monthly Incidents by Service Entitlement", "service_entitlement", "incident", "Service Entitlement", "Avg Monthly Incidents", "offline-vol-service-entitlement-incidents", "ticket_volume_by_service_entitlement_incidents.csv")}
+          ${serviceVolumeSection("Average Monthly SC Tasks by Service Entitlement", "service_entitlement", "sc_task", "Service Entitlement", "Avg Monthly SC Tasks", "offline-vol-service-entitlement-sc-tasks", "ticket_volume_by_service_entitlement_sc_tasks.csv")}
         </div>
         ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_service_entitlement_ticket_volume_split" })}
         <div class="chart-grid-three">
-          ${serviceVolumeSection("Overall Ticket Volume by Service Type", "service_type", "all", "Service Type", "Ticket Count", "offline-vol-service-type-overall", "ticket_volume_by_service_type_overall.csv")}
-          ${serviceVolumeSection("Incident Volume by Service Type", "service_type", "incident", "Service Type", "Incident Count", "offline-vol-service-type-incidents", "ticket_volume_by_service_type_incidents.csv")}
-          ${serviceVolumeSection("SC Task Volume by Service Type", "service_type", "sc_task", "Service Type", "SC Task Count", "offline-vol-service-type-sc-tasks", "ticket_volume_by_service_type_sc_tasks.csv")}
+          ${serviceVolumeSection("Average Monthly Tickets by Service Type", "service_type", "all", "Service Type", "Avg Monthly Tickets", "offline-vol-service-type-overall", "ticket_volume_by_service_type_overall.csv")}
+          ${serviceVolumeSection("Average Monthly Incidents by Service Type", "service_type", "incident", "Service Type", "Avg Monthly Incidents", "offline-vol-service-type-incidents", "ticket_volume_by_service_type_incidents.csv")}
+          ${serviceVolumeSection("Average Monthly SC Tasks by Service Type", "service_type", "sc_task", "Service Type", "Avg Monthly SC Tasks", "offline-vol-service-type-sc-tasks", "ticket_volume_by_service_type_sc_tasks.csv")}
         </div>
         ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_service_type_ticket_volume_split" })}
         ${scTaskCatalogSection()}
@@ -5079,17 +5330,16 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         </div>
         ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "sap_non_sap_distribution_row" })}
         <div class="chart-grid-three">
-          ${distributionPieSection("Average Monthly Tickets by Architecture Type", "architecture_type", "all")}
-          ${distributionPieSection("Average Monthly Incidents by Architecture Type", "architecture_type", "incident")}
-          ${distributionPieSection("Average Monthly SC Tasks by Architecture Type", "architecture_type", "sc_task")}
+          ${distributionPieSection("Average Monthly Tickets by Assignment Group SAP / Non-SAP", "assignment_group_sap_non_sap", "all")}
+          ${distributionPieSection("Average Monthly Incidents by Assignment Group SAP / Non-SAP", "assignment_group_sap_non_sap", "incident")}
+          ${distributionPieSection("Average Monthly SC Tasks by Assignment Group SAP / Non-SAP", "assignment_group_sap_non_sap", "sc_task")}
         </div>
-        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "architecture_type_distribution_row" })}
+        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "assignment_group_sap_non_sap_distribution_row" })}
         <div class="chart-grid-three">
-          ${distributionPieSection("Average Monthly Tickets by Install Type", "install_type", "all")}
-          ${distributionPieSection("Average Monthly Incidents by Install Type", "install_type", "incident")}
-          ${distributionPieSection("Average Monthly SC Tasks by Install Type", "install_type", "sc_task")}
+          ${serviceTypeAssignmentGroupSapPivotSection("Service Type vs Assignment Group SAP / Non-SAP - Overall", "all", "offline-service-type-assignment-group-sap-pivot-overall", "service_type_by_assignment_group_sap_non_sap_overall.csv", "Avg Monthly Tickets")}
+          ${serviceTypeAssignmentGroupSapPivotSection("Service Type vs Assignment Group SAP / Non-SAP - Incidents", "incident", "offline-service-type-assignment-group-sap-pivot-incidents", "service_type_by_assignment_group_sap_non_sap_incidents.csv", "Avg Monthly Incidents")}
+          ${serviceTypeAssignmentGroupSapPivotSection("Service Type vs Assignment Group SAP / Non-SAP - SC Tasks", "sc_task", "offline-service-type-assignment-group-sap-pivot-sc-tasks", "service_type_by_assignment_group_sap_non_sap_sc_tasks.csv", "Avg Monthly SC Tasks")}
         </div>
-        ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "install_type_distribution_row" })}
         <div class="chart-grid-three">
           ${distributionPieSection("Average Monthly Tickets by Hosting Env", "hosting_env", "all")}
           ${distributionPieSection("Average Monthly Incidents by Hosting Env", "hosting_env", "incident")}
@@ -5105,13 +5355,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function paretoBarLineChart(data, createdName, canceledName) {
       if (!data.length) return `<p class="muted" style="padding:12px">No chart data available.</p>`;
       const width = 1100;
-      const height = 430;
-      const margin = { top: 58, right: 72, bottom: 132, left: 44 };
+      const height = 410;
+      const margin = { top: 58, right: 72, bottom: 130, left: 86 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
-      const maxValue = Math.max(1, ...data.flatMap((row) => [Number(row.created || 0), Number(row.canceled || 0)]));
+      const maxValue = Math.max(1, ...data.flatMap((row) => [Number(row.created || 0), Number(row.canceled || 0)])) * 1.12;
       const groupWidth = plotWidth / Math.max(1, data.length);
-      const barWidth = Math.max(8, Math.min(26, (groupWidth - 12) / 2));
+      const barWidth = Math.max(12, Math.min(38, (groupWidth - 12) / 2));
       const bars = [];
       const linePoints = [];
       data.forEach((row, index) => {
@@ -5132,7 +5382,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const linePath = linePoints.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
       const labels = data.map((row, index) => {
         const x = margin.left + index * groupWidth + groupWidth / 2;
-        return `<text x="${x}" y="${height - 50}" text-anchor="end" transform="rotate(-38 ${x} ${height - 50})" font-size="10" font-weight="800" fill="#334155"><title>${esc(row.label)}</title>${esc(truncateLabel(row.label))}</text>`;
+        const y = margin.top + plotHeight + 34;
+        return `<text x="${x}" y="${y}" text-anchor="end" transform="rotate(-35 ${x} ${y})" font-size="8" font-weight="800" fill="#334155"><title>${esc(row.label)}</title>${esc(row.label)}</text>`;
       });
       return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Top applications Pareto chart">
         <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
@@ -5197,7 +5448,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const yAt = (value) => margin.top + plotHeight - (Number(value || 0) / maxValue) * plotHeight;
       const gridLines = Array.from({ length: 4 }, (_, index) => {
         const y = margin.top + (plotHeight * index) / 3;
-        return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#e2e8f0"></line>`;
+        const tickValue = maxValue * (1 - index / 3);
+        return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#e2e8f0"></line><text x="${margin.left - 8}" y="${y + 4}" text-anchor="end" font-size="10" font-weight="800" fill="#475569">${fmt(tickValue, 1)}</text>`;
       }).join("");
       const labels = series.flatMap((item, seriesIndex) => {
         const offset = seriesIndex === 0 ? -18 : 20;
@@ -5257,7 +5509,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
     }
     function durationBucketChart(row) {
-      return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(row.label)}</h3><div class="chart-frame chart-stage">${barChart(row.buckets, [{ key: "count", name: "Tickets", color: COLORS.purple }], { width: 520, height: 340, durationBucketChart: true })}</div></section>`;
+      return `<section class="chart-card panel" data-commentary-skip="true"><h3>${esc(row.label)}</h3><div class="chart-frame chart-stage">${barChart(row.buckets, [{ key: "count", name: "Tickets", color: COLORS.purple }], { width: 520, height: 340, durationBucketChart: true, hideLegend: true })}</div></section>`;
     }
     function durationGroup(title, ticketType) {
       const notApplicable = state.volTicketType !== "all" && state.volTicketType !== ticketType;
@@ -5346,19 +5598,19 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       </svg>${legend(series.map((item) => ({ name: item.name, color: item.color })))}`;
     }
     function openTicketAgingTable(data, tableKey) {
-      return `<div class="table-card"><div class="table-scroll"><table class="applications-table" id="open-ticket-aging-${esc(tableKey)}"><thead><tr><th>Month</th><th>0-1 Days Open</th><th>1-3 Days Open</th><th>3-10 Days Open</th><th>&gt;10 Days Open</th><th>Total Open Tickets</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.open_0_1_days)}</td><td>${fmt(row.open_1_3_days)}</td><td>${fmt(row.open_3_10_days)}</td><td>${fmt(row.open_gt_10_days)}</td><td>${fmt(row.total_open)}</td></tr>`).join("")}</tbody></table></div></div>`;
+      return `<div class="table-card" data-commentary-skip="true"><div class="table-scroll compact-table-frame"><table class="applications-table compact-export-table" id="open-ticket-aging-${esc(tableKey)}"><thead><tr><th>Month</th><th>0-1 Days Open</th><th>1-3 Days Open</th><th>3-10 Days Open</th><th>&gt;10 Days Open</th><th>Total Open Tickets</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.open_0_1_days)}</td><td>${fmt(row.open_1_3_days)}</td><td>${fmt(row.open_3_10_days)}</td><td>${fmt(row.open_gt_10_days)}</td><td>${fmt(row.total_open)}</td></tr>`).join("")}</tbody></table></div></div>`;
     }
     function openTicketAgingCategory(title, ticketType, commentaryKey) {
       const notApplicable = ticketType !== "all" && state.volTicketType !== "all" && state.volTicketType !== ticketType;
       if (notApplicable) {
-        return `<section class="chart-card panel full"><h3>${esc(title)}</h3><p class="muted">This open aging group is not applicable for the selected ticket type.</p></section>`;
+        return `<section class="chart-card panel full" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">This open aging group is not applicable for the selected ticket type.</p></section>`;
       }
       const points = openTicketAgingPoints(ticketType);
-      return `<section class="chart-card panel full"><h3>${esc(title)}</h3><p class="muted">Open tickets at period end by age from created date.</p><div class="chart-grid two"><div><h4>0-1 and 1-3 Days Open</h4><div class="chart-frame chart-stage">${openTicketAgingLineChart(points, openAgingSeries.short, `${title} 0-1 and 1-3 Days Open`)}</div></div><div><h4>3-10 and &gt;10 Days Open</h4><div class="chart-frame chart-stage">${openTicketAgingLineChart(points, openAgingSeries.long, `${title} 3-10 and >10 Days Open`)}</div></div></div>${openTicketAgingTable(points, ticketType)}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: commentaryKey })}</section>`;
+      return `<section class="chart-card panel full" data-commentary-skip="true"><h3>${esc(title)}</h3><p class="muted">Open tickets at period end by age from created date.</p><div class="chart-grid two"><div><h4>0-1 and 1-3 Days Open</h4><div class="chart-frame chart-stage">${openTicketAgingLineChart(points, openAgingSeries.short, `${title} 0-1 and 1-3 Days Open`)}</div></div><div><h4>3-10 and &gt;10 Days Open</h4><div class="chart-frame chart-stage">${openTicketAgingLineChart(points, openAgingSeries.long, `${title} 3-10 and >10 Days Open`)}</div></div></div>${openTicketAgingTable(points, ticketType)}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: commentaryKey })}</section>`;
     }
     function openTicketAgingGroup() {
       const notes = DASHBOARD.volumetrics.kpi_trends?.open_ticket_aging?.data_notes || [];
-      return `<section class="panel full" data-commentary-key="open_ticket_aging_trend"><p class="label">KPI Trends</p><h3>Open Ticket Aging Trend</h3><p class="muted">Open tickets at period end grouped by aging bucket using the Backlog(Open) exit logic.</p>${openTicketAgingCategory("Incidents", "incident", "open_ticket_aging_incidents")}${openTicketAgingCategory("SC Tasks", "sc_task", "open_ticket_aging_sc_tasks")}${openTicketAgingCategory("Overall", "all", "open_ticket_aging_overall")}${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}</section>`;
+      return `<section class="panel full" data-commentary-key="open_ticket_aging_trend" data-commentary-skip="true"><p class="label">KPI Trends</p><h3>Open Ticket Aging Trend</h3><p class="muted">Open tickets at period end grouped by aging bucket using the Backlog(Open) exit logic.</p>${openTicketAgingCategory("Incidents", "incident", "open_ticket_aging_incidents")}${openTicketAgingCategory("SC Tasks", "sc_task", "open_ticket_aging_sc_tasks")}${openTicketAgingCategory("Overall", "all", "open_ticket_aging_overall")}${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}</section>`;
     }
     function reassignmentHopsPoints() {
       const rows = (DASHBOARD.volumetrics.kpi_trends?.reassignment_hops?.rows || []).filter(offlineFilterMatch);
@@ -5378,8 +5630,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           created: values.created,
           tickets: values.tickets,
           hops: values.hops,
-          ticketPct: values.created ? (values.tickets / values.created) * 100 : null,
-          hopsPct: values.created ? (values.hops / values.created) * 100 : null
+          ticketPct: values.created ? (values.tickets / values.created) * 100 : null
         };
       });
     }
@@ -5391,12 +5642,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
       const ticketMax = Math.max(1, ...data.map((row) => Number(row.tickets || 0)));
-      const pctMax = Math.max(1, ...data.map((row) => Number(row.hopsPct || 0)));
+      const pctMax = Math.max(1, ...data.map((row) => Number(row.ticketPct || 0)));
       const xAt = (index) => margin.left + (plotWidth * index) / Math.max(1, data.length - 1);
       const ticketY = (value) => margin.top + plotHeight - (Number(value || 0) / ticketMax) * plotHeight;
       const pctY = (value) => margin.top + plotHeight - (Number(value || 0) / pctMax) * plotHeight;
       const ticketPoints = data.map((row, index) => ({ x: xAt(index), y: ticketY(row.tickets), value: row.tickets }));
-      const pctPoints = data.map((row, index) => ({ x: xAt(index), y: row.hopsPct === null ? null : pctY(row.hopsPct), value: row.hopsPct }));
+      const pctPoints = data.map((row, index) => ({ x: xAt(index), y: row.ticketPct === null ? null : pctY(row.ticketPct), value: row.ticketPct }));
       const ticketPath = ticketPoints.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
       const pctPath = pctPoints.filter((point) => point.y !== null).map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
       const gridLines = Array.from({ length: 4 }, (_, index) => {
@@ -5413,20 +5664,20 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         <line x1="${width - margin.right}" y1="${margin.top}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#94a3b8"></line>
         <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#64748b"></line>
         <text x="18" y="${margin.top + plotHeight / 2}" transform="rotate(-90 18 ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">Tickets with 2+ reassignments</text>
-        <text x="${width - 18}" y="${margin.top + plotHeight / 2}" transform="rotate(90 ${width - 18} ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">Hops % of created</text>
+        <text x="${width - 18}" y="${margin.top + plotHeight / 2}" transform="rotate(90 ${width - 18} ${margin.top + plotHeight / 2})" font-size="11" font-weight="800" fill="#334155">% tickets with 2+ reassignments</text>
         <path d="${ticketPath}" fill="none" stroke="${COLORS.teal}" stroke-width="3"></path>
         <path d="${pctPath}" fill="none" stroke="${COLORS.purple}" stroke-width="3"></path>
         ${ticketPoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${COLORS.teal}" stroke-width="2"></circle><text x="${point.x}" y="${Math.max(margin.top + 12, point.y - 12)}" text-anchor="middle" font-size="10" font-weight="900" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${fmt(point.value)}</text>`).join("")}
         ${pctPoints.filter((point) => point.y !== null).map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#fff" stroke="${COLORS.purple}" stroke-width="2"></circle><text x="${point.x}" y="${Math.min(margin.top + plotHeight + 28, point.y + 22)}" text-anchor="middle" font-size="10" font-weight="900" fill="${COLORS.purple}" stroke="#fff" stroke-width="3" paint-order="stroke">${Number(point.value || 0).toFixed(1)}%</text>`).join("")}
         ${axisLabels}
-      </svg>${legend([{ name: "Tickets with 2+ reassignments", color: COLORS.teal }, { name: "Hops % of created", color: COLORS.purple }])}`;
+      </svg>${legend([{ name: "Tickets with 2+ reassignments", color: COLORS.teal }, { name: "% Tickets with 2+ reassignments", color: COLORS.purple }])}`;
     }
     function reassignmentHopsTable(data) {
-      return `<div class="table-card"><div class="table-scroll"><table class="applications-table"><thead><tr><th>Month</th><th>Total Created Tickets</th><th>Tickets with 2+ Reassignments</th><th>Total Reassignment Hops for 2+ Reassignment Tickets</th><th>% Tickets with 2+ Reassignments</th><th>% Reassignment Hops to Created Volume</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.created)}</td><td>${fmt(row.tickets)}</td><td>${fmt(row.hops)}</td><td>${row.ticketPct === null ? "N/A" : `${row.ticketPct.toFixed(1)}%`}</td><td>${row.hopsPct === null ? "N/A" : `${row.hopsPct.toFixed(1)}%`}</td></tr>`).join("")}</tbody></table></div></div>`;
+      return `<div class="table-card" data-commentary-skip="true"><div class="table-scroll compact-table-frame"><table class="applications-table compact-export-table"><thead><tr><th>Month</th><th>Total Created Tickets</th><th>Tickets with 2+ Reassignments</th><th>Total Reassignment Hops for 2+ Reassignment Tickets</th><th>% Tickets with 2+ Reassignments</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.created)}</td><td>${fmt(row.tickets)}</td><td>${fmt(row.hops)}</td><td>${row.ticketPct === null ? "N/A" : `${row.ticketPct.toFixed(1)}%`}</td></tr>`).join("")}</tbody></table></div></div>`;
     }
     function reassignmentHopsGroup() {
       const points = reassignmentHopsPoints();
-      return `<section class="panel full" data-commentary-key="reassignment_hops_trend"><p class="label">KPI Trends</p><h3>Reassignment / Hops Trend</h3><p class="muted">Tickets with 2+ reassignments indicate handoffs between support teams. The percentage shows reassignment hops as a share of monthly created ticket volume.</p><section class="chart-card panel full"><h3>Monthly Reassignment / Hops Trend</h3><p class="muted">Generic Tickets includes Incidents and SC Tasks only. Problems and Changes are excluded.</p><div class="chart-frame chart-stage">${reassignmentHopsLineChart(points)}</div>${reassignmentHopsTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "reassignment_hops_trend" })}</section>`;
+      return `<section class="panel full" data-commentary-key="reassignment_hops_trend" data-commentary-skip="true"><p class="label">KPI Trends</p><h3>Reassignment / Hops Trend</h3><p class="muted">Tickets with 2+ reassignments indicate handoffs between support teams. The percentage shows the share of monthly created tickets that had 2+ reassignments.</p><section class="chart-card panel full" data-commentary-skip="true"><h3>Monthly Reassignment / Hops Trend</h3><p class="muted">Generic Tickets includes Incidents and SC Tasks only. Problems and Changes are excluded.</p><div class="chart-frame chart-stage">${reassignmentHopsLineChart(points)}</div>${reassignmentHopsTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "reassignment_hops_trend" })}</section>`;
     }
     function problemFilterMatch(row) {
       return (
@@ -5506,11 +5757,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       </svg>${legend([{ name: "Problem Tickets Created", color: COLORS.teal }, { name: "Problem Tickets Closed", color: COLORS.blue }, { name: "Linked Incidents Resolved Permanently", color: COLORS.orange }])}`;
     }
     function problemManagementTable(data) {
-      return `<div class="table-card"><div class="table-scroll"><table class="applications-table"><thead><tr><th>Month</th><th>Problem Tickets Created</th><th>Problem Tickets Closed</th><th>Linked Incidents Resolved Permanently</th><th>Avg Linked Incidents per Closed Problem</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.created)}</td><td>${fmt(row.closed)}</td><td>${fmt(row.linked)}</td><td>${row.avgLinked === null ? "N/A" : fmt(row.avgLinked, 2)}</td></tr>`).join("")}</tbody></table></div></div>`;
+      return `<div class="table-card" data-commentary-skip="true"><div class="table-scroll compact-table-frame"><table class="applications-table compact-export-table"><thead><tr><th>Month</th><th>Problem Tickets Created</th><th>Problem Tickets Closed</th><th>Linked Incidents Resolved Permanently</th><th>Avg Linked Incidents per Closed Problem</th></tr></thead><tbody>${data.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.created)}</td><td>${fmt(row.closed)}</td><td>${fmt(row.linked)}</td><td>${row.avgLinked === null ? "N/A" : fmt(row.avgLinked, 2)}</td></tr>`).join("")}</tbody></table></div></div>`;
     }
     function problemManagementGroup() {
       const points = problemManagementPoints();
-      return `<section class="panel full" data-commentary-key="problem_management_trend"><p class="label">KPI Trends</p><h3>Problem Management Trend</h3><p class="muted">Shows Problem tickets created and closed by month, plus linked Incidents expected to be permanently resolved through closed Problems.</p><section class="chart-card panel full"><h3>Monthly Problem Management Trend</h3><p class="muted">Problem records are analyzed separately. The selected scope is applied to Problem records by Application Inventory assignment group.</p><div class="chart-frame chart-stage">${problemManagementChart(points)}</div>${problemManagementTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "problem_management_trend" })}</section>`;
+      return `<section class="panel full" data-commentary-key="problem_management_trend" data-commentary-skip="true"><p class="label">KPI Trends</p><h3>Problem Management Trend</h3><p class="muted">Shows Problem tickets created and closed by month, plus linked Incidents expected to be permanently resolved through closed Problems.</p><section class="chart-card panel full" data-commentary-skip="true"><h3>Monthly Problem Management Trend</h3><p class="muted">Problem records are analyzed separately. The selected scope is applied to Problem records by Application Inventory assignment group.</p><div class="chart-frame chart-stage">${problemManagementChart(points)}</div>${problemManagementTable(points)}</section>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "problem_management_trend" })}</section>`;
     }
     function renderKpiTrends() {
       return `
@@ -5528,7 +5779,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function renderOverallVolume(periods) {
       const totalCreated = sum(periods, "created");
+      const totalCreatedIncidents = sum(periods, "createdIncidents");
+      const totalCreatedScTasks = sum(periods, "createdScTasks");
       const totalResolved = sum(periods, "resolved");
+      const totalResolvedIncidents = sum(periods, "resolvedIncidents");
+      const totalResolvedScTasks = sum(periods, "resolvedScTasks");
       const totalCanceled = sum(periods, "canceled");
       const responsePercentages = periods.filter((row) => row.responseTotal > 0).map((row) => (row.responseMet / row.responseTotal) * 100);
       const resolutionPercentages = periods.filter((row) => row.resolutionTotal > 0).map((row) => (row.resolutionMet / row.resolutionTotal) * 100);
@@ -5537,7 +5792,10 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return `
         <div class="summary-grid cards-grid">
           ${tile("Created", `Total: ${fmt(totalCreated)}`, `Avg monthly: ${fmt(totalCreated / Math.max(1, periods.length))}`, 0, 5)}
-          ${tile("Resolved / Closed", `Total: ${fmt(totalResolved)}`, `Avg monthly: ${fmt(totalResolved / Math.max(1, periods.length))}`, 1, 5)}
+          ${splitTile("Created Ticket Split", [
+            { label: "Incidents", value: fmt(totalCreatedIncidents), helper: `Avg monthly: ${fmt(totalCreatedIncidents / Math.max(1, periods.length))}` },
+            { label: "SC Tasks", value: fmt(totalCreatedScTasks), helper: `Avg monthly: ${fmt(totalCreatedScTasks / Math.max(1, periods.length))}` }
+          ], 1, 5)}
           ${tile("Canceled / Closed Incomplete", `Total: ${fmt(totalCanceled)}`, `% of Resolved+Canceled: ${pct(totalCanceled, totalResolved + totalCanceled)}`, 2, 5)}
           ${tile("Response SLA", responseAverage === null ? "N/A" : `${responseAverage.toFixed(1)}%`, "Avg monthly adherence", 3, 5)}
           ${tile("Resolution SLA", resolutionAverage === null ? "N/A" : `${resolutionAverage.toFixed(1)}%`, "Avg monthly adherence", 4, 5)}
@@ -5602,9 +5860,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function priorityRank(label) {
       const normalized = String(label || "").toLowerCase();
-      const pMatch = normalized.match(/\bp\s*([1-4])\b/);
+      const pMatch = normalized.match(/\\bp\\s*([1-4])\\b/);
       if (pMatch) return Number(pMatch[1]);
-      const digitMatch = normalized.match(/\b([1-4])\b/);
+      const digitMatch = normalized.match(/\\b([1-4])\\b/);
       if (digitMatch) return Number(digitMatch[1]);
       if (normalized.includes("moderate") || normalized.includes("medium")) return 3;
       if (normalized.includes("low")) return 4;
@@ -5679,9 +5937,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
             bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" fill="${item.color}"><title>${esc(item.name)}: ${fmt(value)} (${segmentPct.toFixed(1)}%)</title></rect>`);
             if (priorityLabelRequired(item.name)) {
               const label = priorityChartLabelParts(value, segmentPct);
-              const inside = barHeight >= 28 && barWidth >= 20;
-              const labelY = inside ? y + barHeight / 2 - 5 : Math.max(margin.top + 14, y - 16);
-              bars.push(`<text x="${x + barWidth / 2}" y="${labelY}" text-anchor="middle" font-size="9" font-weight="900" fill="${inside ? "#ffffff" : "#334155"}" stroke="${inside ? "none" : "#ffffff"}" stroke-width="${inside ? 0 : 3}" paint-order="stroke"><tspan x="${x + barWidth / 2}" dy="0">${esc(label.count)}</tspan><tspan x="${x + barWidth / 2}" dy="10">${esc(label.percentage)}</tspan></text>`);
+              const labelY = Math.max(margin.top + 14, y - 16);
+              bars.push(`<text x="${x + barWidth / 2}" y="${labelY}" text-anchor="middle" font-size="9" font-weight="900" fill="#334155" stroke="#ffffff" stroke-width="3" paint-order="stroke"><tspan x="${x + barWidth / 2}" dy="0">${esc(label.count)}</tspan><tspan x="${x + barWidth / 2}" dy="10">${esc(label.percentage)}</tspan></text>`);
             }
           }
           stackTop = y;
@@ -5708,8 +5965,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         <section class="panel" style="padding:12px"><div class="segmented-control" role="group" aria-label="SLA mode">
           ${["sla", "ola"].map((mode) => `<button type="button" data-sla-mode="${mode}" class="${state.slaMode === mode ? "active" : ""}">${mode.toUpperCase()}</button>`).join("")}
         </div></section>
-        <section class="chart-card panel full" data-commentary-key="response_sla_adherence"><h3>Response ${modeLabel} adherence trend</h3><p class="muted">Adherence = captured ${modeLabel} adhered count / captured ${modeLabel} count.</p><div class="chart-frame chart-stage">${slaLineChart(response, COLORS.teal, `Response ${modeLabel} adherence %`)}</div>${slaTrendTable(response, `Response ${modeLabel}`)}</section>
-        <section class="chart-card panel full" data-commentary-key="resolution_sla_adherence"><h3>Resolution ${modeLabel} adherence trend</h3><p class="muted">Adherence = captured ${modeLabel} adhered count / captured ${modeLabel} count.</p><div class="chart-frame chart-stage">${slaLineChart(resolution, COLORS.blue, `Resolution ${modeLabel} adherence %`)}</div>${slaTrendTable(resolution, `Resolution ${modeLabel}`)}</section>
+        <section class="chart-card panel full" data-commentary-key="response_sla_adherence"><h3>Response ${modeLabel} adherence trend</h3><p class="muted">Adherence = captured ${modeLabel} adhered count / captured ${modeLabel} count. Cancelled incidents are excluded.</p><div class="chart-frame chart-stage">${slaLineChart(response, COLORS.teal, `Response ${modeLabel} adherence %`)}</div>${slaTrendTable(response, `Response ${modeLabel}`)}</section>
+        <section class="chart-card panel full" data-commentary-key="resolution_sla_adherence"><h3>Resolution ${modeLabel} adherence trend</h3><p class="muted">Adherence = captured ${modeLabel} adhered count / captured ${modeLabel} count. Cancelled incidents are excluded.</p><div class="chart-frame chart-stage">${slaLineChart(resolution, COLORS.blue, `Resolution ${modeLabel} adherence %`)}</div>${slaTrendTable(resolution, `Resolution ${modeLabel}`)}</section>
       `;
     }
     function slaTrendPoints(rows, kind) {

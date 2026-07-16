@@ -10,6 +10,7 @@ from app.models import (
     AssessmentChangeRecord,
     AssessmentOutOfScopeChangeRecord,
     AssessmentOutOfScopeProblemRecord,
+    AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Ticket,
     UploadBatch,
@@ -82,6 +83,13 @@ def count_normalized_tickets(db: Session, upload_batch_id: UUID) -> int:
         )
     return int(
         db.scalar(select(func.count(Ticket.id)).where(Ticket.upload_batch_id == upload_batch_id))
+        or 0
+    ) + int(
+        db.scalar(
+            select(func.count(AssessmentOutOfScopeTicket.id)).where(
+                AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id
+            )
+        )
         or 0
     )
 

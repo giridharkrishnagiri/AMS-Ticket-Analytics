@@ -60,6 +60,8 @@ class UploadBatchResponse(BaseModel):
     uploaded_file_count: int | None = None
     raw_row_count: int | None = None
     normalized_ticket_count: int | None = None
+    in_scope_ticket_count: int | None = None
+    out_of_scope_ticket_count: int | None = None
     normalized_at: datetime | None = None
     archived_at: datetime | None = None
     deleted_at: datetime | None = None

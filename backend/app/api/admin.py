@@ -17,10 +17,13 @@ from app.schemas.admin import (
     ClientDeleteRequest,
     DashboardFilterFactsRefreshRequest,
     DashboardFilterFactsRefreshResponse,
+    InScopeAssignmentGroupChangeResponse,
     InScopeAssignmentGroupPreviewRowResponse,
     InScopeAssignmentGroupRowResponse,
     InScopeAssignmentGroupsImportResponse,
     InScopeAssignmentGroupsStatusResponse,
+    InScopeAssignmentGroupsUpdateRequest,
+    InScopeAssignmentGroupsUpdateResponse,
     OperationalDataResetRequest,
     OperationalDataResetResponse,
     OperationalReprocessingRequest,
@@ -37,6 +40,9 @@ from app.services.admin_reset import (
     reset_operational_data,
     reset_project_operational_data,
 )
+from app.services.application_inventory import (
+    sync_application_inventory_scope_from_assignment_groups,
+)
 from app.services.assignment_group_master_reference import (
     AssignmentGroupMasterReferenceError,
     assignment_group_master_reference_status,
@@ -46,10 +52,12 @@ from app.services.assignment_group_master_reference import (
 from app.services.dashboard_filter_cache import mark_filter_caches_stale
 from app.services.dashboard_filter_facts import refresh_dashboard_filter_facts
 from app.services.in_scope_assignment_groups import (
+    AssignmentGroupScopeUpdate,
     InScopeAssignmentGroupsError,
     import_in_scope_assignment_groups,
     in_scope_assignment_groups_status,
     list_in_scope_assignment_groups,
+    update_assignment_group_scope_rows,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -70,6 +78,7 @@ def reference_preview_response(row) -> InScopeAssignmentGroupPreviewRowResponse:
     return InScopeAssignmentGroupPreviewRowResponse(
         assignment_group=row.assignment_group,
         functional_track=row.functional_track,
+        is_in_scope=row.is_in_scope,
         source_row_number=row.source_row_number,
     )
 
@@ -182,6 +191,7 @@ async def post_import_in_scope_assignment_groups(
     temp_path = await copy_upload_to_temp_file(file)
     try:
         result = import_in_scope_assignment_groups(db, project_id, temp_path, filename)
+        sync_application_inventory_scope_from_assignment_groups(db, project_id)
         mark_filter_caches_stale(db, project_id)
         db.commit()
     except FileNotFoundError as exc:
@@ -236,13 +246,72 @@ def get_in_scope_assignment_groups_status(
 def get_in_scope_assignment_groups(
     project_id: Annotated[UUID, Query(...)],
     db: DbSession,
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    limit: Annotated[int, Query(ge=1, le=10000)] = 1000,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[InScopeAssignmentGroupRowResponse]:
     try:
         return list_in_scope_assignment_groups(db, project_id, limit=limit, offset=offset)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/in-scope-assignment-groups/update",
+    response_model=InScopeAssignmentGroupsUpdateResponse,
+)
+def post_update_in_scope_assignment_groups(
+    request: InScopeAssignmentGroupsUpdateRequest,
+    db: DbSession,
+) -> InScopeAssignmentGroupsUpdateResponse:
+    try:
+        result = update_assignment_group_scope_rows(
+            db,
+            request.project_id,
+            [
+                AssignmentGroupScopeUpdate(
+                    id=row.id,
+                    functional_track=row.functional_track,
+                    is_in_scope=row.is_in_scope,
+                )
+                for row in request.rows
+            ],
+        )
+        inventory_rows_updated_count = sync_application_inventory_scope_from_assignment_groups(
+            db,
+            request.project_id,
+        )
+        if result.changed_count > 0:
+            refresh_dashboard_filter_facts(db, request.project_id)
+            mark_filter_caches_stale(db, request.project_id)
+        db.commit()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except InScopeAssignmentGroupsError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return InScopeAssignmentGroupsUpdateResponse(
+        project_id=result.project_id,
+        submitted_count=result.submitted_count,
+        changed_count=result.changed_count,
+        unchanged_count=result.unchanged_count,
+        tickets_updated_count=result.tickets_updated_count,
+        inventory_rows_updated_count=inventory_rows_updated_count,
+        missing_count=result.missing_count,
+        warnings=result.warnings,
+        changes=[
+            InScopeAssignmentGroupChangeResponse(
+                id=change.id,
+                assignment_group=change.assignment_group,
+                previous_functional_track=change.previous_functional_track,
+                next_functional_track=change.next_functional_track,
+                previous_is_in_scope=change.previous_is_in_scope,
+                next_is_in_scope=change.next_is_in_scope,
+                tickets_updated=change.tickets_updated,
+            )
+            for change in result.changes
+        ],
+    )
 
 
 @router.post(

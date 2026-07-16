@@ -90,6 +90,7 @@ def add_ticket(
             ticket_type=ticket_type,
             month_key=f"{created_at:%Y-%m}",
             created_at=created_at,
+            closed_at=created_at,
             short_description=f"{ticket_number} title",
             state="Closed",
             priority="P3",

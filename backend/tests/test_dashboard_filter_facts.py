@@ -8,7 +8,6 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
     AssessmentChangeRecord,
-    AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Client,
     DashboardFilterFact,
@@ -120,19 +119,11 @@ def add_ticket(
         "install_type": install_type,
         "hosting_env": hosting_env,
     }
-    if scope == "out_of_scope":
-        db.add(
-            AssessmentOutOfScopeTicket(
-                **common_values,
-                out_of_scope_reason="assignment_group_not_in_application_inventory",
-            )
-        )
-        return
-
     db.add(
         Ticket(
             **common_values,
             uploaded_file_id=file_id,
+            is_in_scope=scope != "out_of_scope",
         )
     )
 
@@ -260,10 +251,7 @@ def test_dashboard_filter_fact_refresh_excludes_problem_and_change_records() -> 
             ).all()
         )
         assert len(facts) == 4
-        assert {row.record_source for row in facts} == {
-            "tickets",
-            "assessment_out_of_scope_tickets",
-        }
+        assert {row.record_source for row in facts} == {"tickets"}
         assert {row.record_type for row in facts} == {"incident", "sc_task"}
         assert {row.scope for row in facts} == {"in_scope", "out_of_scope"}
         assert all("Problem" not in row.functional_track_ams_owner for row in facts)

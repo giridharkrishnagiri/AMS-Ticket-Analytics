@@ -460,7 +460,6 @@ def refresh_application_filter_facts(
             JOIN projects AS p ON p.id = i.project_id
             WHERE i.project_id = CAST(:project_id AS uuid)
               AND i.is_current IS true
-              AND i.scope_status = 'in_scope'
               AND NULLIF(btrim(i.business_service_ci_name), '') IS NOT NULL
             ORDER BY lower(btrim(i.business_service_ci_name)), i.id
             """

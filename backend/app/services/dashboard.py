@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 from app.models import (
     ApplicationInventoryItem,
     AssessmentOutOfScopeProblemRecord,
-    AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     Client,
     DashboardFilterFact,
@@ -284,26 +283,16 @@ VOLUMETRICS_FILTER_CUSTOM_SORTS = {
 
 SC_TASK_CATALOG_PERIODS = (
     (
-        "H1_2025",
-        "H1 2025",
-        datetime(2025, 1, 1, tzinfo=UTC),
-        datetime(2025, 7, 1, tzinfo=UTC),
-    ),
-    (
-        "H2_2025",
-        "H2 2025",
-        datetime(2025, 7, 1, tzinfo=UTC),
-        datetime(2026, 1, 1, tzinfo=UTC),
-    ),
-    (
-        "H1_2026",
-        "H1 2026",
-        datetime(2026, 1, 1, tzinfo=UTC),
-        datetime(2026, 7, 1, tzinfo=UTC),
+        "DEC_2025_MAY_2026",
+        "Dec-25 to May-26",
+        datetime(2025, 12, 1, tzinfo=UTC),
+        datetime(2026, 6, 1, tzinfo=UTC),
     ),
 )
 
 ASSIGNMENT_GROUP_VOLUMETRICS_DEFAULT_MONTHS = ("2025-12", "2026-05")
+DASHBOARD_REPORTING_DATA_START = datetime(2025, 1, 1, tzinfo=UTC)
+DASHBOARD_REPORTING_DATA_END = datetime(2026, 5, 31, 23, 59, 59, 999999, tzinfo=UTC)
 ASSIGNMENT_GROUP_MAPPING_SOURCES = {"application_inventory", "tickets"}
 ASSIGNMENT_GROUP_MAPPING_SCOPES = {"in_scope", "out_of_scope", "all"}
 UNMAPPED_ASSIGNMENT_GROUP_LABEL = "Unmapped Assignment Group"
@@ -392,7 +381,7 @@ def normalize_ticket_type(ticket_type: str | None) -> str:
 
 def to_utc_datetime(value: date | datetime) -> datetime:
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=UTC)
+        return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
     return datetime.combine(value, time.min, tzinfo=UTC)
 
 
@@ -443,6 +432,7 @@ def complete_month_bounds(
         if normalized_start.day == 1
         else first_day_of_next_month(normalized_start)
     )
+    start_datetime = max(start_datetime, DASHBOARD_REPORTING_DATA_START)
     end_month_last_day = calendar.monthrange(normalized_end.year, normalized_end.month)[1]
     data_end_datetime = (
         last_moment_of_month(normalized_end)
@@ -450,6 +440,7 @@ def complete_month_bounds(
         else last_moment_of_previous_month(normalized_end)
     )
     latest_allowed_end = last_moment_of_previous_month(reference_datetime or datetime.now(UTC))
+    latest_allowed_end = min(latest_allowed_end, DASHBOARD_REPORTING_DATA_END)
     end_datetime = min(data_end_datetime, latest_allowed_end)
     if start_datetime > end_datetime:
         return None, None
@@ -519,7 +510,10 @@ def period_key(value: datetime | None, grain: TimeGrain) -> datetime | None:
 
 
 def dashboard_base_conditions(filters: DashboardFilters) -> list[Any]:
-    conditions: list[Any] = [Ticket.project_id == filters.project_id]
+    conditions: list[Any] = [
+        Ticket.project_id == filters.project_id,
+        Ticket.is_in_scope.is_(True),
+    ]
     if filters.ticket_type:
         conditions.append(Ticket.ticket_type.in_([value.upper() for value in filters.ticket_type]))
     if filters.priority:
@@ -632,8 +626,10 @@ def overview_ticket_volume_80pct_application_count(
         )
         .where(
             Ticket.project_id == project_id,
+            Ticket.ticket_type.in_(tuple(VOLUMETRICS_TICKET_TYPE_VALUES.values())),
             application_expression.is_not(None),
             completion_expression.is_not(None),
+            Ticket.is_in_scope.is_(True),
             valid_resolved_closed_state_condition(Ticket),
             completion_expression >= completion_start,
             completion_expression <= completion_end,
@@ -689,9 +685,6 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         distinct_nonblank_count(ApplicationInventoryItem.supported_by_vendor).label(
             "supported_vendor_count",
         ),
-        distinct_nonblank_count(ApplicationInventoryItem.assignment_group).label(
-            "assignment_group_count",
-        ),
         distinct_nonblank_count(ApplicationInventoryItem.application_owner).label(
             "application_owner_count",
         ),
@@ -703,6 +696,13 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         .label("critical_application_count"),
     ).where(*applications_base_conditions(project_id))
     inventory_row = db.execute(inventory_statement).mappings().one()
+    assignment_group_count = db.scalar(
+        select(distinct_nonblank_count(ApplicationInventoryItem.assignment_group)).where(
+            ApplicationInventoryItem.project_id == project_id,
+            ApplicationInventoryItem.is_current.is_(True),
+            ApplicationInventoryItem.scope_status == "in_scope",
+        ),
+    )
 
     completion_expression = effective_completion_expression()
     range_statement = select(
@@ -710,6 +710,8 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         func.max(completion_expression).label("completion_date_max"),
     ).where(
         Ticket.project_id == project_id,
+        Ticket.ticket_type.in_(tuple(VOLUMETRICS_TICKET_TYPE_VALUES.values())),
+        Ticket.is_in_scope.is_(True),
         valid_resolved_closed_state_condition(Ticket),
         completion_expression.is_not(None),
     )
@@ -719,28 +721,67 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
         range_row["completion_date_max"],
     )
 
-    ticket_conditions = [Ticket.project_id == project_id]
-    if completion_start is None or completion_end is None:
-        ticket_conditions.append(literal(False))
-    else:
-        ticket_conditions.extend(
-            [
-                completion_expression.is_not(None),
-                valid_resolved_closed_state_condition(Ticket),
-                completion_expression >= completion_start,
-                completion_expression <= completion_end,
-            ],
-        )
-
     ticket_statement = select(
-        func.count(Ticket.id).label("total_in_scope_tickets"),
-        func.sum(case((Ticket.ticket_type == "INCIDENT", 1), else_=0)).label("incident_count"),
-        func.sum(case((Ticket.ticket_type == "SERVICE_CATALOG_TASK", 1), else_=0)).label(
+        func.count(Ticket.id).label("total_tickets"),
+        func.sum(case((Ticket.is_in_scope.is_(True), 1), else_=0)).label(
+            "total_in_scope_tickets",
+        ),
+        func.sum(case((Ticket.is_in_scope.is_(False), 1), else_=0)).label(
+            "total_out_of_scope_tickets",
+        ),
+        func.sum(
+            case(
+                (
+                    and_(Ticket.ticket_type == "INCIDENT", Ticket.is_in_scope.is_(True)),
+                    1,
+                ),
+                else_=0,
+            ),
+        ).label("incident_count"),
+        func.sum(
+            case(
+                (
+                    and_(
+                        Ticket.ticket_type == "SERVICE_CATALOG_TASK",
+                        Ticket.is_in_scope.is_(True),
+                    ),
+                    1,
+                ),
+                else_=0,
+            ),
+        ).label(
             "sc_task_count",
         ),
+        func.sum(
+            case(
+                (
+                    and_(Ticket.ticket_type == "INCIDENT", Ticket.is_in_scope.is_(False)),
+                    1,
+                ),
+                else_=0,
+            ),
+        ).label("out_of_scope_incident_count"),
+        func.sum(
+            case(
+                (
+                    and_(
+                        Ticket.ticket_type == "SERVICE_CATALOG_TASK",
+                        Ticket.is_in_scope.is_(False),
+                    ),
+                    1,
+                ),
+                else_=0,
+            ),
+        ).label("out_of_scope_sc_task_count"),
         func.min(completion_expression).label("completion_date_min"),
         func.max(completion_expression).label("completion_date_max"),
-    ).where(*ticket_conditions)
+    ).where(
+        Ticket.project_id == project_id,
+        Ticket.ticket_type.in_(tuple(VOLUMETRICS_TICKET_TYPE_VALUES.values())),
+        Ticket.created_at.is_not(None),
+        Ticket.created_at >= DASHBOARD_REPORTING_DATA_START,
+        Ticket.created_at <= DASHBOARD_REPORTING_DATA_END,
+    )
     ticket_row = db.execute(ticket_statement).mappings().one()
     applications_80pct_count = overview_ticket_volume_80pct_application_count(
         db,
@@ -777,7 +818,7 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
             "functional_track_count": int(inventory_row["functional_track_count"] or 0),
             "ams_owner_count": int(inventory_row["ams_owner_count"] or 0),
             "supported_vendor_count": int(inventory_row["supported_vendor_count"] or 0),
-            "assignment_group_count": int(inventory_row["assignment_group_count"] or 0),
+            "assignment_group_count": int(assignment_group_count or 0),
             "application_owner_count": int(inventory_row["application_owner_count"] or 0),
             "very_critical_application_count": int(
                 inventory_row["very_critical_application_count"] or 0,
@@ -791,9 +832,19 @@ def overview_summary(db: Session, project_id: UUID) -> dict[str, Any]:
             "incident_sla_rows": raw_incident_sla_rows,
         },
         "tickets": {
+            "total_tickets": int(ticket_row["total_tickets"] or 0),
             "total_in_scope_tickets": int(ticket_row["total_in_scope_tickets"] or 0),
+            "total_out_of_scope_tickets": int(
+                ticket_row["total_out_of_scope_tickets"] or 0,
+            ),
             "incident_count": int(ticket_row["incident_count"] or 0),
             "sc_task_count": int(ticket_row["sc_task_count"] or 0),
+            "out_of_scope_incident_count": int(
+                ticket_row["out_of_scope_incident_count"] or 0,
+            ),
+            "out_of_scope_sc_task_count": int(
+                ticket_row["out_of_scope_sc_task_count"] or 0,
+            ),
             "completion_date_min": completion_start,
             "completion_date_max": completion_end,
             "applications_80pct_monthly_volume_count": applications_80pct_count,
@@ -850,9 +901,9 @@ def normalized_text_expression(expression: Any) -> Any:
     return func.lower(func.trim(func.coalesce(expression, literal(""))))
 
 
-def application_lifecycle_stage_status_in_use_condition() -> Any:
-    lifecycle_stage_status = application_field_expression("lifecycle_stage_status")
-    return normalized_text_expression(lifecycle_stage_status) == "in use"
+def application_install_status_installed_condition() -> Any:
+    install_status = application_field_expression("install_status")
+    return normalized_text_expression(install_status) == "installed"
 
 
 def canonical_lifecycle_plan_expression(expression: Any) -> Any:
@@ -882,14 +933,22 @@ def canonical_lifecycle_plan_value(value: Any) -> str | None:
     return None
 
 
-def applications_base_conditions(project_id: UUID) -> list[Any]:
+def applications_base_conditions(
+    project_id: UUID,
+    *,
+    scope_status: str | None = "in_scope",
+    require_business_service_ci: bool = True,
+) -> list[Any]:
     service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
-    return [
+    conditions = [
         ApplicationInventoryItem.project_id == project_id,
         ApplicationInventoryItem.is_current.is_(True),
-        ApplicationInventoryItem.scope_status == "in_scope",
-        service_expression.is_not(None),
     ]
+    if require_business_service_ci:
+        conditions.append(service_expression.is_not(None))
+    if scope_status is not None:
+        conditions.append(ApplicationInventoryItem.scope_status == scope_status)
+    return conditions
 
 
 def applications_business_service_detail_conditions(
@@ -917,8 +976,19 @@ def applications_filter_conditions(
     filters: Any,
     *,
     excluded_filter_name: str | None = None,
+    require_business_service_ci: bool = True,
 ) -> list[Any]:
-    conditions = applications_base_conditions(project_id)
+    selected_scope_values = selected_application_filter_values(filters, "application_scope")
+    default_scope = (
+        None
+        if excluded_filter_name == "application_scope" or selected_scope_values
+        else "in_scope"
+    )
+    conditions = applications_base_conditions(
+        project_id,
+        scope_status=default_scope,
+        require_business_service_ci=require_business_service_ci,
+    )
 
     for filter_name, field_name in SINGLE_APPLICATION_FILTER_FIELDS.items():
         if filter_name == excluded_filter_name:
@@ -945,9 +1015,10 @@ def distinct_application_filter_values(
     filter_name: str | None = None,
 ) -> list[str]:
     expression = application_display_expression(field_name)
+    scope_status = None if filter_name == "application_scope" else "in_scope"
     statement = (
         select(expression.label("label"))
-        .where(*applications_base_conditions(project_id))
+        .where(*applications_base_conditions(project_id, scope_status=scope_status))
         .group_by(expression)
         .order_by(expression.asc())
     )
@@ -1323,9 +1394,6 @@ def applications_summary(db: Session, request: Any) -> dict[str, Any]:
         distinct_nonblank_count(ApplicationInventoryItem.functional_track).label(
             "functional_groups",
         ),
-        distinct_nonblank_count(ApplicationInventoryItem.assignment_group).label(
-            "assignment_groups",
-        ),
         distinct_nonblank_count(ApplicationInventoryItem.parent_application_name).label(
             "parent_business_apps",
         ),
@@ -1343,10 +1411,19 @@ def applications_summary(db: Session, request: Any) -> dict[str, Any]:
         ),
     ).where(*conditions)
     row = db.execute(statement).mappings().one()
+    assignment_group_count = db.scalar(
+        select(distinct_nonblank_count(ApplicationInventoryItem.assignment_group)).where(
+            *applications_filter_conditions(
+                request.project_id,
+                filters,
+                require_business_service_ci=False,
+            ),
+        ),
+    )
     return {
         "applications": int(row["applications"] or 0),
         "functional_groups": int(row["functional_groups"] or 0),
-        "assignment_groups": int(row["assignment_groups"] or 0),
+        "assignment_groups": int(assignment_group_count or 0),
         "parent_business_apps": int(row["parent_business_apps"] or 0),
         "business_applications": int(row["business_applications"] or 0),
         "technical_applications": int(row["technical_applications"] or 0),
@@ -1443,7 +1520,7 @@ def applications_criticality_hosting_pivot(db: Session, request: Any) -> dict[st
         )
         .where(
             *applications_filter_conditions(request.project_id, request.filters),
-            application_lifecycle_stage_status_in_use_condition(),
+            application_install_status_installed_condition(),
             criticality_label.is_not(None),
             hosting_label.is_not(None),
             service_expression.is_not(None),
@@ -1660,7 +1737,7 @@ def applications_lifecycle_matrix_counts(db: Session, request: Any) -> dict[tupl
                 plan_expression.label("plan"),
             ).where(
                 *applications_filter_conditions(request.project_id, request.filters),
-                application_lifecycle_stage_status_in_use_condition(),
+                application_install_status_installed_condition(),
                 service_expression.is_not(None),
                 plan_expression.is_not(None),
             ),
@@ -1713,7 +1790,7 @@ def applications_lifecycle_in_use_count(db: Session, request: Any) -> int:
     service_expression = nonblank_text_expression(ApplicationInventoryItem.business_service_ci_name)
     statement = select(func.count(func.distinct(service_expression))).where(
         *applications_filter_conditions(request.project_id, request.filters),
-        application_lifecycle_stage_status_in_use_condition(),
+        application_install_status_installed_condition(),
         service_expression.is_not(None),
     )
     return int(db.scalar(statement) or 0)
@@ -1757,7 +1834,7 @@ def lifecycle_planning_selected_applications(
         select(*columns)
         .where(
             *applications_filter_conditions(request.project_id, request.filters),
-            application_lifecycle_stage_status_in_use_condition(),
+            application_install_status_installed_condition(),
             service_expression.is_not(None),
             or_(*lifecycle_selected_plan_conditions(selected_plan)),
         )
@@ -2383,9 +2460,14 @@ def assignment_group_mapping_summary(rows: list[dict[str, Any]]) -> dict[str, An
         if row["parent_business_application"]
         not in {REFERENCE_MISSING_LABEL, UNMAPPED_PARENT_APPLICATION_LABEL}
     }
+    assignment_group_keys = {
+        key
+        for row in rows
+        if (key := str(row.get("assignment_group_key") or "").strip())
+    }
     return {
         "mapping_count": len(rows),
-        "assignment_group_count": len({row["assignment_group"] for row in rows}),
+        "assignment_group_count": len(assignment_group_keys),
         "business_service_ci_count": len(business_service_cis),
         "parent_business_application_count": len(parent_business_applications),
         "incident_count": incident_total,
@@ -2452,6 +2534,12 @@ def rounded_average_monthly_count(count: int, months: int) -> int:
     return int(math.floor((count / months) + 0.5))
 
 
+def rounded_count(value: float | int | None) -> int:
+    if value is None:
+        return 0
+    return int(math.floor(float(value) + 0.5))
+
+
 def month_key(month_start: date) -> str:
     return f"{month_start:%Y-%m}"
 
@@ -2478,6 +2566,10 @@ def volumetrics_assignment_group_available_tracks(db: Session, request: Any) -> 
         .order_by(track_expression.asc())
     )
     return [str(row["functional_track"]) for row in db.execute(statement).mappings().all()]
+
+
+def business_service_ci_volumetrics_available_tracks(db: Session, request: Any) -> list[str]:
+    return volumetrics_assignment_group_available_tracks(db, request)
 
 
 def assignment_group_volumetrics_category_expression(source: Any) -> Any:
@@ -2512,7 +2604,10 @@ def assignment_group_volumetrics_event_rows(
     ams_owner_expression = reference_display_expression(source.c.ams_owner)
     support_lead_expression = reference_display_expression(source.c.support_lead)
     category_expression = assignment_group_volumetrics_category_expression(source)
-    month_expression = func.to_char(func.date_trunc("month", date_expression), "YYYY-MM")
+    month_expression = func.to_char(
+        func.date_trunc("month", func.timezone("UTC", date_expression)),
+        "YYYY-MM",
+    )
     basis_security_expression = case(
         (
             and_(
@@ -2583,6 +2678,119 @@ def blank_month_metrics(months: list[date]) -> dict[str, dict[str, int]]:
         month_key(month): {"created": 0, "resolved": 0, "cancelled": 0}
         for month in months
     }
+
+
+def business_service_ci_volumetrics_event_rows(
+    db: Session,
+    source: Any,
+    *,
+    date_expression: Any,
+    event_name: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+    functional_track: str,
+    extra_conditions: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    business_service_expression = validation_display_expression(
+        source.c.business_service_ci_name,
+        UNMAPPED_BUSINESS_SERVICE_CI_LABEL,
+    )
+    business_service_key_expression = normalized_text_expression(source.c.business_service_ci_name)
+    assignment_expression = validation_display_expression(
+        source.c.assignment_group,
+        UNMAPPED_ASSIGNMENT_GROUP_LABEL,
+    )
+    assignment_key_expression = normalized_assignment_group_expression(source.c.assignment_group)
+    filter_track_expression = validation_display_expression(
+        source.c.functional_track,
+        UNMAPPED_FUNCTIONAL_TRACK_LABEL,
+    )
+    track_expression = reference_display_expression(source.c.functional_track)
+    category_expression = assignment_group_volumetrics_category_expression(source)
+    month_expression = func.to_char(
+        func.date_trunc("month", func.timezone("UTC", date_expression)),
+        "YYYY-MM",
+    )
+    conditions: list[Any] = [
+        source.c.ticket_type.in_(VOLUMETRICS_TICKET_TYPE_VALUES.values()),
+        date_expression.is_not(None),
+        date_expression >= start_datetime,
+        date_expression < end_datetime,
+    ]
+    if functional_track != "all":
+        conditions.append(filter_track_expression == functional_track)
+    if extra_conditions:
+        conditions.extend(extra_conditions)
+
+    statement = (
+        select(
+            category_expression.label("ticket_category"),
+            business_service_expression.label("business_service_ci_name"),
+            business_service_key_expression.label("business_service_ci_key"),
+            assignment_expression.label("assignment_group"),
+            assignment_key_expression.label("assignment_group_key"),
+            track_expression.label("functional_track"),
+            month_expression.label("month_key"),
+            func.count(source.c.id).label("ticket_count"),
+        )
+        .select_from(source)
+        .where(*conditions)
+        .group_by(
+            category_expression,
+            business_service_expression,
+            business_service_key_expression,
+            assignment_expression,
+            assignment_key_expression,
+            track_expression,
+            month_expression,
+        )
+    )
+    return [
+        {
+            "ticket_category": row["ticket_category"],
+            "business_service_ci_name": row["business_service_ci_name"],
+            "business_service_ci_key": row["business_service_ci_key"],
+            "assignment_group": row["assignment_group"],
+            "assignment_group_key": row["assignment_group_key"],
+            "functional_track": row["functional_track"],
+            "month_key": row["month_key"],
+            event_name: int_count(row["ticket_count"]),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+
+
+def add_business_service_ci_volumetrics_event(
+    store: dict[tuple[str, str, str, str], dict[str, Any]],
+    row: dict[str, Any],
+    months: list[date],
+    event_name: str,
+) -> None:
+    key = (
+        row["ticket_category"],
+        row["business_service_ci_key"],
+        row["assignment_group_key"],
+        row["functional_track"],
+    )
+    entry = store.setdefault(
+        key,
+        {
+            "business_service_ci_name": row["business_service_ci_name"],
+            "business_service_ci_values": set(),
+            "business_service_ci_key": row["business_service_ci_key"],
+            "assignment_group": row["assignment_group"],
+            "assignment_group_values": set(),
+            "assignment_group_key": row["assignment_group_key"],
+            "functional_track": row["functional_track"],
+            "functional_track_values": set(),
+            "months": blank_month_metrics(months),
+        },
+    )
+    entry["business_service_ci_values"].add(row["business_service_ci_name"])
+    entry["assignment_group_values"].add(row["assignment_group"])
+    entry["functional_track_values"].add(row["functional_track"])
+    if row["month_key"] in entry["months"]:
+        entry["months"][row["month_key"]][event_name] += int_count(row[event_name])
 
 
 def add_assignment_group_volumetrics_event(
@@ -2722,6 +2930,57 @@ def build_assignment_group_volumetrics_table(
             str(item["functional_track"]).casefold(),
             str(item["ams_owner"]).casefold(),
             str(item["support_lead"]).casefold(),
+        ),
+    )
+    return {
+        "title": title,
+        "rows": output_rows,
+        "grand_totals": {
+            "created": sum(int_count(row["totals"]["created"]) for row in output_rows),
+            "resolved": sum(int_count(row["totals"]["resolved"]) for row in output_rows),
+            "cancelled": sum(int_count(row["totals"]["cancelled"]) for row in output_rows),
+        },
+    }
+
+
+def build_business_service_ci_volumetrics_table(
+    title: str,
+    rows: list[dict[str, Any]],
+    months: list[date],
+) -> dict[str, Any]:
+    output_rows: list[dict[str, Any]] = []
+    for row in rows:
+        business_service_ci_name = display_assignment_group_value(
+            row.get("business_service_ci_values", set()),
+            str(row["business_service_ci_name"]),
+        )
+        assignment_group = display_assignment_group_value(
+            row.get("assignment_group_values", set()),
+            str(row["assignment_group"]),
+        )
+        totals = {
+            "created": sum(row["months"][month_key(month)]["created"] for month in months),
+            "resolved": sum(row["months"][month_key(month)]["resolved"] for month in months),
+            "cancelled": sum(row["months"][month_key(month)]["cancelled"] for month in months),
+        }
+        output_rows.append(
+            {
+                "business_service_ci_name": business_service_ci_name,
+                "functional_track": display_reference_value(
+                    row.get("functional_track_values", set()),
+                    row.get("functional_track"),
+                ),
+                "assignment_group": assignment_group,
+                "months": row["months"],
+                "totals": totals,
+            },
+        )
+    output_rows.sort(
+        key=lambda item: (
+            -int_count(item["totals"]["created"]),
+            str(item["business_service_ci_name"]).casefold(),
+            str(item["functional_track"]).casefold(),
+            str(item["assignment_group"]).casefold(),
         ),
     )
     return {
@@ -2934,6 +3193,129 @@ def volumetrics_assignment_group_volumetrics(db: Session, request: Any) -> dict[
     }
 
 
+def volumetrics_business_service_ci_volumetrics(db: Session, request: Any) -> dict[str, Any]:
+    scope = normalize_volumetrics_scope(request.scope)
+    functional_track = normalize_assignment_mapping_track(request.functional_track)
+    months = month_key_date_range(request.from_month, request.to_month)
+    start_datetime = datetime.combine(months[0], time.min, tzinfo=UTC)
+    end_datetime = datetime.combine(next_month_start(months[-1]), time.min, tzinfo=UTC)
+    source = volumetrics_source_subquery(request, scope_override=scope)
+    cancelled_condition = volumetrics_cancelled_state_expression(source.c)
+    resolved_closed_condition = volumetrics_resolved_closed_state_expression(source.c)
+    resolved_date_expression = source.c.completion_at
+    cancelled_date_expression = volumetrics_cancelled_count_date_expression(source.c)
+
+    store: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for row in business_service_ci_volumetrics_event_rows(
+        db,
+        source,
+        date_expression=source.c.created_at,
+        event_name="created",
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        functional_track=functional_track,
+    ):
+        add_business_service_ci_volumetrics_event(store, row, months, "created")
+    for row in business_service_ci_volumetrics_event_rows(
+        db,
+        source,
+        date_expression=resolved_date_expression,
+        event_name="resolved",
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        functional_track=functional_track,
+        extra_conditions=[resolved_closed_condition],
+    ):
+        add_business_service_ci_volumetrics_event(store, row, months, "resolved")
+    for row in business_service_ci_volumetrics_event_rows(
+        db,
+        source,
+        date_expression=cancelled_date_expression,
+        event_name="cancelled",
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        functional_track=functional_track,
+        extra_conditions=[cancelled_condition],
+    ):
+        add_business_service_ci_volumetrics_event(store, row, months, "cancelled")
+
+    incident_rows = [row for key, row in store.items() if key[0] == "incidents"]
+    sc_task_rows = [row for key, row in store.items() if key[0] == "sc_tasks"]
+    overall_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in incident_rows + sc_task_rows:
+        key = (
+            row["business_service_ci_key"],
+            row["assignment_group_key"],
+            row["functional_track"],
+        )
+        overall_row = overall_by_key.setdefault(
+            key,
+            {
+                "business_service_ci_name": row["business_service_ci_name"],
+                "business_service_ci_values": set(),
+                "business_service_ci_key": row["business_service_ci_key"],
+                "assignment_group": row["assignment_group"],
+                "assignment_group_values": set(),
+                "assignment_group_key": row["assignment_group_key"],
+                "functional_track": row["functional_track"],
+                "functional_track_values": set(),
+                "months": blank_month_metrics(months),
+            },
+        )
+        overall_row["business_service_ci_values"].update(
+            row.get("business_service_ci_values", set()),
+        )
+        overall_row["assignment_group_values"].update(row.get("assignment_group_values", set()))
+        overall_row["functional_track_values"].update(row.get("functional_track_values", set()))
+        for current_month in months:
+            current_key = month_key(current_month)
+            for metric in ("created", "resolved", "cancelled"):
+                overall_row["months"][current_key][metric] += row["months"][current_key][metric]
+
+    return {
+        "scope": scope,
+        "functional_track": functional_track,
+        "months": [
+            {
+                "month": current_month,
+                "month_key": month_key(current_month),
+                "month_label": month_label(current_month),
+            }
+            for current_month in months
+        ],
+        "tables": {
+            "incidents": build_business_service_ci_volumetrics_table(
+                "Incidents",
+                incident_rows,
+                months,
+            ),
+            "sc_tasks": build_business_service_ci_volumetrics_table(
+                "SC Tasks",
+                sc_task_rows,
+                months,
+            ),
+            "overall": build_business_service_ci_volumetrics_table(
+                "Overall",
+                list(overall_by_key.values()),
+                months,
+            ),
+        },
+        "available_functional_tracks": business_service_ci_volumetrics_available_tracks(
+            db,
+            request,
+        ),
+        "data_notes": [
+            "Business Service CI Volumetrics includes Incidents and SC Tasks only.",
+            "Problems and Changes are excluded.",
+            "Rows are grouped by Business Service CI, Functional Track, and Assignment Group.",
+            "Created counts use created_at month.",
+            "Resolved counts use normalized completion date and exclude cancelled states.",
+            "Cancelled counts use cancelled/closed-incomplete state with closed/resolved date.",
+        ],
+        "warnings": [],
+    }
+
+
 def normalize_volumetrics_scope(value: str | None) -> str:
     normalized = (value or "in_scope").strip().lower()
     if normalized not in VOLUMETRICS_SCOPES:
@@ -2970,7 +3352,7 @@ def volumetrics_agreement_breach_columns(source: Any, request: Any) -> tuple[Any
 
 
 def normalize_dashboard_datetime(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
+    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def volumetrics_completion_expression(model: Any) -> Any:
@@ -3031,7 +3413,19 @@ def volumetrics_supported_vendor_expression(model: Any) -> Any:
     )
 
 
-def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) -> Any:
+def volumetrics_source_select(
+    model: Any,
+    scope_label: str,
+    project_id: UUID,
+    *,
+    ticket_scope: bool | None = None,
+) -> Any:
+    conditions = [
+        model.project_id == project_id,
+        model.ticket_type.in_(tuple(VOLUMETRICS_TICKET_TYPE_VALUES.values())),
+    ]
+    if ticket_scope is not None and hasattr(model, "is_in_scope"):
+        conditions.append(model.is_in_scope.is_(ticket_scope))
     return select(
         literal(scope_label).label("scope"),
         model.id.label("id"),
@@ -3073,25 +3467,31 @@ def volumetrics_source_select(model: Any, scope_label: str, project_id: UUID) ->
         func.coalesce(model.ola_resolution_sla_breached, model.resolution_sla_breached).label(
             "ola_resolution_sla_breached",
         ),
-    ).where(
-        model.project_id == project_id,
-        model.ticket_type.in_(tuple(VOLUMETRICS_TICKET_TYPE_VALUES.values())),
-    )
+    ).where(*conditions)
 
 
 def volumetrics_source_subquery(request: Any, *, scope_override: str | None = None) -> Any:
     scope = normalize_volumetrics_scope(scope_override or request.scope)
-    in_scope_select = volumetrics_source_select(Ticket, "in_scope", request.project_id)
-    out_of_scope_select = volumetrics_source_select(
-        AssessmentOutOfScopeTicket,
+    in_scope_select = volumetrics_source_select(
+        Ticket,
+        "in_scope",
+        request.project_id,
+        ticket_scope=True,
+    )
+    out_of_scope_ticket_select = volumetrics_source_select(
+        Ticket,
         "out_of_scope",
         request.project_id,
+        ticket_scope=False,
     )
     if scope == "in_scope":
         return in_scope_select.subquery("volumetrics_source")
     if scope == "out_of_scope":
-        return out_of_scope_select.subquery("volumetrics_source")
-    return union_all(in_scope_select, out_of_scope_select).subquery("volumetrics_source")
+        return out_of_scope_ticket_select.subquery("volumetrics_source")
+    return union_all(
+        in_scope_select,
+        out_of_scope_ticket_select,
+    ).subquery("volumetrics_source")
 
 
 def volumetrics_display_expression(expression: Any) -> Any:
@@ -3647,17 +4047,16 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
 
 
 def volumetrics_data_range(db: Session, project_id: UUID) -> dict[str, Any]:
-    in_scope_select = select(
-        volumetrics_availability_completion_expression(Ticket).label("completion_at"),
-    ).where(Ticket.project_id == project_id)
-    out_of_scope_select = select(
-        volumetrics_availability_completion_expression(AssessmentOutOfScopeTicket).label(
-            "completion_at",
-        ),
-    ).where(
-        AssessmentOutOfScopeTicket.project_id == project_id,
+    source = (
+        select(
+            volumetrics_availability_completion_expression(Ticket).label("completion_at"),
+        )
+        .where(
+            Ticket.project_id == project_id,
+            Ticket.ticket_type.in_(tuple(VOLUMETRICS_TICKET_TYPE_VALUES.values())),
+        )
+        .subquery("volumetrics_source")
     )
-    source = union_all(in_scope_select, out_of_scope_select).subquery("volumetrics_source")
     row = db.execute(
         select(
             func.min(source.c.completion_at).label("completion_date_min"),
@@ -3736,7 +4135,10 @@ def scalar_count(db: Session, source: Any, conditions: list[Any]) -> int:
 
 
 def volumetrics_period_start_expression(date_expression: Any, grain: str) -> Any:
-    return func.date_trunc("month" if grain == "monthly" else "week", date_expression)
+    return func.date_trunc(
+        "month" if grain == "monthly" else "week",
+        func.timezone("UTC", date_expression),
+    )
 
 
 def normalize_volumetrics_period_key(value: datetime | None, grain: str) -> datetime | None:
@@ -3842,14 +4244,30 @@ def volumetrics_period_metrics(
         request,
         source,
         source.c.created_at,
-        [func.count(source.c.id).label("created_count")],
+        [
+            func.count(source.c.id).label("created_count"),
+            func.count(source.c.id)
+            .filter(source.c.ticket_type == "INCIDENT")
+            .label("created_incident_count"),
+            func.count(source.c.id)
+            .filter(source.c.ticket_type == "SERVICE_CATALOG_TASK")
+            .label("created_sc_task_count"),
+        ],
     )
     completed_rows = volumetrics_aggregate_by_period(
         db,
         request,
         source,
         source.c.completion_at,
-        [func.count(source.c.id).label("resolved_closed_count")],
+        [
+            func.count(source.c.id).label("resolved_closed_count"),
+            func.count(source.c.id)
+            .filter(source.c.ticket_type == "INCIDENT")
+            .label("resolved_closed_incident_count"),
+            func.count(source.c.id)
+            .filter(source.c.ticket_type == "SERVICE_CATALOG_TASK")
+            .label("resolved_closed_sc_task_count"),
+        ],
         [resolved_closed_condition],
     )
     cancelled_rows = (
@@ -3885,7 +4303,7 @@ def volumetrics_period_metrics(
             db,
             request,
             source,
-            source.c.created_at,
+            source.c.closed_at,
             [
                 func.count(source.c.id)
                 .filter(response_breached_column.is_not(None))
@@ -3899,6 +4317,10 @@ def volumetrics_period_metrics(
                 func.count(source.c.id)
                 .filter(resolution_breached_column.is_(False))
                 .label("resolution_met_count"),
+            ],
+            [
+                volumetrics_resolved_closed_state_expression(source.c),
+                ~volumetrics_cancelled_expression(source),
             ],
             override_request=incident_request,
         )
@@ -3952,8 +4374,20 @@ def volumetrics_period_metrics(
                 "period_end": period.end,
                 "period_label": period.label,
                 "created_count": created_count,
+                "created_incident_count": int_count(
+                    created_values.get("created_incident_count"),
+                ),
+                "created_sc_task_count": int_count(
+                    created_values.get("created_sc_task_count"),
+                ),
                 "resolved_closed_count": int_count(
                     completed_values.get("resolved_closed_count"),
+                ),
+                "resolved_closed_incident_count": int_count(
+                    completed_values.get("resolved_closed_incident_count"),
+                ),
+                "resolved_closed_sc_task_count": int_count(
+                    completed_values.get("resolved_closed_sc_task_count"),
                 ),
                 "cancelled_count": int_count(cancelled_values.get("cancelled_count")),
                 "backlog_open_count": (
@@ -3976,7 +4410,15 @@ def volumetrics_summary(db: Session, request: Any) -> dict[str, Any]:
     rows = volumetrics_period_metrics(db, request, include_backlog=False)
     period_count = len(rows)
     total_created = sum(row["created_count"] for row in rows)
+    total_created_incidents = sum(row["created_incident_count"] for row in rows)
+    total_created_sc_tasks = sum(row["created_sc_task_count"] for row in rows)
     total_resolved_closed = sum(row["resolved_closed_count"] for row in rows)
+    total_resolved_closed_incidents = sum(
+        row["resolved_closed_incident_count"] for row in rows
+    )
+    total_resolved_closed_sc_tasks = sum(
+        row["resolved_closed_sc_task_count"] for row in rows
+    )
     total_cancelled = sum(row["cancelled_count"] for row in rows)
     response_applicable = sum(row["response_applicable_count"] for row in rows)
     response_met = sum(row["response_met_count"] for row in rows)
@@ -3989,10 +4431,26 @@ def volumetrics_summary(db: Session, request: Any) -> dict[str, Any]:
         "created": {
             "total": total_created,
             "average_per_period": total_created / period_count if period_count else None,
+            "incident_count": total_created_incidents,
+            "incident_average_per_period": (
+                total_created_incidents / period_count if period_count else None
+            ),
+            "sc_task_count": total_created_sc_tasks,
+            "sc_task_average_per_period": (
+                total_created_sc_tasks / period_count if period_count else None
+            ),
         },
         "resolved_closed": {
             "total": total_resolved_closed,
             "average_per_period": total_resolved_closed / period_count if period_count else None,
+            "incident_count": total_resolved_closed_incidents,
+            "incident_average_per_period": (
+                total_resolved_closed_incidents / period_count if period_count else None
+            ),
+            "sc_task_count": total_resolved_closed_sc_tasks,
+            "sc_task_average_per_period": (
+                total_resolved_closed_sc_tasks / period_count if period_count else None
+            ),
         },
         "cancelled": {
             "total": total_cancelled,
@@ -4341,8 +4799,8 @@ def volumetrics_hourly_created_resolved(db: Session, request: Any) -> dict[str, 
                 "hour": f"{hour:02d}",
                 "average_created": average_created,
                 "average_resolved_closed": average_resolved,
-                "created_label": math.ceil(average_created),
-                "resolved_closed_label": math.ceil(average_resolved),
+                "created_label": rounded_count(average_created),
+                "resolved_closed_label": rounded_count(average_resolved),
             },
         )
 
@@ -4456,7 +4914,9 @@ def empty_sla_trend_response(request: Any, *, not_applicable: bool) -> dict[str,
                 f"resolution_{agreement_mode}_adhered_count / "
                 f"resolution_{agreement_mode}_captured_count * 100"
             ),
-            "captured_definition": f"{agreement_label} breached flag IS NOT NULL",
+            "captured_definition": (
+                f"{agreement_label} breached flag IS NOT NULL; cancelled incidents are excluded"
+            ),
         },
     }
 
@@ -4467,7 +4927,7 @@ def volumetrics_sla_trend_rows(
     source: Any,
 ) -> dict[str, dict[str, Any]]:
     grain = normalize_volumetrics_time_grain(request.time_grain)
-    period_expression = volumetrics_period_start_expression(source.c.resolved_at, grain)
+    period_expression = volumetrics_period_start_expression(source.c.closed_at, grain)
     incident_request = replace_request_value(request, "ticket_type", "incident")
     response_breached_column, resolution_breached_column = volumetrics_agreement_breach_columns(
         source,
@@ -4497,10 +4957,11 @@ def volumetrics_sla_trend_rows(
                 incident_request,
                 include_date_bounds=False,
             ),
-            source.c.resolved_at.is_not(None),
+            source.c.closed_at.is_not(None),
             volumetrics_resolved_closed_state_expression(source.c),
-            source.c.resolved_at >= normalize_dashboard_datetime(request.start_datetime),
-            source.c.resolved_at <= normalize_dashboard_datetime(request.end_datetime),
+            ~volumetrics_cancelled_expression(source),
+            source.c.closed_at >= normalize_dashboard_datetime(request.start_datetime),
+            source.c.closed_at <= normalize_dashboard_datetime(request.end_datetime),
         )
         .group_by(period_expression)
         .order_by(period_expression)
@@ -4677,8 +5138,8 @@ def pareto_top_application_points(
                 "application_name": str(row["application_name"]),
                 output_created_key: created_value,
                 output_canceled_key: canceled_value,
-                created_label_key: math.ceil(created_value),
-                canceled_label_key: math.ceil(canceled_value),
+                created_label_key: rounded_count(created_value),
+                canceled_label_key: rounded_count(canceled_value),
                 "pareto_cumulative_pct": percentage(
                     int(round(running_created * 1000)),
                     int(round(total_created * 1000)),
@@ -4797,7 +5258,7 @@ def top_application_volume_points(
             if overall_average_monthly_volume
             else None
         )
-        created_label = math.ceil(created_value)
+        created_label = rounded_count(created_value)
         pct_text = f"{volume_pct:.1f}%" if volume_pct is not None else "N/A"
         points.append(
             {
@@ -4805,7 +5266,7 @@ def top_application_volume_points(
                 "average_created": created_value,
                 "average_canceled_closed_incomplete": canceled_value,
                 "created_label": created_label,
-                "canceled_label": math.ceil(canceled_value),
+                "canceled_label": rounded_count(canceled_value),
                 "volume_pct": volume_pct,
                 "display_label": f"{created_label:,} ({pct_text})",
             },
@@ -4964,11 +5425,11 @@ def volumetrics_split_rows(
     )
     rows = [dict(row) for row in db.execute(statement).mappings().all()]
     total_average = sum(float(row["average_monthly_count"] or 0) for row in rows)
-    return [
+    output_rows = [
         {
             "label": str(row["label"]),
             "average_monthly_count": float(row["average_monthly_count"] or 0),
-            "display_count": math.ceil(float(row["average_monthly_count"] or 0)),
+            "display_count": rounded_count(float(row["average_monthly_count"] or 0)),
             "percentage": (
                 float(row["average_monthly_count"] or 0) / total_average * 100
                 if total_average
@@ -4977,6 +5438,13 @@ def volumetrics_split_rows(
         }
         for row in rows
     ]
+    if field_name == "hosting_env":
+        return compact_percentage_rows(
+            output_rows,
+            value_key="average_monthly_count",
+            minimum_visible_pct=5.0,
+        )
+    return output_rows
 
 
 def volumetrics_detailed_architecture_install_splits(
@@ -5148,11 +5616,11 @@ def volumetrics_distribution_split_rows(
     )
     rows = [dict(row) for row in db.execute(statement).mappings().all()]
     total_average = sum(float(row["average_monthly_count"] or 0) for row in rows)
-    return [
+    output_rows = [
         {
             "label": str(row["label"]),
             "average_monthly_count": float(row["average_monthly_count"] or 0),
-            "display_count": math.ceil(float(row["average_monthly_count"] or 0)),
+            "display_count": rounded_count(float(row["average_monthly_count"] or 0)),
             "percentage": (
                 float(row["average_monthly_count"] or 0) / total_average * 100
                 if total_average
@@ -5160,6 +5628,73 @@ def volumetrics_distribution_split_rows(
             ),
         }
         for row in rows
+    ]
+    if field_name == "hosting_env":
+        return compact_percentage_rows(
+            output_rows,
+            value_key="average_monthly_count",
+            minimum_visible_pct=5.0,
+        )
+    return output_rows
+
+
+def compact_percentage_rows(
+    rows: list[dict[str, Any]],
+    *,
+    value_key: str,
+    max_slices: int = 5,
+    minimum_visible_pct: float = 10.0,
+) -> list[dict[str, Any]]:
+    if len(rows) <= 1:
+        return rows
+    total = sum(float(row.get(value_key) or 0) for row in rows)
+    if total <= 0:
+        return rows[:max_slices]
+
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (-float(row.get(value_key) or 0), str(row.get("label") or "").casefold()),
+    )
+    visible = [
+        row
+        for row in sorted_rows
+        if (float(row.get(value_key) or 0) / total * 100) >= minimum_visible_pct
+    ]
+    if not visible and len(sorted_rows) > max_slices:
+        visible = sorted_rows[: max_slices - 1]
+    elif len(visible) >= max_slices:
+        visible = visible[: max_slices - 1]
+
+    visible_ids = {id(row) for row in visible}
+    other_rows = [row for row in sorted_rows if id(row) not in visible_ids]
+    other_value = sum(float(row.get(value_key) or 0) for row in other_rows)
+
+    compacted = [dict(row) for row in visible]
+    if other_value > 0:
+        other_row: dict[str, Any] = {
+            "label": "Others",
+            value_key: other_value,
+            "percentage": other_value / total * 100,
+        }
+        if "display_count" in sorted_rows[0]:
+            other_row["display_count"] = rounded_count(other_value)
+        for aggregate_key in ("ticket_count", "sc_task_count"):
+            if aggregate_key in sorted_rows[0]:
+                other_row[aggregate_key] = sum(
+                    int(row.get(aggregate_key) or 0) for row in other_rows
+                )
+        compacted.append(other_row)
+
+    return [
+        {
+            **row,
+            "percentage": (
+                float(row.get(value_key) or 0) / total * 100
+                if total
+                else None
+            ),
+        }
+        for row in compacted
     ]
 
 
@@ -5169,6 +5704,8 @@ def volumetrics_service_volume_split_rows(
     *,
     field_name: str,
     ticket_type: str,
+    window_start: datetime,
+    window_end: datetime,
 ) -> list[dict[str, Any]]:
     source = volumetrics_source_subquery(request)
     effective_request = (
@@ -5184,25 +5721,142 @@ def volumetrics_service_volume_split_rows(
         select(
             split_expression.label("label"),
             func.count(source.c.id).label("ticket_count"),
+            (func.count(source.c.id) / 6.0).label("average_monthly_count"),
         )
         .select_from(source)
-        .where(*volumetrics_base_conditions(source, effective_request))
+        .where(
+            *volumetrics_base_conditions(source, effective_request, include_date_bounds=False),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= window_start,
+            source.c.created_at <= window_end,
+        )
         .group_by(split_expression)
         .order_by(func.count(source.c.id).desc(), split_expression.asc())
     )
     rows = [dict(row) for row in db.execute(statement).mappings().all()]
-    total = sum(int(row["ticket_count"] or 0) for row in rows)
+    total_average = sum(float(row["average_monthly_count"] or 0) for row in rows)
     return [
         {
             "label": str(row["label"]),
             "ticket_count": int(row["ticket_count"] or 0),
+            "average_monthly_count": float(row["average_monthly_count"] or 0),
+            "display_count": rounded_count(float(row["average_monthly_count"] or 0)),
             "percentage": (
-                int(row["ticket_count"] or 0) / total * 100
-                if total
+                float(row["average_monthly_count"] or 0) / total_average * 100
+                if total_average
                 else None
             ),
         }
         for row in rows
+    ]
+
+
+def assignment_group_sap_non_sap_expression(assignment_group_expression: Any) -> Any:
+    normalized_assignment_group = func.lower(
+        func.trim(func.coalesce(assignment_group_expression, literal(""))),
+    )
+    return case(
+        (normalized_assignment_group.like("it-sap%"), literal("SAP")),
+        (normalized_assignment_group.like("it-nsa%"), literal("Non-SAP")),
+        else_=literal("Others"),
+    )
+
+
+def volumetrics_assignment_group_sap_non_sap_split_rows(
+    db: Session,
+    request: Any,
+    *,
+    ticket_type: str,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    effective_request = (
+        replace_request_value(request, "ticket_type", ticket_type)
+        if ticket_type != "all"
+        else replace_request_value(request, "ticket_type", "all")
+    )
+    split_expression = assignment_group_sap_non_sap_expression(source.c.assignment_group)
+    statement = (
+        select(
+            split_expression.label("label"),
+            (func.count(source.c.id) / 6.0).label("average_monthly_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(source, effective_request, include_date_bounds=False),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= window_start,
+            source.c.created_at <= window_end,
+        )
+        .group_by(split_expression)
+        .order_by(func.count(source.c.id).desc(), split_expression.asc())
+    )
+    rows = [dict(row) for row in db.execute(statement).mappings().all()]
+    total_average = sum(float(row["average_monthly_count"] or 0) for row in rows)
+    return [
+        {
+            "label": str(row["label"]),
+            "average_monthly_count": float(row["average_monthly_count"] or 0),
+            "display_count": rounded_count(float(row["average_monthly_count"] or 0)),
+            "percentage": (
+                float(row["average_monthly_count"] or 0) / total_average * 100
+                if total_average
+                else None
+            ),
+        }
+        for row in rows
+    ]
+
+
+def volumetrics_service_type_assignment_group_sap_non_sap_pivot_rows(
+    db: Session,
+    request: Any,
+    *,
+    ticket_type: str,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    effective_request = replace_request_value(request, "ticket_type", ticket_type)
+    service_type_expression = func.coalesce(
+        nonblank_text_expression(source.c.service_type),
+        literal("Blank"),
+    )
+    split_expression = assignment_group_sap_non_sap_expression(source.c.assignment_group)
+    statement = (
+        select(
+            service_type_expression.label("service_type"),
+            (func.count(source.c.id).filter(split_expression == "SAP") / 6.0).label(
+                "sap_average_monthly_count",
+            ),
+            (func.count(source.c.id).filter(split_expression == "Non-SAP") / 6.0).label(
+                "non_sap_average_monthly_count",
+            ),
+            (func.count(source.c.id).filter(split_expression == "Others") / 6.0).label(
+                "others_average_monthly_count",
+            ),
+            (func.count(source.c.id) / 6.0).label("total_average_monthly_count"),
+        )
+        .select_from(source)
+        .where(
+            *volumetrics_base_conditions(source, effective_request, include_date_bounds=False),
+            source.c.created_at.is_not(None),
+            source.c.created_at >= window_start,
+            source.c.created_at <= window_end,
+        )
+        .group_by(service_type_expression)
+        .order_by(func.count(source.c.id).desc(), service_type_expression.asc())
+    )
+    return [
+        {
+            "service_type": str(row["service_type"]),
+            "sap_average_monthly_count": float(row["sap_average_monthly_count"] or 0),
+            "non_sap_average_monthly_count": float(row["non_sap_average_monthly_count"] or 0),
+            "others_average_monthly_count": float(row["others_average_monthly_count"] or 0),
+            "total_average_monthly_count": float(row["total_average_monthly_count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
     ]
 
 
@@ -5244,18 +5898,74 @@ def volumetrics_distribution_splits(db: Session, request: Any) -> dict[str, Any]
                 request,
                 field_name=field_name,
                 ticket_type="all",
+                window_start=window_start,
+                window_end=window_end,
             ),
             "incidents": volumetrics_service_volume_split_rows(
                 db,
                 request,
                 field_name=field_name,
                 ticket_type="incident",
+                window_start=window_start,
+                window_end=window_end,
             ),
             "sc_tasks": volumetrics_service_volume_split_rows(
                 db,
                 request,
                 field_name=field_name,
                 ticket_type="sc_task",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+        }
+
+    def assignment_group_sap_non_sap_group() -> dict[str, list[dict[str, Any]]]:
+        return {
+            "all": volumetrics_assignment_group_sap_non_sap_split_rows(
+                db,
+                request,
+                ticket_type="all",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            "incidents": volumetrics_assignment_group_sap_non_sap_split_rows(
+                db,
+                request,
+                ticket_type="incident",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            "sc_tasks": volumetrics_assignment_group_sap_non_sap_split_rows(
+                db,
+                request,
+                ticket_type="sc_task",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+        }
+
+    def service_type_assignment_group_sap_non_sap_pivot_group() -> dict[str, list[dict[str, Any]]]:
+        return {
+            "all": volumetrics_service_type_assignment_group_sap_non_sap_pivot_rows(
+                db,
+                request,
+                ticket_type="all",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            "incidents": volumetrics_service_type_assignment_group_sap_non_sap_pivot_rows(
+                db,
+                request,
+                ticket_type="incident",
+                window_start=window_start,
+                window_end=window_end,
+            ),
+            "sc_tasks": volumetrics_service_type_assignment_group_sap_non_sap_pivot_rows(
+                db,
+                request,
+                ticket_type="sc_task",
+                window_start=window_start,
+                window_end=window_end,
             ),
         }
 
@@ -5264,6 +5974,10 @@ def volumetrics_distribution_splits(db: Session, request: Any) -> dict[str, Any]
         "ticket_volume_by_service_entitlement": service_volume_group("service_entitlement"),
         "ticket_volume_by_service_type": service_volume_group("service_type"),
         "sap_non_sap": group("sap_non_sap"),
+        "assignment_group_sap_non_sap": assignment_group_sap_non_sap_group(),
+        "service_type_by_assignment_group_sap_non_sap": (
+            service_type_assignment_group_sap_non_sap_pivot_group()
+        ),
         "architecture_type": group("architecture_type"),
         "install_type": group("install_type"),
         "hosting_env": group("hosting_env"),
@@ -5326,33 +6040,41 @@ def sc_task_catalog_pie_rows(
     raw_rows: list[dict[str, Any]],
     total_sc_tasks: int,
 ) -> list[dict[str, Any]]:
-    visible_rows: list[dict[str, Any]] = []
-    other_count = 0
-    for row in raw_rows:
-        sc_task_count = int(row["sc_task_count"])
-        proportion_pct = percentage(sc_task_count, total_sc_tasks)
-        if proportion_pct is not None and proportion_pct < 2:
-            other_count += sc_task_count
-        else:
-            visible_rows.append(row)
-
     pie_rows = [
         sc_task_catalog_metric_row(
             str(row["catalog_item_name"]),
             int(row["sc_task_count"]),
             total_sc_tasks,
         )
-        for row in visible_rows
+        for row in raw_rows
     ]
-    if other_count > 0:
-        pie_rows.append(sc_task_catalog_metric_row("Others", other_count, total_sc_tasks))
-    return sorted(
-        pie_rows,
-        key=lambda item: (
-            -int(item["sc_task_count"]),
-            str(item["catalog_item_name"]).casefold(),
-        ),
+    compacted_rows = compact_percentage_rows(
+        [
+            {
+                "label": row["catalog_item_name"],
+                "catalog_item_name": row["catalog_item_name"],
+                "sc_task_count": row["sc_task_count"],
+                "avg_monthly_volume": row["avg_monthly_volume"],
+                "proportion_pct": row["proportion_pct"],
+                "percentage": row["proportion_pct"],
+            }
+            for row in pie_rows
+        ],
+        value_key="sc_task_count",
+        max_slices=40,
+        minimum_visible_pct=2.0,
     )
+    return [
+        {
+            "catalog_item_name": str(row["label"]),
+            "sc_task_count": int(row["sc_task_count"]),
+            "avg_monthly_volume": round(int(row["sc_task_count"]) / 6.0, 1),
+            "proportion_pct": round(float(row["percentage"]), 1)
+            if row.get("percentage") is not None
+            else None,
+        }
+        for row in compacted_rows
+    ]
 
 
 def volumetrics_sc_task_catalog_item_proportion(
@@ -5365,9 +6087,9 @@ def volumetrics_sc_task_catalog_item_proportion(
     data_notes = [
         "SC Task Catalog Item Proportion uses SC Tasks only.",
         "Incidents, Problems, and Changes are excluded.",
-        "Pie charts group catalog items below 2% into Others.",
-        "Average monthly volume is calculated over six months for each half-year period.",
-        "Date controls do not override the fixed H1/H2 periods for this chart.",
+        "Catalog items below 2% of the Dec-25 through May-26 volume are grouped into Others.",
+        "Average monthly volume is calculated over Dec-25 through May-26.",
+        "Date controls do not override the fixed Dec-25 to May-26 period for this chart.",
     ]
     warnings: list[str] = []
     if selected_ticket_type == "incident":
@@ -6604,7 +7326,10 @@ def date_filter_basis_expression(filters: DashboardFilters) -> Any:
 
 
 def period_start_expression(date_expression: Any, grain: TimeGrain) -> Any:
-    return func.date_trunc(DATE_TRUNC_GRAIN[grain.value], date_expression)
+    return func.date_trunc(
+        DATE_TRUNC_GRAIN[grain.value],
+        func.timezone("UTC", date_expression),
+    )
 
 
 def query_date_bounds(
@@ -6803,20 +7528,21 @@ def mttr_trend(db: Session, filters: DashboardFilters) -> list[dict[str, Any]]:
 
 
 def sla_trend(db: Session, filters: DashboardFilters) -> list[dict[str, Any]]:
-    periods = build_periods_for_dates(db, filters, [Ticket.created_at])
+    periods = build_periods_for_dates(db, filters, [Ticket.closed_at])
     if not periods:
         return []
 
     rows_by_period = aggregate_by_period(
         db,
         filters,
-        Ticket.created_at,
+        Ticket.closed_at,
         [
             func.count(Ticket.id).filter(Ticket.sla_breached.is_not(None)).label("known_count"),
             func.count(Ticket.id).filter(Ticket.sla_breached.is_(False)).label("met_count"),
             func.count(Ticket.id).filter(Ticket.sla_breached.is_(True)).label("breached_count"),
             func.count(Ticket.id).filter(Ticket.sla_breached.is_(None)).label("unknown_count"),
         ],
+        [~cancelled_or_canceled_state_condition(Ticket)],
     )
 
     rows: list[dict[str, Any]] = []
@@ -6843,7 +7569,7 @@ def sla_trend(db: Session, filters: DashboardFilters) -> list[dict[str, Any]]:
 
 def incident_sla_trend(db: Session, filters: DashboardFilters) -> list[dict[str, Any]]:
     filters = incident_only_filters(filters)
-    periods = build_periods_for_dates(db, filters, [Ticket.created_at])
+    periods = build_periods_for_dates(db, filters, [Ticket.closed_at])
     if not periods:
         return []
 
@@ -6856,7 +7582,7 @@ def incident_sla_trend(db: Session, filters: DashboardFilters) -> list[dict[str,
     rows_by_period = aggregate_by_period(
         db,
         filters,
-        Ticket.created_at,
+        Ticket.closed_at,
         [
             func.count(Ticket.id).label("incident_count"),
             func.count(Ticket.id)
@@ -6880,6 +7606,7 @@ def incident_sla_trend(db: Session, filters: DashboardFilters) -> list[dict[str,
             .filter(Ticket.resolution_sla_breached.is_(True))
             .label("resolution_breached_count"),
         ],
+        [~cancelled_or_canceled_state_condition(Ticket)],
     )
 
     rows: list[dict[str, Any]] = []
@@ -6977,7 +7704,11 @@ def incident_sla_summary(db: Session, filters: DashboardFilters) -> dict[str, An
         .label("resolution_default_count"),
     )
     statement = dashboard_select(statement, filters)
-    statement = apply_date_bounds(statement, filters, Ticket.created_at)
+    statement = apply_date_bounds(statement, filters, Ticket.closed_at)
+    statement = statement.where(
+        Ticket.closed_at.is_not(None),
+        ~cancelled_or_canceled_state_condition(Ticket),
+    )
     row = db.execute(statement).mappings().one()
     response_applicable = int_count(row["response_applicable_count"])
     response_met = int_count(row["response_met_count"])
@@ -7028,8 +7759,13 @@ def sla_name_breakdown_rows(
         avg_hours.label("avg_business_elapsed_hours"),
     )
     statement = dashboard_select(statement, filters)
-    statement = apply_date_bounds(statement, filters, Ticket.created_at)
-    statement = statement.where(name_column.is_not(None), breached_column.is_not(None))
+    statement = apply_date_bounds(statement, filters, Ticket.closed_at)
+    statement = statement.where(
+        Ticket.closed_at.is_not(None),
+        name_column.is_not(None),
+        breached_column.is_not(None),
+        ~cancelled_or_canceled_state_condition(Ticket),
+    )
     statement = statement.group_by(name_column).order_by(func.count(Ticket.id).desc(), name_column)
     rows: list[dict[str, Any]] = []
     for row in db.execute(statement).mappings().all():

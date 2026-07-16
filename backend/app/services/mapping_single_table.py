@@ -18,6 +18,10 @@ from app.models import (
     TicketRawRow,
     UploadBatch,
 )
+from app.services.in_scope_assignment_groups import (
+    AssignmentGroupScope,
+    assignment_group_scope_map,
+)
 from app.services.ingestion import INGESTION_BATCH_SIZE
 from app.services.mapping import (
     CMDB_ARCHITECTURE_TYPE_KEYS,
@@ -29,13 +33,10 @@ from app.services.mapping import (
     ApplyMappingResult,
     MappingError,
     NormalizationErrorSample,
-    active_inventory_in_scope_assignment_group_keys,
-    build_out_of_scope_ticket,
     build_ticket_from_raw_row,
     cmdb_payload_text,
     load_active_inventory_items,
     normalize_match_key,
-    normalize_ticket_type_value,
     text_or_none,
 )
 from app.services.upload_lifecycle import (
@@ -48,16 +49,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class GroupEnrichment:
-    functional_track: str | None = None
-    ams_owner: str | None = None
-    support_lead: str | None = None
-
-
-@dataclass(frozen=True)
 class InventoryReferenceIndex:
     inventory_by_business_service: dict[str, ApplicationInventoryItem]
-    group_enrichment_by_group: dict[str, GroupEnrichment]
 
 
 @dataclass
@@ -87,18 +80,6 @@ def chunked[T](values: list[T], chunk_size: int) -> list[list[T]]:
     return [values[index : index + chunk_size] for index in range(0, len(values), chunk_size)]
 
 
-def unique_text_value(values: list[str | None]) -> str | None:
-    values_by_key: dict[str, str] = {}
-    for value in values:
-        text = text_or_none(value)
-        if text is None:
-            continue
-        values_by_key.setdefault(normalize_match_key(text) or text.casefold(), text)
-    if len(values_by_key) == 1:
-        return next(iter(values_by_key.values()))
-    return None
-
-
 def inventory_item_sort_key(item: ApplicationInventoryItem) -> tuple[int, int, object, str]:
     return (
         0 if item.active is True else 1,
@@ -112,101 +93,106 @@ def build_inventory_reference_index(
     inventory_items: list[ApplicationInventoryItem],
 ) -> InventoryReferenceIndex:
     business_service_candidates: dict[str, list[ApplicationInventoryItem]] = {}
-    group_candidates: dict[str, list[ApplicationInventoryItem]] = {}
-
     for item in inventory_items:
-        assignment_group_key = normalize_match_key(item.assignment_group)
-        if assignment_group_key is not None:
-            group_candidates.setdefault(assignment_group_key, []).append(item)
         business_service_key = normalize_match_key(item.business_service_ci_name)
         if business_service_key is not None:
             business_service_candidates.setdefault(business_service_key, []).append(item)
 
-    inventory_by_business_service = {
-        key: sorted(candidates, key=inventory_item_sort_key)[0]
-        for key, candidates in business_service_candidates.items()
-    }
-    group_enrichment_by_group = {
-        group_key: GroupEnrichment(
-            functional_track=unique_text_value(
-                [item.functional_track for item in group_inventory_items]
-            ),
-            ams_owner=unique_text_value([item.ams_owner for item in group_inventory_items]),
-            support_lead=unique_text_value([item.support_lead for item in group_inventory_items]),
-        )
-        for group_key, group_inventory_items in group_candidates.items()
-    }
     return InventoryReferenceIndex(
-        inventory_by_business_service=inventory_by_business_service,
-        group_enrichment_by_group=group_enrichment_by_group,
+        inventory_by_business_service={
+            key: sorted(candidates, key=inventory_item_sort_key)[0]
+            for key, candidates in business_service_candidates.items()
+        },
     )
 
 
-def ticket_business_service_match_value(ticket: Ticket) -> str | None:
-    if normalize_ticket_type_value(ticket.ticket_type) == "SERVICE_CATALOG_TASK":
-        return ticket.cmdb_ci
-    return ticket.business_service
+def first_text_value(*values: Any) -> str | None:
+    for value in values:
+        text = text_or_none(value)
+        if text is not None:
+            return text
+    return None
 
 
-def enrich_ticket_from_index(ticket: Ticket, reference_index: InventoryReferenceIndex) -> None:
+def ticket_cmdb_match_value(ticket: Ticket) -> str | None:
+    return first_text_value(
+        ticket.business_service_ci_name,
+        ticket.business_service,
+        ticket.application,
+        ticket.cmdb_ci,
+    )
+
+
+def apply_assignment_group_scope(
+    ticket: Ticket,
+    scope_by_assignment_group: dict[str, AssignmentGroupScope],
+) -> str:
     assignment_group_key = normalize_match_key(ticket.assignment_group)
+    if assignment_group_key is None:
+        ticket.is_in_scope = False
+        return "OUT_OF_SCOPE_BLANK_ASSIGNMENT_GROUP"
+
+    scope = scope_by_assignment_group.get(assignment_group_key)
+    if scope is None:
+        ticket.is_in_scope = False
+        return OUT_OF_SCOPE_SCOPE_REFERENCE_DESTINATION
+
+    ticket.is_in_scope = scope.is_in_scope
+    ticket.functional_track = scope.functional_track
+    return "IN_SCOPE" if scope.is_in_scope else OUT_OF_SCOPE_SCOPE_REFERENCE_DESTINATION
+
+
+def enrich_ticket_from_inventory_index(
+    ticket: Ticket,
+    reference_index: InventoryReferenceIndex,
+) -> None:
+    match_value = ticket_cmdb_match_value(ticket)
     if ticket.business_service_ci_name is None:
-        ticket.business_service_ci_name = ticket_business_service_match_value(ticket)
-    business_service_key = normalize_match_key(ticket.business_service_ci_name)
+        ticket.business_service_ci_name = match_value
+
+    business_service_key = normalize_match_key(match_value)
     inventory_item = (
         reference_index.inventory_by_business_service.get(business_service_key)
         if business_service_key is not None
         else None
     )
-
-    if inventory_item is not None:
-        ticket.application_inventory_id = inventory_item.id
-        ticket.parent_application_number = inventory_item.application_number_apm
-        ticket.parent_application_name = inventory_item.parent_application_name
-        ticket.application_owner = inventory_item.application_owner
-        ticket.supported_by_vendor = inventory_item.supported_by_vendor
-        ticket.service_type = text_or_none(inventory_item.service_type)
-        ticket.service_entitlement = text_or_none(inventory_item.service_entitlement)
-        ticket.assignment_group_owner = inventory_item.assignment_group_owner
-        ticket.sap_non_sap = text_or_none(inventory_item.sap_non_sap)
-        ticket.derived_vendor = inventory_item.supported_by_vendor
-        ticket.hosting_env = inventory_item.hosting_env
-        ticket.architecture_type = cmdb_payload_text(
-            inventory_item.cmdb_payload,
-            *CMDB_ARCHITECTURE_TYPE_KEYS,
-        )
-        ticket.business_critical = cmdb_payload_text(
-            inventory_item.cmdb_payload,
-            *CMDB_BUSINESS_CRITICAL_KEYS,
-        )
-        ticket.install_type = cmdb_payload_text(
-            inventory_item.cmdb_payload,
-            *CMDB_INSTALL_TYPE_KEYS,
-        )
-    else:
+    if inventory_item is None:
         ticket.sap_non_sap = None
-
-    if assignment_group_key is None:
         return
-    group_enrichment = reference_index.group_enrichment_by_group.get(assignment_group_key)
-    if group_enrichment is None:
-        return
-    if ticket.functional_track is None and group_enrichment.functional_track is not None:
-        ticket.functional_track = group_enrichment.functional_track
-    if ticket.ams_owner is None and group_enrichment.ams_owner is not None:
-        ticket.ams_owner = group_enrichment.ams_owner
-    if ticket.support_lead is None and group_enrichment.support_lead is not None:
-        ticket.support_lead = group_enrichment.support_lead
+
+    ticket.application_inventory_id = inventory_item.id
+    ticket.parent_application_number = inventory_item.application_number_apm
+    ticket.parent_application_name = inventory_item.parent_application_name
+    ticket.application_owner = inventory_item.application_owner
+    ticket.support_lead = inventory_item.support_lead
+    ticket.supported_by_vendor = inventory_item.supported_by_vendor
+    ticket.service_type = text_or_none(inventory_item.service_type)
+    ticket.service_entitlement = text_or_none(inventory_item.service_entitlement)
+    ticket.assignment_group_owner = inventory_item.assignment_group_owner
+    ticket.sap_non_sap = text_or_none(inventory_item.sap_non_sap)
+    ticket.derived_vendor = inventory_item.supported_by_vendor
+    ticket.hosting_env = inventory_item.hosting_env
+    ticket.architecture_type = cmdb_payload_text(
+        inventory_item.cmdb_payload,
+        *CMDB_ARCHITECTURE_TYPE_KEYS,
+    )
+    ticket.business_critical = cmdb_payload_text(
+        inventory_item.cmdb_payload,
+        *CMDB_BUSINESS_CRITICAL_KEYS,
+    )
+    ticket.install_type = cmdb_payload_text(
+        inventory_item.cmdb_payload,
+        *CMDB_INSTALL_TYPE_KEYS,
+    )
 
 
-def model_insert_dict(model: Any, *, out_of_scope: bool = False) -> dict[str, Any]:
-    table = AssessmentOutOfScopeTicket.__table__ if out_of_scope else Ticket.__table__
+def model_insert_dict(ticket: Ticket) -> dict[str, Any]:
     skip_columns = {"ingested_at", "record_updated_at"}
     row: dict[str, Any] = {"id": uuid4()}
-    for column in table.columns:
+    for column in Ticket.__table__.columns:
         if column.name in skip_columns or column.name == "id":
             continue
-        row[column.name] = getattr(model, column.name)
+        row[column.name] = getattr(ticket, column.name)
     return row
 
 
@@ -239,20 +225,17 @@ def bulk_delete_destinations(
         )
 
 
-def bulk_insert_rows(
+def bulk_insert_ticket_rows(
     db: Session,
     *,
-    in_scope_rows: list[dict[str, Any]],
-    out_of_scope_rows: list[dict[str, Any]],
+    ticket_rows: list[dict[str, Any]],
     chunk_size: int,
 ) -> None:
-    for row_chunk in chunked(in_scope_rows, chunk_size):
+    for row_chunk in chunked(ticket_rows, chunk_size):
         db.execute(insert(Ticket), row_chunk)
-    for row_chunk in chunked(out_of_scope_rows, chunk_size):
-        db.execute(insert(AssessmentOutOfScopeTicket), row_chunk)
 
 
-def apply_mapping_to_batch_v2(
+def apply_mapping_to_batch_single_table(
     db: Session,
     *,
     upload_batch: UploadBatch,
@@ -264,14 +247,14 @@ def apply_mapping_to_batch_v2(
     chunk_size = max(1, settings.ams_processing_bulk_chunk_size)
     timer = StageTimer()
     started_at = perf_counter()
-    warnings: list[str] = ["Using processing pipeline version: v2."]
+    warnings: list[str] = ["Using processing pipeline version: single-table-v2."]
     errors: list[NormalizationErrorSample] = []
     failed_row_count = 0
     duplicate_ticket_replacement_count = 0
     deduped: dict[str, tuple[Ticket, str]] = {}
 
     logger.info(
-        "Using processing pipeline version: v2 upload_batch_id=%s project_id=%s",
+        "Using single-table ticket mapping upload_batch_id=%s project_id=%s",
         upload_batch_id,
         upload_batch.project_id,
     )
@@ -281,17 +264,13 @@ def apply_mapping_to_batch_v2(
 
     with timer.measure("load_reference_data"):
         inventory_items = load_active_inventory_items(db, upload_batch.project_id)
-        active_assignment_groups = active_inventory_in_scope_assignment_group_keys(
-            db,
-            upload_batch.project_id,
-        )
+        scope_by_assignment_group = assignment_group_scope_map(db, upload_batch.project_id)
     with timer.measure("build_reference_indexes"):
         reference_index = build_inventory_reference_index(inventory_items)
-    if not active_assignment_groups:
+    if not scope_by_assignment_group:
         warnings.append(
-            "No active CMDB/Application Inventory in-scope assignment groups were found "
-            "for this project; tickets with non-blank assignment groups will be classified "
-            "as out of scope.",
+            "No assignment group scope reference rows were found for this project; tickets "
+            "will be classified as out of scope until the scope file is imported.",
         )
 
     raw_row_statement = (
@@ -306,15 +285,8 @@ def apply_mapping_to_batch_v2(
             total_raw_rows += 1
             try:
                 ticket = build_ticket_from_raw_row(raw_row, upload_batch, resolved_mapping)
-                enrich_ticket_from_index(ticket, reference_index)
-
-                assignment_group_key = normalize_match_key(ticket.assignment_group)
-                if assignment_group_key is None:
-                    destination = "OUT_OF_SCOPE_BLANK_ASSIGNMENT_GROUP"
-                elif assignment_group_key not in active_assignment_groups:
-                    destination = OUT_OF_SCOPE_SCOPE_REFERENCE_DESTINATION
-                else:
-                    destination = "IN_SCOPE"
+                destination = apply_assignment_group_scope(ticket, scope_by_assignment_group)
+                enrich_ticket_from_inventory_index(ticket, reference_index)
 
                 if ticket.ticket_number in deduped:
                     duplicate_ticket_replacement_count += 1
@@ -331,26 +303,25 @@ def apply_mapping_to_batch_v2(
                     )
 
     ticket_numbers = list(deduped)
-    in_scope_rows: list[dict[str, Any]] = []
-    out_of_scope_rows: list[dict[str, Any]] = []
+    ticket_rows: list[dict[str, Any]] = []
     blank_assignment_group_count = 0
     assignment_group_not_in_inventory_count = 0
+    in_scope_count = 0
+    out_of_scope_count = 0
+
     for ticket, destination in deduped.values():
-        if destination == "IN_SCOPE":
-            in_scope_rows.append(model_insert_dict(ticket))
+        if ticket.is_in_scope:
+            in_scope_count += 1
         else:
+            out_of_scope_count += 1
             if destination == "OUT_OF_SCOPE_BLANK_ASSIGNMENT_GROUP":
-                reason = "blank_assignment_group"
                 blank_assignment_group_count += 1
             else:
-                reason = "assignment_group_not_in_scope_reference"
                 assignment_group_not_in_inventory_count += 1
-            out_of_scope_rows.append(
-                model_insert_dict(build_out_of_scope_ticket(ticket, reason), out_of_scope=True)
-            )
+        ticket_rows.append(model_insert_dict(ticket))
 
     try:
-        if delete_existing and ticket_numbers:
+        if delete_existing:
             with timer.measure("bulk_delete_destinations"):
                 bulk_delete_destinations(
                     db,
@@ -360,10 +331,9 @@ def apply_mapping_to_batch_v2(
                     chunk_size=chunk_size,
                 )
         with timer.measure("bulk_insert_destinations"):
-            bulk_insert_rows(
+            bulk_insert_ticket_rows(
                 db,
-                in_scope_rows=in_scope_rows,
-                out_of_scope_rows=out_of_scope_rows,
+                ticket_rows=ticket_rows,
                 chunk_size=chunk_size,
             )
 
@@ -395,30 +365,30 @@ def apply_mapping_to_batch_v2(
     duration_seconds = perf_counter() - started_at
     rows_per_second = len(deduped) / duration_seconds if duration_seconds else 0.0
     logger.info(
-        "V2 apply mapping complete upload_batch_id=%s input_rows=%s deduped_rows=%s "
+        "Single-table mapping complete upload_batch_id=%s input_rows=%s deduped_rows=%s "
         "in_scope_rows=%s out_of_scope_rows=%s duration_seconds=%.3f rows_per_second=%.2f "
         "stage_timings=%s",
         upload_batch_id,
         total_raw_rows,
         len(deduped),
-        len(in_scope_rows),
-        len(out_of_scope_rows),
+        in_scope_count,
+        out_of_scope_count,
         duration_seconds,
         rows_per_second,
         {key: round(value, 3) for key, value in timer.timings.items()},
     )
     warnings.append(
-        "V2 stage timings: "
+        "Single-table stage timings: "
         + ", ".join(f"{key}={value:.2f}s" for key, value in timer.timings.items())
     )
-    warnings.append(f"V2 rows/sec: {rows_per_second:.2f}")
+    warnings.append(f"Single-table rows/sec: {rows_per_second:.2f}")
     db.refresh(upload_batch)
 
     return ApplyMappingResult(
         upload_batch_id=upload_batch.id,
         total_raw_rows=total_raw_rows,
-        normalized_ticket_count=len(in_scope_rows),
-        out_of_scope_ticket_count=len(out_of_scope_rows),
+        normalized_ticket_count=in_scope_count,
+        out_of_scope_ticket_count=out_of_scope_count,
         blank_assignment_group_count=blank_assignment_group_count,
         assignment_group_not_in_inventory_count=assignment_group_not_in_inventory_count,
         duplicate_skipped_count=0,

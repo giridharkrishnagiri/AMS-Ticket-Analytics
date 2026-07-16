@@ -124,9 +124,13 @@ class DashboardOverviewInventorySummary(BaseModel):
 
 
 class DashboardOverviewTicketSummary(BaseModel):
+    total_tickets: int
     total_in_scope_tickets: int
+    total_out_of_scope_tickets: int
     incident_count: int
     sc_task_count: int
+    out_of_scope_incident_count: int
+    out_of_scope_sc_task_count: int
     completion_date_min: datetime | None
     completion_date_max: datetime | None
     applications_80pct_monthly_volume_count: int
@@ -605,6 +609,13 @@ class VolumetricsSummaryMetric(BaseModel):
     average_per_period: float | None
 
 
+class VolumetricsCreatedSummaryMetric(VolumetricsSummaryMetric):
+    incident_count: int
+    incident_average_per_period: float | None
+    sc_task_count: int
+    sc_task_average_per_period: float | None
+
+
 class VolumetricsSlaMetric(BaseModel):
     average_adherence_pct: float | None
     applicable_count: int
@@ -617,8 +628,8 @@ class VolumetricsCancelledMetric(VolumetricsSummaryMetric):
 
 class VolumetricsSummaryResponse(BaseModel):
     period_count: int
-    created: VolumetricsSummaryMetric
-    resolved_closed: VolumetricsSummaryMetric
+    created: VolumetricsCreatedSummaryMetric
+    resolved_closed: VolumetricsCreatedSummaryMetric
     cancelled: VolumetricsCancelledMetric
     response_sla: VolumetricsSlaMetric
     resolution_sla: VolumetricsSlaMetric
@@ -695,6 +706,30 @@ class VolumetricsAssignmentGroupResponse(BaseModel):
     functional_track: str
     months: list[VolumetricsAssignmentGroupMonth]
     tables: dict[str, VolumetricsAssignmentGroupTable]
+    available_functional_tracks: list[str]
+    data_notes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class VolumetricsBusinessServiceCiRow(BaseModel):
+    business_service_ci_name: str
+    functional_track: str
+    assignment_group: str
+    months: dict[str, VolumetricsAssignmentGroupMonthMetrics]
+    totals: VolumetricsAssignmentGroupMonthMetrics
+
+
+class VolumetricsBusinessServiceCiTable(BaseModel):
+    title: str
+    rows: list[VolumetricsBusinessServiceCiRow]
+    grand_totals: VolumetricsAssignmentGroupMonthMetrics
+
+
+class VolumetricsBusinessServiceCiResponse(BaseModel):
+    scope: str
+    functional_track: str
+    months: list[VolumetricsAssignmentGroupMonth]
+    tables: dict[str, VolumetricsBusinessServiceCiTable]
     available_functional_tracks: list[str]
     data_notes: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -951,11 +986,29 @@ class VolumetricsTripleServiceVolumeSplit(BaseModel):
     sc_tasks: list[VolumetricsServiceVolumeDatum]
 
 
+class VolumetricsServiceTypeAssignmentGroupSapNonSapPivotRow(BaseModel):
+    service_type: str
+    sap_average_monthly_count: float
+    non_sap_average_monthly_count: float
+    others_average_monthly_count: float
+    total_average_monthly_count: float
+
+
+class VolumetricsTripleServiceTypeAssignmentGroupSapNonSapPivot(BaseModel):
+    all: list[VolumetricsServiceTypeAssignmentGroupSapNonSapPivotRow]
+    incidents: list[VolumetricsServiceTypeAssignmentGroupSapNonSapPivotRow]
+    sc_tasks: list[VolumetricsServiceTypeAssignmentGroupSapNonSapPivotRow]
+
+
 class VolumetricsDistributionSplitsResponse(BaseModel):
     ranking_window: VolumetricsRankingWindow
     ticket_volume_by_service_entitlement: VolumetricsTripleServiceVolumeSplit
     ticket_volume_by_service_type: VolumetricsTripleServiceVolumeSplit
     sap_non_sap: VolumetricsTripleTicketTypeSplit
+    assignment_group_sap_non_sap: VolumetricsTripleTicketTypeSplit
+    service_type_by_assignment_group_sap_non_sap: (
+        VolumetricsTripleServiceTypeAssignmentGroupSapNonSapPivot
+    )
     architecture_type: VolumetricsTripleTicketTypeSplit
     install_type: VolumetricsTripleTicketTypeSplit
     hosting_env: VolumetricsTripleTicketTypeSplit

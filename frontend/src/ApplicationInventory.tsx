@@ -2,6 +2,15 @@ import { useMemo, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
 import {
+  getInScopeAssignmentGroupsStatus,
+  importInScopeAssignmentGroups,
+} from "./api/admin";
+import type {
+  InScopeAssignmentGroupPreviewRow,
+  InScopeAssignmentGroupsImportResponse,
+  InScopeAssignmentGroupsStatusResponse,
+} from "./api/admin";
+import {
   enrichApplicationInventory,
   getApplicationInventoryFilterValues,
   getApplicationInventorySummary,
@@ -89,6 +98,35 @@ function TopValues({
   );
 }
 
+function ScopePreviewTable({ rows }: { rows: InScopeAssignmentGroupPreviewRow[] }) {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="scroll-frame compact-file-frame">
+      <table>
+        <thead>
+          <tr>
+            <th>Support Group</th>
+            <th>Functional Track</th>
+            <th>In Scope</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={`${row.assignment_group}-${row.source_row_number ?? ""}`}>
+              <td>{row.assignment_group}</td>
+              <td>{row.functional_track ?? "Not available"}</td>
+              <td>{row.is_in_scope ? "Yes" : "No"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function topValueCounts<T>(
   items: T[],
   valueGetter: (item: T) => string | null | undefined,
@@ -117,6 +155,16 @@ type ApplicationInventoryProps = {
   embedded?: boolean;
 };
 
+function uploadActionErrorMessage(error: unknown, actionName: string): string {
+  if (error instanceof Error) {
+    if (error.message === "Not Found") {
+      return `${actionName} is not available in the running backend. Restart the backend so the latest code is loaded, then try again.`;
+    }
+    return error.message;
+  }
+  return `${actionName} failed.`;
+}
+
 function ApplicationInventory({
   projectId: externalProjectId,
   selectedProject,
@@ -128,15 +176,24 @@ function ApplicationInventory({
   const projectId = externalProjectId ?? localProjectId;
   const setProjectId = onProjectIdChange ?? setLocalProjectId;
   const [file, setFile] = useState<File | null>(null);
+  const [scopeReferenceFile, setScopeReferenceFile] = useState<File | null>(null);
   const [inventoryItems, setInventoryItems] = useState<ApplicationInventoryItem[]>([]);
   const [uploadResult, setUploadResult] = useState<ApplicationInventoryUploadResponse | null>(null);
+  const [scopeReferenceResult, setScopeReferenceResult] =
+    useState<InScopeAssignmentGroupsImportResponse | null>(null);
+  const [scopeReferenceStatus, setScopeReferenceStatus] =
+    useState<InScopeAssignmentGroupsStatusResponse | null>(null);
   const [summary, setSummary] = useState<ApplicationInventoryEnrichmentSummary | null>(null);
   const [coverage, setCoverage] = useState<UnmatchedBusinessServicesResponse | null>(null);
   const [filterValues, setFilterValues] = useState<ApplicationInventoryFilterValues | null>(null);
   const [replaceExisting, setReplaceExisting] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [isImportingScopeReference, setIsImportingScopeReference] = useState(false);
+  const [isLoadingScopeReferenceStatus, setIsLoadingScopeReferenceStatus] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [scopeReferenceMessage, setScopeReferenceMessage] = useState<string | null>(null);
+  const [scopeReferenceError, setScopeReferenceError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -167,6 +224,68 @@ function ApplicationInventory({
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
     setFile(event.target.files?.[0] ?? null);
+  }
+
+  function handleScopeReferenceFileSelection(event: ChangeEvent<HTMLInputElement>) {
+    setScopeReferenceFile(event.target.files?.[0] ?? null);
+  }
+
+  async function refreshScopeReferenceStatus(showMessage = true) {
+    if (!projectId.trim()) {
+      setScopeReferenceError("Select a customer first.");
+      return;
+    }
+
+    setIsLoadingScopeReferenceStatus(true);
+    setScopeReferenceError(null);
+    try {
+      const status = await getInScopeAssignmentGroupsStatus(projectId);
+      setScopeReferenceStatus(status);
+      if (showMessage) {
+        setScopeReferenceMessage(
+          `Assignment group scope status loaded. Active rows: ${formatNumber(
+            status.active_count
+          )}.`
+        );
+      }
+    } catch (requestError) {
+      setScopeReferenceError(
+        uploadActionErrorMessage(requestError, "Assignment Group Scope status")
+      );
+    } finally {
+      setIsLoadingScopeReferenceStatus(false);
+    }
+  }
+
+  async function handleImportScopeReference() {
+    if (!projectId.trim()) {
+      setScopeReferenceError("Select a customer first.");
+      return;
+    }
+    if (!scopeReferenceFile) {
+      setScopeReferenceError("Select the Assignment Group Scope workbook first.");
+      return;
+    }
+
+    setIsImportingScopeReference(true);
+    setScopeReferenceError(null);
+    setScopeReferenceMessage(null);
+    try {
+      const result = await importInScopeAssignmentGroups(projectId, scopeReferenceFile);
+      setScopeReferenceResult(result);
+      setScopeReferenceMessage(
+        `Assignment group scope import complete: ${formatNumber(
+          result.imported_count
+        )} active rows loaded. Next: upload CMDB/Application Inventory.`
+      );
+      await refreshScopeReferenceStatus(false);
+    } catch (requestError) {
+      setScopeReferenceError(
+        uploadActionErrorMessage(requestError, "Assignment Group Scope import")
+      );
+    } finally {
+      setIsImportingScopeReference(false);
+    }
   }
 
   async function refreshInventory(nextProjectId = projectId) {
@@ -273,9 +392,17 @@ function ApplicationInventory({
         <div className="panel-heading">
           <div>
             <p className="label">Application Inventory</p>
-            <h2 id="application-inventory-heading">Application Inventory Upload</h2>
+            <h2 id="application-inventory-heading">CMDB and Scope Upload</h2>
           </div>
           <div className="panel-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void refreshScopeReferenceStatus()}
+              disabled={!projectId.trim() || isLoadingScopeReferenceStatus}
+            >
+              {isLoadingScopeReferenceStatus ? "Loading..." : "Show Scope Status"}
+            </button>
             <button
               className="secondary-button"
               type="button"
@@ -303,7 +430,16 @@ function ApplicationInventory({
               />
             )}
             <label>
-              <span>Inventory File</span>
+              <span>Assignment Group Scope File</span>
+              <input
+                type="file"
+                accept=".csv,.xlsx"
+                onChange={handleScopeReferenceFileSelection}
+                disabled={isImportingScopeReference}
+              />
+            </label>
+            <label>
+              <span>CMDB/Application Inventory File</span>
               <input
                 type="file"
                 accept=".csv,.xlsx"
@@ -314,6 +450,14 @@ function ApplicationInventory({
           </div>
 
           <div className="action-row">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!projectId.trim() || !scopeReferenceFile || isImportingScopeReference}
+              onClick={() => void handleImportScopeReference()}
+            >
+              {isImportingScopeReference ? "Importing..." : "Import Assignment Group Scope"}
+            </button>
             <button
               className="primary-button"
               type="submit"
@@ -340,21 +484,66 @@ function ApplicationInventory({
             <span>Replace existing inventory enrichment</span>
           </label>
           <p className="scope-note">
-            Application Inventory / CMDB upload is the source of truth for ticket scope
-            classification. Tickets are in scope only when their Assignment Group matches a
-            Support group marked In scope in the latest active CMDB file. Business Service CI Name
-            is imported as an application attribute and is not used for ticket scope
-            classification. Uploading a new file replaces the active inventory reference set for
-            this project. Functional Track is imported from CMDB and can be derived from AMS Lead
-            when blank. Enrichment updates only denormalized inventory fields and does not change
-            raw ticket fields or uploaded source data.
+            Assignment group scope is the source of truth for ticket scope classification.
+            CMDB rows are enriched with scope by matching Support group to the assignment group
+            scope reference. Business Service CI Name is imported as an application attribute.
+            Uploading a new file replaces the active inventory reference set for this project.
+            Functional Track for tickets is populated from the assignment group scope reference.
+            Enrichment updates only denormalized inventory fields and does not change raw ticket
+            fields or uploaded source data.
           </p>
         </form>
 
         <div className="message-stack">
+          {scopeReferenceMessage ? <p className="success-text">{scopeReferenceMessage}</p> : null}
+          {scopeReferenceError ? <p className="error-text">{scopeReferenceError}</p> : null}
           {message ? <p className="success-text">{message}</p> : null}
           {error ? <p className="error-text">{error}</p> : null}
         </div>
+
+        {scopeReferenceResult ? (
+          <div className="summary-block">
+            <p className="label">Assignment Group Scope Import</p>
+            <div className="summary-grid">
+              <div>
+                <p className="label">Imported</p>
+                <strong>{formatNumber(scopeReferenceResult.imported_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Skipped Rows</p>
+                <strong>{formatNumber(scopeReferenceResult.skipped_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Duplicate Rows</p>
+                <strong>{formatNumber(scopeReferenceResult.duplicate_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Warnings</p>
+                <strong>{formatNumber(scopeReferenceResult.warning_count)}</strong>
+              </div>
+            </div>
+            <MessageList title="Scope Warnings" values={scopeReferenceResult.warnings} />
+            <MessageList title="Scope Errors" values={scopeReferenceResult.errors} />
+            <ScopePreviewTable rows={scopeReferenceResult.preview_rows} />
+          </div>
+        ) : null}
+
+        {scopeReferenceStatus ? (
+          <div className="summary-block">
+            <p className="label">Assignment Group Scope Status</p>
+            <div className="summary-grid">
+              <div>
+                <p className="label">Active Scope Rows</p>
+                <strong>{formatNumber(scopeReferenceStatus.active_count)}</strong>
+              </div>
+              <div>
+                <p className="label">Last Imported</p>
+                <strong>{scopeReferenceStatus.last_imported_at ?? "Not available"}</strong>
+              </div>
+            </div>
+            <ScopePreviewTable rows={scopeReferenceStatus.preview_rows} />
+          </div>
+        ) : null}
       </div>
 
       {uploadResult ? (

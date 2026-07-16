@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, UniqueConstraint, true
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,11 @@ class InScopeAssignmentGroup(UuidPrimaryKeyMixin, TimestampMixin, Base):
             "project_id",
             "is_active",
         ),
+        Index(
+            "ix_in_scope_assignment_groups_project_scope",
+            "project_id",
+            "is_in_scope",
+        ),
     )
 
     client_id: Mapped[UUID] = mapped_column(
@@ -45,6 +50,12 @@ class InScopeAssignmentGroup(UuidPrimaryKeyMixin, TimestampMixin, Base):
     assignment_group: Mapped[str] = mapped_column(Text, nullable=False)
     assignment_group_key: Mapped[str] = mapped_column(Text, nullable=False)
     functional_track: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_in_scope: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=true(),
+    )
     source_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

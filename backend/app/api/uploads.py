@@ -8,7 +8,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -68,11 +68,14 @@ from app.services.mapping import (
 from app.services.upload_lifecycle import (
     BATCH_STATUS_ARCHIVED,
     BATCH_STATUS_DELETED,
+    BATCH_STATUS_INGESTING,
+    BATCH_STATUS_INGESTION_FAILED,
     BATCH_STATUS_NORMALIZATION_FAILED,
     BATCH_STATUS_NORMALIZED,
     BATCH_STATUS_UPLOADED,
     count_normalized_tickets,
     mark_upload_batch_normalization_failed,
+    mark_upload_batch_normalizing,
     sync_legacy_normalized_status,
     utc_now,
 )
@@ -135,6 +138,43 @@ def count_generic_raw_rows_with_destination(db: Session, upload_batch_id: UUID) 
             destination_exists,
         ),
     )
+
+
+def mark_upload_batch_ingesting(
+    db: Session,
+    upload_batch: UploadBatch,
+    uploaded_file: UploadedFile,
+) -> None:
+    now = utc_now()
+    upload_batch.status = BATCH_STATUS_INGESTING
+    upload_batch.started_at = upload_batch.started_at or now
+    upload_batch.completed_at = None
+    uploaded_file.status = "INGESTING"
+    uploaded_file.error_message = None
+    db.commit()
+
+
+def mark_upload_batch_ingestion_failed(
+    db: Session,
+    upload_batch: UploadBatch,
+    uploaded_file: UploadedFile,
+    error_message: str,
+) -> None:
+    uploaded_file.status = "FAILED"
+    uploaded_file.error_message = error_message
+    upload_batch.status = BATCH_STATUS_INGESTION_FAILED
+    upload_batch.completed_at = utc_now()
+    db.commit()
+
+
+def mark_upload_batch_processing_started(db: Session, upload_batch: UploadBatch) -> None:
+    if upload_batch.status in {
+        BATCH_STATUS_ARCHIVED,
+        BATCH_STATUS_DELETED,
+    }:
+        return
+    mark_upload_batch_normalizing(upload_batch)
+    db.commit()
 
 
 def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
@@ -210,15 +250,32 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
 
     in_scope_rows = get_count(
         db,
-        select(func.count(Ticket.id)).where(Ticket.upload_batch_id == upload_batch_id),
+        select(func.count(Ticket.id)).where(
+            Ticket.upload_batch_id == upload_batch_id,
+            Ticket.is_in_scope.is_(True),
+        ),
     )
-    out_of_scope_rows = get_count(
+    out_of_scope_ticket_rows = get_count(
+        db,
+        select(func.count(Ticket.id)).where(
+            Ticket.upload_batch_id == upload_batch_id,
+            Ticket.is_in_scope.is_(False),
+        ),
+    )
+    legacy_out_of_scope_rows = get_count(
         db,
         select(func.count(AssessmentOutOfScopeTicket.id)).where(
             AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id
         ),
     )
     blank_assignment_group_rows = get_count(
+        db,
+        select(func.count(Ticket.id)).where(
+            Ticket.upload_batch_id == upload_batch_id,
+            Ticket.is_in_scope.is_(False),
+            or_(Ticket.assignment_group.is_(None), func.trim(Ticket.assignment_group) == ""),
+        ),
+    ) + get_count(
         db,
         select(func.count(AssessmentOutOfScopeTicket.id)).where(
             AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id,
@@ -227,6 +284,14 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
     )
     assignment_group_not_in_inventory_rows = get_count(
         db,
+        select(func.count(Ticket.id)).where(
+            Ticket.upload_batch_id == upload_batch_id,
+            Ticket.is_in_scope.is_(False),
+            Ticket.assignment_group.is_not(None),
+            func.trim(Ticket.assignment_group) != "",
+        ),
+    ) + get_count(
+        db,
         select(func.count(AssessmentOutOfScopeTicket.id)).where(
             AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id,
             AssessmentOutOfScopeTicket.out_of_scope_reason.in_(
@@ -234,6 +299,7 @@ def batch_output_counts(db: Session, upload_batch_id: UUID) -> dict[str, int]:
             ),
         ),
     )
+    out_of_scope_rows = out_of_scope_ticket_rows + legacy_out_of_scope_rows
     output_rows = in_scope_rows + out_of_scope_rows
     mapped_raw_rows = count_generic_raw_rows_with_destination(db, upload_batch_id)
     return {
@@ -288,6 +354,81 @@ def grouped_counts_by_upload_batch(
     return {row[0]: int(row[1] or 0) for row in rows}
 
 
+def grouped_ticket_counts_by_scope(
+    db: Session,
+    upload_batch_ids: list[UUID],
+) -> tuple[dict[UUID, int], dict[UUID, int]]:
+    if not upload_batch_ids:
+        return {}, {}
+    in_scope_counts: dict[UUID, int] = {}
+    out_of_scope_counts: dict[UUID, int] = {}
+    rows = db.execute(
+        select(Ticket.upload_batch_id, Ticket.is_in_scope, func.count(Ticket.id))
+        .where(Ticket.upload_batch_id.in_(upload_batch_ids))
+        .group_by(Ticket.upload_batch_id, Ticket.is_in_scope)
+    ).all()
+    for upload_batch_id, is_in_scope, row_count in rows:
+        if is_in_scope is True:
+            in_scope_counts[upload_batch_id] = int(row_count or 0)
+        else:
+            out_of_scope_counts[upload_batch_id] = int(row_count or 0)
+    return in_scope_counts, out_of_scope_counts
+
+
+def scoped_output_counts_for_batch(
+    db: Session,
+    upload_batch_id: UUID,
+) -> tuple[int, int]:
+    ticket_in_scope = get_count(
+        db,
+        select(func.count(Ticket.id)).where(
+            Ticket.upload_batch_id == upload_batch_id,
+            Ticket.is_in_scope.is_(True),
+        ),
+    )
+    ticket_out_of_scope = get_count(
+        db,
+        select(func.count(Ticket.id)).where(
+            Ticket.upload_batch_id == upload_batch_id,
+            Ticket.is_in_scope.is_(False),
+        ),
+    )
+    legacy_out_of_scope = get_count(
+        db,
+        select(func.count(AssessmentOutOfScopeTicket.id)).where(
+            AssessmentOutOfScopeTicket.upload_batch_id == upload_batch_id,
+        ),
+    )
+    problem_in_scope = get_count(
+        db,
+        select(func.count(AssessmentProblemRecord.id)).where(
+            AssessmentProblemRecord.upload_batch_id == upload_batch_id,
+        ),
+    )
+    problem_out_of_scope = get_count(
+        db,
+        select(func.count(AssessmentOutOfScopeProblemRecord.id)).where(
+            AssessmentOutOfScopeProblemRecord.upload_batch_id == upload_batch_id,
+        ),
+    )
+    change_in_scope = get_count(
+        db,
+        select(func.count(AssessmentChangeRecord.id)).where(
+            AssessmentChangeRecord.upload_batch_id == upload_batch_id,
+        ),
+    )
+    change_out_of_scope = get_count(
+        db,
+        select(func.count(AssessmentOutOfScopeChangeRecord.id)).where(
+            AssessmentOutOfScopeChangeRecord.upload_batch_id == upload_batch_id,
+        ),
+    )
+    return (
+        ticket_in_scope + problem_in_scope + change_in_scope,
+        ticket_out_of_scope + legacy_out_of_scope + problem_out_of_scope + change_out_of_scope,
+    )
+
+
 def upload_batch_response_counts(
     db: Session,
     upload_batch_ids: list[UUID],
@@ -297,6 +438,8 @@ def upload_batch_response_counts(
             "uploaded_file_count": 0,
             "raw_row_count": 0,
             "normalized_ticket_count": 0,
+            "in_scope_ticket_count": 0,
+            "out_of_scope_ticket_count": 0,
         }
         for upload_batch_id in upload_batch_ids
     }
@@ -306,6 +449,15 @@ def upload_batch_response_counts(
     uploaded_file_counts = grouped_counts_by_upload_batch(db, UploadedFile, upload_batch_ids)
     raw_row_counts = grouped_counts_by_upload_batch(db, TicketRawRow, upload_batch_ids)
     ticket_counts = grouped_counts_by_upload_batch(db, Ticket, upload_batch_ids)
+    in_scope_ticket_counts, out_of_scope_ticket_counts = grouped_ticket_counts_by_scope(
+        db,
+        upload_batch_ids,
+    )
+    out_ticket_counts = grouped_counts_by_upload_batch(
+        db,
+        AssessmentOutOfScopeTicket,
+        upload_batch_ids,
+    )
     problem_counts = grouped_counts_by_upload_batch(db, AssessmentProblemRecord, upload_batch_ids)
     out_problem_counts = grouped_counts_by_upload_batch(
         db,
@@ -325,8 +477,20 @@ def upload_batch_response_counts(
             0,
         )
         counts[upload_batch_id]["raw_row_count"] = raw_row_counts.get(upload_batch_id, 0)
+        counts[upload_batch_id]["in_scope_ticket_count"] = (
+            in_scope_ticket_counts.get(upload_batch_id, 0)
+            + problem_counts.get(upload_batch_id, 0)
+            + change_counts.get(upload_batch_id, 0)
+        )
+        counts[upload_batch_id]["out_of_scope_ticket_count"] = (
+            out_of_scope_ticket_counts.get(upload_batch_id, 0)
+            + out_ticket_counts.get(upload_batch_id, 0)
+            + out_problem_counts.get(upload_batch_id, 0)
+            + out_change_counts.get(upload_batch_id, 0)
+        )
         counts[upload_batch_id]["normalized_ticket_count"] = (
             ticket_counts.get(upload_batch_id, 0)
+            + out_ticket_counts.get(upload_batch_id, 0)
             + problem_counts.get(upload_batch_id, 0)
             + out_problem_counts.get(upload_batch_id, 0)
             + change_counts.get(upload_batch_id, 0)
@@ -348,6 +512,10 @@ def build_upload_batch_response(
             if sync_legacy_status
             else count_normalized_tickets(db, upload_batch.id)
         )
+        in_scope_ticket_count, out_of_scope_ticket_count = scoped_output_counts_for_batch(
+            db,
+            upload_batch.id,
+        )
         uploaded_file_count = get_count(
             db,
             select(func.count(UploadedFile.id)).where(
@@ -362,6 +530,8 @@ def build_upload_batch_response(
         )
     else:
         normalized_ticket_count = counts["normalized_ticket_count"]
+        in_scope_ticket_count = counts["in_scope_ticket_count"]
+        out_of_scope_ticket_count = counts["out_of_scope_ticket_count"]
         uploaded_file_count = counts["uploaded_file_count"]
         raw_row_count = counts["raw_row_count"]
 
@@ -382,6 +552,8 @@ def build_upload_batch_response(
         uploaded_file_count=uploaded_file_count,
         raw_row_count=raw_row_count,
         normalized_ticket_count=normalized_ticket_count,
+        in_scope_ticket_count=in_scope_ticket_count,
+        out_of_scope_ticket_count=out_of_scope_ticket_count,
         normalized_at=upload_batch.normalized_at,
         archived_at=upload_batch.archived_at,
         deleted_at=upload_batch.deleted_at,
@@ -940,9 +1112,20 @@ def ingest_upload_batches(
             if uploaded_file.status == "INGESTED":
                 continue
             try:
+                mark_upload_batch_ingesting(db, upload_batch, uploaded_file)
                 ingest_uploaded_file(db, uploaded_file.id)
             except Exception as exc:
-                batch_errors.append(f"{uploaded_file.original_filename}: {exc}")
+                error_message = str(exc)
+                batch_errors.append(f"{uploaded_file.original_filename}: {error_message}")
+                failed_batch = db.get(UploadBatch, upload_batch.id)
+                failed_file = db.get(UploadedFile, uploaded_file.id)
+                if failed_batch is not None and failed_file is not None:
+                    mark_upload_batch_ingestion_failed(
+                        db,
+                        failed_batch,
+                        failed_file,
+                        error_message,
+                    )
 
         recalculate_upload_batch_status(db, upload_batch_id)
         db.commit()
@@ -1044,6 +1227,7 @@ def normalize_upload_batches(
             continue
 
         try:
+            mark_upload_batch_processing_started(db, upload_batch)
             result = apply_mapping_to_batch(
                 db=db,
                 upload_batch_id=upload_batch.id,
@@ -1273,6 +1457,7 @@ def apply_mapping_to_upload_batches(
             continue
 
         try:
+            mark_upload_batch_processing_started(db, upload_batch)
             result = apply_mapping_to_batch(
                 db=db,
                 upload_batch_id=upload_batch.id,
@@ -1377,27 +1562,34 @@ def list_upload_batches(
     ]
 
 
+def delete_normalized_outputs_for_batch(db: Session, upload_batch_id: UUID) -> dict[str, int]:
+    deleted_counts: dict[str, int] = {}
+    for label, model in (
+        ("tickets", Ticket),
+        ("legacy_out_of_scope_tickets", AssessmentOutOfScopeTicket),
+        ("problem_records", AssessmentProblemRecord),
+        ("legacy_out_of_scope_problem_records", AssessmentOutOfScopeProblemRecord),
+        ("change_records", AssessmentChangeRecord),
+        ("legacy_out_of_scope_change_records", AssessmentOutOfScopeChangeRecord),
+    ):
+        result = db.execute(delete(model).where(model.upload_batch_id == upload_batch_id))
+        deleted_counts[label] = int(result.rowcount or 0)
+    return deleted_counts
+
+
 @router.delete("/batches/{upload_batch_id}", response_model=UploadBatchResponse)
 def delete_staging_upload_batch(
     upload_batch_id: UUID,
     db: DbSession,
 ) -> UploadBatchResponse:
     upload_batch = get_existing_batch_or_404(db, upload_batch_id)
-    normalized_ticket_count = count_normalized_tickets(db, upload_batch_id)
-    if normalized_ticket_count > 0 or upload_batch.status in {
-        BATCH_STATUS_NORMALIZED,
-        BATCH_STATUS_ARCHIVED,
-    }:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "This batch has already been normalized. Delete normalized ticket data first "
-                "or archive it instead."
-            ),
-        )
-
+    deleted_counts = delete_normalized_outputs_for_batch(db, upload_batch_id)
+    if sum(deleted_counts.values()) > 0:
+        refresh_dashboard_filter_facts(db, upload_batch.project_id)
+        mark_filter_caches_stale(db, upload_batch.project_id)
     upload_batch.status = BATCH_STATUS_DELETED
     upload_batch.deleted_at = utc_now()
+    upload_batch.completed_at = upload_batch.completed_at or upload_batch.deleted_at
     db.commit()
     db.refresh(upload_batch)
     return build_upload_batch_response(db, upload_batch)

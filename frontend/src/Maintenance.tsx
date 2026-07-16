@@ -3,17 +3,17 @@ import { useState } from "react";
 import {
   deleteClientAndRelatedData,
   deleteProjectAndRelatedData,
-  getAssignmentGroupMasterReferenceStatus,
   getDashboardFilterCacheStatus,
-  importAssignmentGroupMasterReference,
+  listInScopeAssignmentGroups,
   prepareOperationalReprocessing,
   refreshDashboardFilterCache,
   resetProjectOperationalData,
+  updateInScopeAssignmentGroups,
 } from "./api/admin";
 import type {
   DashboardFilterCacheStatusItem,
-  AssignmentGroupMasterImportResponse,
-  AssignmentGroupMasterStatusResponse,
+  InScopeAssignmentGroupRow,
+  InScopeAssignmentGroupsUpdateResponse,
   OperationalDataResetResponse,
   OperationalReprocessingResponse,
 } from "./api/admin";
@@ -28,6 +28,10 @@ type ReprocessStartPoint =
   | "resume_from_ingestion"
   | "resume_from_normalization"
   | "reapply_mapping_only";
+type ScopeDraftRow = InScopeAssignmentGroupRow & {
+  original_functional_track: string | null;
+  original_is_in_scope: boolean;
+};
 
 const selectedDataConfirmation = "RESET OPERATIONAL DATA";
 const projectDataConfirmation = "RESET PROJECT DATA";
@@ -138,15 +142,13 @@ function Maintenance() {
   const [isRefreshingCache, setIsRefreshingCache] = useState(false);
   const [cacheStatus, setCacheStatus] = useState<DashboardFilterCacheStatusItem[]>([]);
   const [cacheMessage, setCacheMessage] = useState<string | null>(null);
-  const [masterReferenceFile, setMasterReferenceFile] = useState<File | null>(null);
-  const [masterReferenceStatus, setMasterReferenceStatus] =
-    useState<AssignmentGroupMasterStatusResponse | null>(null);
-  const [masterReferenceResult, setMasterReferenceResult] =
-    useState<AssignmentGroupMasterImportResponse | null>(null);
-  const [isImportingMasterReference, setIsImportingMasterReference] = useState(false);
-  const [isLoadingMasterReferenceStatus, setIsLoadingMasterReferenceStatus] = useState(false);
-  const [masterReferenceMessage, setMasterReferenceMessage] = useState<string | null>(null);
-  const [masterReferenceError, setMasterReferenceError] = useState<string | null>(null);
+  const [scopeRows, setScopeRows] = useState<ScopeDraftRow[]>([]);
+  const [scopeUpdateResult, setScopeUpdateResult] =
+    useState<InScopeAssignmentGroupsUpdateResponse | null>(null);
+  const [isLoadingScopeRows, setIsLoadingScopeRows] = useState(false);
+  const [isApplyingScopeUpdates, setIsApplyingScopeUpdates] = useState(false);
+  const [scopeMaintenanceMessage, setScopeMaintenanceMessage] = useState<string | null>(null);
+  const [scopeMaintenanceError, setScopeMaintenanceError] = useState<string | null>(null);
   const [reprocessIncidents, setReprocessIncidents] = useState(false);
   const [reprocessScTasks, setReprocessScTasks] = useState(false);
   const [reprocessProblems, setReprocessProblems] = useState(false);
@@ -182,6 +184,11 @@ function Maintenance() {
     hasSelectedReprocessDomain &&
     reprocessConfirmationText === reprocessingConfirmation &&
     !isPreparingReprocess;
+  const changedScopeRows = scopeRows.filter(
+    (row) =>
+      (row.functional_track ?? "") !== (row.original_functional_track ?? "") ||
+      row.is_in_scope !== row.original_is_in_scope
+  );
 
   function clearMaintenanceForm() {
     setResetMode("selected-data");
@@ -195,11 +202,10 @@ function Maintenance() {
     setScopeSummary(null);
     setCacheStatus([]);
     setCacheMessage(null);
-    setMasterReferenceFile(null);
-    setMasterReferenceStatus(null);
-    setMasterReferenceResult(null);
-    setMasterReferenceMessage(null);
-    setMasterReferenceError(null);
+    setScopeRows([]);
+    setScopeUpdateResult(null);
+    setScopeMaintenanceMessage(null);
+    setScopeMaintenanceError(null);
     setReprocessIncidents(false);
     setReprocessScTasks(false);
     setReprocessProblems(false);
@@ -220,11 +226,10 @@ function Maintenance() {
       setScopeSummary(null);
       setCacheStatus([]);
       setCacheMessage(null);
-      setMasterReferenceFile(null);
-      setMasterReferenceStatus(null);
-      setMasterReferenceResult(null);
-      setMasterReferenceMessage(null);
-      setMasterReferenceError(null);
+      setScopeRows([]);
+      setScopeUpdateResult(null);
+      setScopeMaintenanceMessage(null);
+      setScopeMaintenanceError(null);
       setReprocessResult(null);
       setReprocessMessage(null);
       setReprocessError(null);
@@ -313,70 +318,88 @@ function Maintenance() {
     }
   }
 
-  async function refreshMasterReferenceStatus(showMessage = true) {
+  async function refreshScopeRows(showMessage = true) {
     if (!projectId.trim()) {
-      setMasterReferenceError("Select a customer/project first.");
+      setScopeMaintenanceError("Select a customer/project first.");
       return;
     }
-    setIsLoadingMasterReferenceStatus(true);
-    setMasterReferenceError(null);
+    setIsLoadingScopeRows(true);
+    setScopeMaintenanceError(null);
     try {
-      const status = await getAssignmentGroupMasterReferenceStatus(projectId.trim());
-      setMasterReferenceStatus(status);
+      const rows = await listInScopeAssignmentGroups(projectId.trim(), 10000);
+      setScopeRows(
+        rows.map((row) => ({
+          ...row,
+          original_functional_track: row.functional_track,
+          original_is_in_scope: row.is_in_scope,
+        }))
+      );
+      setScopeUpdateResult(null);
       if (showMessage) {
-        setMasterReferenceMessage(
-          `Master reference status loaded. Active assignment groups: ${formatNumber(
-            status.active_count
-          )}; rows with Manager: ${formatNumber(status.manager_populated_count)}.`
+        setScopeMaintenanceMessage(
+          `Assignment group scope rows loaded: ${formatNumber(rows.length)}.`
         );
       }
     } catch (requestError) {
-      setMasterReferenceError(
-        maintenanceActionErrorMessage(
-          requestError,
-          "Assignment Group Master Reference status"
-        )
+      setScopeMaintenanceError(
+        maintenanceActionErrorMessage(requestError, "Assignment Group Scope list")
       );
     } finally {
-      setIsLoadingMasterReferenceStatus(false);
+      setIsLoadingScopeRows(false);
     }
   }
 
-  async function handleImportMasterReference() {
+  function updateScopeDraftRow(
+    rowId: string,
+    patch: Partial<Pick<ScopeDraftRow, "functional_track" | "is_in_scope">>
+  ) {
+    setScopeRows((currentRows) =>
+      currentRows.map((row) => (row.id === rowId ? { ...row, ...patch } : row))
+    );
+  }
+
+  async function handleApplyScopeUpdates() {
     if (!projectId.trim()) {
-      setMasterReferenceError("Select a customer/project first.");
+      setScopeMaintenanceError("Select a customer/project first.");
       return;
     }
-    if (!masterReferenceFile) {
-      setMasterReferenceError("Choose the Assignment Group Master Reference workbook first.");
+    if (changedScopeRows.length === 0) {
+      setScopeMaintenanceError("No assignment group scope changes to apply.");
       return;
     }
-    setIsImportingMasterReference(true);
-    setMasterReferenceError(null);
-    setMasterReferenceMessage(null);
+    const confirmed = window.confirm(
+      `Apply ${changedScopeRows.length} assignment group scope change(s) and update matching ticket rows?`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsApplyingScopeUpdates(true);
+    setScopeMaintenanceError(null);
+    setScopeMaintenanceMessage(null);
     try {
-      const result = await importAssignmentGroupMasterReference(
+      const result = await updateInScopeAssignmentGroups(
         projectId.trim(),
-        masterReferenceFile
+        changedScopeRows.map((row) => ({
+          id: row.id,
+          functional_track: row.functional_track?.trim() || null,
+          is_in_scope: row.is_in_scope,
+        }))
       );
-      setMasterReferenceResult(result);
-      setMasterReferenceMessage(
-        `Import completed. ${formatNumber(
-          result.imported_count
-        )} active assignment groups are now loaded. ${formatNumber(
-          result.manager_populated_count
-        )} rows have Manager populated for Support Lead fallback. Next: refresh Volumetrics > Assignment Group Volumetrics to see fallback values.`
+      setScopeUpdateResult(result);
+      setScopeMaintenanceMessage(
+        `Applied ${formatNumber(result.changed_count)} assignment group change(s). Updated ${formatNumber(
+          result.tickets_updated_count
+        )} ticket row(s) and ${formatNumber(result.inventory_rows_updated_count)} CMDB row(s).`
       );
-      await refreshMasterReferenceStatus(false);
+      await refreshScopeRows(false);
+      await refreshScopeSummary();
     } catch (requestError) {
-      setMasterReferenceError(
-        maintenanceActionErrorMessage(
-          requestError,
-          "Assignment Group Master Reference import"
-        )
+      setScopeMaintenanceError(
+        maintenanceActionErrorMessage(requestError, "Assignment Group Scope update")
       );
     } finally {
-      setIsImportingMasterReference(false);
+      setIsApplyingScopeUpdates(false);
     }
   }
 
@@ -547,148 +570,138 @@ function Maintenance() {
         <div className="panel-heading">
           <div>
             <p className="label">Reference Data</p>
-            <h2>Assignment Group Master Reference</h2>
+            <h2>Assignment Group Scope Maintenance</h2>
           </div>
           <div className="panel-actions">
             <button
               className="secondary-button"
               type="button"
-              disabled={!projectId.trim() || isLoadingMasterReferenceStatus}
-              onClick={() => void refreshMasterReferenceStatus()}
+              disabled={!projectId.trim() || isLoadingScopeRows}
+              onClick={() => void refreshScopeRows()}
             >
-              {isLoadingMasterReferenceStatus ? "Loading..." : "Show Master Reference Status"}
+              {isLoadingScopeRows ? "Loading..." : "Load Scope Rows"}
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={
+                !projectId.trim() || changedScopeRows.length === 0 || isApplyingScopeUpdates
+              }
+              onClick={() => void handleApplyScopeUpdates()}
+            >
+              {isApplyingScopeUpdates ? "Applying..." : "Save and Apply Scope Updates"}
             </button>
           </div>
         </div>
-        <div className="warning-list">
-          <p>
-            Import the ServiceNow master assignment group list with sheet{" "}
-            <strong>Master</strong> and columns <strong>Name</strong>,{" "}
-            <strong>Description</strong>, and <strong>Manager</strong>.
-          </p>
-          <p>
-            This master list is used only to populate Support Lead from the Manager column
-            when Support Lead is not available from Application Inventory. It does not
-            control in-scope or out-of-scope classification.
-          </p>
-        </div>
-        <div className="form-grid summary-block">
-          <label>
-            <span>Master reference workbook</span>
-            <input
-              type="file"
-              accept=".xlsx,.csv"
-              onChange={(event) => setMasterReferenceFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
-        </div>
-        <div className="action-row">
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={
-              !projectId.trim() || !masterReferenceFile || isImportingMasterReference
-            }
-            onClick={() => void handleImportMasterReference()}
-          >
-            {isImportingMasterReference ? "Importing..." : "Import Master Assignment Groups"}
-          </button>
+        <p className="scope-note">
+          Functional Track is enriched from the assignment group scope reference during ticket
+          scoping. Changes here update the reference row and only matching ticket rows for the
+          changed assignment groups.
+        </p>
+        <div className="summary-grid summary-block">
+          <div>
+            <p className="label">Loaded Rows</p>
+            <strong>{formatNumber(scopeRows.length)}</strong>
+          </div>
+          <div>
+            <p className="label">Pending Changes</p>
+            <strong>{formatNumber(changedScopeRows.length)}</strong>
+          </div>
+          <div>
+            <p className="label">In Scope</p>
+            <strong>{formatNumber(scopeRows.filter((row) => row.is_in_scope).length)}</strong>
+          </div>
+          <div>
+            <p className="label">Out of Scope</p>
+            <strong>{formatNumber(scopeRows.filter((row) => !row.is_in_scope).length)}</strong>
+          </div>
         </div>
         <div className="message-stack" role="status" aria-live="polite">
-          {masterReferenceMessage ? (
-            <p className="success-text">{masterReferenceMessage}</p>
+          {scopeMaintenanceMessage ? (
+            <p className="success-text">{scopeMaintenanceMessage}</p>
           ) : null}
-          {masterReferenceError ? <p className="error-text">{masterReferenceError}</p> : null}
+          {scopeMaintenanceError ? <p className="error-text">{scopeMaintenanceError}</p> : null}
         </div>
-        {masterReferenceResult ? (
+        <div className="scroll-frame compact-file-frame">
+          {scopeRows.length === 0 ? (
+            <p className="muted-text">Load scope rows after selecting a customer/project.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Assignment Group</th>
+                  <th>Functional Track</th>
+                  <th>In Scope</th>
+                  <th>Changed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scopeRows.map((row) => {
+                  const changed =
+                    (row.functional_track ?? "") !== (row.original_functional_track ?? "") ||
+                    row.is_in_scope !== row.original_is_in_scope;
+                  return (
+                    <tr key={row.id}>
+                      <td>{row.assignment_group}</td>
+                      <td>
+                        <input
+                          type="text"
+                          value={row.functional_track ?? ""}
+                          onChange={(event) =>
+                            updateScopeDraftRow(row.id, {
+                              functional_track: event.target.value,
+                            })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <select
+                          value={row.is_in_scope ? "yes" : "no"}
+                          onChange={(event) =>
+                            updateScopeDraftRow(row.id, {
+                              is_in_scope: event.target.value === "yes",
+                            })
+                          }
+                        >
+                          <option value="yes">Yes</option>
+                          <option value="no">No</option>
+                        </select>
+                      </td>
+                      <td>{changed ? "Yes" : ""}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        {scopeUpdateResult ? (
           <div className="summary-block">
-            <p className="scope-note">
-              Import succeeded for {masterReferenceResult.source_filename}. This reference
-              updates only Support Lead fallback in Assignment Group Volumetrics; ticket scope
-              classification is unchanged.
-            </p>
             <div className="summary-grid">
               <div>
-                <p className="label">Imported</p>
-                <strong>{formatNumber(masterReferenceResult.imported_count)}</strong>
+                <p className="label">Changed Groups</p>
+                <strong>{formatNumber(scopeUpdateResult.changed_count)}</strong>
               </div>
               <div>
-                <p className="label">With Manager</p>
-                <strong>{formatNumber(masterReferenceResult.manager_populated_count)}</strong>
+                <p className="label">Tickets Updated</p>
+                <strong>{formatNumber(scopeUpdateResult.tickets_updated_count)}</strong>
               </div>
               <div>
-                <p className="label">Skipped Rows</p>
-                <strong>{formatNumber(masterReferenceResult.skipped_count)}</strong>
+                <p className="label">CMDB Rows Updated</p>
+                <strong>{formatNumber(scopeUpdateResult.inventory_rows_updated_count)}</strong>
               </div>
               <div>
-                <p className="label">Duplicate Rows</p>
-                <strong>{formatNumber(masterReferenceResult.duplicate_count)}</strong>
-              </div>
-              <div>
-                <p className="label">Warnings</p>
-                <strong>{formatNumber(masterReferenceResult.warning_count)}</strong>
+                <p className="label">Unchanged Submitted</p>
+                <strong>{formatNumber(scopeUpdateResult.unchanged_count)}</strong>
               </div>
             </div>
-            {masterReferenceResult.warnings.length > 0 ? (
+            {scopeUpdateResult.warnings.length > 0 ? (
               <ul className="warning-list">
-                {masterReferenceResult.warnings.map((warning) => (
+                {scopeUpdateResult.warnings.map((warning) => (
                   <li key={warning}>{warning}</li>
                 ))}
               </ul>
             ) : null}
-            <p className="muted-text">
-              Next step: refresh Volumetrics &amp; SLA &gt; Assignment Group Volumetrics to
-              see Manager values used as Support Lead fallback where Application Inventory
-              does not provide Support Lead.
-            </p>
-          </div>
-        ) : null}
-        {masterReferenceStatus ? (
-          <div className="summary-block">
-            <div className="summary-grid">
-              <div>
-                <p className="label">Active Reference Rows</p>
-                <strong>{formatNumber(masterReferenceStatus.active_count)}</strong>
-              </div>
-              <div>
-                <p className="label">Rows with Manager</p>
-                <strong>{formatNumber(masterReferenceStatus.manager_populated_count)}</strong>
-              </div>
-            </div>
-            <p className="muted-text">
-              Last imported: {masterReferenceStatus.last_imported_at ?? "Not available"}
-              {masterReferenceStatus.last_imported_filename
-                ? ` from ${masterReferenceStatus.last_imported_filename}`
-                : ""}
-            </p>
-            <div className="table-scroll">
-              <table className="details-table">
-                <thead>
-                  <tr>
-                    <th>Assignment Group</th>
-                    <th>Manager</th>
-                    <th>Description</th>
-                    <th>Source Row</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {masterReferenceStatus.preview_rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={4}>No active master reference rows found.</td>
-                    </tr>
-                  ) : (
-                    masterReferenceStatus.preview_rows.map((row) => (
-                      <tr key={`${row.assignment_group}-${row.source_row_number ?? ""}`}>
-                        <td>{row.assignment_group}</td>
-                        <td>{row.manager_name ?? ""}</td>
-                        <td>{row.description ?? ""}</td>
-                        <td>{row.source_row_number ?? ""}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
           </div>
         ) : null}
       </div>

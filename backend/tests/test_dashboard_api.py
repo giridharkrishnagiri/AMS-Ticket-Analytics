@@ -16,7 +16,6 @@ from app.models import (
     ApplicationInventoryItem,
     AssessmentChangeRecord,
     AssessmentOutOfScopeProblemRecord,
-    AssessmentOutOfScopeTicket,
     AssessmentProblemRecord,
     AssignmentGroupMasterReference,
     Client,
@@ -29,6 +28,7 @@ from app.models import (
     UploadBatch,
     UploadedFile,
 )
+from app.schemas.dashboard import VolumetricsFilters, VolumetricsRequest
 from app.services import dashboard as dashboard_service
 from app.services.batch_classification import derive_is_batch_related
 from app.services.sap_classification import derive_sap_non_sap
@@ -208,12 +208,13 @@ def add_out_of_scope_ticket(
     ams_owner: str | None = None,
     support_lead: str | None = None,
     assigned_to: str | None = None,
-) -> AssessmentOutOfScopeTicket:
-    ticket = AssessmentOutOfScopeTicket(
+) -> Ticket:
+    ticket = Ticket(
         project_id=project_id,
         upload_batch_id=upload_batch_id,
         ticket_number=number,
         ticket_type=ticket_type,
+        is_in_scope=False,
         month_key="2026-01",
         created_at=created_at,
         resolved_at=resolved_at,
@@ -229,7 +230,7 @@ def add_out_of_scope_ticket(
         assigned_to=assigned_to,
         sap_non_sap=derive_sap_non_sap(assignment_group),
         is_batch_related=derive_is_batch_related(ticket_type, f"{number} title"),
-        out_of_scope_reason="assignment_group_not_in_reference",
+        normalized_payload={"raw_payload_json": {}},
     )
     db.add(ticket)
     return ticket
@@ -354,6 +355,7 @@ def add_inventory_item(
     global_application: str | None = None,
     service_entitlement: str | None = None,
     service_type: str | None = None,
+    install_status: str | None = None,
     lifecycle_stage_status: str | None = None,
     lifecycle_current: str | None = None,
     lifecycle_1_to_3_years: str | None = None,
@@ -362,11 +364,17 @@ def add_inventory_item(
     is_current: bool = True,
     cmdb_payload: dict[str, object] | None = None,
 ) -> ApplicationInventoryItem:
-    payload = cmdb_payload or {}
+    payload = dict(cmdb_payload or {})
     if lifecycle_stage_status is None:
         lifecycle_stage_status = (
             payload.get("Life Cycle Stage Status") or payload.get("Lifecycle Stage Status")
         )
+    if install_status is None:
+        install_status = payload.get("Install Status") or payload.get("install_status")
+    if install_status is None:
+        install_status = "Installed"
+    if install_status is not None:
+        payload.setdefault("Install Status", install_status)
     if lifecycle_current is None:
         lifecycle_current = payload.get("Lifecycle - Current") or payload.get("Lifecycle Current")
     if lifecycle_1_to_3_years is None:
@@ -404,7 +412,7 @@ def add_inventory_item(
         lifecycle_current=lifecycle_current,
         lifecycle_1_to_3_years=lifecycle_1_to_3_years,
         lifecycle_3_to_5_years=lifecycle_3_to_5_years,
-        cmdb_payload=cmdb_payload,
+        cmdb_payload=payload,
         source_filename="overview-inventory.csv",
     )
     db.add(item)
@@ -502,6 +510,18 @@ def test_applications_assignment_group_mapping_application_inventory_source() ->
             scope_status="in_scope",
             is_current=False,
         )
+        add_inventory_item(
+            db,
+            project_id,
+            "Blank Support Group Service",
+            supported_by_vendor="Vendor Blank",
+            functional_track="Finance",
+            ams_owner="Owner A",
+            assignment_group="",
+            application_owner="App Owner Blank",
+            parent_application_name="Finance Parent",
+            scope_status="in_scope",
+        )
         db.commit()
 
         with TestClient(app) as client:
@@ -518,7 +538,8 @@ def test_applications_assignment_group_mapping_application_inventory_source() ->
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["summary"]["mapping_count"] == 1
+        assert payload["summary"]["mapping_count"] == 2
+        assert payload["summary"]["assignment_group_count"] == 1
         assert payload["available_functional_tracks"] == ["Finance"]
         assert all(row["assignment_group"] != "IT-NSA-UK-RSSL" for row in payload["rows"])
         assert payload["rows"][0] == {
@@ -916,6 +937,138 @@ def test_volumetrics_assignment_group_volumetrics_fixed_months_and_totals() -> N
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_business_service_ci_volumetrics_groups_by_ci_track_and_group() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-BSCI-1",
+            "INCIDENT",
+            dt("2025-12-05T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-07T00:00:00"),
+            assignment_group="AG-FIN",
+            business_service_ci_name="Finance Portal",
+            functional_track="Finance",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-BSCI-2",
+            "INCIDENT",
+            dt("2025-12-10T00:00:00"),
+            state="Cancelled",
+            closed_at=dt("2026-02-11T00:00:00"),
+            assignment_group="AG-FIN",
+            business_service_ci_name="Finance Portal",
+            functional_track="Finance",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCT-BSCI-1",
+            "SERVICE_CATALOG_TASK",
+            dt("2025-12-12T00:00:00"),
+            state="Closed Complete",
+            closed_at=dt("2025-12-20T00:00:00"),
+            assignment_group="AG-FIN",
+            business_service_ci_name="Finance Portal",
+            functional_track="Finance",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "PRB-BSCI-1",
+            "PROBLEM",
+            dt("2025-12-15T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2025-12-21T00:00:00"),
+            assignment_group="AG-FIN",
+            business_service_ci_name="Finance Portal",
+            functional_track="Finance",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-BSCI-OTHER",
+            "INCIDENT",
+            dt("2025-12-17T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2025-12-18T00:00:00"),
+            assignment_group="AG-SUPPLY",
+            business_service_ci_name="Supply Portal",
+            functional_track="Supply Chain",
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/business-service-ci-volumetrics",
+                json={
+                    "project_id": str(project_id),
+                    "scope": "in_scope",
+                    "functional_track": "Finance",
+                    "from_month": "2025-12",
+                    "to_month": "2026-05",
+                },
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["available_functional_tracks"] == ["Finance", "Supply Chain"]
+        assert payload["months"][0]["month_key"] == "2025-12"
+        assert payload["months"][-1]["month_key"] == "2026-05"
+        incident_rows = payload["tables"]["incidents"]["rows"]
+        assert len(incident_rows) == 1
+        incident_row = incident_rows[0]
+        assert incident_row["business_service_ci_name"] == "Finance Portal"
+        assert incident_row["functional_track"] == "Finance"
+        assert incident_row["assignment_group"] == "AG-FIN"
+        assert incident_row["months"]["2025-12"] == {
+            "created": 2,
+            "resolved": 0,
+            "cancelled": 0,
+        }
+        assert incident_row["months"]["2026-01"] == {
+            "created": 0,
+            "resolved": 1,
+            "cancelled": 0,
+        }
+        assert incident_row["months"]["2026-02"] == {
+            "created": 0,
+            "resolved": 0,
+            "cancelled": 1,
+        }
+        assert incident_row["totals"] == {"created": 2, "resolved": 1, "cancelled": 1}
+        assert payload["tables"]["sc_tasks"]["rows"][0]["totals"] == {
+            "created": 1,
+            "resolved": 1,
+            "cancelled": 0,
+        }
+        assert payload["tables"]["overall"]["grand_totals"] == {
+            "created": 3,
+            "resolved": 2,
+            "cancelled": 1,
+        }
+        serialized = json.dumps(payload)
+        assert "PRB-BSCI-1" not in serialized
+        assert "cmdb_payload" not in serialized
+        assert "normalized_payload" not in serialized
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_assignment_group_volumetrics_splits_distinct_reference_combinations() -> None:
     db, client_id, project_id, batch_id, _, _ = create_dashboard_project()
     try:
@@ -1256,6 +1409,17 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
         add_inventory_item(
             db,
             project_id,
+            "",
+            supported_by_vendor="Inventory Vendor D",
+            functional_track="HR",
+            ams_owner="Owner C",
+            assignment_group="Assignment D",
+            application_owner="App Owner C",
+            parent_application_name="Parent Three",
+        )
+        add_inventory_item(
+            db,
+            project_id,
             "Inactive Inventory Service",
             supported_by_vendor="Inactive Vendor",
             functional_track="Inactive Track",
@@ -1296,6 +1460,42 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
         sc_task.business_service_ci_name = "Another Ticket Service"
         sc_task.supported_by_vendor = "Another Ticket Vendor"
 
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-OPEN-OVERVIEW",
+            "INCIDENT",
+            dt("2026-01-03T00:00:00"),
+            state="Open",
+            resolved_at=None,
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-INCOMPLETE-OVERVIEW",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-01-04T00:00:00"),
+            state="Closed Incomplete",
+            closed_at=dt("2026-01-05T00:00:00"),
+        )
+        out_of_scope_incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-OOS-OVERVIEW",
+            "INCIDENT",
+            dt("2026-01-05T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-06T00:00:00"),
+        )
+        out_of_scope_incident.is_in_scope = False
+        out_of_scope_incident.business_service_ci_name = "Out-of-Scope Service"
+
         add_raw_row(db, project_id, batch_id, file_id, "INCIDENT", 1)
         add_raw_row(db, project_id, batch_id, file_id, "INCIDENT", 2)
         add_raw_row(db, project_id, batch_id, file_id, "SERVICE_CATALOG_TASK", 3)
@@ -1320,17 +1520,6 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             ),
         )
 
-        db.add(
-            AssessmentOutOfScopeTicket(
-                project_id=project_id,
-                upload_batch_id=batch_id,
-                ticket_number="OOS-OVERVIEW",
-                ticket_type="INCIDENT",
-                created_at=dt("2026-01-02T00:00:00"),
-                resolved_at=dt("2026-01-04T00:00:00"),
-                out_of_scope_reason="assignment_group_not_in_application_inventory",
-            ),
-        )
         db.commit()
 
         with TestClient(app) as client:
@@ -1347,7 +1536,7 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             "functional_track_count": 2,
             "ams_owner_count": 2,
             "supported_vendor_count": 3,
-            "assignment_group_count": 3,
+            "assignment_group_count": 4,
             "application_owner_count": 2,
             "very_critical_application_count": 1,
             "critical_application_count": 1,
@@ -1358,9 +1547,13 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
             "sc_task_rows": 1,
             "incident_sla_rows": 2,
         }
-        assert payload["tickets"]["total_in_scope_tickets"] == 2
-        assert payload["tickets"]["incident_count"] == 1
-        assert payload["tickets"]["sc_task_count"] == 1
+        assert payload["tickets"]["total_tickets"] == 5
+        assert payload["tickets"]["total_in_scope_tickets"] == 4
+        assert payload["tickets"]["total_out_of_scope_tickets"] == 1
+        assert payload["tickets"]["incident_count"] == 2
+        assert payload["tickets"]["sc_task_count"] == 2
+        assert payload["tickets"]["out_of_scope_incident_count"] == 1
+        assert payload["tickets"]["out_of_scope_sc_task_count"] == 0
         assert payload["tickets"]["completion_date_min"].startswith("2026-01-01")
         assert payload["tickets"]["completion_date_max"].startswith("2026-01-31")
         assert payload["tickets"]["applications_80pct_monthly_volume_count"] == 2
@@ -1385,12 +1578,13 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
             parent_application_name="Parent A",
             hosting_env="Production",
             global_application="Yes",
+            service_entitlement="Gold",
             lifecycle_stage_status="In Use",
             cmdb_payload={
                 "Application type": "Business",
                 "Architecture type": "Cloud",
                 "Business criticality": "Critical",
-                "Install Status": "In production",
+                "Install Status": "Installed",
                 "Install type": "Production",
                 "Life Cycle Stage": "Operational",
             },
@@ -1407,13 +1601,38 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
             parent_application_name="Parent B",
             hosting_env="Non-Production",
             global_application="No",
+            service_entitlement="Silver",
             lifecycle_stage_status="In Use",
             cmdb_payload={
                 "Application type": "Business",
                 "Architecture type": "On Premise",
                 "Business criticality": "Low",
-                "Install Status": "In production",
+                "Install Status": "Installed",
                 "Install type": "Non-Production",
+                "Life Cycle Stage": "Operational",
+            },
+        )
+        add_inventory_item(
+            db,
+            project_id,
+            "Cache App C",
+            supported_by_vendor="Vendor C",
+            functional_track="Run",
+            ams_owner="Owner C",
+            assignment_group="IT-NSA-Group C",
+            application_owner="Application Owner C",
+            parent_application_name="Parent C",
+            hosting_env="Production",
+            global_application="No",
+            service_entitlement="Bronze",
+            scope_status="out_of_scope",
+            lifecycle_stage_status="In Use",
+            cmdb_payload={
+                "Application type": "Business",
+                "Architecture type": "Cloud",
+                "Business criticality": "Low",
+                "Install Status": "Installed",
+                "Install type": "Production",
                 "Life Cycle Stage": "Operational",
             },
         )
@@ -1523,7 +1742,7 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
         assert refresh_response.status_code == 200
         refresh_payload = refresh_response.json()
         assert refresh_payload["dashboard_area"] == "all"
-        assert refresh_payload["facts_count"] == 4
+        assert refresh_payload["facts_count"] == 5
         assert refresh_payload["catalog_count"] > 0
 
         assert status_response.status_code == 200
@@ -1543,8 +1762,12 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
             for row in applications_catalog["filters"]["application_scope"]
         ] == [
             ("in_scope", "In Scope", 2),
-            ("out_of_scope", "Out of Scope", 0),
+            ("out_of_scope", "Out of Scope", 1),
         ]
+        assert {
+            row["value"]: row["baseline_count"]
+            for row in applications_catalog["filters"]["service_entitlement"]
+        } == {"Bronze": 1, "Gold": 1, "Silver": 1}
         assert [row["value"] for row in applications_catalog["filters"]["business_critical"]] == [
             "Critical",
             "Low",
@@ -1567,7 +1790,7 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
         assert applications_counts_response.status_code == 200
         applications_counts = applications_counts_response.json()["counts"]
         assert applications_counts["supported_by_vendor"] == {"Vendor A": 1}
-        assert applications_counts["sap_non_sap"] == {"Non-SAP": 1, "SAP": 1}
+        assert applications_counts["sap_non_sap"] == {"Non-SAP": 2, "SAP": 1}
 
         assert volumetrics_counts_response.status_code == 200
         volumetrics_counts = volumetrics_counts_response.json()["counts"]
@@ -1994,8 +2217,9 @@ def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_glo
                 "YES",
                 {
                     "Business criticality": "High",
-                    "Life Cycle Stage": "Operational",
-                    "Life Cycle Stage Status": "In Use",
+                    "Life Cycle Stage": "End of Life",
+                    "Life Cycle Stage Status": "Obsolete",
+                    "Install Status": "Installed",
                 },
             ),
             (
@@ -2033,8 +2257,9 @@ def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_glo
                 "Yes",
                 {
                     "Business criticality": "Very Critical",
-                    "Life Cycle Stage": "End of Life",
-                    "Life Cycle Stage Status": "Obsolete",
+                    "Life Cycle Stage": "Operational",
+                    "Life Cycle Stage Status": "In Use",
+                    "Install Status": "Pending Retirement",
                 },
             ),
             (
@@ -2935,6 +3160,23 @@ def test_dashboard_applications_only_show_in_scope_business_service_ci_rows() ->
                     "offset": 0,
                 },
             )
+            out_scope_summary_response = client.post(
+                "/api/dashboard/applications/summary",
+                json={
+                    "project_id": str(project_id),
+                    "filters": {"application_scope": ["out_of_scope"]},
+                },
+            )
+            out_scope_list_response = client.post(
+                "/api/dashboard/applications/list",
+                json={
+                    "project_id": str(project_id),
+                    "filters": {"application_scope": ["out_of_scope"]},
+                    "sort": {"column": "business_service_ci_name", "direction": "asc"},
+                    "limit": 50,
+                    "offset": 0,
+                },
+            )
             filter_response = client.get(
                 "/api/dashboard/applications/filter-values",
                 params={"project_id": str(project_id)},
@@ -2954,6 +3196,7 @@ def test_dashboard_applications_only_show_in_scope_business_service_ci_rows() ->
 
         assert summary_response.status_code == 200
         assert summary_response.json()["applications"] == 2
+        assert summary_response.json()["assignment_groups"] == 3
 
         assert list_response.status_code == 200
         list_payload = list_response.json()
@@ -2963,13 +3206,62 @@ def test_dashboard_applications_only_show_in_scope_business_service_ci_rows() ->
             "In Scope Service",
         ]
 
+        assert out_scope_summary_response.status_code == 200
+        assert out_scope_summary_response.json()["applications"] == 1
+
+        assert out_scope_list_response.status_code == 200
+        out_scope_list_payload = out_scope_list_response.json()
+        assert out_scope_list_payload["total"] == 1
+        assert out_scope_list_payload["rows"][0]["business_service_ci_name"] == "Out Scope Service"
+
         assert filter_response.status_code == 200
-        assert filter_response.json()["application_scope"] == ["in_scope"]
+        assert filter_response.json()["application_scope"] == ["in_scope", "out_of_scope"]
 
         assert mapping_response.status_code == 200
         mapping_summary = mapping_response.json()["summary"]
         assert mapping_summary["business_service_ci_count"] == 2
         assert mapping_summary["mapping_count"] == 3
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_volumetrics_data_range_caps_latest_month_to_may_2026() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-RANGE-MAY",
+            "INCIDENT",
+            dt("2026-05-01T00:00:00"),
+            state="Closed",
+            resolved_at=dt("2026-05-31T12:00:00"),
+            closed_at=dt("2026-05-31T12:00:00"),
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-RANGE-JUN",
+            "INCIDENT",
+            dt("2026-06-01T00:00:00"),
+            state="Closed",
+            resolved_at=dt("2026-06-30T12:00:00"),
+            closed_at=dt("2026-06-30T12:00:00"),
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/dashboard/volumetrics/data-range",
+                params={"project_id": str(project_id)},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["completion_date_max"].startswith("2026-05-31")
     finally:
         cleanup_client(db, client_id)
 
@@ -2987,6 +3279,7 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             dt("2026-01-10T00:00:00"),
             state="Resolved",
             resolved_at=dt("2026-02-03T00:00:00"),
+            closed_at=dt("2026-02-04T00:00:00"),
             assignment_group="IT-SAP-Group A",
             business_critical="Critical",
         )
@@ -3040,6 +3333,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         cancelled.parent_application_name = "Parent B"
         cancelled.application_owner = "App Owner B"
         cancelled.supported_by_vendor = "Vendor B"
+        cancelled.sla_response_sla_breached = True
+        cancelled.sla_resolution_sla_breached = True
+        cancelled.ola_response_sla_breached = True
+        cancelled.ola_resolution_sla_breached = True
 
         add_ticket(
             db,
@@ -3055,31 +3352,30 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             business_critical="Low",
         )
 
-        db.add(
-            AssessmentOutOfScopeTicket(
-                project_id=project_id,
-                upload_batch_id=batch_id,
-                ticket_number="INC-VOL-OOS",
-                ticket_type="INCIDENT",
-                created_at=dt("2026-01-05T00:00:00"),
-                resolved_at=dt("2026-03-05T00:00:00"),
-                state="Resolved",
-                assignment_group="Group OOS",
-                sap_non_sap=None,
-                support_lead="Lead OOS",
-                functional_track="Out",
-                ams_owner="Owner OOS",
-                parent_application_name="Parent OOS",
-                application_owner="App Owner OOS",
-                supported_by_vendor="Vendor OOS",
-                business_critical="Medium",
-                response_sla_breached=True,
-                resolution_sla_breached=False,
-                sla_response_sla_breached=False,
-                sla_resolution_sla_breached=False,
-                out_of_scope_reason="assignment_group_not_in_application_inventory",
-            ),
+        oos_incident = add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-VOL-OOS",
+            "INCIDENT",
+            dt("2026-01-05T00:00:00"),
+            resolved_at=dt("2026-03-05T00:00:00"),
+            state="Resolved",
+            assignment_group="Group OOS",
+            support_lead="Lead OOS",
+            functional_track="Out",
+            ams_owner="Owner OOS",
+            parent_application_name="Parent OOS",
+            business_service_ci_name=None,
         )
+        oos_incident.sap_non_sap = None
+        oos_incident.application_owner = "App Owner OOS"
+        oos_incident.supported_by_vendor = "Vendor OOS"
+        oos_incident.business_critical = "Medium"
+        oos_incident.response_sla_breached = True
+        oos_incident.resolution_sla_breached = False
+        oos_incident.sla_response_sla_breached = False
+        oos_incident.sla_resolution_sla_breached = False
         db.add(
             DashboardCommentary(
                 client_id=client_id,
@@ -3204,6 +3500,10 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         assert summary["period_count"] == 2
         assert summary["created"]["total"] == 3
         assert summary["created"]["average_per_period"] == 1.5
+        assert summary["created"]["incident_count"] == 2
+        assert summary["created"]["incident_average_per_period"] == 1
+        assert summary["created"]["sc_task_count"] == 1
+        assert summary["created"]["sc_task_average_per_period"] == 0.5
         assert summary["resolved_closed"]["total"] == 2
         assert summary["cancelled"]["total"] == 1
         assert round(summary["cancelled"]["cancelled_pct_of_resolved_cancelled"], 1) == 33.3
@@ -3372,7 +3672,9 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         sla_trends = sla_trends_response.json()
         assert sla_trends["agreement_mode"] == "sla"
         assert sla_trends["not_applicable"] is False
-        assert sla_trends["logic"]["captured_definition"] == "SLA breached flag IS NOT NULL"
+        assert sla_trends["logic"]["captured_definition"] == (
+            "SLA breached flag IS NOT NULL; cancelled incidents are excluded"
+        )
         assert sla_trends["response"][1]["total_closed_ticket_count"] == 1
         assert sla_trends["response"][1]["sla_captured_count"] == 1
         assert sla_trends["response"][1]["sla_adhered_count"] == 1
@@ -3384,7 +3686,9 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
         assert ola_trends_response.status_code == 200
         ola_trends = ola_trends_response.json()
         assert ola_trends["agreement_mode"] == "ola"
-        assert ola_trends["logic"]["captured_definition"] == "OLA breached flag IS NOT NULL"
+        assert ola_trends["logic"]["captured_definition"] == (
+            "OLA breached flag IS NOT NULL; cancelled incidents are excluded"
+        )
         assert ola_trends["response"][1]["sla_captured_count"] == 1
         assert ola_trends["response"][1]["sla_adhered_count"] == 0
         assert ola_trends["response"][1]["sla_adherence_pct"] == 0
@@ -3414,6 +3718,7 @@ def test_volumetrics_resolved_closed_counts_exclude_cancelled_and_incomplete_sta
             dt("2026-01-01T00:00:00"),
             state="Resolved",
             resolved_at=dt("2026-01-05T10:00:00"),
+            closed_at=dt("2026-01-05T11:00:00"),
             assignment_group="AG-State-Filters",
             functional_track="Track",
             ams_owner="Owner",
@@ -3430,6 +3735,7 @@ def test_volumetrics_resolved_closed_counts_exclude_cancelled_and_incomplete_sta
             dt("2026-01-02T00:00:00"),
             state="Cancelled",
             resolved_at=dt("2026-01-06T10:00:00"),
+            closed_at=dt("2026-01-06T11:00:00"),
             assignment_group="AG-State-Filters",
             functional_track="Track",
             ams_owner="Owner",
@@ -3626,6 +3932,151 @@ def test_volumetrics_resolved_closed_counts_exclude_cancelled_and_incomplete_sta
         assert sla_trends["response"][0]["total_closed_ticket_count"] == 1
         assert sla_trends["response"][0]["sla_captured_count"] == 1
         assert sla_trends["response"][0]["sla_adhered_count"] == 1
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_volumetrics_summary_buckets_created_tickets_by_utc_month() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-UTC-MAY-EDGE",
+            "INCIDENT",
+            datetime.fromisoformat("2026-06-01T00:30:00+05:30"),
+            state="Resolved",
+            resolved_at=datetime.fromisoformat("2026-06-01T02:30:00+05:30"),
+            closed_at=datetime.fromisoformat("2026-06-01T03:00:00+05:30"),
+            assignment_group="AG-UTC-Edge",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-UTC-MAY-EDGE",
+            "SERVICE_CATALOG_TASK",
+            datetime.fromisoformat("2026-06-01T01:00:00+05:30"),
+            state="Closed",
+            closed_at=datetime.fromisoformat("2026-06-01T04:00:00+05:30"),
+            assignment_group="AG-UTC-Edge",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-UTC-JUN-OUT",
+            "INCIDENT",
+            datetime.fromisoformat("2026-06-01T06:00:00+05:30"),
+            state="Resolved",
+            resolved_at=datetime.fromisoformat("2026-06-01T07:00:00+05:30"),
+            closed_at=datetime.fromisoformat("2026-06-01T08:00:00+05:30"),
+            assignment_group="AG-UTC-Edge",
+        )
+        db.commit()
+
+        request = VolumetricsRequest(
+            project_id=project_id,
+            scope="in_scope",
+            ticket_type="all",
+            time_grain="monthly",
+            start_datetime=datetime.fromisoformat("2026-05-01T00:00:00+00:00"),
+            end_datetime=datetime.fromisoformat("2026-05-31T23:59:59+00:00"),
+            filters=VolumetricsFilters(),
+        )
+
+        summary = dashboard_service.volumetrics_summary(db, request)
+        chart = dashboard_service.volumetrics_created_resolved_backlog(db, request)
+
+        created = summary["created"]
+        assert created["total"] == 2
+        assert created["incident_count"] == 1
+        assert created["sc_task_count"] == 1
+
+        rows = chart["rows"]
+        assert [row["period_label"] for row in rows] == ["May-26"]
+        assert rows[0]["created_count"] == 2
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_volumetrics_sla_trends_bucket_incidents_by_closed_date() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        ticket = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-SLA-CLOSED-JUN",
+            "INCIDENT",
+            dt("2026-05-20T00:00:00"),
+            state="Closed",
+            resolved_at=dt("2026-05-22T10:00:00"),
+            closed_at=dt("2026-06-02T10:00:00"),
+            assignment_group="AG-SLA-Closed-Date",
+        )
+        ticket.sla_response_sla_breached = False
+        ticket.sla_resolution_sla_breached = False
+        ticket.ola_response_sla_breached = False
+        ticket.ola_resolution_sla_breached = False
+
+        cancelled = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-SLA-CANCELLED-JUN",
+            "INCIDENT",
+            dt("2026-05-21T00:00:00"),
+            state="Cancelled",
+            resolved_at=dt("2026-05-22T10:00:00"),
+            closed_at=dt("2026-06-03T10:00:00"),
+            assignment_group="AG-SLA-Closed-Date",
+        )
+        cancelled.sla_response_sla_breached = True
+        cancelled.sla_resolution_sla_breached = True
+        cancelled.ola_response_sla_breached = True
+        cancelled.ola_resolution_sla_breached = True
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "in_scope",
+            "ticket_type": "incident",
+            "time_grain": "monthly",
+            "start_datetime": "2026-05-01T00:00:00+00:00",
+            "end_datetime": "2026-06-30T23:59:59+00:00",
+            "filters": {},
+        }
+
+        with TestClient(app) as client:
+            sla_response = client.post(
+                "/api/dashboard/volumetrics/sla-trends",
+                json=request_body,
+            )
+            ola_response = client.post(
+                "/api/dashboard/volumetrics/sla-trends",
+                json={**request_body, "agreement_mode": "ola"},
+            )
+
+        assert sla_response.status_code == 200
+        sla_rows = sla_response.json()["response"]
+        assert [row["period_label"] for row in sla_rows] == ["May-26", "Jun-26"]
+        assert sla_rows[0]["sla_captured_count"] == 0
+        assert sla_rows[1]["total_closed_ticket_count"] == 1
+        assert sla_rows[1]["sla_captured_count"] == 1
+        assert sla_rows[1]["sla_adhered_count"] == 1
+
+        assert ola_response.status_code == 200
+        ola_rows = ola_response.json()["response"]
+        assert ola_rows[0]["sla_captured_count"] == 0
+        assert ola_rows[1]["sla_captured_count"] == 1
+        assert ola_rows[1]["sla_adhered_count"] == 1
     finally:
         cleanup_client(db, client_id)
 
@@ -3973,7 +4424,7 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
                 file_id,
                 f"SCTASK-LARGE-CAT-{index}",
                 "SERVICE_CATALOG_TASK",
-                dt("2025-01-15T09:00:00"),
+                dt("2025-12-15T09:00:00"),
                 business_service_ci_name="Payroll",
                 sap_non_sap="SAP",
             )
@@ -3987,7 +4438,7 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
                 file_id,
                 f"SCTASK-UNMAPPED-{index}",
                 "SERVICE_CATALOG_TASK",
-                dt("2025-01-15T09:00:00"),
+                dt("2025-12-15T09:00:00"),
                 business_service_ci_name="Payroll",
                 sap_non_sap="SAP",
             )
@@ -4001,7 +4452,7 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
                 file_id,
                 f"SCTASK-CAT-{index:02d}",
                 "SERVICE_CATALOG_TASK",
-                dt("2025-02-10T09:00:00"),
+                dt("2026-01-10T09:00:00"),
                 business_service_ci_name="Payroll",
                 sap_non_sap="SAP",
             )
@@ -4013,9 +4464,9 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
                 project_id,
                 batch_id,
                 file_id,
-                f"SCTASK-H2-{index}",
-                "SERVICE_CATALOG_TASK",
-                dt("2025-08-10T09:00:00"),
+            f"SCTASK-OUTSIDE-{index}",
+            "SERVICE_CATALOG_TASK",
+            dt("2025-08-10T09:00:00"),
                 business_service_ci_name="Payroll",
                 sap_non_sap="SAP",
             )
@@ -4034,19 +4485,17 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
         )
         incident.catalog_item_name = "Incident Item"
 
-        db.add(
-            AssessmentOutOfScopeTicket(
-                project_id=project_id,
-                upload_batch_id=batch_id,
-                ticket_number="SCTASK-OOS-CATALOG",
-                ticket_type="SERVICE_CATALOG_TASK",
-                created_at=dt("2025-03-10T09:00:00"),
-                assignment_group="External",
-                catalog_item_name="Out Item",
-                sap_non_sap="SAP",
-                out_of_scope_reason="assignment_group_not_in_application_inventory",
-            ),
+        oos_catalog_task = add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "SCTASK-OOS-CATALOG",
+            "SERVICE_CATALOG_TASK",
+            dt("2025-03-10T09:00:00"),
+            assignment_group="External",
         )
+        oos_catalog_task.catalog_item_name = "Out Item"
+        oos_catalog_task.sap_non_sap = "SAP"
         db.commit()
 
         with TestClient(app) as client:
@@ -4069,46 +4518,43 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
 
         assert response.status_code == 200
         payload = response.json()
-        h1_2025 = next(period for period in payload["periods"] if period["period_key"] == "H1_2025")
-        assert h1_2025["total_sc_tasks"] == 114
-        assert h1_2025["top_10_rows"][0]["catalog_item_name"] == "Large Item"
-        assert h1_2025["top_10_rows"][0]["sc_task_count"] == 100
-        assert h1_2025["top_10_rows"][0]["avg_monthly_with_pct_label"] == "17 (87.7%)"
-        assert len(h1_2025["top_10_rows"]) == 10
-        assert [row["catalog_item_name"] for row in h1_2025["pie_rows"]] == [
+        dec_may = next(
+            period for period in payload["periods"] if period["period_key"] == "DEC_2025_MAY_2026"
+        )
+        assert dec_may["total_sc_tasks"] == 114
+        assert dec_may["top_10_rows"][0]["catalog_item_name"] == "Large Item"
+        assert dec_may["top_10_rows"][0]["sc_task_count"] == 100
+        assert dec_may["top_10_rows"][0]["avg_monthly_with_pct_label"] == "17 (87.7%)"
+        assert len(dec_may["top_10_rows"]) == 10
+        assert [row["catalog_item_name"] for row in dec_may["pie_rows"]] == [
             "Large Item",
-            "Others",
             "Unmapped Catalog Item",
+            "Others",
         ]
-        assert h1_2025["pie_rows"][1]["sc_task_count"] == 11
-        assert h1_2025["pie_rows"][1]["proportion_pct"] == 9.6
-
-        h2_2025 = next(period for period in payload["periods"] if period["period_key"] == "H2_2025")
-        assert h2_2025["total_sc_tasks"] == 6
-        assert h2_2025["top_10_rows"][0]["catalog_item_name"] == "H2 Item"
-        assert h2_2025["top_10_rows"][0]["avg_monthly_volume"] == 1.0
-        assert h2_2025["top_10_rows"][0]["proportion_pct"] == 100.0
-
-        h1_2026 = next(period for period in payload["periods"] if period["period_key"] == "H1_2026")
-        assert h1_2026["total_sc_tasks"] == 0
-        assert "No SC Task catalog item data available" in h1_2026["warnings"][0]
+        assert dec_may["pie_rows"][1]["sc_task_count"] == 3
+        assert dec_may["pie_rows"][1]["proportion_pct"] == 2.6
+        assert dec_may["pie_rows"][2]["sc_task_count"] == 11
+        assert dec_may["pie_rows"][2]["proportion_pct"] == 9.6
         assert "normalized_payload" not in response.text
         assert "cmdb_payload" not in response.text
 
         assert out_of_scope_response.status_code == 200
         out_payload = out_of_scope_response.json()
-        out_h1 = next(
-            period for period in out_payload["periods"] if period["period_key"] == "H1_2025"
+        out_dec_may = next(
+            period
+            for period in out_payload["periods"]
+            if period["period_key"] == "DEC_2025_MAY_2026"
         )
-        assert out_h1["total_sc_tasks"] == 1
-        assert out_h1["top_10_rows"][0]["catalog_item_name"] == "Out Item"
+        assert out_dec_may["total_sc_tasks"] == 0
 
         assert all_scope_response.status_code == 200
         all_payload = all_scope_response.json()
-        all_h1 = next(
-            period for period in all_payload["periods"] if period["period_key"] == "H1_2025"
+        all_dec_may = next(
+            period
+            for period in all_payload["periods"]
+            if period["period_key"] == "DEC_2025_MAY_2026"
         )
-        assert all_h1["total_sc_tasks"] == 115
+        assert all_dec_may["total_sc_tasks"] == 114
 
         assert incident_response.status_code == 200
         incident_payload = incident_response.json()
@@ -4679,24 +5125,22 @@ def test_volumetrics_reassignment_hops_trend_counts_hops_and_filters() -> None:
         )
         feb_task.functional_track = "Run"
         feb_task.ams_owner = "Owner B"
-        db.add(
-            AssessmentOutOfScopeTicket(
-                project_id=project_id,
-                upload_batch_id=batch_id,
-                ticket_number="INC-HOPS-OOS-FEB-2",
-                ticket_type="INCIDENT",
-                created_at=dt("2025-02-15T00:00:00"),
-                resolved_at=dt("2025-02-16T00:00:00"),
-                state="Resolved",
-                assignment_group="IT-SAP-OOS",
-                sap_non_sap="SAP",
-                functional_track="Out",
-                ams_owner="Owner OOS",
-                support_lead="Lead OOS",
-                reassignment_count=2,
-                out_of_scope_reason="assignment_group_not_in_application_inventory",
-            ),
+        oos_hops_incident = add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-HOPS-OOS-FEB-2",
+            "INCIDENT",
+            dt("2025-02-15T00:00:00"),
+            resolved_at=dt("2025-02-16T00:00:00"),
+            state="Resolved",
+            assignment_group="IT-SAP-OOS",
+            functional_track="Out",
+            ams_owner="Owner OOS",
+            support_lead="Lead OOS",
         )
+        oos_hops_incident.sap_non_sap = "SAP"
+        oos_hops_incident.reassignment_count = 2
         partial_month_ticket = add_ticket(
             db,
             project_id,
@@ -4920,7 +5364,7 @@ def test_volumetrics_service_entitlement_and_type_splits_filter_by_created_volum
             dt("2026-01-10T00:00:00"),
             state="Resolved",
             resolved_at=dt("2026-01-11T00:00:00"),
-            assignment_group="AG-GOLD",
+            assignment_group="IT-SAP-GOLD",
         )
         gold_incident.service_entitlement = "Gold"
         gold_incident.service_type = "End-to-End"
@@ -4934,7 +5378,7 @@ def test_volumetrics_service_entitlement_and_type_splits_filter_by_created_volum
             dt("2026-01-12T00:00:00"),
             state="Closed Complete",
             closed_at=dt("2026-01-13T00:00:00"),
-            assignment_group="AG-SILVER",
+            assignment_group="IT-NSA-SILVER",
         )
         silver_task.service_entitlement = "Silver"
         silver_task.service_type = "Integrator"
@@ -4948,7 +5392,7 @@ def test_volumetrics_service_entitlement_and_type_splits_filter_by_created_volum
             dt("2026-01-14T00:00:00"),
             state="Closed Complete",
             closed_at=dt("2026-01-15T00:00:00"),
-            assignment_group="AG-BLANK",
+            assignment_group="IT-NSA-BLANK",
         )
         blank_task.service_entitlement = ""
         blank_task.service_type = None
@@ -4961,7 +5405,7 @@ def test_volumetrics_service_entitlement_and_type_splits_filter_by_created_volum
             dt("2026-01-16T00:00:00"),
             state="Resolved",
             resolved_at=dt("2026-01-17T00:00:00"),
-            assignment_group="AG-OOS",
+            assignment_group="LEGACY-OOS",
         )
         out_incident.service_entitlement = "Gold"
         out_incident.service_type = "Archived"
@@ -5013,6 +5457,39 @@ def test_volumetrics_service_entitlement_and_type_splits_filter_by_created_volum
             for row in payload["ticket_volume_by_service_type"]["sc_tasks"]
         }
         assert sc_task_type_rows == {"Blank": 1, "Integrator": 1}
+        assignment_group_split_rows = {
+            row["label"]: round(row["average_monthly_count"], 3)
+            for row in payload["assignment_group_sap_non_sap"]["all"]
+        }
+        assert assignment_group_split_rows == {
+            "Non-SAP": round(2 / 6, 3),
+            "Others": round(1 / 6, 3),
+            "SAP": round(1 / 6, 3),
+        }
+        pivot_rows = {
+            row["service_type"]: row
+            for row in payload["service_type_by_assignment_group_sap_non_sap"]["all"]
+        }
+        assert round(pivot_rows["End-to-End"]["sap_average_monthly_count"], 3) == round(
+            1 / 6,
+            3,
+        )
+        assert round(pivot_rows["Integrator"]["non_sap_average_monthly_count"], 3) == round(
+            1 / 6,
+            3,
+        )
+        assert round(pivot_rows["Archived"]["others_average_monthly_count"], 3) == round(
+            1 / 6,
+            3,
+        )
+        incident_assignment_group_rows = {
+            row["label"]: round(row["average_monthly_count"], 3)
+            for row in payload["assignment_group_sap_non_sap"]["incidents"]
+        }
+        assert incident_assignment_group_rows == {
+            "Others": round(1 / 6, 3),
+            "SAP": round(1 / 6, 3),
+        }
         assert "normalized_payload" not in response.text
         assert "cmdb_payload" not in response.text
 
@@ -5022,6 +5499,56 @@ def test_volumetrics_service_entitlement_and_type_splits_filter_by_created_volum
             for row in filtered_response.json()["ticket_volume_by_service_type"]["all"]
         }
         assert filtered_rows == {"Archived": 1, "End-to-End": 1}
+
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_volumetrics_hosting_env_distribution_clubs_values_below_five_percent() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        for index in range(20):
+            ticket = add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"INC-HOSTING-PROD-{index}",
+                "INCIDENT",
+                dt("2026-01-10T00:00:00"),
+                state="Resolved",
+                resolved_at=dt("2026-01-11T00:00:00"),
+                assignment_group="IT-SAP-PROD",
+            )
+            ticket.hosting_env = "Production"
+        tiny_ticket = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-HOSTING-TINY",
+            "INCIDENT",
+            dt("2026-01-12T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-13T00:00:00"),
+            assignment_group="IT-SAP-TINY",
+        )
+        tiny_ticket.hosting_env = "Training"
+        db.commit()
+
+        request_body = volumetrics_request(project_id, scope="in_scope")
+        request_body["start_datetime"] = "2026-01-01T00:00:00+00:00"
+        request_body["end_datetime"] = "2026-01-31T23:59:59+00:00"
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/distribution-splits",
+                json=request_body,
+            )
+
+        assert response.status_code == 200
+        labels = {row["label"] for row in response.json()["hosting_env"]["incidents"]}
+        assert labels == {"Production", "Others"}
 
     finally:
         cleanup_client(db, client_id)
@@ -5270,7 +5797,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
                 "Application type": "Business",
                 "Architecture type": "Cloud",
                 "Business criticality": "Critical",
-                "Install Status": "In production",
+                "Install Status": "Installed",
                 "Install type": "Production",
                 "Life Cycle Stage": "Operational",
                 "Life Cycle Stage Status": "In Use",
@@ -5304,6 +5831,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         incident.ams_owner = "Owner A"
         incident.support_lead = "Lead A"
         incident.business_service_ci_name = "Payroll Portal"
+        incident.closed_at = dt("2026-01-02T00:00:00")
         incident.parent_application_name = "Parent Payroll"
         incident.application_owner = "Application Owner A"
         incident.supported_by_vendor = "Vendor A"
@@ -5380,35 +5908,33 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         incomplete_month_incident.application_owner = "Application Owner A"
         incomplete_month_incident.supported_by_vendor = "Vendor A"
 
-        db.add(
-            AssessmentOutOfScopeTicket(
-                project_id=project_id,
-                upload_batch_id=batch_id,
-                ticket_number="INC-OFFLINE-OOS-SECRET",
-                ticket_type="INCIDENT",
-                created_at=dt("2026-01-14T00:00:00"),
-                resolved_at=dt("2026-01-20T00:00:00"),
-                state="Resolved",
-                assignment_group="IT-SAP-OOS",
-                sap_non_sap="SAP",
-                functional_track="Data",
-                ams_owner="Owner A",
-                support_lead="Lead A",
-                parent_application_name="Parent Payroll",
-                application_owner="Application Owner A",
-                supported_by_vendor="Vendor A",
-                business_duration_seconds=86400,
-                architecture_type="Cloud",
-                business_critical="Critical",
-                install_type="Production",
-                hosting_env="Production",
-                    response_sla_breached=False,
-                    resolution_sla_breached=False,
-                    sla_response_sla_breached=False,
-                    sla_resolution_sla_breached=False,
-                    out_of_scope_reason="assignment_group_not_in_application_inventory",
-                ),
-            )
+        offline_oos_incident = add_out_of_scope_ticket(
+            db,
+            project_id,
+            batch_id,
+            "INC-OFFLINE-OOS-SECRET",
+            "INCIDENT",
+            dt("2026-01-14T00:00:00"),
+            resolved_at=dt("2026-01-20T00:00:00"),
+            state="Resolved",
+            assignment_group="IT-SAP-OOS",
+            functional_track="Data",
+            ams_owner="Owner A",
+            support_lead="Lead A",
+            parent_application_name="Parent Payroll",
+        )
+        offline_oos_incident.sap_non_sap = "SAP"
+        offline_oos_incident.application_owner = "Application Owner A"
+        offline_oos_incident.supported_by_vendor = "Vendor A"
+        offline_oos_incident.business_duration_seconds = 86400
+        offline_oos_incident.architecture_type = "Cloud"
+        offline_oos_incident.business_critical = "Critical"
+        offline_oos_incident.install_type = "Production"
+        offline_oos_incident.hosting_env = "Production"
+        offline_oos_incident.response_sla_breached = False
+        offline_oos_incident.resolution_sla_breached = False
+        offline_oos_incident.sla_response_sla_breached = False
+        offline_oos_incident.sla_resolution_sla_breached = False
         add_problem_record(
             db,
             project_id,
@@ -5472,10 +5998,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         document = response.text
         assert "Overview" in document
         assert "Applications" in document
-        assert "Lifecycle Planning" in document
-        assert "Application Lifecycle Planning Matrix" in document
-        assert "function lifecyclePlanTitle" in document
-        assert "function lifecyclePlanLineChart" in document
+        assert "Lifecycle Planning" not in document
+        assert "Application Lifecycle Planning Matrix" not in document
         assert "LIFECYCLE_PLAN_COLORS" in document
         assert "function sortCriticalityValues" in document
         assert (
@@ -5484,17 +6008,10 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         )
         assert (
             "lifecyclePlanLineChart(lifecycleData.selected_plan.chart, state.lifecyclePlan)"
-            in document
-        )
-        assert "Applications Planned to Retire" in document
-        assert "applications_lifecycle_plan_invest" in document
-        assert "lifecycle-matrix-note" in document
-        assert (
-            "Matrix is based on ${fmt(matrix.in_use_application_count)} In Use applications."
-            in document
+            not in document
         )
         assert "Total Across Horizons" not in document
-        assert "Global vs Local Applications" in document
+        assert "Global vs Local Applications" not in document
         assert "Application Criticality by Hosting Environment" in document
         assert "Grand Total" in document
         assert "Volumetrics &amp; SLA" in document
@@ -5502,7 +6019,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Overall SLA Trends" in document
         assert "Detailed Volume Trends" in document
         assert "KPI Trends" in document
-        assert "Category-wise Trends" in document
+        assert "Category-wise Trends" not in document
         assert "Created vs Resolved by hour of the day" in document
         assert "Priority-wise ticket distribution" in document
         assert 'slaMode: "sla"' in document
@@ -5514,10 +6031,10 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Batch-related Incidents Created" in document
         assert "Incident Batch-Related Tickets Created Trend" not in document
         assert "Top Applications with Incident Batch-Related Tickets" in document
-        assert "Average Monthly Incidents by Architecture Type" in document
-        assert "Average Monthly SC Tasks by Architecture Type" in document
-        assert "Average Monthly Incidents by Install Type" in document
-        assert "Average Monthly SC Tasks by Install Type" in document
+        assert "Average Monthly Incidents by Architecture Type" not in document
+        assert "Average Monthly SC Tasks by Architecture Type" not in document
+        assert "Average Monthly Incidents by Install Type" not in document
+        assert "Average Monthly SC Tasks by Install Type" not in document
         assert "Average Monthly Tickets by Hosting Env" in document
         assert "Average Monthly Incidents by Hosting Env" in document
         assert "Average Monthly SC Tasks by Hosting Env" in document
@@ -5533,24 +6050,30 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "SC Task P2 MTTR</h3>" not in document
         assert "SC Task P3 MTTR</h3>" not in document
         assert "SC Task P4 MTTR</h3>" not in document
-        assert document.count("Average Monthly Incidents by Architecture Type") == 1
-        assert document.count("Average Monthly SC Tasks by Architecture Type") == 1
-        assert document.count("Average Monthly Incidents by Install Type") == 1
-        assert document.count("Average Monthly SC Tasks by Install Type") == 1
+        assert document.count("Average Monthly Incidents by Architecture Type") == 0
+        assert document.count("Average Monthly SC Tasks by Architecture Type") == 0
+        assert document.count("Average Monthly Incidents by Install Type") == 0
+        assert document.count("Average Monthly SC Tasks by Install Type") == 0
         assert "Incident Resolved Volume by Resolution Duration" in document
         assert "SC Task Closed Volume by Closed Duration" in document
-        assert "Top Parent Business Applications by Active Users" in document
+        assert "Top Parent Business Applications by Active Users" not in document
         assert "Top Applications by Active Users" not in document
-        assert "Tickets per User per Month by Application" in document
+        assert "Tickets per User per Month by Application" not in document
         assert "SC Task Catalog Item Proportion" in document
-        assert "H1 2025 Catalog Item Proportion" in document
+        assert "Dec-25 to May-26 Catalog Item Proportion" in document
         assert "scTaskCatalogSection" in document
         assert "volumetrics_sc_task_catalog_item_proportion" in document
         assert "Average Monthly Tickets by SAP / Non-SAP" in document
         assert "Average Monthly Incidents by SAP / Non-SAP" in document
         assert "Average Monthly SC Tasks by SAP / Non-SAP" in document
-        assert "Average Monthly Tickets by Architecture Type" in document
-        assert "Average Monthly Tickets by Install Type" in document
+        assert "Average Monthly Tickets by Assignment Group SAP / Non-SAP" in document
+        assert "Average Monthly Incidents by Assignment Group SAP / Non-SAP" in document
+        assert "Average Monthly SC Tasks by Assignment Group SAP / Non-SAP" in document
+        assert "Service Type vs Assignment Group SAP / Non-SAP - Overall" in document
+        assert "Service Type vs Assignment Group SAP / Non-SAP - Incidents" in document
+        assert "Service Type vs Assignment Group SAP / Non-SAP - SC Tasks" in document
+        assert "Average Monthly Tickets by Architecture Type" not in document
+        assert "Average Monthly Tickets by Install Type" not in document
         assert "Average Monthly Tickets by Hosting Env" in document
         assert (
             '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
@@ -5586,6 +6109,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function renderCustomerLogo" in document
         assert "function dateTimeText" in document
         assert "Exported: ${dateTimeText(DASHBOARD.metadata.exported_at)}" in document
+        assert "monthlyRows()" not in document
+        assert "filteredVolumetricsRows().filter(incidentBatchFilterMatch)" in document
         assert "max-width: 100vw" in document
         assert "*::before" in document
         assert "*::after" in document
@@ -5610,13 +6135,15 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "barWidth = Math.max(22" in document
         assert "barWidth = Math.max(28" in document
         assert "applicationChart: true" in document
+        assert "applicationChart: true, colorByIndex: true, hideLegend: true" in document
         assert "durationBucketChart: true" in document
+        assert "durationBucketChart: true, hideLegend: true" in document
         assert 'data-commentary-skip="true"' in document
         assert 'data-commentary-key="top_high_volume_applications"' in document
-        assert 'data-commentary-key="tickets_per_user_application"' in document
+        assert 'data-commentary-key="tickets_per_user_application"' not in document
         assert "sap_non_sap_distribution_row" in document
-        assert "architecture_type_distribution_row" in document
-        assert "install_type_distribution_row" in document
+        assert "architecture_type_distribution_row" not in document
+        assert "install_type_distribution_row" not in document
         assert "hosting_env_distribution_row" in document
         assert "incident_duration_buckets_row" in document
         assert "sc_task_duration_buckets_row" in document
@@ -5666,6 +6193,8 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             not in document
         )
         assert "assignment-volumetrics-panel" in document
+        assert "Business Service CI Volumetrics" in document
+        assert "businessServiceCiVolumetricsTable" in document
         assert "assignment-volumetrics-export-actions" in document
         assert "offline-export-table-${generatedOfflineTableExportId}" in document
         assert 'data-copy-table="offline-app-assignment-mapping"' in document
@@ -5860,10 +6389,10 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             "overall_sla_trends",
             "detailed_volume_trends",
             "kpi_trends",
-            "performance_trends",
-            "category_wise_trends",
             "assignment_group_volumetrics",
+            "business_service_ci_volumetrics",
         ]
+        assert "business_service_ci_volumetrics" in payload["volumetrics"]
         assert payload["volumetrics"]["created_patterns"]["rows"]
         assert payload["volumetrics"]["overall_volume_trends"][
             "created_resolved_by_hour"
@@ -5882,8 +6411,20 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             == "2026-05"
         )
         assert (
+            payload["volumetrics"]["detailed_volume_trends"]["ranking_window"][
+                "start_month"
+            ]
+            == "2025-12"
+        )
+        assert (
             payload["volumetrics"]["detailed_volume_trends"]["split_window"]["end_month"]
             == "2026-05"
+        )
+        assert (
+            payload["volumetrics"]["detailed_volume_trends"]["split_window"][
+                "start_month"
+            ]
+            == "2025-12"
         )
         assert payload["volumetrics"]["kpi_trends"]["mttr"]["rows"]
         duration_period_keys = [
@@ -5894,13 +6435,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert payload["volumetrics"]["kpi_trends"]["open_ticket_aging"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["reassignment_hops"]["rows"]
         assert payload["volumetrics"]["kpi_trends"]["problem_management"]["rows"]
-        assert "performance_trends" in payload["volumetrics"]
-        assert payload["volumetrics"]["performance_trends"]["performance_period"]["months"] == 3
-        assert (
-            payload["volumetrics"]["performance_trends"]["performance_period"]["to_month"]
-            == "2026-05"
-        )
-        assert "all_engineers" in payload["volumetrics"]["performance_trends"]
+        assert "performance_trends" not in payload["volumetrics"]
         detailed_row = payload["volumetrics"]["detailed_volume_trends"]["application_rows"][0]
         assert "ticket_number" not in detailed_row
         assert "short_description" not in detailed_row
@@ -5914,7 +6449,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert {
             row["split_type"]
             for row in payload["volumetrics"]["detailed_volume_trends"]["split_rows"]
-        } >= {"architecture_type", "install_type", "hosting_env"}
+        } >= {
+            "architecture_type",
+            "install_type",
+            "hosting_env",
+            "assignment_group_sap_non_sap",
+        }
         kpi_row = payload["volumetrics"]["kpi_trends"]["mttr"]["rows"][0]
         assert "ticket_count" in kpi_row
         assert "ticket_number" not in kpi_row
@@ -6106,7 +6646,7 @@ def test_powerpoint_dashboard_export_returns_valid_pptx_with_commentary() -> Non
         assert "KPI Trends - Incident MTTR" in slide_xml
         assert "KPI Trends - SC Task MTTR" in slide_xml
         assert "Performance Trends" in slide_xml
-        assert "Category-wise Trends" in slide_xml
+        assert "Category-wise Trends" not in slide_xml
         assert "Executive note" in slide_xml
         assert "raw ticket payload should not be exported" not in slide_xml
         assert "raw sc task payload should not be exported" not in slide_xml

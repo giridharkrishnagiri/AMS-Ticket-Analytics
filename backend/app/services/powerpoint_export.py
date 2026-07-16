@@ -937,10 +937,18 @@ def add_overview_slide(
         (
             "In-Scope Tickets",
             fmt_number(tickets.get("total_in_scope_tickets")),
-            "Tickets table only",
+            f"Out-of-scope: {fmt_number(tickets.get('total_out_of_scope_tickets'))}",
         ),
-        ("Incidents", fmt_number(tickets.get("incident_count")), "In-scope Incident volume"),
-        ("SC Tasks", fmt_number(tickets.get("sc_task_count")), "In-scope SC Task volume"),
+        (
+            "In-Scope Incidents",
+            fmt_number(tickets.get("incident_count")),
+            f"Out-of-scope: {fmt_number(tickets.get('out_of_scope_incident_count'))}",
+        ),
+        (
+            "In-Scope SC Tasks",
+            fmt_number(tickets.get("sc_task_count")),
+            f"Out-of-scope: {fmt_number(tickets.get('out_of_scope_sc_task_count'))}",
+        ),
         (
             "Apps Driving 80%",
             fmt_number(tickets.get("applications_80pct_monthly_volume_count")),
@@ -1868,17 +1876,6 @@ def build_powerpoint_export(
         payload,
         "Performance Trends",
         "Performance Trends will be added in a future dashboard prompt.",
-    )
-    add_placeholder_slide(
-        presentation,
-        payload,
-        "Category-wise Trends",
-        payload["volumetrics"]
-        .get("placeholders", {})
-        .get(
-            "category_wise_trends",
-            "Detailed requirements for this section will be added in a future prompt.",
-        ),
     )
 
     output = BytesIO()

@@ -49,6 +49,7 @@ class DashboardFilterFactsRefreshResponse(BaseModel):
 class InScopeAssignmentGroupPreviewRowResponse(BaseModel):
     assignment_group: str
     functional_track: str | None = None
+    is_in_scope: bool = True
     source_row_number: int | None = None
 
 
@@ -79,6 +80,7 @@ class InScopeAssignmentGroupRowResponse(BaseModel):
     assignment_group: str
     assignment_group_key: str
     functional_track: str | None = None
+    is_in_scope: bool
     source_filename: str | None = None
     source_row_number: int | None = None
     is_active: bool
@@ -86,6 +88,39 @@ class InScopeAssignmentGroupRowResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class InScopeAssignmentGroupUpdateRowRequest(BaseModel):
+    id: UUID
+    functional_track: str | None = None
+    is_in_scope: bool
+
+
+class InScopeAssignmentGroupsUpdateRequest(BaseModel):
+    project_id: UUID
+    rows: list[InScopeAssignmentGroupUpdateRowRequest]
+
+
+class InScopeAssignmentGroupChangeResponse(BaseModel):
+    id: UUID
+    assignment_group: str
+    previous_functional_track: str | None = None
+    next_functional_track: str | None = None
+    previous_is_in_scope: bool
+    next_is_in_scope: bool
+    tickets_updated: int
+
+
+class InScopeAssignmentGroupsUpdateResponse(BaseModel):
+    project_id: UUID
+    submitted_count: int
+    changed_count: int
+    unchanged_count: int
+    tickets_updated_count: int
+    inventory_rows_updated_count: int
+    missing_count: int
+    warnings: list[str]
+    changes: list[InScopeAssignmentGroupChangeResponse]
 
 
 class AssignmentGroupMasterPreviewRowResponse(BaseModel):

@@ -7,6 +7,7 @@ import {
   Cell,
   ComposedChart,
   Legend,
+  LabelList,
   Line,
   LineChart,
   Pie,
@@ -184,6 +185,62 @@ function formatPercent(value: number | null | undefined): string {
     return "Not available";
   }
   return `${value.toFixed(1)}%`;
+}
+
+function renderPieLabel(
+  props: {
+    cx?: number | string;
+    cy?: number | string;
+    midAngle?: number | string;
+    name?: string;
+    outerRadius?: number | string;
+    value?: number | string;
+  },
+  total: number,
+) {
+  const value = Number(props.value);
+  const percentage = total > 0 ? (value / total) * 100 : 0;
+  if (!Number.isFinite(value) || percentage < 10) {
+    return null;
+  }
+  const radius = Number(props.outerRadius ?? 0) + 14;
+  const angle = -Number(props.midAngle ?? 0) * (Math.PI / 180);
+  const cx = Number(props.cx ?? 0);
+  const x = cx + radius * Math.cos(angle);
+  const y = Number(props.cy ?? 0) + radius * Math.sin(angle);
+  return (
+    <text
+      className="pie-slice-label pie-slice-label-outside"
+      dominantBaseline="central"
+      textAnchor={x > cx ? "start" : "end"}
+      x={x}
+      y={y}
+    >
+      {props.name}
+    </text>
+  );
+}
+
+function renderPiePercentage(
+  props: { x?: number | string; y?: number | string; value?: unknown },
+  total: number,
+) {
+  const value = Number(props.value);
+  const percentage = total > 0 ? (value / total) * 100 : 0;
+  if (!Number.isFinite(value) || percentage < 10) {
+    return <g />;
+  }
+  return (
+    <text
+      className="pie-slice-label pie-slice-label-inside"
+      dominantBaseline="central"
+      textAnchor="middle"
+      x={Number(props.x ?? 0)}
+      y={Number(props.y ?? 0)}
+    >
+      {formatPercent(percentage)}
+    </text>
+  );
 }
 
 function uniqueNonBlank(values: string[]): string[] {
@@ -914,11 +971,10 @@ function Dashboard() {
 
   const overviewInventory = overview.data?.application_inventory;
   const overviewTickets = overview.data?.tickets;
-  const overviewCompletionDateRange = formatDisplayDateRange(
-    overviewTickets?.completion_date_min,
-    overviewTickets?.completion_date_max
-  );
+  const overviewCompletionDateRange = "01-Jan-2025 to 31-May-2026";
   const overviewTotalTickets = overviewTickets?.total_in_scope_tickets ?? 0;
+  const overviewOutOfScopeTickets = overviewTickets?.total_out_of_scope_tickets ?? 0;
+  const overviewScopedTickets = overviewTickets?.total_tickets ?? overviewTotalTickets;
   const incidentTicketShare =
     overviewTotalTickets > 0
       ? `${(((overviewTickets?.incident_count ?? 0) / overviewTotalTickets) * 100).toFixed(
@@ -1055,19 +1111,29 @@ function Dashboard() {
             <div className={`overview-slab-card ${summaryTileToneClass(4, 4)}`}>
               <p className="label">In-Scope Tickets</p>
               <strong>{formatNumber(overviewTickets?.total_in_scope_tickets)}</strong>
+              <div className="overview-ticket-details">
+                <span>Out-of-scope: {formatNumber(overviewOutOfScopeTickets)}</span>
+                <span>Total scoped: {formatNumber(overviewScopedTickets)}</span>
+              </div>
             </div>
             <div className={`overview-slab-card ${summaryTileToneClass(5, 4)}`}>
-              <p className="label">Incidents</p>
+              <p className="label">In-Scope Incidents</p>
               <strong>{formatNumber(overviewTickets?.incident_count)}</strong>
               <div className="overview-ticket-details">
                 <span>{incidentTicketShare}</span>
+                <span>
+                  Out-of-scope: {formatNumber(overviewTickets?.out_of_scope_incident_count)}
+                </span>
               </div>
             </div>
             <div className={`overview-slab-card ${summaryTileToneClass(6, 4)}`}>
-              <p className="label">SC Tasks</p>
+              <p className="label">In-Scope SC Tasks</p>
               <strong>{formatNumber(overviewTickets?.sc_task_count)}</strong>
               <div className="overview-ticket-details">
                 <span>{scTaskTicketShare}</span>
+                <span>
+                  Out-of-scope: {formatNumber(overviewTickets?.out_of_scope_sc_task_count)}
+                </span>
               </div>
             </div>
             <div className={summaryTileToneClass(7, 4)}>
@@ -1740,10 +1806,26 @@ function Dashboard() {
                   data={technicalFunctionalItems}
                   dataKey="value"
                   innerRadius={70}
+                  label={(props) =>
+                    renderPieLabel(
+                      props,
+                      sumValues(technicalFunctionalItems, (item) => item.value),
+                    )
+                  }
+                  labelLine={false}
                   nameKey="name"
                   outerRadius={105}
                   paddingAngle={2}
                 >
+                  <LabelList
+                    content={(props) =>
+                      renderPiePercentage(
+                        props,
+                        sumValues(technicalFunctionalItems, (item) => item.value),
+                      )
+                    }
+                    dataKey="value"
+                  />
                   {technicalFunctionalItems.map((item) => (
                     <Cell fill={item.color} key={item.name} />
                   ))}
