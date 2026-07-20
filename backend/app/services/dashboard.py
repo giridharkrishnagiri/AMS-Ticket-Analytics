@@ -4129,6 +4129,16 @@ def volumetrics_cancelled_expression(source: Any) -> Any:
     return volumetrics_cancelled_state_expression(source.c)
 
 
+def volumetrics_open_backlog_condition(source: Any, period_end: datetime) -> Any:
+    period_end = normalize_dashboard_datetime(period_end)
+    return and_(
+        source.c.created_at.is_not(None),
+        source.c.created_at <= period_end,
+        volumetrics_resolved_closed_state_expression(source.c),
+        or_(source.c.completion_at.is_(None), source.c.completion_at > period_end),
+    )
+
+
 def scalar_count(db: Session, source: Any, conditions: list[Any]) -> int:
     statement = select(func.count(source.c.id)).select_from(source).where(*conditions)
     return int(db.scalar(statement) or 0)
@@ -4282,17 +4292,6 @@ def volumetrics_period_metrics(
         if include_cancelled
         else {}
     )
-    exit_rows = (
-        volumetrics_aggregate_by_period(
-            db,
-            request,
-            source,
-            source.c.exit_at,
-            [func.count(source.c.id).label("exit_count")],
-        )
-        if include_backlog
-        else {}
-    )
     incident_request = replace_request_value(request, "ticket_type", "incident")
     response_breached_column, resolution_breached_column = volumetrics_agreement_breach_columns(
         source,
@@ -4328,29 +4327,6 @@ def volumetrics_period_metrics(
         else {}
     )
 
-    first_period_start = periods[0].start if periods else None
-    running_created = 0
-    running_exits = 0
-    if include_backlog and first_period_start is not None:
-        running_created = scalar_count(
-            db,
-            source,
-            [
-                *base_conditions,
-                source.c.created_at.is_not(None),
-                source.c.created_at < first_period_start,
-            ],
-        )
-        running_exits = scalar_count(
-            db,
-            source,
-            [
-                *base_conditions,
-                source.c.exit_at.is_not(None),
-                source.c.exit_at < first_period_start,
-            ],
-        )
-
     rows: list[dict[str, Any]] = []
     for period in periods:
         period_key = volumetrics_period_lookup_key(
@@ -4360,13 +4336,20 @@ def volumetrics_period_metrics(
         created_values = created_rows.get(period_key, {})
         completed_values = completed_rows.get(period_key, {})
         cancelled_values = cancelled_rows.get(period_key, {})
-        exit_values = exit_rows.get(period_key, {})
         sla_values = sla_rows.get(period_key, {})
         created_count = int_count(created_values.get("created_count"))
-        exit_count = int_count(exit_values.get("exit_count"))
-        if include_backlog:
-            running_created += created_count
-            running_exits += exit_count
+        backlog_open_count = (
+            scalar_count(
+                db,
+                source,
+                [
+                    *base_conditions,
+                    volumetrics_open_backlog_condition(source, period.end),
+                ],
+            )
+            if include_backlog
+            else 0
+        )
 
         rows.append(
             {
@@ -4390,9 +4373,7 @@ def volumetrics_period_metrics(
                     completed_values.get("resolved_closed_sc_task_count"),
                 ),
                 "cancelled_count": int_count(cancelled_values.get("cancelled_count")),
-                "backlog_open_count": (
-                    max(running_created - running_exits, 0) if include_backlog else 0
-                ),
+                "backlog_open_count": backlog_open_count,
                 "response_applicable_count": int_count(
                     sla_values.get("response_applicable_count"),
                 ),
@@ -6474,10 +6455,7 @@ def open_ticket_aging_rows(db: Session, request: Any) -> list[dict[str, Any]]:
 
     for period in periods:
         period_end = normalize_dashboard_datetime(period.end)
-        period_start = normalize_dashboard_datetime(period.start)
         age_seconds = func.extract("epoch", literal(period_end) - source.c.created_at)
-        created_period = volumetrics_period_start_expression(source.c.created_at, "monthly")
-        exit_period = volumetrics_period_start_expression(source.c.exit_at, "monthly")
         statement = (
             select(
                 func.count(source.c.id)
@@ -6506,9 +6484,7 @@ def open_ticket_aging_rows(db: Session, request: Any) -> list[dict[str, Any]]:
                     monthly_request,
                     include_date_bounds=False,
                 ),
-                source.c.created_at.is_not(None),
-                created_period <= period_start,
-                or_(source.c.exit_at.is_(None), exit_period > period_start),
+                volumetrics_open_backlog_condition(source, period_end),
             )
         )
         values = db.execute(statement).mappings().one()
@@ -6561,10 +6537,10 @@ def volumetrics_kpi_open_ticket_aging_trend(db: Session, request: Any) -> dict[s
         },
         "data_notes": [
             "Open Ticket Aging Trend uses the same normalized volumetrics source and "
-            "period-end exit logic as Backlog(Open).",
+            "period-end open ticket definition as Backlog(Open).",
             "Age is calculated as period end date minus created date.",
             "Cancelled/canceled tickets and SC Tasks in Closed Incomplete state are removed "
-            "from the aging trend when their Backlog(Open) exit period has passed.",
+            "from the open backlog and aging populations.",
             "Overall includes Incidents and SC Tasks only.",
         ],
         "warnings": [],

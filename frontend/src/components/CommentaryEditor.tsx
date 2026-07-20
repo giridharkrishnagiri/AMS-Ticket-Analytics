@@ -18,18 +18,39 @@ type ActiveCommentaryEditor = {
 
 let activeCommentaryEditor: ActiveCommentaryEditor | null = null;
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function optionalContextValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed || null;
+}
+
+function filterContextValue(value: string | null | undefined): string {
+  return value?.trim() || "all";
+}
+
 function normalizedContext(input: DashboardCommentaryContext): Required<DashboardCommentaryContext> {
   return {
-    project_id: input.project_id,
-    dashboard_area: input.dashboard_area,
-    tab_name: input.tab_name,
-    sub_tab_name: input.sub_tab_name ?? null,
-    section_key: input.section_key,
-    chart_key: input.chart_key ?? null,
-    scope_filter: input.scope_filter ?? "all",
-    ticket_type_filter: input.ticket_type_filter ?? "all",
-    functional_track_ams_owner: input.functional_track_ams_owner ?? "all",
+    project_id: input.project_id.trim(),
+    dashboard_area: input.dashboard_area.trim(),
+    tab_name: input.tab_name.trim(),
+    sub_tab_name: optionalContextValue(input.sub_tab_name),
+    section_key: input.section_key.trim(),
+    chart_key: optionalContextValue(input.chart_key),
+    scope_filter: filterContextValue(input.scope_filter),
+    ticket_type_filter: filterContextValue(input.ticket_type_filter),
+    functional_track_ams_owner: filterContextValue(input.functional_track_ams_owner),
   };
+}
+
+function commentaryContextIsReady(context: Required<DashboardCommentaryContext>): boolean {
+  return (
+    UUID_PATTERN.test(context.project_id) &&
+    context.dashboard_area.length > 0 &&
+    context.tab_name.length > 0 &&
+    context.section_key.length > 0
+  );
 }
 
 function contextSignature(context: Required<DashboardCommentaryContext>): string {
@@ -87,6 +108,7 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
     ]
   );
   const signature = useMemo(() => contextSignature(context), [context]);
+  const contextReady = useMemo(() => commentaryContextIsReady(context), [context]);
   const [isEditing, setIsEditing] = useState(false);
   const [commentary, setCommentary] = useState<DashboardCommentaryRecord | null>(null);
   const [draftHtml, setDraftHtml] = useState("");
@@ -96,6 +118,23 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
 
   useEffect(() => {
     let cancelled = false;
+    if (!contextReady) {
+      setCommentary(null);
+      setDraftHtml("");
+      setStatus("idle");
+      setMessage(null);
+      setIsEditing(false);
+      if (editorRef.current) {
+        editorRef.current.innerHTML = "";
+      }
+      if (activeCommentaryEditor?.signature === signature) {
+        activeCommentaryEditor = null;
+      }
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setStatus("loading");
     setMessage(null);
     void getDashboardCommentary(context)
@@ -126,7 +165,7 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
         activeCommentaryEditor = null;
       }
     };
-  }, [context, signature]);
+  }, [context, contextReady, signature]);
 
   const executeCommand = useCallback((command: string) => {
     editorRef.current?.focus();
@@ -148,6 +187,10 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
   }, [commentary, signature]);
 
   const saveDraft = useCallback(async () => {
+    if (!contextReady) {
+      return false;
+    }
+
     const html = editorRef.current?.innerHTML ?? draftHtml;
     const text = editorRef.current?.innerText ?? "";
     setStatus("saving");
@@ -176,7 +219,7 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
       setStatus("error");
       return false;
     }
-  }, [context, draftHtml, signature]);
+  }, [context, contextReady, draftHtml, signature]);
 
   const clearCommentary = useCallback(async () => {
     setDraftHtml("");
@@ -187,7 +230,7 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
   }, [saveDraft]);
 
   const beginEditing = useCallback(async () => {
-    if (props.disabled || status === "loading" || status === "saving") {
+    if (!contextReady || props.disabled || status === "loading" || status === "saving") {
       return;
     }
     if (activeCommentaryEditor && activeCommentaryEditor.signature !== signature) {
@@ -205,7 +248,7 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
     setIsEditing(true);
     setMessage(null);
     window.setTimeout(() => editorRef.current?.focus(), 0);
-  }, [props.disabled, saveDraft, signature, status]);
+  }, [contextReady, props.disabled, saveDraft, signature, status]);
 
   const handleEditorKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -257,7 +300,7 @@ export default function CommentaryEditor(props: CommentaryEditorProps) {
             aria-label="Edit commentary"
             className="commentary-icon-button"
             type="button"
-            disabled={props.disabled || status === "loading"}
+            disabled={!contextReady || props.disabled || status === "loading"}
             onClick={() => void beginEditing()}
           >
             ✎

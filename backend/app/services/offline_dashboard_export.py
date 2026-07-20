@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Float, Integer, case, cast, func, literal, or_, select, union_all
+from sqlalchemy import Float, Integer, case, cast, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -58,6 +58,7 @@ from app.services.dashboard import (
     volumetrics_cancelled_expression,
     volumetrics_data_range,
     volumetrics_display_expression,
+    volumetrics_open_backlog_condition,
     volumetrics_performance_trends,
     volumetrics_period_start_expression,
     volumetrics_resolved_closed_state_expression,
@@ -526,6 +527,35 @@ def offline_initial_counts(
     }
 
 
+def offline_backlog_open_rows(
+    db: Session,
+    request: Any,
+    source: Any,
+    periods: list[Any],
+) -> dict[tuple[tuple[str, str, str, str, str, str, str, str], str], int]:
+    dimensions = volumetrics_dimension_expressions(source)
+    results: dict[tuple[tuple[str, str, str, str, str, str, str, str], str], int] = {}
+    for period in periods:
+        period_end = normalize_dashboard_datetime(period.end)
+        statement = (
+            select(
+                *[expression.label(name) for name, expression in dimensions.items()],
+                func.count(source.c.id).label("backlog_open"),
+            )
+            .select_from(source)
+            .where(
+                *volumetrics_base_conditions(source, request, include_date_bounds=False),
+                volumetrics_open_backlog_condition(source, period_end),
+            )
+            .group_by(*dimensions.values())
+        )
+        for row in db.execute(statement).mappings().all():
+            results[(dimension_key(row), month_key(period.start))] = int(
+                row["backlog_open"] or 0,
+            )
+    return results
+
+
 def offline_sla_rows(
     db: Session,
     request: Any,
@@ -871,11 +901,9 @@ def build_monthly_volumetrics_rows(
         "cancelled_count",
         [cancelled_condition],
     )
-    exit_rows = offline_period_rows(db, request, source, source.c.exit_at, "exit_count")
+    backlog_open_rows = offline_backlog_open_rows(db, request, source, periods)
     sla_rows = offline_sla_rows(db, request, source)
     reassignment_hops_rows = offline_reassignment_hops_rows(db, request, source)
-    initial_created = offline_initial_counts(db, request, source, source.c.created_at)
-    initial_exits = offline_initial_counts(db, request, source, source.c.exit_at)
 
     dimension_keys = distinct_dimension_keys(db, request, source)
     for row_key, _period_key in [
@@ -883,7 +911,7 @@ def build_monthly_volumetrics_rows(
         *incident_batch_created_rows.keys(),
         *completed_rows.keys(),
         *cancelled_rows.keys(),
-        *exit_rows.keys(),
+        *backlog_open_rows.keys(),
         *sla_rows.keys(),
         *reassignment_hops_rows.keys(),
     ]:
@@ -891,13 +919,9 @@ def build_monthly_volumetrics_rows(
 
     rows: list[dict[str, Any]] = []
     for key in sorted(dimension_keys):
-        running_created = initial_created.get(key, 0)
-        running_exits = initial_exits.get(key, 0)
         for period in periods:
             period_key = month_key(period.start)
             created_count = created_rows.get((key, period_key), 0)
-            running_created += created_count
-            running_exits += exit_rows.get((key, period_key), 0)
             sla_values = sla_rows.get((key, period_key), {})
             reassignment_values = reassignment_hops_rows.get((key, period_key), {})
             rows.append(
@@ -920,7 +944,7 @@ def build_monthly_volumetrics_rows(
                     ),
                     "resolved_closed_count": completed_rows.get((key, period_key), 0),
                     "canceled_closed_incomplete_count": cancelled_rows.get((key, period_key), 0),
-                    "backlog_open": max(running_created - running_exits, 0),
+                    "backlog_open": backlog_open_rows.get((key, period_key), 0),
                     "response_sla_met_count": sla_values.get("response_sla_met_count", 0),
                     "response_sla_total_count": sla_values.get("response_sla_total_count", 0),
                     "resolution_sla_met_count": sla_values.get("resolution_sla_met_count", 0),
@@ -1771,10 +1795,7 @@ def build_open_ticket_aging_payload(
         effective_request = SimpleNamespace(**{**request.__dict__, "ticket_type": ticket_type})
         for period in periods:
             period_end = normalize_dashboard_datetime(period.end)
-            period_start = normalize_dashboard_datetime(period.start)
             age_seconds = func.extract("epoch", literal(period_end) - source.c.created_at)
-            created_period = volumetrics_period_start_expression(source.c.created_at, "monthly")
-            exit_period = volumetrics_period_start_expression(source.c.exit_at, "monthly")
             statement = (
                 select(
                     *[expression.label(name) for name, expression in dimensions.items()],
@@ -1798,9 +1819,7 @@ def build_open_ticket_aging_payload(
                         effective_request,
                         include_date_bounds=False,
                     ),
-                    source.c.created_at.is_not(None),
-                    created_period <= period_start,
-                    or_(source.c.exit_at.is_(None), exit_period > period_start),
+                    volumetrics_open_backlog_condition(source, period_end),
                 )
                 .group_by(*dimensions.values())
             )
@@ -1831,10 +1850,10 @@ def build_open_ticket_aging_payload(
         "rows": rows,
         "data_notes": [
             "Open Ticket Aging Trend uses the same normalized volumetrics source and "
-            "period-end exit logic as Backlog(Open).",
+            "period-end open ticket definition as Backlog(Open).",
             "Age is calculated as period end date minus created date.",
             "Cancelled/canceled tickets and SC Tasks in Closed Incomplete state are removed "
-            "from the aging trend when their Backlog(Open) exit period has passed.",
+            "from the open backlog and aging populations.",
             "Overall includes Incidents and SC Tasks only.",
         ],
     }
@@ -5610,7 +5629,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function openTicketAgingGroup() {
       const notes = DASHBOARD.volumetrics.kpi_trends?.open_ticket_aging?.data_notes || [];
-      return `<section class="panel full" data-commentary-key="open_ticket_aging_trend" data-commentary-skip="true"><p class="label">KPI Trends</p><h3>Open Ticket Aging Trend</h3><p class="muted">Open tickets at period end grouped by aging bucket using the Backlog(Open) exit logic.</p>${openTicketAgingCategory("Incidents", "incident", "open_ticket_aging_incidents")}${openTicketAgingCategory("SC Tasks", "sc_task", "open_ticket_aging_sc_tasks")}${openTicketAgingCategory("Overall", "all", "open_ticket_aging_overall")}${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}</section>`;
+      return `<section class="panel full" data-commentary-key="open_ticket_aging_trend" data-commentary-skip="true"><p class="label">KPI Trends</p><h3>Open Ticket Aging Trend</h3><p class="muted">Open tickets at period end grouped by aging bucket using the Backlog(Open) open ticket definition.</p>${openTicketAgingCategory("Incidents", "incident", "open_ticket_aging_incidents")}${openTicketAgingCategory("SC Tasks", "sc_task", "open_ticket_aging_sc_tasks")}${openTicketAgingCategory("Overall", "all", "open_ticket_aging_overall")}${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}</section>`;
     }
     function reassignmentHopsPoints() {
       const rows = (DASHBOARD.volumetrics.kpi_trends?.reassignment_hops?.rows || []).filter(offlineFilterMatch);
