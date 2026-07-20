@@ -20,6 +20,7 @@ from app.models import (
     AssignmentGroupMasterReference,
     Client,
     DashboardCommentary,
+    DashboardFilterCatalog,
     DashboardFilterFact,
     IncidentSlaRow,
     Project,
@@ -1818,6 +1819,110 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
         )
         assert "normalized_payload" not in combined_payload_text
         assert "cmdb_payload" not in combined_payload_text
+    finally:
+        cleanup_client(db, client_id)
+
+
+def test_dashboard_filter_catalog_auto_refreshes_when_missing() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        add_inventory_item(
+            db,
+            project_id,
+            "Auto Cache App",
+            supported_by_vendor="Vendor A",
+            functional_track="Finance",
+            ams_owner="Owner A",
+            assignment_group="IT-SAP-A",
+            application_owner="Application Owner A",
+            parent_application_name="Parent A",
+            hosting_env="Production",
+            service_entitlement="Gold",
+            lifecycle_stage_status="In Use",
+            cmdb_payload={
+                "Application type": "Business",
+                "Architecture type": "Cloud",
+                "Business criticality": "Critical",
+                "Install Status": "Installed",
+                "Install type": "Production",
+                "Life Cycle Stage": "Operational",
+            },
+        )
+        ticket = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-AUTO-CACHE",
+            "INCIDENT",
+            dt("2026-01-05T00:00:00"),
+            state="Resolved",
+            resolved_at=dt("2026-01-08T00:00:00"),
+            assignment_group="IT-SAP-A",
+            business_service_ci_name="Auto Cache App",
+            architecture_type="Cloud",
+            business_critical="Critical",
+            install_type="Production",
+            hosting_env="Production",
+        )
+        ticket.functional_track = "Finance"
+        ticket.ams_owner = "Owner A"
+        ticket.support_lead = "Lead A"
+        ticket.parent_application_name = "Parent A"
+        ticket.application_owner = "Application Owner A"
+        ticket.supported_by_vendor = "Vendor A"
+        db.commit()
+
+        with TestClient(app) as client:
+            applications_catalog_response = client.get(
+                "/api/dashboard/filter-catalog",
+                params={
+                    "customer_id": str(client_id),
+                    "project_id": str(project_id),
+                    "dashboard_area": "applications",
+                },
+            )
+            volumetrics_counts_response = client.post(
+                "/api/dashboard/filter-counts",
+                json={
+                    "customer_id": str(client_id),
+                    "project_id": str(project_id),
+                    "dashboard_area": "volumetrics",
+                    "selected_filters": {},
+                    "scope": "in_scope",
+                    "ticket_type": "all",
+                    "date_range": {
+                        "from_date": "2026-01-01T00:00:00+00:00",
+                        "to_date": "2026-01-31T23:59:59+00:00",
+                    },
+                },
+            )
+
+        assert applications_catalog_response.status_code == 200
+        applications_catalog = applications_catalog_response.json()
+        assert applications_catalog["status"] == "ready"
+        assert applications_catalog["warnings"] == []
+        assert applications_catalog["filters"]["supported_by_vendor"][0] == {
+            "value": "Vendor A",
+            "label": "Vendor A",
+            "baseline_count": 1,
+            "sort_order": 0,
+        }
+
+        assert volumetrics_counts_response.status_code == 200
+        volumetrics_counts = volumetrics_counts_response.json()
+        assert volumetrics_counts["warnings"] == []
+        assert volumetrics_counts["counts"]["supported_by_vendor"] == {"Vendor A": 1}
+
+        catalog_areas = {
+            row.dashboard_area
+            for row in db.scalars(
+                select(DashboardFilterCatalog).where(
+                    DashboardFilterCatalog.project_id == project_id,
+                ),
+            )
+        }
+        assert catalog_areas == {"applications", "volumetrics"}
     finally:
         cleanup_client(db, client_id)
 

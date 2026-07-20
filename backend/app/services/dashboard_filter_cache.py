@@ -320,6 +320,37 @@ def dashboard_area_fact_count(db: Session, project_id: UUID, dashboard_area: str
     )
 
 
+def dashboard_area_catalog_count(db: Session, project_id: UUID, dashboard_area: str) -> int:
+    return int(
+        db.scalar(
+            select(func.count(DashboardFilterCatalog.id)).where(
+                DashboardFilterCatalog.project_id == project_id,
+                DashboardFilterCatalog.dashboard_area == dashboard_area,
+            ),
+        )
+        or 0,
+    )
+
+
+def ensure_filter_cache_for_read(
+    db: Session,
+    customer_id: UUID,
+    project_id: UUID,
+    dashboard_area: str,
+) -> dict[str, Any]:
+    project_customer_id = project_client_id(db, project_id)
+    if project_customer_id != customer_id:
+        raise ValueError("customer_id does not match the selected project.")
+
+    status = filter_cache_status_items(db, customer_id, project_id, dashboard_area)[0]
+    catalog_count = dashboard_area_catalog_count(db, project_id, dashboard_area)
+    if status["status"] == "missing" or catalog_count == 0:
+        refresh_filter_cache(db, project_id, dashboard_area)
+        db.commit()
+        status = filter_cache_status_items(db, customer_id, project_id, dashboard_area)[0]
+    return status
+
+
 def payload_text_sql(alias: str, *keys: str) -> str:
     return "COALESCE(" + ", ".join(f"{alias}.cmdb_payload ->> '{key}'" for key in keys) + ")"
 
@@ -660,8 +691,7 @@ def filter_catalog(
     area = validate_dashboard_area(dashboard_area)
     if area == "all":
         raise ValueError("dashboard_area must be applications or volumetrics for catalog reads.")
-    status_items = filter_cache_status_items(db, customer_id, project_id, area)
-    status = status_items[0] if status_items else {"status": "missing", "data_version": None}
+    status = ensure_filter_cache_for_read(db, customer_id, project_id, area)
     rows = db.scalars(
         select(DashboardFilterCatalog)
         .where(
@@ -719,7 +749,7 @@ def dynamic_filter_counts(
     if area == "all":
         raise ValueError("dashboard_area must be applications or volumetrics for count reads.")
     started = perf_counter()
-    status = filter_cache_status_items(db, customer_id, project_id, area)[0]
+    status = ensure_filter_cache_for_read(db, customer_id, project_id, area)
     counts: dict[str, dict[str, int]] = {}
     for filter_key in filter_keys_for_area(area, db):
         rows = count_rows_for_filter(
