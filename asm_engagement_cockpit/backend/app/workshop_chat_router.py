@@ -505,7 +505,7 @@ def local_hash_embeddings(texts: list[str]) -> list[list[float]]:
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    embeddings, _ = embed_texts_for_model(texts, get_settings().openai_embedding_model, allow_fallback=True)
+    embeddings, _ = embed_texts_for_model(texts, get_settings().required_openai_embedding_model, allow_fallback=True)
     return embeddings
 
 
@@ -559,7 +559,7 @@ def rebuild_workshop_chat_index(db: Session) -> WorkshopChatIndexRebuildResponse
     documents = build_index_documents(db)
     embeddings, embedding_model = embed_texts_for_model(
         [embedding_input(document) for document in documents],
-        settings.openai_embedding_model,
+        settings.required_openai_embedding_model,
         allow_fallback=True,
     )
 
@@ -624,7 +624,7 @@ def index_status(db: Session, rebuilt: bool | None = None, message: str | None =
     )
     link_count = db.scalar(select(func.count()).select_from(WorkshopRagLink)) or 0
     last_indexed_at = db.scalar(select(func.max(WorkshopRagDocument.indexed_at)))
-    active_embedding_model = indexed_embedding_model(db) or settings.openai_embedding_model
+    active_embedding_model = indexed_embedding_model(db) or settings.required_openai_embedding_model
     payload = {
         "document_count": document_count,
         "transcript_chunk_count": transcript_count,
@@ -681,7 +681,7 @@ def scope_boost(document: WorkshopRagDocument, scope_type: str, scope_id: uuid.U
 
 def retrieve_documents(db: Session, question: str, request: WorkshopChatAskRequest) -> tuple[list[WorkshopRagDocument], list[WorkshopRagDocument], dict[uuid.UUID, float]]:
     settings = get_settings()
-    active_embedding_model = indexed_embedding_model(db) or settings.openai_embedding_model
+    active_embedding_model = indexed_embedding_model(db) or settings.required_openai_embedding_model
     docs = list(
         db.scalars(
             select(WorkshopRagDocument).where(
@@ -692,7 +692,7 @@ def retrieve_documents(db: Session, question: str, request: WorkshopChatAskReque
     )
     if not docs:
         rebuild_workshop_chat_index(db)
-        active_embedding_model = indexed_embedding_model(db) or settings.openai_embedding_model
+        active_embedding_model = indexed_embedding_model(db) or settings.required_openai_embedding_model
         docs = list(
             db.scalars(
                 select(WorkshopRagDocument).where(
@@ -843,8 +843,8 @@ def select_chat_model(request: WorkshopChatAskRequest, sources: list[WorkshopCha
     has_entity = any(source.document_type != "transcript_chunk" for source in sources)
     scoped_entity = request.scope_type in {"workstream", "deliverable", "task", "subtask"}
     if request.force_deep_context or (has_transcript and has_entity and scoped_entity):
-        return settings.openai_deep_chat_model
-    return settings.openai_chat_model
+        return settings.required_openai_deep_chat_model
+    return settings.required_openai_chat_model
 
 
 def quota_or_availability_error(exc: Exception) -> bool:
@@ -919,7 +919,7 @@ def run_chat_llm(
 
     client = get_openai_client()
     settings = get_settings()
-    fallback_model = settings.openai_model
+    fallback_model = settings.required_openai_model
     last_error: Exception | None = None
     response = None
     model_used = model

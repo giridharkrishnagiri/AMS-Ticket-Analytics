@@ -32,10 +32,10 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     openai_tracing: bool = True
-    openai_model: str = "gpt-4.1-mini"
-    openai_chat_model: str = "gpt-5.6-luna"
-    openai_deep_chat_model: str = "gpt-5.6-terra"
-    openai_embedding_model: str = "text-embedding-3-small"
+    openai_model: str = ""
+    openai_chat_model: str = ""
+    openai_deep_chat_model: str = ""
+    openai_embedding_model: str = ""
 
     api_auth_enabled: bool = False
     api_auth_key: str | None = None
@@ -67,6 +67,28 @@ class Settings(BaseSettings):
     @property
     def is_local(self) -> bool:
         return self.app_env.strip().lower() in {"local", "dev", "development"}
+
+    def required_env_value(self, value: str | None, env_name: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            raise RuntimeError(f"{env_name} is not configured in backend/.env.")
+        return normalized
+
+    @property
+    def required_openai_model(self) -> str:
+        return self.required_env_value(self.openai_model, "OPENAI_MODEL")
+
+    @property
+    def required_openai_chat_model(self) -> str:
+        return self.required_env_value(self.openai_chat_model, "OPENAI_CHAT_MODEL")
+
+    @property
+    def required_openai_deep_chat_model(self) -> str:
+        return self.required_env_value(self.openai_deep_chat_model, "OPENAI_DEEP_CHAT_MODEL")
+
+    @property
+    def required_openai_embedding_model(self) -> str:
+        return self.required_env_value(self.openai_embedding_model, "OPENAI_EMBEDDING_MODEL")
 
     @property
     def auth_is_ready(self) -> bool:

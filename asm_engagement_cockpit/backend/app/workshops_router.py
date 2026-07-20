@@ -366,7 +366,7 @@ def run_workshop_llm(system_prompt: str, user_prompt: str) -> str:
         agent = Agent(
             name="ASM Workshop Transcript Analyst",
             instructions=system_prompt,
-            model=settings.openai_model,
+            model=settings.required_openai_model,
         )
 
         trace_context = (

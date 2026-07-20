@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.models import Deliverable, Subtask, Task, Workstream
 from app.models.mvp10_timesheets import TimesheetEntry, TimesheetSummary
@@ -29,9 +30,11 @@ router = APIRouter(prefix="/api", tags=["MVP 10 Timesheets"])
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(BACKEND_ROOT / ".env", override=False)
 
-LLM_MODEL = os.getenv("OPENAI_MODEL", os.getenv("LLM_MODEL", "gpt-4.1-mini"))
+settings = get_settings()
 
-OPENAI_TRACING_ENABLED = os.getenv("OPENAI_TRACING", "true").strip().lower() in {
+LLM_MODEL = os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL") or settings.required_openai_model
+
+OPENAI_TRACING_ENABLED = str(settings.openai_tracing).strip().lower() in {
     "1",
     "true",
     "yes",

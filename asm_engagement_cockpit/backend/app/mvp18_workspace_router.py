@@ -630,7 +630,7 @@ def _run_llm(prompt: str, fallback: str, workflow_name: str) -> str:
                 "Return clear, practical, executive-ready consulting text. "
                 "Do not invent facts. If data is missing, identify data gaps and questions to ask."
             ),
-            model=getattr(settings, "openai_model", "gpt-4.1-mini"),
+            model=settings.required_openai_model,
         )
 
         with trace(workflow_name=workflow_name):
