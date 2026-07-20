@@ -12,7 +12,7 @@ from typing import Annotated, Any
 from xml.etree import ElementTree
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
@@ -282,16 +282,30 @@ def get_action_or_404(db: Session, action_id: uuid.UUID) -> WorkshopAction:
     return item
 
 
-def action_count(db: Session, workshop_id: uuid.UUID) -> int:
-    return int(
-        db.scalar(
-            select(func.count()).select_from(WorkshopAction).where(WorkshopAction.workshop_id == workshop_id)
+def workshop_action_counts(db: Session) -> dict[uuid.UUID, tuple[int, int, int]]:
+    closed_count = func.sum(
+        case(
+            (func.lower(WorkshopAction.status) == "closed", 1),
+            else_=0,
         )
-        or 0
     )
+    rows = db.execute(
+        select(
+            WorkshopAction.workshop_id,
+            func.count(WorkshopAction.id),
+            closed_count,
+        ).group_by(WorkshopAction.workshop_id)
+    ).all()
+    counts: dict[uuid.UUID, tuple[int, int, int]] = {}
+    for workshop_id, total_count, closed_total in rows:
+        total = int(total_count or 0)
+        closed = int(closed_total or 0)
+        counts[workshop_id] = (total, max(0, total - closed), closed)
+    return counts
 
 
-def workshop_list_item(db: Session, workshop: Workshop) -> WorkshopListItem:
+def workshop_list_item(workshop: Workshop, action_counts: dict[uuid.UUID, tuple[int, int, int]]) -> WorkshopListItem:
+    total_actions, open_actions, closed_actions = action_counts.get(workshop.id, (0, 0, 0))
     return WorkshopListItem(
         id=workshop.id,
         workshop_date=workshop.workshop_date,
@@ -301,7 +315,9 @@ def workshop_list_item(db: Session, workshop: Workshop) -> WorkshopListItem:
         transcript_filename=workshop.transcript_filename,
         recording_path=workshop.recording_path,
         last_analyzed_at=workshop.last_analyzed_at,
-        action_count=action_count(db, workshop.id),
+        action_count=total_actions,
+        open_action_count=open_actions,
+        closed_action_count=closed_actions,
     )
 
 
@@ -431,7 +447,8 @@ def list_workshops(
     _: Annotated[dict[str, Any], Depends(require_authenticated_request)],
 ) -> list[WorkshopListItem]:
     rows = list(db.scalars(select(Workshop).order_by(Workshop.workshop_date.desc(), Workshop.created_at.desc())).all())
-    return [workshop_list_item(db, item) for item in rows]
+    action_counts = workshop_action_counts(db)
+    return [workshop_list_item(item, action_counts) for item in rows]
 
 
 @router.post("/workshops", response_model=WorkshopRead)

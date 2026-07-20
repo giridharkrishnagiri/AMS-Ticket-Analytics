@@ -830,6 +830,67 @@ function formatHours(value: string | number | null | undefined): string {
   return `${value} hr${Number(value) === 1 ? "" : "s"}`;
 }
 
+function workshopTrackLabel(track: string | null | undefined): string {
+  return track?.trim() || "Unassigned Track";
+}
+
+function compareWorkshopDates(a: WorkshopListItem, b: WorkshopListItem): number {
+  const dateCompare = a.workshop_date.localeCompare(b.workshop_date);
+  if (dateCompare !== 0) return dateCompare;
+  return a.title.localeCompare(b.title);
+}
+
+function groupWorkshopsByTrack(items: WorkshopListItem[]) {
+  const groups = new Map<string, WorkshopListItem[]>();
+  for (const item of items) {
+    const track = workshopTrackLabel(item.functional_track);
+    groups.set(track, [...(groups.get(track) ?? []), item]);
+  }
+
+  return Array.from(groups.entries())
+    .sort(([trackA], [trackB]) => {
+      if (trackA === "Unassigned Track") return 1;
+      if (trackB === "Unassigned Track") return -1;
+      return trackA.localeCompare(trackB);
+    })
+    .map(([track, workshops]) => ({
+      track,
+      workshops: [...workshops].sort(compareWorkshopDates),
+    }));
+}
+
+function WorkshopListIndicators({ item }: { item: WorkshopListItem }) {
+  const hasAnalyzedTranscript = Boolean(item.last_analyzed_at);
+  const openActionCount = item.open_action_count ?? item.action_count;
+  const totalActionCount = item.action_count ?? openActionCount;
+  const hasOpenActions = openActionCount > 0;
+  const hasActions = totalActionCount > 0;
+  const actionTitle = hasOpenActions
+    ? `${openActionCount} open action${openActionCount === 1 ? "" : "s"}`
+    : hasActions
+      ? "All actions closed"
+      : "No actions captured";
+
+  return (
+    <div className="mvp18-workshop-indicators">
+      {hasAnalyzedTranscript ? (
+        <span className="mvp18-workshop-indicator success" title="Transcript analyzed and meeting notes saved" aria-label="Transcript analyzed and meeting notes saved">
+          <span aria-hidden="true">✓</span>
+          Analyzed
+        </span>
+      ) : null}
+      <span
+        className={`mvp18-workshop-indicator ${hasOpenActions ? "warning" : hasActions ? "success" : "muted"}`}
+        title={actionTitle}
+        aria-label={actionTitle}
+      >
+        <span aria-hidden="true">{hasOpenActions ? "!" : hasActions ? "✓" : "-"}</span>
+        {hasOpenActions ? `${openActionCount} open` : hasActions ? "All closed" : "No actions"}
+      </span>
+    </div>
+  );
+}
+
 function WorkshopFormModal({
   state,
   onClose,
@@ -992,6 +1053,7 @@ function WorkshopsPage() {
   if (workshopsQuery.isError) return <ErrorPanel error={workshopsQuery.error} />;
 
   const items = workshopsQuery.data ?? [];
+  const workshopGroups = groupWorkshopsByTrack(items);
 
   return (
     <>
@@ -1003,45 +1065,57 @@ function WorkshopsPage() {
         <button className="mvp18-button-primary" onClick={() => setFormState({ mode: "create" })}>Create Workshop</button>
       </div>
 
-      <div className="mvp18-list">
+      <div className="mvp18-workshop-groups">
         {items.length === 0 ? <EmptyPanel label="No workshops yet." /> : null}
-        {items.map((item: WorkshopListItem) => (
-          <div className="mvp18-entity-card" key={item.id}>
-            <div>
-              <h3>{item.title}</h3>
-              <div className="mvp18-entity-meta">
-                <span>Date: {formatDate(item.workshop_date)}</span>
-                <span>Track: {item.functional_track || "-"}</span>
-                <span>Duration: {formatHours(item.duration_hours)}</span>
-                <span>Actions: {item.action_count}</span>
-                <span>Transcript: {item.transcript_filename ? "Uploaded" : "-"}</span>
-              </div>
+        {workshopGroups.map(({ track, workshops }) => (
+          <section className="mvp18-workshop-group" key={track}>
+            <div className="mvp18-workshop-group-header">
+              <h2>{track}</h2>
+              <StatusBadge status={`${workshops.length} workshop${workshops.length === 1 ? "" : "s"}`} />
             </div>
-            <div className="mvp18-actions">
-              <button className="mvp18-button-primary" onClick={() => navigateTo(`/workshops/${item.id}`)}>View</button>
-              <button
-                className="mvp18-button-secondary"
-                onClick={async () => {
-                  const fullItem = await queryClient.fetchQuery({
-                    queryKey: ["workshop", item.id],
-                    queryFn: () => getWorkshop(item.id),
-                  });
-                  setFormState({ mode: "edit", item: fullItem });
-                }}
-              >
-                Edit
-              </button>
-              <button
-                className="mvp18-button-danger"
-                onClick={() => {
-                  const ok = window.confirm("Are you sure you want to delete this workshop?\n\nThis will delete its extracted notes and action items.");
-                  if (ok) deleteMutation.mutate(item.id);
-                }}
-              >
-                Delete
-              </button>
+            <div className="mvp18-list">
+              {workshops.map((item: WorkshopListItem) => (
+                <div className="mvp18-entity-card" key={item.id}>
+                  <div>
+                    <div className="mvp18-workshop-card-title-row">
+                      <h3>{item.title}</h3>
+                      <WorkshopListIndicators item={item} />
+                    </div>
+                    <div className="mvp18-entity-meta">
+                      <span>Date: {formatDate(item.workshop_date)}</span>
+                      <span>Duration: {formatHours(item.duration_hours)}</span>
+                      <span>Actions: {item.action_count}</span>
+                      <span>Transcript: {item.transcript_filename ? "Uploaded" : "-"}</span>
+                    </div>
+                  </div>
+                  <div className="mvp18-actions">
+                    <button className="mvp18-button-primary" onClick={() => navigateTo(`/workshops/${item.id}`)}>View</button>
+                    <button
+                      className="mvp18-button-secondary"
+                      onClick={async () => {
+                        const fullItem = await queryClient.fetchQuery({
+                          queryKey: ["workshop", item.id],
+                          queryFn: () => getWorkshop(item.id),
+                        });
+                        setFormState({ mode: "edit", item: fullItem });
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="mvp18-button-danger"
+                      onClick={() => {
+                        const ok = window.confirm("Are you sure you want to delete this workshop?\n\nThis will delete its extracted notes and action items.");
+                        if (ok) deleteMutation.mutate(item.id);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
-          </div>
+          </section>
         ))}
       </div>
 

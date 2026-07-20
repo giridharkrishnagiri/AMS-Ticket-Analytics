@@ -76,6 +76,8 @@ class WorkshopListItem(BaseModel):
     recording_path: str | None
     last_analyzed_at: datetime | None
     action_count: int = 0
+    open_action_count: int = 0
+    closed_action_count: int = 0
 
 
 class WorkshopAnalysisUpdate(BaseModel):

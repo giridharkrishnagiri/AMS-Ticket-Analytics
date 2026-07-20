@@ -538,6 +538,8 @@ export type WorkshopListItem = {
   recording_path: string | null;
   last_analyzed_at: string | null;
   action_count: number;
+  open_action_count: number;
+  closed_action_count: number;
 };
 
 export type WorkshopFormPayload = {
