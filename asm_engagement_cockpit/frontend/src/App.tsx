@@ -1012,9 +1012,9 @@ function WorkshopActionRow({ action, workshopId }: { action: WorkshopAction; wor
 
   return (
     <div className="mvp18-action-row">
-      <label>
+      <label className="mvp18-action-field">
         Action
-        <textarea value={actionText} rows={2} onChange={(event) => setActionText(event.target.value)} />
+        <textarea value={actionText} rows={3} onChange={(event) => setActionText(event.target.value)} />
       </label>
       <div className="mvp18-form-grid">
         <label>
@@ -1034,7 +1034,7 @@ function WorkshopActionRow({ action, workshopId }: { action: WorkshopAction; wor
           </select>
         </label>
       </div>
-      <label>
+      <label className="mvp18-action-field">
         Notes
         <textarea value={notes} rows={2} onChange={(event) => setNotes(event.target.value)} />
       </label>

@@ -533,10 +533,41 @@
 .mvp18-action-row {
   display: grid;
   gap: 12px;
-  padding: 16px;
+  padding: 18px 20px;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   background: #f8fafc;
+}
+
+.mvp18-action-row label {
+  color: #334155;
+  font-weight: 700;
+}
+
+.mvp18-action-row input,
+.mvp18-action-row select,
+.mvp18-action-row textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 9px 10px;
+  font: inherit;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.mvp18-action-field {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.mvp18-action-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  overflow-y: auto;
+  resize: vertical;
 }
 
 @media (max-width: 900px) {
@@ -547,5 +578,10 @@
   .mvp18-task-metadata-item {
     grid-template-columns: 1fr;
     gap: 3px;
+  }
+
+  .mvp18-action-field {
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
 }
