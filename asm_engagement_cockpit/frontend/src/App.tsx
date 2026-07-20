@@ -1146,6 +1146,8 @@ function WorkshopDetailPage({ id }: { id: string }) {
         </div>
       </div>
 
+      {analyzeMutation.isError ? <ErrorPanel error={analyzeMutation.error} /> : null}
+
       <section className="mvp18-panel">
         <div className="mvp18-section-header">
           <div>

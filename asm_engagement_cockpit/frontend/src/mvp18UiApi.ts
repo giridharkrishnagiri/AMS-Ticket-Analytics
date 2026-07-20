@@ -278,6 +278,28 @@ function buildHeaders(includeJson: boolean): HeadersInit {
   return headers;
 }
 
+async function responseErrorMessage(response: Response): Promise<string> {
+  const fallback = `API request failed: ${response.status} ${response.statusText}`;
+  const errorText = await response.text();
+  if (!errorText) {
+    return fallback;
+  }
+
+  try {
+    const payload = JSON.parse(errorText) as { detail?: unknown };
+    if (typeof payload.detail === "string") {
+      return payload.detail;
+    }
+    if (payload.detail) {
+      return `${fallback}. ${JSON.stringify(payload.detail)}`;
+    }
+  } catch {
+    // Fall back to the raw body when the API did not return JSON.
+  }
+
+  return `${fallback}. ${errorText}`;
+}
+
 async function requestJson<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
@@ -288,8 +310,7 @@ async function requestJson<T>(path: string, options: RequestInit = {}): Promise<
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API request failed: ${response.status} ${response.statusText}. ${errorText}`);
+    throw new Error(await responseErrorMessage(response));
   }
 
   return response.json() as Promise<T>;
@@ -325,8 +346,7 @@ async function requestFormJson<T>(path: string, method: "POST" | "PUT", body: Fo
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API request failed: ${response.status} ${response.statusText}. ${errorText}`);
+    throw new Error(await responseErrorMessage(response));
   }
 
   return response.json() as Promise<T>;

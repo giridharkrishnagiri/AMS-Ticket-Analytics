@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 import zipfile
+from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
@@ -259,38 +260,62 @@ def extract_json_object(raw_text: str) -> dict[str, Any]:
     return {}
 
 
+class WorkshopLlmError(RuntimeError):
+    pass
+
+
+def workshop_llm_failure_message(exc: Exception) -> str:
+    error_text = str(exc)
+    error_type = type(exc).__name__
+    if error_type == "RateLimitError" and (
+        "insufficient_quota" in error_text or "current quota" in error_text
+    ):
+        return (
+            "OpenAI rejected the workshop analysis because the configured API key or "
+            "project has insufficient quota. Add quota/billing or configure a key with "
+            "available quota, then retry Analyze Transcript."
+        )
+    if error_type == "APIConnectionError":
+        return (
+            "The backend could not connect to OpenAI from Python. Verify network, proxy, "
+            "and certificate trust settings on the backend host, then retry Analyze Transcript."
+        )
+    return f"LLM analysis failed: {error_type}: {error_text}"
+
+
 def run_workshop_llm(system_prompt: str, user_prompt: str) -> str:
     settings = get_settings()
     if not settings.openai_api_key:
-        return json.dumps(
-            {
-                "meeting_notes": "LLM analysis was not run because OPENAI_API_KEY is not configured.",
-                "key_decisions": "",
-                "actions": [],
-            }
+        raise WorkshopLlmError(
+            "OPENAI_API_KEY is not configured. Add OPENAI_API_KEY to backend/.env, "
+            "restart the backend, and retry Analyze Transcript.",
         )
 
     try:
-        from agents import Agent, Runner, trace
+        from agents import Agent, Runner, set_default_openai_key, set_tracing_disabled, trace
 
+        set_default_openai_key(
+            settings.openai_api_key,
+            use_for_tracing=settings.openai_tracing,
+        )
+        set_tracing_disabled(disabled=not settings.openai_tracing)
         agent = Agent(
             name="ASM Workshop Transcript Analyst",
             instructions=system_prompt,
             model=settings.openai_model,
         )
 
-        with trace(workflow_name="ASM Engagement Cockpit - Analyze Workshop Transcript"):
+        trace_context = (
+            trace(workflow_name="ASM Engagement Cockpit - Analyze Workshop Transcript")
+            if settings.openai_tracing
+            else nullcontext()
+        )
+        with trace_context:
             result = Runner.run_sync(agent, user_prompt)
 
         return str(result.final_output).strip()
     except Exception as exc:
-        return json.dumps(
-            {
-                "meeting_notes": f"LLM analysis failed: {type(exc).__name__}: {exc}",
-                "key_decisions": "",
-                "actions": [],
-            }
-        )
+        raise WorkshopLlmError(workshop_llm_failure_message(exc)) from exc
 
 
 def apply_action_payload(item: WorkshopAction, payload: WorkshopActionUpdate) -> None:
@@ -460,7 +485,10 @@ def analyze_workshop(
         raise HTTPException(status_code=400, detail="Upload a transcript before analyzing the workshop.")
 
     prompt_preview = build_prompt_preview(db, item)
-    output = run_workshop_llm(prompt_preview.system_prompt, prompt_preview.user_prompt)
+    try:
+        output = run_workshop_llm(prompt_preview.system_prompt, prompt_preview.user_prompt)
+    except WorkshopLlmError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     parsed = extract_json_object(output)
 
     item.meeting_notes = normalize_text(parsed.get("meeting_notes")) or output

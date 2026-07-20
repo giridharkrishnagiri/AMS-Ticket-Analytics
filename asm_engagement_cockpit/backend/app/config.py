@@ -8,6 +8,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
+def install_os_truststore() -> None:
+    try:
+        import truststore
+    except ImportError:
+        return
+
+    truststore.inject_into_ssl()
+
+
+install_os_truststore()
+
+
 class Settings(BaseSettings):
     app_name: str = "ASM Engagement Cockpit"
     app_env: str = "local"
