@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: asm_engagement_cockpit_postgres
+    environment:
+      POSTGRES_DB: asm_cockpit
+      POSTGRES_USER: asm_user
+      POSTGRES_PASSWORD: asm_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - asm_cockpit_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asm_user -d asm_cockpit"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  asm_cockpit_postgres_data:
