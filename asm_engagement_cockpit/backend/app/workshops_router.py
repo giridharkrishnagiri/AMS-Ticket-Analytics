@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/ui", tags=["Workshops"])
 
 WORKSHOP_ANALYSIS_PROMPT_KEY = "workshop_transcript_analysis"
 
-DEFAULT_WORKSHOP_SYSTEM_PROMPT = (
+LEGACY_WORKSHOP_SYSTEM_PROMPT = (
     "You are an expert Application Support and Maintenance consulting facilitator. "
     "Analyze workshop transcripts for a consulting engagement. "
     "Extract concise meeting notes, key decisions, and action items. "
@@ -44,7 +44,7 @@ DEFAULT_WORKSHOP_SYSTEM_PROMPT = (
     "Return only valid JSON without markdown fences."
 )
 
-DEFAULT_WORKSHOP_USER_PROMPT = """Analyze this workshop transcript and return valid JSON with these keys:
+LEGACY_WORKSHOP_USER_PROMPT = """Analyze this workshop transcript and return valid JSON with these keys:
 {
   "meeting_notes": "Concise meeting notes as editable plain text.",
   "key_decisions": "Key decisions or agreements as editable plain text.",
@@ -73,6 +73,63 @@ Transcript:
 {{transcript_text}}
 """
 
+DEFAULT_WORKSHOP_SYSTEM_PROMPT = (
+    "You are an expert Application Support and Maintenance consulting facilitator. "
+    "Analyze workshop transcripts for a consulting engagement and produce detailed, "
+    "speaker-aware notes that connect the discussion to workstreams, deliverables, "
+    "tasks, risks, dependencies, decisions, and next steps when they are present. "
+    "Do not invent facts. If an owner or due date is not stated, leave it blank. "
+    "Return only valid JSON without markdown fences."
+)
+
+DEFAULT_WORKSHOP_USER_PROMPT = """Analyze this workshop transcript and return one valid JSON object with these keys:
+{
+  "meeting_notes": "Detailed editable plain text. Use section headings and bullets. Do not return one large paragraph.",
+  "key_decisions": "Key decisions or agreements as editable plain text using numbered bullets.",
+  "actions": [
+    {
+      "action_text": "Action item text",
+      "owner_name": "Owner if explicitly stated",
+      "due_date": "YYYY-MM-DD if explicitly stated, otherwise null",
+      "status": "Open",
+      "notes": "Optional context"
+    }
+  ]
+}
+
+Meeting notes requirements:
+- Structure the meeting_notes value as editable plain text, not a markdown table.
+- Create clear topic headings for each major discussion area.
+- Under each heading, write detailed bullets. Every bullet must begin with a short statement heading followed by a colon, for example "- Scope alignment: ...", "- Data dependency: ...", or "- Delivery impact: ...".
+- Refer to the speaker by name or role when the transcript identifies the speaker. If the speaker is unclear, use "a participant" or "the team".
+- Cover the full workshop flow: context, discovery inputs, workstream impact, deliverable/task relevance, dependencies, risks, clarifications, unresolved questions, decisions, and follow-ups.
+- For a one-hour workshop, target enough useful detail that reading the notes takes around 8 to 10 minutes. Scale the level of detail up or down based on the Duration hours value.
+- Do not pad with generic commentary. Include only points supported by the transcript, participant list, or agenda.
+- Preserve concrete names, systems, dates, workstreams, deliverables, tasks, metrics, and constraints mentioned in the workshop.
+
+Key decisions requirements:
+- Use numbered bullets.
+- Include only decisions or agreements that are actually supported by the transcript.
+
+Action requirements:
+- Extract action items separately in the actions array.
+- Leave owner_name blank when the owner is not explicitly stated.
+- Use null for due_date when no explicit due date is stated.
+
+Workshop date: {{workshop_date}}
+Workshop title: {{title}}
+Functional track: {{functional_track}}
+Duration hours: {{duration_hours}}
+Participants:
+{{participants_text}}
+
+Agenda:
+{{agenda}}
+
+Transcript:
+{{transcript_text}}
+"""
+
 
 def normalize_text(value: Any) -> str:
     return str(value or "").strip()
@@ -81,6 +138,13 @@ def normalize_text(value: Any) -> str:
 def ensure_default_prompt_templates(db: Session) -> None:
     existing = db.scalar(select(LlmPromptTemplate).where(LlmPromptTemplate.prompt_key == WORKSHOP_ANALYSIS_PROMPT_KEY))
     if existing is not None:
+        if (
+            normalize_text(existing.system_prompt) == normalize_text(LEGACY_WORKSHOP_SYSTEM_PROMPT)
+            and normalize_text(existing.user_prompt_template) == normalize_text(LEGACY_WORKSHOP_USER_PROMPT)
+        ):
+            existing.system_prompt = DEFAULT_WORKSHOP_SYSTEM_PROMPT
+            existing.user_prompt_template = DEFAULT_WORKSHOP_USER_PROMPT
+            db.commit()
         return
 
     db.add(

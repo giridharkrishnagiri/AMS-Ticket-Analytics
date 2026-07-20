@@ -1178,7 +1178,7 @@ function WorkshopDetailPage({ id }: { id: string }) {
         <div className="mvp18-form">
           <label>
             Notes
-            <textarea value={meetingNotes} rows={8} onChange={(event) => setMeetingNotes(event.target.value)} />
+            <textarea value={meetingNotes} rows={18} onChange={(event) => setMeetingNotes(event.target.value)} />
           </label>
           <label>
             Key Decisions
