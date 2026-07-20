@@ -394,6 +394,9 @@ def list_llm_prompts(
     _: Annotated[dict[str, Any], Depends(require_authenticated_request)],
 ) -> list[LlmPromptTemplate]:
     ensure_default_prompt_templates(db)
+    from app.workshop_chat_router import ensure_workshop_chat_prompt_templates
+
+    ensure_workshop_chat_prompt_templates(db)
     return list(db.scalars(select(LlmPromptTemplate).order_by(LlmPromptTemplate.name.asc())).all())
 
 

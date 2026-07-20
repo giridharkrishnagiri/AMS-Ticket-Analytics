@@ -586,6 +586,78 @@ export type LlmPromptTemplatePayload = {
   is_active?: boolean;
 };
 
+export type WorkshopChatScopeType = "all" | "workshop" | "workstream" | "deliverable" | "task" | "subtask";
+
+export type WorkshopChatAskPayload = {
+  question: string;
+  session_id?: string | null;
+  scope_type?: WorkshopChatScopeType;
+  scope_id?: string | null;
+  allow_external_knowledge?: boolean;
+  force_deep_context?: boolean;
+};
+
+export type WorkshopChatSource = {
+  id: string;
+  document_type: string;
+  title: string;
+  source_label: string;
+  score: number;
+  snippet: string;
+  workshop_id: string | null;
+  workstream_id: string | null;
+  deliverable_id: string | null;
+  task_id: string | null;
+  subtask_id: string | null;
+  chunk_index: number | null;
+  chunk_start_minute: number | null;
+  chunk_end_minute: number | null;
+};
+
+export type WorkshopChatMessage = {
+  id: string;
+  role: string;
+  content: string;
+  model_used: string | null;
+  created_at: string;
+};
+
+export type WorkshopChatResponse = {
+  session_id: string;
+  answer: string;
+  requires_external_knowledge: boolean;
+  external_knowledge_reason: string | null;
+  model_used: string | null;
+  search_order: string[];
+  sources: WorkshopChatSource[];
+  linked_entities: WorkshopChatSource[];
+  messages: WorkshopChatMessage[];
+};
+
+export type WorkshopChatSession = {
+  id: string;
+  title: string | null;
+  scope_type: string;
+  scope_id: string | null;
+  created_at: string;
+  updated_at: string;
+  messages: WorkshopChatMessage[];
+};
+
+export type WorkshopChatIndexStatus = {
+  document_count: number;
+  transcript_chunk_count: number;
+  entity_document_count: number;
+  link_count: number;
+  last_indexed_at: string | null;
+  embedding_model: string;
+};
+
+export type WorkshopChatIndexRebuildResponse = WorkshopChatIndexStatus & {
+  rebuilt: boolean;
+  message: string;
+};
+
 function workshopFormData(payload: WorkshopFormPayload): FormData {
   const formData = new FormData();
   formData.append("workshop_date", payload.workshop_date);
@@ -653,4 +725,20 @@ export function getLlmPrompts(): Promise<LlmPromptTemplate[]> {
 
 export function updateLlmPrompt(promptKey: string, payload: LlmPromptTemplatePayload): Promise<LlmPromptTemplate> {
   return putJson<LlmPromptTemplate>(`/ui/llm-prompts/${encodeURIComponent(promptKey)}`, payload);
+}
+
+export function getWorkshopChatIndexStatus(): Promise<WorkshopChatIndexStatus> {
+  return getJson<WorkshopChatIndexStatus>("/ui/workshop-chat/index-status");
+}
+
+export function rebuildWorkshopChatIndex(): Promise<WorkshopChatIndexRebuildResponse> {
+  return postJson<WorkshopChatIndexRebuildResponse>("/ui/workshop-chat/rebuild-index");
+}
+
+export function askWorkshopChat(payload: WorkshopChatAskPayload): Promise<WorkshopChatResponse> {
+  return postJson<WorkshopChatResponse>("/ui/workshop-chat/ask", payload);
+}
+
+export function getWorkshopChatSession(sessionId: string): Promise<WorkshopChatSession> {
+  return getJson<WorkshopChatSession>(`/ui/workshop-chat/sessions/${sessionId}`);
 }

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_tracing: bool = True
     openai_model: str = "gpt-4.1-mini"
+    openai_chat_model: str = "gpt-5.6-luna"
+    openai_deep_chat_model: str = "gpt-5.6-terra"
+    openai_embedding_model: str = "text-embedding-3-small"
 
     api_auth_enabled: bool = False
     api_auth_key: str | None = None

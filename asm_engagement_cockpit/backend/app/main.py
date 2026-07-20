@@ -59,6 +59,7 @@ from app.mvp11_review_workflow_router import router as mvp11_review_workflow_rou
 from app.mvp12_recommendation_management_router import router as mvp12_recommendation_management_router
 from app.mvp14_diagnostics_router import router as mvp14_diagnostics_router
 from app.mvp18_workspace_router import router as mvp18_workspace_router
+from app.workshop_chat_router import router as workshop_chat_router
 from app.workshops_router import router as workshops_router
 
 settings = get_settings()
@@ -86,6 +87,7 @@ app.include_router(mvp11_review_workflow_router)
 app.include_router(mvp12_recommendation_management_router)
 app.include_router(mvp14_diagnostics_router)
 app.include_router(mvp18_workspace_router)
+app.include_router(workshop_chat_router)
 app.include_router(workshops_router)
 
 COMPLETED_STATUS = "Completed"

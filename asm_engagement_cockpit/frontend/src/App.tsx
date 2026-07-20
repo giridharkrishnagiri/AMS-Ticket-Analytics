@@ -5,6 +5,7 @@ import "./styles.css";
 import "./mvp18Simplified.css";
 
 import {
+  askWorkshopChat,
   clearStoredSession,
   analyzeWorkshop,
   createDeliverable,
@@ -39,11 +40,13 @@ import {
   getStoredSession,
   getSubtaskWorkspace,
   getTaskWorkspace,
+  getWorkshopChatIndexStatus,
   getWorkshop,
   getWorkshopPromptPreview,
   getWorkshops,
   getWorkstreamWorkspace,
   login,
+  rebuildWorkshopChatIndex,
   storeSession,
   updateDeliverable,
   updateEngagement,
@@ -69,6 +72,10 @@ import {
   type TaskWorkspace,
   type Workshop,
   type WorkshopAction,
+  type WorkshopChatMessage,
+  type WorkshopChatResponse,
+  type WorkshopChatScopeType,
+  type WorkshopChatSource,
   type WorkshopFormPayload,
   type WorkshopListItem,
   type WorkstreamWorkspace,
@@ -125,6 +132,12 @@ type FormState = {
 type WorkshopFormState = {
   mode: FormMode;
   item?: Workshop;
+};
+
+type WorkshopChatScope = {
+  scope_type: WorkshopChatScopeType;
+  scope_id: string | null;
+  label: string;
 };
 
 const STATUS_OPTIONS = [
@@ -218,6 +231,45 @@ function navigateTo(path: string) {
 
   window.dispatchEvent(new PopStateEvent("popstate"));
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function workshopChatScopeFromPath(path = window.location.pathname): WorkshopChatScope | null {
+  const parts = (path || "/").split("/").filter(Boolean);
+  const first = parts[0];
+  const second = parts[1];
+
+  if (first === "workshop-chat") {
+    return null;
+  }
+  if (first === "workshops" && second) {
+    return { scope_type: "workshop", scope_id: second, label: "Current Workshop" };
+  }
+  if (first === "workstreams" && second) {
+    return { scope_type: "workstream", scope_id: second, label: "Current Workstream" };
+  }
+  if (first === "deliverables" && second) {
+    return { scope_type: "deliverable", scope_id: second, label: "Current Deliverable" };
+  }
+  if (first === "tasks" && second) {
+    return { scope_type: "task", scope_id: second, label: "Current Task" };
+  }
+  if (first === "subtasks" && second) {
+    return { scope_type: "subtask", scope_id: second, label: "Current Sub-task" };
+  }
+  if (first === "my-work" && parts[1] === "workstreams" && parts[2]) {
+    return { scope_type: "workstream", scope_id: parts[2], label: "Current Workstream" };
+  }
+  if (first === "my-work" && parts[1] === "deliverables" && parts[2]) {
+    return { scope_type: "deliverable", scope_id: parts[2], label: "Current Deliverable" };
+  }
+  if (first === "my-work" && parts[1] === "tasks" && parts[2]) {
+    return { scope_type: "task", scope_id: parts[2], label: "Current Task" };
+  }
+  if (first === "my-work" && parts[1] === "subtasks" && parts[2]) {
+    return { scope_type: "subtask", scope_id: parts[2], label: "Current Sub-task" };
+  }
+
+  return { scope_type: "all", scope_id: null, label: "All Workshops" };
 }
 
 function entityLabel(item: EntitySummary): string {
@@ -420,6 +472,7 @@ function AppShell({
     { label: "Dashboard", path: "/" },
     { label: "Engagements", path: "/engagements" },
     { label: "Workshops", path: "/workshops" },
+    { label: "Workshop Chat", path: "/workshop-chat" },
     { label: "My Work", path: "/my-work" },
     { label: "Reminders", path: "/reminders" },
     { label: "Reports", path: "/reports" },
@@ -486,6 +539,7 @@ function AppShell({
 
         <div className="mvp18-content">{children}</div>
       </main>
+      <WorkshopChatFloating scope={workshopChatScopeFromPath(currentPath)} />
     </div>
   );
 }
@@ -1227,6 +1281,274 @@ function WorkshopDetailPage({ id }: { id: string }) {
       ) : null}
 
       {promptPreview ? <PromptPreviewModal preview={promptPreview} onClose={() => setPromptPreview(null)} /> : null}
+    </>
+  );
+}
+
+const ALL_CHAT_SCOPE: WorkshopChatScope = { scope_type: "all", scope_id: null, label: "All Workshops" };
+
+function WorkshopChatIndexPanel({ compact = false }: { compact?: boolean }) {
+  const queryClient = useQueryClient();
+  const statusQuery = useQuery({
+    queryKey: ["workshop-chat-index-status"],
+    queryFn: getWorkshopChatIndexStatus,
+    retry: 1,
+  });
+  const rebuildMutation = useMutation({
+    mutationFn: rebuildWorkshopChatIndex,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["workshop-chat-index-status"] }),
+  });
+
+  const status = statusQuery.data;
+
+  return (
+    <section className={compact ? "mvp18-chat-index compact" : "mvp18-panel mvp18-chat-index"}>
+      <div>
+        <strong>Search Index</strong>
+        <span>
+          {status
+            ? `${status.transcript_chunk_count} chunks, ${status.entity_document_count} entities, ${status.link_count} links`
+            : statusQuery.isLoading
+              ? "Loading..."
+              : "Not loaded"}
+        </span>
+      </div>
+      <button className="mvp18-button-secondary" onClick={() => rebuildMutation.mutate()} disabled={rebuildMutation.isPending}>
+        {rebuildMutation.isPending ? "Rebuilding..." : "Rebuild Index"}
+      </button>
+      {rebuildMutation.isError ? <div className="mvp18-error">{rebuildMutation.error instanceof Error ? rebuildMutation.error.message : "Index rebuild failed."}</div> : null}
+    </section>
+  );
+}
+
+function WorkshopChatMessages({ messages }: { messages: WorkshopChatMessage[] }) {
+  if (messages.length === 0) {
+    return <EmptyPanel label="No chat messages yet." />;
+  }
+
+  return (
+    <div className="mvp18-chat-messages">
+      {messages.map((message) => (
+        <div className={`mvp18-chat-message ${message.role}`} key={message.id}>
+          <div className="mvp18-chat-message-role">{message.role === "user" ? "You" : "Assistant"}</div>
+          <pre>{message.content}</pre>
+          {message.model_used ? <span>{message.model_used}</span> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WorkshopChatSources({
+  sources,
+  linkedEntities,
+}: {
+  sources: WorkshopChatSource[];
+  linkedEntities: WorkshopChatSource[];
+}) {
+  if (sources.length === 0 && linkedEntities.length === 0) {
+    return null;
+  }
+
+  const transcriptSources = sources.filter((source) => source.document_type === "transcript_chunk");
+
+  return (
+    <div className="mvp18-chat-sources">
+      {transcriptSources.length > 0 ? (
+        <div>
+          <h3>Transcript Sources</h3>
+          {transcriptSources.map((source) => (
+            <details key={source.id}>
+              <summary>{source.source_label}</summary>
+              <p>{source.snippet}</p>
+            </details>
+          ))}
+        </div>
+      ) : null}
+      {linkedEntities.length > 0 ? (
+        <div>
+          <h3>Linked Work Items</h3>
+          {linkedEntities.map((source) => (
+            <details key={source.id}>
+              <summary>{source.source_label}</summary>
+              <p>{source.snippet}</p>
+            </details>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkshopChatBox({
+  initialScope = ALL_CHAT_SCOPE,
+  compact = false,
+}: {
+  initialScope?: WorkshopChatScope;
+  compact?: boolean;
+}) {
+  const [scope, setScope] = useState<WorkshopChatScope>(initialScope);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
+  const [messages, setMessages] = useState<WorkshopChatMessage[]>([]);
+  const [lastResponse, setLastResponse] = useState<WorkshopChatResponse | null>(null);
+  const [pendingExternalQuestion, setPendingExternalQuestion] = useState("");
+  const [allowExternalKnowledge, setAllowExternalKnowledge] = useState(false);
+  const [forceDeepContext, setForceDeepContext] = useState(false);
+
+  const scopeOptions = useMemo(() => {
+    if (initialScope.scope_type === "all") {
+      return [ALL_CHAT_SCOPE];
+    }
+    return [initialScope, ALL_CHAT_SCOPE];
+  }, [initialScope.scope_type, initialScope.scope_id, initialScope.label]);
+
+  useEffect(() => {
+    setScope(initialScope);
+    setSessionId(null);
+    setMessages([]);
+    setLastResponse(null);
+    setPendingExternalQuestion("");
+  }, [initialScope.scope_type, initialScope.scope_id]);
+
+  const askMutation = useMutation({
+    mutationFn: askWorkshopChat,
+    onSuccess: (data, variables) => {
+      setSessionId(data.session_id);
+      setMessages(data.messages);
+      setLastResponse(data);
+      setPendingExternalQuestion(data.requires_external_knowledge ? variables.question : "");
+      if (!data.requires_external_knowledge) {
+        setQuestion("");
+      }
+    },
+  });
+
+  function ask(questionText: string, allowExternalOverride = allowExternalKnowledge) {
+    const trimmed = questionText.trim();
+    if (!trimmed) return;
+
+    askMutation.mutate({
+      question: trimmed,
+      session_id: sessionId,
+      scope_type: scope.scope_type,
+      scope_id: scope.scope_id,
+      allow_external_knowledge: allowExternalOverride,
+      force_deep_context: forceDeepContext,
+    });
+  }
+
+  return (
+    <section className={compact ? "mvp18-chat-box compact" : "mvp18-panel mvp18-chat-box"}>
+      <div className="mvp18-chat-controls">
+        <label>
+          Scope
+          <select
+            value={`${scope.scope_type}:${scope.scope_id || ""}`}
+            onChange={(event) => {
+              const next = scopeOptions.find((item) => `${item.scope_type}:${item.scope_id || ""}` === event.target.value) || ALL_CHAT_SCOPE;
+              setScope(next);
+              setSessionId(null);
+              setMessages([]);
+              setLastResponse(null);
+              setPendingExternalQuestion("");
+            }}
+          >
+            {scopeOptions.map((item) => (
+              <option key={`${item.scope_type}:${item.scope_id || ""}`} value={`${item.scope_type}:${item.scope_id || ""}`}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mvp18-chat-checkbox">
+          <input type="checkbox" checked={allowExternalKnowledge} onChange={(event) => setAllowExternalKnowledge(event.target.checked)} />
+          Generic knowledge
+        </label>
+        <label className="mvp18-chat-checkbox">
+          <input type="checkbox" checked={forceDeepContext} onChange={(event) => setForceDeepContext(event.target.checked)} />
+          Deep context
+        </label>
+      </div>
+
+      <WorkshopChatMessages messages={messages} />
+
+      {lastResponse?.requires_external_knowledge && pendingExternalQuestion ? (
+        <div className="mvp18-chat-confirm">
+          <button
+            className="mvp18-button-primary"
+            onClick={() => {
+              setAllowExternalKnowledge(true);
+              ask(pendingExternalQuestion, true);
+            }}
+            disabled={askMutation.isPending}
+          >
+            Continue With Generic Knowledge
+          </button>
+        </div>
+      ) : null}
+
+      {askMutation.isError ? <div className="mvp18-error">{askMutation.error instanceof Error ? askMutation.error.message : "Chat failed."}</div> : null}
+
+      <div className="mvp18-chat-composer">
+        <textarea
+          value={question}
+          rows={compact ? 3 : 4}
+          onChange={(event) => setQuestion(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+              ask(question);
+            }
+          }}
+        />
+        <button className="mvp18-button-primary" onClick={() => ask(question)} disabled={!question.trim() || askMutation.isPending}>
+          {askMutation.isPending ? "Thinking..." : "Ask"}
+        </button>
+      </div>
+
+      {lastResponse ? <WorkshopChatSources sources={lastResponse.sources} linkedEntities={lastResponse.linked_entities} /> : null}
+    </section>
+  );
+}
+
+function WorkshopChatFloating({ scope }: { scope: WorkshopChatScope | null }) {
+  const [open, setOpen] = useState(false);
+
+  if (!scope) {
+    return null;
+  }
+
+  return (
+    <>
+      <button className="mvp18-chat-float-button" onClick={() => setOpen(true)}>Chat</button>
+      {open ? (
+        <div className="mvp18-chat-drawer" role="dialog" aria-modal="true">
+          <div className="mvp18-chat-drawer-header">
+            <div>
+              <h2>Workshop Chat</h2>
+              <span>{scope.label}</span>
+            </div>
+            <button className="mvp18-button-secondary" onClick={() => setOpen(false)}>Close</button>
+          </div>
+          <WorkshopChatIndexPanel compact />
+          <WorkshopChatBox initialScope={scope} compact />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function WorkshopChatPage() {
+  return (
+    <>
+      <div className="mvp18-page-header">
+        <div>
+          <h1>Workshop Chat</h1>
+          <p>Ask across workshop transcripts, workstreams, deliverables, and tasks.</p>
+        </div>
+      </div>
+      <WorkshopChatIndexPanel />
+      <WorkshopChatBox initialScope={ALL_CHAT_SCOPE} />
     </>
   );
 }
@@ -2123,6 +2445,10 @@ function buildPageBreadcrumb(route: RouteState, data: BreadcrumbWorkspaceData): 
     return [{ label: "Settings" }];
   }
 
+  if (section === "workshop-chat") {
+    return [{ label: "Workshop Chat" }];
+  }
+
   if (section === "workshops") {
     if (!id) return [{ label: "Workshops" }];
     const workshop = data as Workshop | null;
@@ -2277,6 +2603,7 @@ function MainRouter({ setFormState }: { setFormState: (state: FormState | null) 
   const parts = route.parts;
 
   if (route.path === "/" || parts.length === 0) return <DashboardPage />;
+  if (parts[0] === "workshop-chat") return <WorkshopChatPage />;
   if (parts[0] === "workshops" && parts.length === 1) return <WorkshopsPage />;
   if (parts[0] === "workshops" && parts[1]) return <WorkshopDetailPage id={parts[1]} />;
   if (parts[0] === "my-work" && parts.length === 1) return <MyWorkPage setFormState={setFormState} />;
