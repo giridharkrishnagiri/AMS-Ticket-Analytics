@@ -140,6 +140,11 @@ type WorkshopChatScope = {
   label: string;
 };
 
+type SaveFeedback = {
+  tone: "info" | "success" | "error";
+  message: string;
+};
+
 const STATUS_OPTIONS = [
   "Not Started",
   "In Progress",
@@ -372,6 +377,15 @@ function LoadingPanel({ label = "Loading..." }: { label?: string }) {
 function ErrorPanel({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : "Unknown error";
   return <div className="mvp18-error">{message}</div>;
+}
+
+function mutationErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function SaveFeedbackMessage({ feedback }: { feedback: SaveFeedback | null }) {
+  if (!feedback) return null;
+  return <div className={`mvp18-feedback ${feedback.tone}`}>{feedback.message}</div>;
 }
 
 function EmptyPanel({ label }: { label: string }) {
@@ -637,10 +651,12 @@ function HierarchyFormModal({
   state,
   onClose,
   onSubmit,
+  isSaving = false,
 }: {
   state: FormState;
   onClose: () => void;
   onSubmit: (payload: HierarchyFormPayload) => void;
+  isSaving?: boolean;
 }) {
   const isTitleBased = state.entityKind === "task" || state.entityKind === "subtask";
   const item = state.item;
@@ -739,8 +755,10 @@ function HierarchyFormModal({
           </label>
 
           <div className="mvp18-actions">
-            <button className="mvp18-button-secondary" type="button" onClick={onClose}>Cancel</button>
-            <button className="mvp18-button-primary" type="submit">Save</button>
+            <button className="mvp18-button-secondary" type="button" onClick={onClose} disabled={isSaving}>Cancel</button>
+            <button className="mvp18-button-primary" type="submit" disabled={isSaving}>
+              {isSaving ? "Saving..." : "Save"}
+            </button>
           </div>
         </form>
       </div>
@@ -816,10 +834,12 @@ function WorkshopFormModal({
   state,
   onClose,
   onSubmit,
+  isSaving = false,
 }: {
   state: WorkshopFormState;
   onClose: () => void;
   onSubmit: (payload: WorkshopFormPayload) => void;
+  isSaving?: boolean;
 }) {
   const item = state.item;
   const [workshopDate, setWorkshopDate] = useState(item?.workshop_date || new Date().toISOString().slice(0, 10));
@@ -906,8 +926,10 @@ function WorkshopFormModal({
           </label>
 
           <div className="mvp18-actions">
-            <button className="mvp18-button-secondary" type="button" onClick={onClose}>Cancel</button>
-            <button className="mvp18-button-primary" type="submit">Save</button>
+            <button className="mvp18-button-secondary" type="button" onClick={onClose} disabled={isSaving}>Cancel</button>
+            <button className="mvp18-button-primary" type="submit" disabled={isSaving}>
+              {isSaving ? "Saving..." : "Save"}
+            </button>
           </div>
         </form>
       </div>
@@ -1027,6 +1049,7 @@ function WorkshopsPage() {
         <WorkshopFormModal
           state={formState}
           onClose={() => setFormState(null)}
+          isSaving={createMutation.isPending || updateMutation.isPending}
           onSubmit={(payload) => {
             if (formState.mode === "create") {
               createMutation.mutate(payload);
@@ -1047,6 +1070,7 @@ function WorkshopActionRow({ action, workshopId }: { action: WorkshopAction; wor
   const [dueDate, setDueDate] = useState(action.due_date || "");
   const [status, setStatus] = useState(action.status || "Open");
   const [notes, setNotes] = useState(action.notes || "");
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
 
   const updateMutation = useMutation({
     mutationFn: () => updateWorkshopAction(action.id, {
@@ -1056,7 +1080,14 @@ function WorkshopActionRow({ action, workshopId }: { action: WorkshopAction; wor
       status,
       notes,
     }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] }),
+    onMutate: () => setSaveFeedback({ tone: "info", message: "Saving action..." }),
+    onSuccess: () => {
+      setSaveFeedback({ tone: "success", message: "Action saved." });
+      queryClient.invalidateQueries({ queryKey: ["workshop", workshopId] });
+    },
+    onError: (error) => {
+      setSaveFeedback({ tone: "error", message: mutationErrorMessage(error, "Action save failed.") });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -1093,8 +1124,13 @@ function WorkshopActionRow({ action, workshopId }: { action: WorkshopAction; wor
         <textarea value={notes} rows={2} onChange={(event) => setNotes(event.target.value)} />
       </label>
       <div className="mvp18-actions">
-        <button className="mvp18-button-secondary" type="button" onClick={() => updateMutation.mutate()}>
-          Save Action
+        <button
+          className="mvp18-button-secondary"
+          type="button"
+          onClick={() => updateMutation.mutate()}
+          disabled={updateMutation.isPending}
+        >
+          {updateMutation.isPending ? "Saving..." : "Save Action"}
         </button>
         <button
           className="mvp18-button-danger"
@@ -1107,6 +1143,7 @@ function WorkshopActionRow({ action, workshopId }: { action: WorkshopAction; wor
           Delete
         </button>
       </div>
+      <SaveFeedbackMessage feedback={saveFeedback} />
     </div>
   );
 }
@@ -1119,6 +1156,8 @@ function WorkshopDetailPage({ id }: { id: string }) {
   const [keyDecisions, setKeyDecisions] = useState("");
   const [newActionText, setNewActionText] = useState("");
   const [newOwnerName, setNewOwnerName] = useState("");
+  const [notesFeedback, setNotesFeedback] = useState<SaveFeedback | null>(null);
+  const [newActionFeedback, setNewActionFeedback] = useState<SaveFeedback | null>(null);
 
   const query = useQuery({ queryKey: ["workshop", id], queryFn: () => getWorkshop(id), retry: 1 });
 
@@ -1148,7 +1187,14 @@ function WorkshopDetailPage({ id }: { id: string }) {
 
   const saveAnalysisMutation = useMutation({
     mutationFn: () => updateWorkshopAnalysis(id, { meeting_notes: meetingNotes, key_decisions: keyDecisions }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["workshop", id] }),
+    onMutate: () => setNotesFeedback({ tone: "info", message: "Saving notes..." }),
+    onSuccess: () => {
+      setNotesFeedback({ tone: "success", message: "Meeting notes saved." });
+      queryClient.invalidateQueries({ queryKey: ["workshop", id] });
+    },
+    onError: (error) => {
+      setNotesFeedback({ tone: "error", message: mutationErrorMessage(error, "Meeting notes save failed.") });
+    },
   });
 
   const addActionMutation = useMutation({
@@ -1161,10 +1207,15 @@ function WorkshopDetailPage({ id }: { id: string }) {
       order_index: query.data?.actions.length || 0,
     }),
     onSuccess: () => {
+      setNewActionFeedback({ tone: "success", message: "Action added." });
       setNewActionText("");
       setNewOwnerName("");
       queryClient.invalidateQueries({ queryKey: ["workshop", id] });
       queryClient.invalidateQueries({ queryKey: ["workshops"] });
+    },
+    onMutate: () => setNewActionFeedback({ tone: "info", message: "Adding action..." }),
+    onError: (error) => {
+      setNewActionFeedback({ tone: "error", message: mutationErrorMessage(error, "Action could not be added.") });
     },
   });
 
@@ -1227,8 +1278,11 @@ function WorkshopDetailPage({ id }: { id: string }) {
             <h2>Meeting Notes</h2>
             <p>Editable output from transcript analysis.</p>
           </div>
-          <button className="mvp18-button-primary" onClick={() => saveAnalysisMutation.mutate()}>Save Notes</button>
+          <button className="mvp18-button-primary" onClick={() => saveAnalysisMutation.mutate()} disabled={saveAnalysisMutation.isPending}>
+            {saveAnalysisMutation.isPending ? "Saving..." : "Save Notes"}
+          </button>
         </div>
+        <SaveFeedbackMessage feedback={notesFeedback} />
         <div className="mvp18-form">
           <label>
             Notes
@@ -1265,10 +1319,15 @@ function WorkshopDetailPage({ id }: { id: string }) {
             <input value={newOwnerName} onChange={(event) => setNewOwnerName(event.target.value)} />
           </label>
           <div className="mvp18-actions">
-            <button className="mvp18-button-primary" disabled={!newActionText.trim()} onClick={() => addActionMutation.mutate()}>
-              Add Action
+            <button
+              className="mvp18-button-primary"
+              disabled={!newActionText.trim() || addActionMutation.isPending}
+              onClick={() => addActionMutation.mutate()}
+            >
+              {addActionMutation.isPending ? "Adding..." : "Add Action"}
             </button>
           </div>
+          <SaveFeedbackMessage feedback={newActionFeedback} />
         </div>
       </section>
 
@@ -1276,6 +1335,7 @@ function WorkshopDetailPage({ id }: { id: string }) {
         <WorkshopFormModal
           state={formState}
           onClose={() => setFormState(null)}
+          isSaving={updateMutation.isPending}
           onSubmit={(payload) => updateMutation.mutate(payload)}
         />
       ) : null}
@@ -1561,6 +1621,7 @@ function SettingsPage() {
   const [description, setDescription] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [userPromptTemplate, setUserPromptTemplate] = useState("");
+  const [settingsFeedback, setSettingsFeedback] = useState<SaveFeedback | null>(null);
 
   const prompts = promptsQuery.data ?? [];
   const selectedPrompt = prompts.find((prompt) => prompt.prompt_key === selectedPromptKey) || prompts[0];
@@ -1573,6 +1634,7 @@ function SettingsPage() {
 
   useEffect(() => {
     if (selectedPrompt) {
+      setSettingsFeedback(null);
       setName(selectedPrompt.name);
       setDescription(selectedPrompt.description || "");
       setSystemPrompt(selectedPrompt.system_prompt);
@@ -1588,7 +1650,14 @@ function SettingsPage() {
       user_prompt_template: userPromptTemplate,
       is_active: selectedPrompt.is_active,
     }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["llm-prompts"] }),
+    onMutate: () => setSettingsFeedback({ tone: "info", message: "Saving prompt..." }),
+    onSuccess: () => {
+      setSettingsFeedback({ tone: "success", message: "Prompt saved." });
+      queryClient.invalidateQueries({ queryKey: ["llm-prompts"] });
+    },
+    onError: (error) => {
+      setSettingsFeedback({ tone: "error", message: mutationErrorMessage(error, "Prompt save failed.") });
+    },
   });
 
   if (promptsQuery.isLoading) return <LoadingPanel label="Loading settings..." />;
@@ -1648,6 +1717,7 @@ function SettingsPage() {
                 {updateMutation.isPending ? "Saving..." : "Save Prompt"}
               </button>
             </div>
+            <SaveFeedbackMessage feedback={settingsFeedback} />
           </div>
         ) : (
           <EmptyPanel label="No prompt templates available." />
@@ -2769,6 +2839,7 @@ function App() {
         <HierarchyFormModal
           state={formState}
           onClose={() => setFormState(null)}
+          isSaving={createMutation.isPending || updateMutation.isPending}
           onSubmit={(payload) => {
             if (formState.mode === "create") {
               createMutation.mutate({ state: formState, payload });
