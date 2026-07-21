@@ -17,6 +17,9 @@ import CustomerSelector from "./CustomerSelector";
 import { formatDisplayDateTime } from "./utils/dateFormat";
 
 const clearConfirmation = "Clear GenAI classification analysis for this month?";
+const forceReprocessConfirmation =
+  "Force reprocess will clear the existing analysis for this month before starting a new run. Continue?";
+const batchesPerRequest = 1;
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -41,6 +44,13 @@ function formatCurrency(value: number | null | undefined): string {
 
 function displayLabel(value: string | null | undefined): string {
   return value?.trim() || "-";
+}
+
+function createRunId(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function SummaryMetric({
@@ -128,32 +138,84 @@ function GenAIWorkbench() {
     if (!canAct) {
       return;
     }
+    if (forceReprocess && !window.confirm(forceReprocessConfirmation)) {
+      return;
+    }
     setIsRunning(true);
     setMessage(null);
     setError(null);
     try {
-      const result = await runTicketClassificationEnrichment({
-        project_id: projectId,
-        analysis_month: analysisMonth,
-        batch_size: batchSize,
-        force_reprocess: forceReprocess,
-      });
-      setSummary(result.summary);
+      if (forceReprocess) {
+        const clearResult = await clearTicketClassificationAnalysis({
+          project_id: projectId,
+          analysis_month: analysisMonth,
+        });
+        setMessage(`Cleared ${formatNumber(clearResult.deleted_count)} rows. Starting analysis...`);
+      }
+
+      const runId = createRunId();
+      let latestResult = null as Awaited<
+        ReturnType<typeof runTicketClassificationEnrichment>
+      > | null;
+      let requestCount = 0;
+      let totalProcessedThisRun = 0;
+      let totalFailedThisRun = 0;
+
+      while (true) {
+        const result = await runTicketClassificationEnrichment({
+          project_id: projectId,
+          analysis_month: analysisMonth,
+          batch_size: batchSize,
+          batch_limit: batchesPerRequest,
+          run_id: runId,
+          force_reprocess: false,
+        });
+        latestResult = result;
+        requestCount += 1;
+        totalProcessedThisRun += result.processed_count;
+        totalFailedThisRun += result.failed_count;
+
+        setSummary(result.summary);
+        if (result.usage_run) {
+          setUsageRuns((currentRuns) => [
+            result.usage_run as GenAITicketClassificationUsageRun,
+            ...currentRuns.filter((run) => run.run_id !== result.usage_run?.run_id),
+          ]);
+        }
+        setMessage(
+          `Running... ${formatNumber(result.summary.analyzed_ticket_count)} of ${formatNumber(
+            result.eligible_ticket_count
+          )} tickets classified, ${formatNumber(result.remaining_ticket_count)} remaining.`
+        );
+
+        if (result.failed_count > 0) {
+          setError(
+            `Stopped after a batch returned ${formatNumber(result.failed_count)} failed tickets.`
+          );
+          break;
+        }
+        if (result.remaining_ticket_count <= 0 || result.processed_batch_count === 0) {
+          break;
+        }
+      }
+
       const [nextPivot, nextUsageRuns] = await Promise.all([
         getTicketClassificationPivot(projectId, analysisMonth),
         getTicketClassificationUsageRuns(projectId, analysisMonth),
       ]);
       setPivot(nextPivot);
-      setUsageRuns(
-        result.usage_run
-          ? [result.usage_run, ...nextUsageRuns.runs.filter((run) => run.run_id !== result.usage_run?.run_id)]
-          : nextUsageRuns.runs
-      );
-      setMessage(
-        `Analysis complete: ${formatNumber(result.processed_count)} processed, ${formatNumber(
-          result.skipped_cached_count
-        )} cached, ${formatNumber(result.failed_count)} failed.`
-      );
+      setUsageRuns(nextUsageRuns.runs);
+      if (latestResult) {
+        setMessage(
+          `Analysis complete: ${formatNumber(
+            latestResult.summary.analyzed_ticket_count
+          )} analyzed, ${formatNumber(latestResult.skipped_cached_count)} cached, ${formatNumber(
+            totalProcessedThisRun
+          )} processed in this run across ${formatNumber(requestCount)} requests, ${formatNumber(
+            totalFailedThisRun
+          )} failed.`
+        );
+      }
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Analysis failed.");
     } finally {

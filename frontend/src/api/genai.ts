@@ -68,7 +68,11 @@ export type GenAITicketClassificationRunResponse = {
   eligible_ticket_count: number;
   processed_count: number;
   skipped_cached_count: number;
+  skipped_error_count: number;
   failed_count: number;
+  remaining_ticket_count: number;
+  processed_batch_count: number;
+  total_batch_count: number;
   summary: GenAITicketClassificationSummary;
   usage: GenAITicketClassificationUsageSummary;
   usage_run: GenAITicketClassificationUsageRun | null;
@@ -126,6 +130,8 @@ export function runTicketClassificationEnrichment(payload: {
   analysis_month: string;
   force_reprocess: boolean;
   batch_size: number;
+  batch_limit?: number;
+  run_id?: string;
 }): Promise<GenAITicketClassificationRunResponse> {
   return requestJson<GenAITicketClassificationRunResponse>("/genai/ticket-classification/run", {
     method: "POST",

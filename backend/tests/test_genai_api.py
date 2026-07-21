@@ -890,38 +890,72 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
 
         with TestClient(app) as client:
             configure_genai(client)
+            run_id = "test-ticket-classification-progress-run"
             run_response = client.post(
                 "/api/genai/ticket-classification/run",
                 json={
                     "project_id": project_id_text,
                     "analysis_month": "2026-05",
-                    "batch_size": 10,
+                    "batch_size": 1,
+                    "batch_limit": 1,
+                    "run_id": run_id,
                 },
             )
             assert run_response.status_code == 200
             run_payload = run_response.json()
             assert run_payload["eligible_ticket_count"] == 2
-            assert run_payload["processed_count"] == 2
+            assert run_payload["processed_count"] == 1
             assert run_payload["failed_count"] == 0
+            assert run_payload["remaining_ticket_count"] == 1
+            assert run_payload["processed_batch_count"] == 1
+            assert run_payload["total_batch_count"] == 2
             assert run_payload["usage_run"]["model_name"] == "gpt-ticket-classifier-test"
             assert run_payload["usage_run"]["prompt_tokens"] == 20
             assert run_payload["usage_run"]["completion_tokens"] == 30
             assert run_payload["usage_run"]["total_tokens"] == 50
             assert run_payload["usage_run"]["estimated_cost"] == 0.001
-            assert run_payload["usage_run"]["ticket_count"] == 2
-            assert set(received_ticket_numbers) == {"INC-CLASSIFY", "SCTASK-CLASSIFY"}
+            assert run_payload["usage_run"]["ticket_count"] == 1
+            assert received_ticket_numbers == ["INC-CLASSIFY"]
             assert model_names_seen == ["gpt-ticket-classifier-test"]
+
+            second_run_response = client.post(
+                "/api/genai/ticket-classification/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "batch_size": 1,
+                    "batch_limit": 1,
+                    "run_id": run_id,
+                },
+            )
+            assert second_run_response.status_code == 200
+            second_run_payload = second_run_response.json()
+            assert second_run_payload["processed_count"] == 1
+            assert second_run_payload["remaining_ticket_count"] == 0
+            assert second_run_payload["usage_run"]["run_id"] == run_id
+            assert second_run_payload["usage_run"]["prompt_tokens"] == 40
+            assert second_run_payload["usage_run"]["completion_tokens"] == 60
+            assert second_run_payload["usage_run"]["total_tokens"] == 100
+            assert second_run_payload["usage_run"]["estimated_cost"] == 0.002
+            assert second_run_payload["usage_run"]["ticket_count"] == 2
+            assert set(received_ticket_numbers) == {"INC-CLASSIFY", "SCTASK-CLASSIFY"}
+            assert model_names_seen == [
+                "gpt-ticket-classifier-test",
+                "gpt-ticket-classifier-test",
+            ]
 
             cached_response = client.post(
                 "/api/genai/ticket-classification/run",
                 json={
                     "project_id": project_id_text,
                     "analysis_month": "2026-05",
-                    "batch_size": 10,
+                    "batch_size": 1,
+                    "batch_limit": 1,
                 },
             )
             assert cached_response.status_code == 200
             assert cached_response.json()["skipped_cached_count"] == 2
+            assert cached_response.json()["processed_batch_count"] == 0
 
             pivot_response = client.get(
                 "/api/genai/ticket-classification/pivot",
@@ -942,9 +976,9 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
             usage_runs = usage_response.json()["runs"]
             assert len(usage_runs) == 1
             assert usage_runs[0]["model_name"] == "gpt-ticket-classifier-test"
-            assert usage_runs[0]["prompt_tokens"] == 20
-            assert usage_runs[0]["completion_tokens"] == 30
-            assert usage_runs[0]["estimated_cost"] == 0.001
+            assert usage_runs[0]["prompt_tokens"] == 40
+            assert usage_runs[0]["completion_tokens"] == 60
+            assert usage_runs[0]["estimated_cost"] == 0.002
 
             clear_response = client.post(
                 "/api/genai/ticket-classification/clear",

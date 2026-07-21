@@ -197,6 +197,8 @@ class GenAITicketClassificationRunRequest(BaseModel):
     analysis_month: str = Field(default="2026-05", pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
     force_reprocess: bool = False
     batch_size: int = Field(default=10, ge=1, le=25)
+    batch_limit: int | None = Field(default=None, ge=1, le=50)
+    run_id: str | None = Field(default=None, max_length=80)
 
 
 class GenAITicketClassificationRunResponse(BaseModel):
@@ -205,7 +207,11 @@ class GenAITicketClassificationRunResponse(BaseModel):
     eligible_ticket_count: int
     processed_count: int
     skipped_cached_count: int
+    skipped_error_count: int
     failed_count: int
+    remaining_ticket_count: int
+    processed_batch_count: int
+    total_batch_count: int
     summary: GenAITicketClassificationSummaryResponse
     usage: GenAITicketClassificationUsageSummary
     usage_run: GenAITicketClassificationUsageRunResponse | None = None

@@ -42,6 +42,8 @@ class TicketClassificationRunRequest:
     analysis_month: str
     force_reprocess: bool = False
     batch_size: int = DEFAULT_BATCH_SIZE
+    batch_limit: int | None = None
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,12 @@ def clamp_batch_size(value: int | None) -> int:
     if value is None:
         return DEFAULT_BATCH_SIZE
     return max(1, min(int(value), MAX_BATCH_SIZE))
+
+
+def clamp_batch_limit(value: int | None) -> int | None:
+    if value is None:
+        return None
+    return max(1, min(int(value), 50))
 
 
 def compact_text(value: Any, *, max_chars: int) -> str | None:
@@ -424,6 +432,7 @@ def run_ticket_classification(
 ) -> dict[str, Any]:
     month_key = validate_month_key(request.analysis_month)
     batch_size = clamp_batch_size(request.batch_size)
+    batch_limit = clamp_batch_limit(request.batch_limit)
     customer_id = project_customer_id(db, request.project_id)
     config = effective_ticket_classification_config(get_or_create_config(db))
     validate_config(config)
@@ -436,6 +445,7 @@ def run_ticket_classification(
 
     tickets_to_process: list[tuple[Ticket, str, GenAITicketClassification | None]] = []
     skipped_cached_count = 0
+    skipped_error_count = 0
     for ticket in tickets:
         ticket_hash = input_hash_for_ticket(
             ticket,
@@ -452,7 +462,22 @@ def run_ticket_classification(
         ):
             skipped_cached_count += 1
             continue
+        if (
+            existing_row is not None
+            and existing_row.status == "error"
+            and existing_row.input_hash == ticket_hash
+            and not request.force_reprocess
+        ):
+            skipped_error_count += 1
+            continue
         tickets_to_process.append((ticket, ticket_hash, existing_row))
+
+    total_batches_to_process = (
+        (len(tickets_to_process) + batch_size - 1) // batch_size if tickets_to_process else 0
+    )
+    request_tickets_to_process = (
+        tickets_to_process[: batch_limit * batch_size] if batch_limit else tickets_to_process
+    )
 
     processed_count = 0
     failed_count = 0
@@ -461,10 +486,11 @@ def run_ticket_classification(
     estimated_cost = 0.0
     duration_ms = 0
     category_reuse_list = reusable_categories(db, request.project_id)
-    run_id = str(uuid4())
+    run_id = (request.run_id or "").strip() or str(uuid4())
+    processed_batch_count = 0
 
-    for index in range(0, len(tickets_to_process), batch_size):
-        batch = tickets_to_process[index : index + batch_size]
+    for index in range(0, len(request_tickets_to_process), batch_size):
+        batch = request_tickets_to_process[index : index + batch_size]
         batch_tickets = [ticket for ticket, _ticket_hash, _existing_row in batch]
         messages = build_messages(
             prompt_text=prompt_text,
@@ -488,6 +514,7 @@ def run_ticket_classification(
                 "ticket_count": len(batch_tickets),
                 "analysis_month": month_key,
                 "force_reprocess": request.force_reprocess,
+                "batch_limit": batch_limit,
             },
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -521,6 +548,7 @@ def run_ticket_classification(
                 )
                 failed_count += 1
             db.commit()
+            processed_batch_count += 1
             continue
         try:
             parsed_rows = parsed_rows_by_ticket(result.response_text)
@@ -540,6 +568,7 @@ def run_ticket_classification(
                 )
                 failed_count += 1
             db.commit()
+            processed_batch_count += 1
             continue
 
         for ticket, ticket_hash, existing_row in batch:
@@ -588,17 +617,26 @@ def run_ticket_classification(
                 )
                 failed_count += 1
         db.commit()
+        processed_batch_count += 1
         category_reuse_list = reusable_categories(db, request.project_id)
 
     summary = ticket_classification_summary(db, request.project_id, month_key)
     usage_run = ticket_classification_usage_run(db, request.project_id, month_key, run_id)
+    remaining_ticket_count = max(
+        eligible_count - summary["analyzed_ticket_count"] - summary["error_ticket_count"],
+        0,
+    )
     return {
         "project_id": request.project_id,
         "analysis_month": month_key,
         "eligible_ticket_count": eligible_count,
         "processed_count": processed_count,
         "skipped_cached_count": skipped_cached_count,
+        "skipped_error_count": skipped_error_count,
         "failed_count": failed_count,
+        "remaining_ticket_count": remaining_ticket_count,
+        "processed_batch_count": processed_batch_count,
+        "total_batch_count": total_batches_to_process,
         "summary": summary,
         "usage": {
             "prompt_tokens": prompt_tokens or None,

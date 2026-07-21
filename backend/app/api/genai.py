@@ -378,6 +378,8 @@ def post_ticket_classification_run(
                 analysis_month=request.analysis_month,
                 force_reprocess=request.force_reprocess,
                 batch_size=request.batch_size,
+                batch_limit=request.batch_limit,
+                run_id=request.run_id,
             ),
         )
     except TicketClassificationError as exc:
