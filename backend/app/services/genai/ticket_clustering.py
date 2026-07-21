@@ -36,6 +36,7 @@ from app.services.genai.llm_client import (
 from app.services.genai.prompt_service import get_prompt_template
 from app.services.genai.ticket_classification import (
     clean_label,
+    cluster_display_id,
     compact_text,
     eligible_ticket_statement,
     normalize_confidence,
@@ -52,7 +53,7 @@ progress_logger = logging.getLogger("uvicorn.error")
 
 PROMPT_KEY = "ticket_cluster_labeling"
 OUTPUT_PROMPT_KEY = "ticket_cluster_analysis"
-EMBEDDING_TEXT_VERSION = "cluster-ticket-text-v1"
+EMBEDDING_TEXT_VERSION = "cluster-ticket-text-v2-short-description-description"
 RANDOM_STATE = 42
 MAX_TEXT_CHARS = 2600
 MAX_REPRESENTATIVE_TEXT_CHARS = 500
@@ -248,12 +249,8 @@ def effective_label_config(config: GenAIConfig) -> GenAIConfig:
 def normalized_ticket_text(ticket: Ticket) -> str:
     payload = ticket_payload(ticket)
     parts = [
-        f"Ticket type: {payload.get('ticket_type') or ''}",
-        f"Catalog item: {payload.get('catalog_item_name') or payload.get('catalog_item') or ''}",
         f"Short description: {payload.get('short_description') or ''}",
         f"Description: {payload.get('description') or ''}",
-        f"Existing category: {payload.get('existing_category') or ''}",
-        f"Existing subcategory: {payload.get('existing_subcategory') or ''}",
     ]
     text = " ".join(part for part in parts if part.strip())
     for pattern in NOISE_PATTERNS:
@@ -261,7 +258,7 @@ def normalized_ticket_text(ticket: Ticket) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) > MAX_TEXT_CHARS:
         text = text[:MAX_TEXT_CHARS].rstrip()
-    return text or f"Ticket type: {ticket.ticket_type or 'Unknown'}"
+    return text or "No short description or description available"
 
 
 def hash_text(value: str) -> str:
@@ -605,7 +602,6 @@ def representative_tickets(
                     ticket.description,
                     max_chars=MAX_REPRESENTATIVE_TEXT_CHARS,
                 ),
-                "catalog_item_name": compact_text(ticket.catalog_item_name, max_chars=255),
                 "similarity": round(score, 4),
             },
         )
@@ -733,6 +729,7 @@ def label_cluster_level(
     for offset in range(0, len(cluster_items), batch_size):
         batch = cluster_items[offset : offset + batch_size]
         batch_number = (offset // batch_size) + 1
+        batch_ticket_count = sum(len(cluster.ticket_indices) for cluster in batch)
         log_progress(
             "level %s labeling batch %s/%s started for %s clusters",
             level,
@@ -783,7 +780,7 @@ def label_cluster_level(
                 "analysis_month": month_key,
                 "cluster_level": level,
                 "cluster_count": len(batch),
-                "ticket_count": 0,
+                "ticket_count": batch_ticket_count if level == 3 else 0,
             },
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -818,7 +815,7 @@ def label_cluster_level(
                         "analysis_month": month_key,
                         "cluster_level": level,
                         "cluster_count": len(batch),
-                        "ticket_count": 0,
+                        "ticket_count": batch_ticket_count if level == 3 else 0,
                     },
                     error_message=str(exc),
                 )
@@ -1005,8 +1002,11 @@ def save_ticket_assignments(
                 model_name=label_model_name,
                 status="success",
                 category_quality=None,
+                genai_category_cluster_id=cluster_display_id(1, l1.key if l1 else None),
                 genai_category=l1.label if l1 else l2.label if l2 else l3.label,
+                genai_subcategory_1_cluster_id=cluster_display_id(2, l2.key if l2 else None),
                 genai_subcategory_1=l2.label if l1 and l2 else None,
+                genai_subcategory_2_cluster_id=cluster_display_id(3, l3.key),
                 genai_subcategory_2=l3.label if l2 else None,
                 confidence=confidence,
                 metadata_json={
@@ -1045,16 +1045,37 @@ def _cluster_usage_run_from_logs(
     logs: list[GenAIUsageLog],
 ) -> dict[str, Any]:
     ordered_logs = sorted(logs, key=lambda row: row.created_at)
+    embedding_logs = [row for row in ordered_logs if row.operation == "ticket_cluster_embedding"]
+    llm_logs = [row for row in ordered_logs if row.operation == "ticket_cluster_labeling"]
     prompt_tokens = _sum_optional([row.prompt_tokens for row in ordered_logs])
     completion_tokens = _sum_optional([row.completion_tokens for row in ordered_logs])
     estimated_cost = _sum_optional([row.estimated_cost for row in ordered_logs])
     duration_ms = _sum_optional([row.duration_ms for row in ordered_logs])
+    embedding_tokens = _sum_optional([row.prompt_tokens for row in embedding_logs])
+    embedding_cost = _sum_optional([row.estimated_cost for row in embedding_logs])
+    llm_prompt_tokens = _sum_optional([row.prompt_tokens for row in llm_logs])
+    llm_completion_tokens = _sum_optional([row.completion_tokens for row in llm_logs])
+    llm_cost = _sum_optional([row.estimated_cost for row in llm_logs])
     total_tokens = (
         int((prompt_tokens or 0) + (completion_tokens or 0))
         if prompt_tokens is not None or completion_tokens is not None
         else None
     )
-    ticket_count = max(
+    llm_total_tokens = (
+        int((llm_prompt_tokens or 0) + (llm_completion_tokens or 0))
+        if llm_prompt_tokens is not None or llm_completion_tokens is not None
+        else None
+    )
+    embedded_ticket_count = sum(
+        int(_metadata_from_usage_log(row).get("ticket_count") or 0) for row in embedding_logs
+    )
+    labeled_level_3_ticket_count = sum(
+        int(metadata.get("ticket_count") or 0)
+        for row in llm_logs
+        for metadata in [_metadata_from_usage_log(row)]
+        if metadata.get("cluster_level") == 3
+    )
+    ticket_count = embedded_ticket_count or labeled_level_3_ticket_count or max(
         (int(_metadata_from_usage_log(row).get("ticket_count") or 0) for row in ordered_logs),
         default=0,
     )
@@ -1068,6 +1089,18 @@ def _cluster_usage_run_from_logs(
         "completion_tokens": int(completion_tokens) if completion_tokens is not None else None,
         "total_tokens": total_tokens,
         "estimated_cost": float(estimated_cost) if estimated_cost is not None else None,
+        "embedding_model_name": embedding_logs[-1].model_name if embedding_logs else None,
+        "embedding_tokens": int(embedding_tokens) if embedding_tokens is not None else None,
+        "embedding_cost": float(embedding_cost) if embedding_cost is not None else None,
+        "embedding_batch_count": len(embedding_logs),
+        "llm_model_name": llm_logs[-1].model_name if llm_logs else None,
+        "llm_prompt_tokens": int(llm_prompt_tokens) if llm_prompt_tokens is not None else None,
+        "llm_completion_tokens": (
+            int(llm_completion_tokens) if llm_completion_tokens is not None else None
+        ),
+        "llm_total_tokens": llm_total_tokens,
+        "llm_cost": float(llm_cost) if llm_cost is not None else None,
+        "llm_batch_count": len(llm_logs),
         "duration_ms": int(duration_ms) if duration_ms is not None else None,
         "ticket_count": ticket_count,
         "batch_count": len(ordered_logs),
@@ -1432,6 +1465,21 @@ def run_ticket_cluster_analysis(
         failed_count,
         time.perf_counter() - run_started_at,
     )
+    usage_run = ticket_cluster_usage_run(db, request.project_id, month_key, run_id)
+    if usage_run:
+        log_progress(
+            (
+                "run %s usage summary: embedding tokens=%s cost=%s; "
+                "llm input tokens=%s output tokens=%s cost=%s; total cost=%s"
+            ),
+            run_id,
+            usage_run.get("embedding_tokens"),
+            usage_run.get("embedding_cost"),
+            usage_run.get("llm_prompt_tokens"),
+            usage_run.get("llm_completion_tokens"),
+            usage_run.get("llm_cost"),
+            usage_run.get("estimated_cost"),
+        )
     return {
         "project_id": request.project_id,
         "analysis_month": month_key,
@@ -1447,5 +1495,5 @@ def run_ticket_cluster_analysis(
         "assigned_ticket_count": assigned_ticket_count,
         "failed_count": failed_count,
         "summary": ticket_classification_summary(db, request.project_id, month_key),
-        "usage_run": ticket_cluster_usage_run(db, request.project_id, month_key, run_id),
+        "usage_run": usage_run,
     }

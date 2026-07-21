@@ -137,6 +137,16 @@ class GenAITicketClassificationUsageRunResponse(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     estimated_cost: float | None = None
+    embedding_model_name: str | None = None
+    embedding_tokens: int | None = None
+    embedding_cost: float | None = None
+    embedding_batch_count: int | None = None
+    llm_model_name: str | None = None
+    llm_prompt_tokens: int | None = None
+    llm_completion_tokens: int | None = None
+    llm_total_tokens: int | None = None
+    llm_cost: float | None = None
+    llm_batch_count: int | None = None
     duration_ms: int | None = None
     ticket_count: int
     batch_count: int

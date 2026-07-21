@@ -1880,7 +1880,13 @@ def build_category_level2_payload(
     statement = (
         select(
             *[expression.label(name) for name, expression in dimensions.items()],
+            GenAITicketClassification.genai_category_cluster_id.label(
+                "genai_category_cluster_id",
+            ),
             category_expression.label("genai_category"),
+            GenAITicketClassification.genai_subcategory_1_cluster_id.label(
+                "genai_subcategory_1_cluster_id",
+            ),
             subcategory_expression.label("genai_subcategory_1"),
             label_expression.label("label"),
             func.count(source.c.id).label("ticket_count"),
@@ -1903,13 +1909,22 @@ def build_category_level2_payload(
             GenAITicketClassification.analysis_month == completion_month,
             GenAITicketClassification.status == "success",
         )
-        .group_by(*dimensions.values(), category_expression, subcategory_expression, label_expression)
+        .group_by(
+            *dimensions.values(),
+            GenAITicketClassification.genai_category_cluster_id,
+            category_expression,
+            GenAITicketClassification.genai_subcategory_1_cluster_id,
+            subcategory_expression,
+            label_expression,
+        )
         .order_by(func.count(source.c.id).desc(), label_expression.asc())
     )
     rows = [
         {
             **dimension_dict(dimension_key(row)),
+            "genai_category_cluster_id": row["genai_category_cluster_id"],
             "genai_category": str(row["genai_category"]),
+            "genai_subcategory_1_cluster_id": row["genai_subcategory_1_cluster_id"],
             "genai_subcategory_1": str(row["genai_subcategory_1"]),
             "label": str(row["label"]),
             "ticket_count": int(row["ticket_count"] or 0),
@@ -2553,6 +2568,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       min-width: 0;
       min-inline-size: 0;
       overflow-x: hidden;
+    }
+    .category-trend-stack {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+      width: 100%;
+      min-width: 0;
     }
     .chart-grid-three {
       display: grid;
@@ -5083,7 +5105,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const notes = payload.data_notes || [];
       const warnings = payload.warnings || [];
       return `<section class="panel full" data-commentary-key="performance_trends"><p class="label">Performance Trends</p><h2>Support Engineer Productivity</h2><p class="muted">Performance period: ${esc(period.label || "latest complete months")} (${fmt(period.working_days || 0)} working days). Offline export includes the latest 3 complete months at export time.</p><p class="muted">The dashboard duration/date filter does not affect Performance Trends. Generic Tickets includes Incidents and SC Tasks only.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "performance_trends" })}</section>
-        <div class="chart-grid two">
+        <div class="category-trend-stack">
           <section class="chart-card panel full"><h3>Top 20 Performers</h3><p class="muted">Pareto line is calculated using all support engineers.</p><div class="chart-frame chart-stage">${performanceParetoChart(payload.top_performers || [], "cumulative_productivity_pct", "Top 20 Performers")}</div></section>
           <section class="chart-card panel full"><h3>Bottom 20 Performers</h3><p class="muted">Bottom-up Pareto line is calculated using all support engineers.</p><div class="chart-frame chart-stage">${performanceParetoChart(payload.bottom_performers || [], "bottom_up_cumulative_productivity_pct", "Bottom 20 Performers")}</div></section>
         </div>
@@ -5466,14 +5488,17 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const totals = new Map();
       rows.forEach((row) => {
         const label = row.label || `${row.genai_category || "(blank)"} - ${row.genai_subcategory_1 || "(blank)"}`;
-        const current = totals.get(label) || {
+        const key = `${row.genai_category_cluster_id || ""}|${row.genai_subcategory_1_cluster_id || ""}|${label}`;
+        const current = totals.get(key) || {
           label,
+          categoryClusterId: row.genai_category_cluster_id || "",
           category: row.genai_category || "(blank)",
+          subcategoryClusterId: row.genai_subcategory_1_cluster_id || "",
           subcategory: row.genai_subcategory_1 || "(blank)",
           value: 0
         };
         current.value += Number(row.ticket_count || 0);
-        totals.set(label, current);
+        totals.set(key, current);
       });
       return [...totals.values()]
         .filter((row) => row.value > 0)
@@ -5481,13 +5506,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     function categoryTrendTable(rows, tableId) {
       if (!rows.length) return "";
-      return `<div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${tableId}.csv">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll compact-table-frame"><table id="${tableId}" class="applications-table compact-export-table"><thead><tr><th>Category - SubCategory-1</th><th>Category</th><th>SubCategory-1</th><th>Tickets</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.category)}</td><td>${esc(row.subcategory)}</td><td>${fmt(row.value)}</td></tr>`).join("")}</tbody></table></div>`;
+      return `<div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${tableId}.csv">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll compact-table-frame"><table id="${tableId}" class="applications-table compact-export-table"><thead><tr><th>Category ID</th><th>Category - SubCategory-1</th><th>Category</th><th>SubCategory-1 ID</th><th>SubCategory-1</th><th>Tickets</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.categoryClusterId || "-")}</td><td>${esc(row.label)}</td><td>${esc(row.category)}</td><td>${esc(row.subcategoryClusterId || "-")}</td><td>${esc(row.subcategory)}</td><td>${fmt(row.value)}</td></tr>`).join("")}</tbody></table></div>`;
     }
     function categoryTrendChart(title, ticketType, color) {
       const notApplicable = state.volTicketType !== "all" && state.volTicketType !== ticketType;
       const rows = notApplicable ? [] : categoryTrendRows(ticketType);
       const tableId = `category-level2-${ticketType}`;
-      return `<section class="chart-card panel" data-commentary-key="category_level2_${ticketType === "incident" ? "incidents" : "sc_tasks"}"><h3>${esc(title)}</h3><p class="muted">Ticket count by GenAI Category - GenAI SubCategory-1, sorted by volume.</p><div class="chart-frame chart-stage table-scroll">${notApplicable ? `<p class="muted" style="padding:12px">This category chart is not applicable for the selected ticket type.</p>` : horizontalBarChart(rows, { title, legend: "Tickets", color, emptyMessage: "No analyzed category rows match the filters.", height: Math.max(320, rows.length * 30 + 92), left: 330, right: 92, fontSize: 10, labelLength: 48 })}</div>${notApplicable ? "" : categoryTrendTable(rows, tableId)}</section>`;
+      return `<section class="chart-card panel" data-commentary-key="category_level2_${ticketType === "incident" ? "incidents" : "sc_tasks"}"><h3>${esc(title)}</h3><p class="muted">Ticket count by GenAI Category - GenAI SubCategory-1, sorted by volume.</p><div class="chart-frame chart-stage table-scroll">${notApplicable ? `<p class="muted" style="padding:12px">This category chart is not applicable for the selected ticket type.</p>` : horizontalBarChart(rows, { title, legend: "Tickets", color, emptyMessage: "No analyzed category rows match the filters.", height: Math.max(320, rows.length * 30 + 92), left: 260, right: 92, fontSize: 8, labelLength: 36 })}</div>${notApplicable ? "" : categoryTrendTable(rows, tableId)}</section>`;
     }
     function renderCategoryTrends() {
       const notes = DASHBOARD.volumetrics.category_trends?.data_notes || [];

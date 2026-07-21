@@ -48,9 +48,9 @@ class Settings(BaseSettings):
     genai_ticket_cluster_label_max_output_tokens: int | None = None
     genai_ticket_cluster_embedding_batch_size: int = 100
     genai_ticket_cluster_label_batch_size: int = 15
-    genai_ticket_cluster_level_1_count: int = 12
-    genai_ticket_cluster_level_2_count: int = 35
-    genai_ticket_cluster_level_3_count: int = 90
+    genai_ticket_cluster_level_1_count: int = 20
+    genai_ticket_cluster_level_2_count: int = 80
+    genai_ticket_cluster_level_3_count: int = 250
     genai_ticket_cluster_representative_ticket_count: int = 8
 
     @property

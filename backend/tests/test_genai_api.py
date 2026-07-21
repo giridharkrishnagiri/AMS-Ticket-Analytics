@@ -1219,6 +1219,12 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             dump_text = dump_response.text
             assert "INC-CLUSTER-A" in dump_text
             assert "SCTASK-CLUSTER-C" in dump_text
+            assert "genai_category_cluster_id" in dump_text
+            assert "genai_subcategory_1_cluster_id" in dump_text
+            assert "genai_subcategory_2_cluster_id" in dump_text
+            assert "Category-000" in dump_text
+            assert "SubCategory-1-000" in dump_text
+            assert "SubCategory-2-000" in dump_text
             assert "Level 1" in dump_text
             assert "Level 2" in dump_text
             assert "Level 3" in dump_text
@@ -1230,7 +1236,18 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                 params={"project_id": project_id_text, "analysis_month": "2026-05"},
             )
             assert usage_response.status_code == 200
-            assert len(usage_response.json()["runs"]) == 2
+            usage_runs = usage_response.json()["runs"]
+            assert len(usage_runs) == 2
+            first_run = next(run for run in usage_runs if run["run_id"] == "cluster-test-run-1")
+            assert first_run["ticket_count"] == 4
+            assert first_run["embedding_tokens"] == 20
+            assert first_run["embedding_cost"] == 0.0001
+            assert first_run["embedding_batch_count"] == 1
+            assert first_run["llm_model_name"] == "cluster-label-test"
+            assert first_run["llm_prompt_tokens"] == 75
+            assert first_run["llm_completion_tokens"] == 60
+            assert first_run["llm_cost"] == 0.003
+            assert first_run["llm_batch_count"] == 3
 
             clear_response = client.post(
                 "/api/genai/ticket-cluster-analysis/clear",

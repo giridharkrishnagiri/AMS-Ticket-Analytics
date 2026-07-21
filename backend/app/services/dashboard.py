@@ -6301,7 +6301,13 @@ def volumetrics_category_level2_rows(
     ]
     statement = (
         select(
+            GenAITicketClassification.genai_category_cluster_id.label(
+                "genai_category_cluster_id",
+            ),
             category_expression.label("genai_category"),
+            GenAITicketClassification.genai_subcategory_1_cluster_id.label(
+                "genai_subcategory_1_cluster_id",
+            ),
             subcategory_expression.label("genai_subcategory_1"),
             label_expression.label("label"),
             func.count(source.c.id).label("ticket_count"),
@@ -6315,12 +6321,20 @@ def volumetrics_category_level2_rows(
             ),
         )
         .where(*conditions)
-        .group_by(category_expression, subcategory_expression, label_expression)
+        .group_by(
+            GenAITicketClassification.genai_category_cluster_id,
+            category_expression,
+            GenAITicketClassification.genai_subcategory_1_cluster_id,
+            subcategory_expression,
+            label_expression,
+        )
         .order_by(func.count(source.c.id).desc(), label_expression.asc())
     )
     return [
         {
+            "genai_category_cluster_id": row["genai_category_cluster_id"],
             "genai_category": str(row["genai_category"]),
+            "genai_subcategory_1_cluster_id": row["genai_subcategory_1_cluster_id"],
             "genai_subcategory_1": str(row["genai_subcategory_1"]),
             "label": str(row["label"]),
             "ticket_count": int(row["ticket_count"] or 0),

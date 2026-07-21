@@ -1045,7 +1045,9 @@ class VolumetricsScTaskCatalogItemProportionResponse(BaseModel):
 
 
 class VolumetricsCategoryLevel2Row(BaseModel):
+    genai_category_cluster_id: str | None = None
     genai_category: str
+    genai_subcategory_1_cluster_id: str | None = None
     genai_subcategory_1: str
     label: str
     ticket_count: int

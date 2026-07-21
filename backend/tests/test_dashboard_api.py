@@ -4927,7 +4927,9 @@ def test_volumetrics_category_level2_trends_use_saved_genai_classification() -> 
         payload = response.json()
         assert payload["incidents"] == [
             {
+                "genai_category_cluster_id": None,
                 "genai_category": "Access",
+                "genai_subcategory_1_cluster_id": None,
                 "genai_subcategory_1": "Login",
                 "label": "Access - Login",
                 "ticket_count": 2,
@@ -4935,7 +4937,9 @@ def test_volumetrics_category_level2_trends_use_saved_genai_classification() -> 
         ]
         assert payload["sc_tasks"] == [
             {
+                "genai_category_cluster_id": None,
                 "genai_category": "User Administration",
+                "genai_subcategory_1_cluster_id": None,
                 "genai_subcategory_1": "New User",
                 "label": "User Administration - New User",
                 "ticket_count": 1,

@@ -17,6 +17,16 @@ export type GenAITicketClassificationUsageRun = {
   completion_tokens: number | null;
   total_tokens: number | null;
   estimated_cost: number | null;
+  embedding_model_name?: string | null;
+  embedding_tokens?: number | null;
+  embedding_cost?: number | null;
+  embedding_batch_count?: number | null;
+  llm_model_name?: string | null;
+  llm_prompt_tokens?: number | null;
+  llm_completion_tokens?: number | null;
+  llm_total_tokens?: number | null;
+  llm_cost?: number | null;
+  llm_batch_count?: number | null;
   duration_ms: number | null;
   ticket_count: number;
   batch_count: number;

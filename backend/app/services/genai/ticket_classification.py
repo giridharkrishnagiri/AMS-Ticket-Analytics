@@ -45,9 +45,12 @@ TICKET_DUMP_EXCLUDED_COLUMNS = {
     "normalized_payload",
 }
 TICKET_DUMP_CLASSIFICATION_COLUMNS = [
+    "genai_category_cluster_id",
     "genai_category_quality",
     "genai_category",
+    "genai_subcategory_1_cluster_id",
     "genai_subcategory_1",
+    "genai_subcategory_2_cluster_id",
     "genai_subcategory_2",
     "genai_confidence",
     "genai_status",
@@ -107,6 +110,39 @@ def clamp_batch_limit(value: int | None) -> int | None:
     if value is None:
         return None
     return max(1, min(int(value), 50))
+
+
+def cluster_display_id(level: int, cluster_key: str | None) -> str | None:
+    if not cluster_key:
+        return None
+    cleaned_key = cluster_key.strip()
+    match = re.search(r"(\d+)$", cleaned_key)
+    suffix = match.group(1).zfill(4) if match else cleaned_key
+    prefix = {
+        1: "Category",
+        2: "SubCategory-1",
+        3: "SubCategory-2",
+    }.get(level)
+    return f"{prefix}-{suffix}" if prefix else cleaned_key
+
+
+def classification_cluster_id(
+    classification: GenAITicketClassification | None,
+    *,
+    column_name: str,
+    metadata_key: str,
+    level: int,
+) -> str | None:
+    if classification is None:
+        return None
+    value = getattr(classification, column_name, None)
+    if value:
+        return value
+    metadata = (
+        classification.metadata_json if isinstance(classification.metadata_json, dict) else {}
+    )
+    metadata_value = metadata.get(metadata_key)
+    return cluster_display_id(level, str(metadata_value)) if metadata_value else None
 
 
 def compact_text(value: Any, *, max_chars: int) -> str | None:
@@ -845,14 +881,32 @@ def ticket_classification_dump_csv(
         row = {column: _csv_value(getattr(ticket, column, None)) for column in ticket_columns}
         row.update(
             {
+                "genai_category_cluster_id": classification_cluster_id(
+                    classification,
+                    column_name="genai_category_cluster_id",
+                    metadata_key="cluster_level_1",
+                    level=1,
+                ),
                 "genai_category_quality": (
                     classification.category_quality if classification is not None else None
                 ),
                 "genai_category": (
                     classification.genai_category if classification is not None else None
                 ),
+                "genai_subcategory_1_cluster_id": classification_cluster_id(
+                    classification,
+                    column_name="genai_subcategory_1_cluster_id",
+                    metadata_key="cluster_level_2",
+                    level=2,
+                ),
                 "genai_subcategory_1": (
                     classification.genai_subcategory_1 if classification is not None else None
+                ),
+                "genai_subcategory_2_cluster_id": classification_cluster_id(
+                    classification,
+                    column_name="genai_subcategory_2_cluster_id",
+                    metadata_key="cluster_level_3",
+                    level=3,
                 ),
                 "genai_subcategory_2": (
                     classification.genai_subcategory_2 if classification is not None else None

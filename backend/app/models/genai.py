@@ -311,8 +311,23 @@ class GenAITicketClassification(UuidPrimaryKeyMixin, TimestampMixin, Base):
     model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="success", index=True)
     category_quality: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    genai_category_cluster_id: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+        index=True,
+    )
     genai_category: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    genai_subcategory_1_cluster_id: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+        index=True,
+    )
     genai_subcategory_1: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    genai_subcategory_2_cluster_id: Mapped[str | None] = mapped_column(
+        String(80),
+        nullable=True,
+        index=True,
+    )
     genai_subcategory_2: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

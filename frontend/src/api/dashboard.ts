@@ -933,7 +933,9 @@ export type DashboardVolumetricsScTaskCatalogItemProportion = {
 };
 
 export type DashboardVolumetricsCategoryLevel2Row = {
+  genai_category_cluster_id: string | null;
   genai_category: string;
+  genai_subcategory_1_cluster_id: string | null;
   genai_subcategory_1: string;
   label: string;
   ticket_count: number;

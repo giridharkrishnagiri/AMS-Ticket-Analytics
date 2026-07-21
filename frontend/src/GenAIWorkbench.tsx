@@ -577,42 +577,59 @@ function GenAIWorkbench() {
             <thead>
               <tr>
                 <th>Completed</th>
-                <th>Model</th>
                 <th>Tickets</th>
-                <th>Batches</th>
-                <th>Input Tokens</th>
-                <th>Output Tokens</th>
-                <th>Total Tokens</th>
-                <th>Cost</th>
+                <th>Embedding Model</th>
+                <th>Embedding Batches</th>
+                <th>Embedding Tokens</th>
+                <th>Embedding Cost</th>
+                <th>LLM Model</th>
+                <th>LLM Batches</th>
+                <th>LLM Input Tokens</th>
+                <th>LLM Output Tokens</th>
+                <th>LLM Total Tokens</th>
+                <th>LLM Cost</th>
+                <th>Total Cost</th>
                 <th>Duration</th>
               </tr>
             </thead>
             <tbody>
               {usageRuns.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>No enrichment usage rows for the selected month.</td>
+                  <td colSpan={14}>No enrichment usage rows for the selected month.</td>
                 </tr>
               ) : (
-                usageRuns.map((run) => (
-                  <tr key={run.run_id}>
-                    <td>{formatDisplayDateTime(run.completed_at)}</td>
-                    <td>{displayLabel(run.model_name)}</td>
-                    <td>{formatNumber(run.ticket_count)}</td>
-                    <td>
-                      {formatNumber(run.batch_count)}
-                      {run.error_batch_count > 0 ? ` (${formatNumber(run.error_batch_count)} failed)` : ""}
-                    </td>
-                    <td>{formatNumber(run.prompt_tokens)}</td>
-                    <td>{formatNumber(run.completion_tokens)}</td>
-                    <td>{formatNumber(run.total_tokens)}</td>
-                    <td>{formatCurrency(run.estimated_cost)}</td>
-                    <td>
-                      {run.duration_ms === null || run.duration_ms === undefined
-                        ? "Not available"
-                        : `${formatNumber(run.duration_ms)} ms`}
-                    </td>
-                  </tr>
-                ))
+                usageRuns.map((run) => {
+                  const hasEmbeddingSplit = run.embedding_tokens !== undefined;
+                  const llmPromptTokens =
+                    run.llm_prompt_tokens ?? (hasEmbeddingSplit ? null : run.prompt_tokens);
+                  const llmCompletionTokens =
+                    run.llm_completion_tokens ?? (hasEmbeddingSplit ? null : run.completion_tokens);
+                  const llmTotalTokens =
+                    run.llm_total_tokens ?? (hasEmbeddingSplit ? null : run.total_tokens);
+                  const llmCost = run.llm_cost ?? (hasEmbeddingSplit ? null : run.estimated_cost);
+                  return (
+                    <tr key={run.run_id}>
+                      <td>{formatDisplayDateTime(run.completed_at)}</td>
+                      <td>{formatNumber(run.ticket_count)}</td>
+                      <td>{displayLabel(run.embedding_model_name)}</td>
+                      <td>{formatNumber(run.embedding_batch_count)}</td>
+                      <td>{formatNumber(run.embedding_tokens)}</td>
+                      <td>{formatCurrency(run.embedding_cost)}</td>
+                      <td>{displayLabel(run.llm_model_name ?? run.model_name)}</td>
+                      <td>{formatNumber(run.llm_batch_count)}</td>
+                      <td>{formatNumber(llmPromptTokens)}</td>
+                      <td>{formatNumber(llmCompletionTokens)}</td>
+                      <td>{formatNumber(llmTotalTokens)}</td>
+                      <td>{formatCurrency(llmCost)}</td>
+                      <td>{formatCurrency(run.estimated_cost)}</td>
+                      <td>
+                        {run.duration_ms === null || run.duration_ms === undefined
+                          ? "Not available"
+                          : `${formatNumber(run.duration_ms)} ms`}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

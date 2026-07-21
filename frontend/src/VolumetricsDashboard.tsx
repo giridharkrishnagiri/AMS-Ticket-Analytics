@@ -3718,7 +3718,9 @@ function CategoryLevel2Tooltip({
   return (
     <div className="chart-tooltip">
       <strong>{row.label}</strong>
+      <span>Category ID: {row.genai_category_cluster_id ?? "-"}</span>
       <span>Category: {row.genai_category}</span>
+      <span>SubCategory-1 ID: {row.genai_subcategory_1_cluster_id ?? "-"}</span>
       <span>SubCategory-1: {row.genai_subcategory_1}</span>
       <span>Tickets: {formatNumber(row.ticket_count)}</span>
     </div>
@@ -3740,17 +3742,25 @@ function CategoryLevel2DataTable({
       <table className="compact-data-table category-level2-data-table" aria-label={`${title} data`}>
         <thead>
           <tr>
+            <th>Category ID</th>
             <th>Category - SubCategory-1</th>
             <th>Category</th>
+            <th>SubCategory-1 ID</th>
             <th>SubCategory-1</th>
             <th>Tickets</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.label}>
+            <tr
+              key={`${row.genai_category_cluster_id ?? ""}|${
+                row.genai_subcategory_1_cluster_id ?? ""
+              }|${row.label}`}
+            >
+              <td>{row.genai_category_cluster_id ?? "-"}</td>
               <td>{row.label}</td>
               <td>{row.genai_category}</td>
+              <td>{row.genai_subcategory_1_cluster_id ?? "-"}</td>
               <td>{row.genai_subcategory_1}</td>
               <td>{formatNumber(row.ticket_count)}</td>
             </tr>
@@ -3780,7 +3790,7 @@ function CategoryLevel2BarChart({
   const notApplicable = categoryTrendNotApplicable(selectedTicketType, valueTicketType);
   const rows = notApplicable ? [] : data;
   const hasRows = rows.length > 0;
-  const chartWidth = Math.max(760, plotWidth - 8);
+  const chartWidth = Math.max(720, plotWidth - 8);
   const chartHeight = Math.max(300, rows.length * 28 + 88);
   const canCopy = status !== "loading" && hasRows;
 
@@ -3824,7 +3834,7 @@ function CategoryLevel2BarChart({
                 data={rows}
                 height={chartHeight}
                 layout="vertical"
-                margin={{ top: 18, right: 86, bottom: 26, left: 260 }}
+                margin={{ top: 18, right: 86, bottom: 26, left: 220 }}
                 width={chartWidth}
               >
                 <CartesianGrid horizontal={false} strokeDasharray="3 3" />
@@ -3832,10 +3842,10 @@ function CategoryLevel2BarChart({
                 <YAxis
                   dataKey="label"
                   interval={0}
-                  tick={{ fontSize: 10, fontWeight: 700 }}
-                  tickFormatter={(value) => truncateLabel(String(value), 42)}
+                  tick={{ fontSize: 8, fontWeight: 700 }}
+                  tickFormatter={(value) => truncateLabel(String(value), 34)}
                   type="category"
-                  width={250}
+                  width={210}
                 />
                 <Tooltip content={<CategoryLevel2Tooltip />} />
                 <Bar
@@ -3847,7 +3857,7 @@ function CategoryLevel2BarChart({
                   <LabelList
                     dataKey="ticket_count"
                     position="right"
-                    fontSize={11}
+                    fontSize={10}
                     fontWeight={800}
                   />
                 </Bar>
