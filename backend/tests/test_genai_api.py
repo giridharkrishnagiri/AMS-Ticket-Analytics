@@ -860,22 +860,25 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
                 response_text=json.dumps(
                     {
                         "tickets": [
-                            {
-                                "ticket_number": row["ticket_number"],
-                                "category_quality": "Meaningful",
-                                "genai_category": (
-                                    "Access Issue"
-                                    if row["ticket_type"] == "INCIDENT"
-                                    else "User Administration"
-                                ),
-                                "genai_subcategory_1": (
-                                    "Login Support"
-                                    if row["ticket_type"] == "INCIDENT"
-                                    else "New User"
-                                ),
-                                "genai_subcategory_2": None,
-                                "confidence": 0.92,
-                            }
+                            (
+                                {
+                                    "ticket_number": row["ticket_number"],
+                                    "category_quality": "Meaningful",
+                                    "genai_category": None,
+                                    "genai_subcategory_1": None,
+                                    "genai_subcategory_2": None,
+                                    "confidence": 0.1,
+                                }
+                                if row["ticket_type"] == "SERVICE_CATALOG_TASK"
+                                else {
+                                    "ticket_number": row["ticket_number"],
+                                    "category_quality": "Meaningful",
+                                    "genai_category": "Access Issue",
+                                    "genai_subcategory_1": "Login Support",
+                                    "genai_subcategory_2": None,
+                                    "confidence": 0.92,
+                                }
+                            )
                             for row in ticket_rows
                         ],
                     },
@@ -935,6 +938,7 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
             assert second_run_response.status_code == 200
             second_run_payload = second_run_response.json()
             assert second_run_payload["processed_count"] == 1
+            assert second_run_payload["failed_count"] == 0
             assert second_run_payload["remaining_ticket_count"] == 0
             assert second_run_payload["usage_run"]["run_id"] == run_id
             assert second_run_payload["usage_run"]["prompt_tokens"] == 40
@@ -970,7 +974,7 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
             pivot_rows = pivot_response.json()["rows"]
             assert {row["genai_category"] for row in pivot_rows} == {
                 "Access Issue",
-                "User Administration",
+                "Needs Review",
             }
 
             usage_response = client.get(

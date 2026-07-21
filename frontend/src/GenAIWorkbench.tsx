@@ -185,12 +185,18 @@ function GenAIWorkbench() {
         setMessage(
           `Running... ${formatNumber(result.summary.analyzed_ticket_count)} of ${formatNumber(
             result.eligible_ticket_count
-          )} tickets classified, ${formatNumber(result.remaining_ticket_count)} remaining.`
+          )} tickets classified, ${formatNumber(result.remaining_ticket_count)} remaining${
+            result.failed_count > 0
+              ? `; ${formatNumber(result.failed_count)} ticket-level issue logged in this batch`
+              : ""
+          }.`
         );
 
-        if (result.failed_count > 0) {
+        if (result.failed_count > 0 && result.processed_count === 0) {
           setError(
-            `Stopped after a batch returned ${formatNumber(result.failed_count)} failed tickets.`
+            `Stopped because this request made no progress and returned ${formatNumber(
+              result.failed_count
+            )} failed tickets.`
           );
           break;
         }

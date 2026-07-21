@@ -112,6 +112,8 @@ For each ticket:
 - If description text is not English, infer internally and still return English labels.
 - Assess the existing Category/Subcategory combination as Meaningful, Non meaningful, or null when
   Category is blank.
+- Always return a non-empty genai_category. If the ticket text is too vague to infer a meaningful
+  category, use "Needs Review" and leave both subcategory fields null.
 
 Return only JSON with this shape:
 {

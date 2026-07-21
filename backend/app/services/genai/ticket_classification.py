@@ -24,6 +24,7 @@ from app.services.genai.tools.validation import (
 from app.services.genai.usage_log_service import create_usage_log
 
 PROMPT_KEY = "ticket_classification_enrichment"
+FALLBACK_CATEGORY = "Needs Review"
 MAX_DESCRIPTION_CHARS = 1800
 MAX_SHORT_DESCRIPTION_CHARS = 500
 MAX_CATEGORY_REUSE_ITEMS = 50
@@ -321,10 +322,10 @@ def upsert_success_row(
     metadata: dict[str, Any],
 ) -> GenAITicketClassification:
     category = clean_label(classification.get("genai_category"))
+    metadata_for_row = dict(metadata)
     if category is None:
-        raise TicketClassificationError(
-            f"Model response did not include a category for {ticket.ticket_number}.",
-        )
+        category = FALLBACK_CATEGORY
+        metadata_for_row["category_fallback"] = "missing_model_category"
     row = existing_row or GenAITicketClassification(
         project_id=ticket.project_id,
         ticket_number=ticket.ticket_number,
@@ -345,7 +346,7 @@ def upsert_success_row(
     row.genai_subcategory_1 = clean_label(classification.get("genai_subcategory_1"))
     row.genai_subcategory_2 = clean_label(classification.get("genai_subcategory_2"))
     row.confidence = normalize_confidence(classification.get("confidence"))
-    row.metadata_json = metadata
+    row.metadata_json = metadata_for_row
     row.error_message = None
     row.processed_at = datetime.now(UTC)
     db.add(row)
