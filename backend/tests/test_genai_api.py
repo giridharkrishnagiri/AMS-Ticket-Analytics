@@ -20,6 +20,8 @@ from app.models import (
     GenAIPromptTemplate,
     GenAISafetySettings,
     GenAITicketClassification,
+    GenAITicketClusterLabel,
+    GenAITicketEmbedding,
     GenAIToolRun,
     GenAIUsageLog,
     Project,
@@ -28,7 +30,7 @@ from app.models import (
     UploadedFile,
 )
 from app.services.genai.default_prompts import DEFAULT_PROMPTS_BY_KEY
-from app.services.genai.llm_client import LLMCompletionResult
+from app.services.genai.llm_client import LLMCompletionResult, LLMEmbeddingResult
 from app.services.genai.usage_log_service import create_usage_log
 
 
@@ -38,7 +40,9 @@ def reset_genai_tables() -> None:
         for model in (
             GenAIToolRun,
             GenAIGeneratedChart,
+            GenAITicketClusterLabel,
             GenAITicketClassification,
+            GenAITicketEmbedding,
             GenAIUsageLog,
             GenAIChatMessage,
             GenAIChatSession,
@@ -907,7 +911,7 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
                     "run_id": run_id,
                 },
             )
-            assert run_response.status_code == 200
+            assert run_response.status_code == 200, run_response.text
             run_payload = run_response.json()
             assert run_payload["eligible_ticket_count"] == 2
             assert run_payload["processed_count"] == 1
@@ -935,7 +939,7 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
                     "run_id": run_id,
                 },
             )
-            assert second_run_response.status_code == 200
+            assert second_run_response.status_code == 200, second_run_response.text
             second_run_payload = second_run_response.json()
             assert second_run_payload["processed_count"] == 1
             assert second_run_payload["failed_count"] == 0
@@ -1011,6 +1015,205 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
                 ),
             ).scalars().all()
             assert remaining == []
+        finally:
+            db.close()
+    finally:
+        cleanup_classification_client(client_id)
+        get_settings.cache_clear()
+
+
+def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) -> None:
+    reset_genai_tables()
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_EMBEDDING_MODEL_NAME", "embedding-test")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LABEL_MODEL_NAME", "cluster-label-test")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_1_COUNT", "2")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_2_COUNT", "3")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_3_COUNT", "4")
+    get_settings.cache_clear()
+    client_id, project_id, upload_batch_id, uploaded_file_id, _suffix = (
+        create_ticket_classification_project()
+    )
+    project_id_text = str(project_id)
+    try:
+        may_5 = datetime(2026, 5, 5, 12, 0, tzinfo=UTC)
+        may_6 = datetime(2026, 5, 6, 12, 0, tzinfo=UTC)
+        may_7 = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
+        may_8 = datetime(2026, 5, 8, 12, 0, tzinfo=UTC)
+
+        for ticket_number, ticket_type, state, completed_at in (
+            ("INC-CLUSTER-A", "INCIDENT", "Resolved", may_5),
+            ("INC-CLUSTER-B", "INCIDENT", "Resolved", may_6),
+            ("SCTASK-CLUSTER-C", "SERVICE_CATALOG_TASK", "Closed Complete", may_7),
+            ("SCTASK-CLUSTER-D", "SERVICE_CATALOG_TASK", "Closed Complete", may_8),
+        ):
+            add_classification_ticket(
+                project_id=project_id,
+                upload_batch_id=upload_batch_id,
+                uploaded_file_id=uploaded_file_id,
+                ticket_number=ticket_number,
+                ticket_type=ticket_type,
+                state=state,
+                resolved_at=completed_at if ticket_type == "INCIDENT" else None,
+                closed_at=completed_at if ticket_type == "SERVICE_CATALOG_TASK" else None,
+            )
+        add_classification_ticket(
+            project_id=project_id,
+            upload_batch_id=upload_batch_id,
+            uploaded_file_id=uploaded_file_id,
+            ticket_number="INC-CLUSTER-CANCELED",
+            ticket_type="INCIDENT",
+            state="Canceled",
+            resolved_at=may_5,
+        )
+        add_classification_ticket(
+            project_id=project_id,
+            upload_batch_id=upload_batch_id,
+            uploaded_file_id=uploaded_file_id,
+            ticket_number="SCTASK-CLUSTER-INCOMPLETE",
+            ticket_type="SERVICE_CATALOG_TASK",
+            state="Closed Incomplete",
+            closed_at=may_5,
+        )
+
+        embedding_calls: list[list[str]] = []
+        label_model_names: list[str | None] = []
+
+        def vector_for_text(text: str) -> list[float]:
+            if "INC-CLUSTER-A" in text:
+                return [1.0, 0.0, 0.0]
+            if "INC-CLUSTER-B" in text:
+                return [0.9, 0.1, 0.0]
+            if "SCTASK-CLUSTER-C" in text:
+                return [0.0, 1.0, 0.0]
+            if "SCTASK-CLUSTER-D" in text:
+                return [0.0, 0.9, 0.1]
+            return [0.0, 0.0, 1.0]
+
+        def fake_embedding_request(_config, texts):
+            embedding_calls.append(texts)
+            return LLMEmbeddingResult(
+                ok=True,
+                embeddings=[vector_for_text(text) for text in texts],
+                prompt_tokens=len(texts) * 5,
+                total_tokens=len(texts) * 5,
+                estimated_cost=0.0001,
+                duration_ms=10,
+            )
+
+        def fake_chat_completion(config, messages):
+            label_model_names.append(config.model_name)
+            content = messages[1]["content"]
+            payload = json.loads(content[content.find("{") :])
+            level = payload["level"]
+            return LLMCompletionResult(
+                ok=True,
+                response_text=json.dumps(
+                    {
+                        "clusters": [
+                            {
+                                "cluster_id": cluster["cluster_id"],
+                                "label": f"Level {level} {cluster['cluster_id']}",
+                                "summary": f"Summary for {cluster['cluster_id']}",
+                                "confidence": 0.9,
+                            }
+                            for cluster in payload["clusters"]
+                        ],
+                    },
+                ),
+                prompt_tokens=25,
+                completion_tokens=20,
+                estimated_cost=0.001,
+                duration_ms=20,
+            )
+
+        monkeypatch.setattr(
+            "app.services.genai.ticket_clustering.embedding_request",
+            fake_embedding_request,
+        )
+        monkeypatch.setattr(
+            "app.services.genai.ticket_clustering.chat_completion",
+            fake_chat_completion,
+        )
+
+        with TestClient(app) as client:
+            configure_genai(client)
+            settings_response = client.get("/api/genai/workbench-settings")
+            assert settings_response.status_code == 200
+            assert settings_response.json()["ticket_cluster_analysis_button_enabled"] is True
+
+            run_response = client.post(
+                "/api/genai/ticket-cluster-analysis/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "force_reprocess": True,
+                    "run_id": "cluster-test-run-1",
+                },
+            )
+            assert run_response.status_code == 200
+            run_payload = run_response.json()
+            assert run_payload["eligible_ticket_count"] == 4
+            assert run_payload["assigned_ticket_count"] == 4
+            assert run_payload["new_embedding_count"] == 4
+            assert run_payload["cached_embedding_count"] == 0
+            assert run_payload["level_1_cluster_count"] == 2
+            assert run_payload["level_2_cluster_count"] == 3
+            assert run_payload["level_3_cluster_count"] == 4
+            assert run_payload["summary"]["analyzed_ticket_count"] == 4
+            assert label_model_names
+            assert set(label_model_names) == {"cluster-label-test"}
+
+            second_run_response = client.post(
+                "/api/genai/ticket-cluster-analysis/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "force_reprocess": True,
+                    "run_id": "cluster-test-run-2",
+                },
+            )
+            assert second_run_response.status_code == 200
+            second_payload = second_run_response.json()
+            assert second_payload["new_embedding_count"] == 0
+            assert second_payload["cached_embedding_count"] == 4
+
+            pivot_response = client.get(
+                "/api/genai/ticket-classification/pivot",
+                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert pivot_response.status_code == 200
+            assert sum(row["total_count"] for row in pivot_response.json()["rows"]) == 4
+
+            usage_response = client.get(
+                "/api/genai/ticket-cluster-analysis/usage-runs",
+                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert usage_response.status_code == 200
+            assert len(usage_response.json()["runs"]) == 2
+
+            clear_response = client.post(
+                "/api/genai/ticket-cluster-analysis/clear",
+                json={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert clear_response.status_code == 200
+            assert clear_response.json()["deleted_classification_count"] == 4
+            assert clear_response.json()["deleted_cluster_label_count"] == 9
+
+        assert len(embedding_calls) == 1
+        db = SessionLocal()
+        try:
+            assert (
+                db.query(GenAITicketEmbedding)
+                .filter(GenAITicketEmbedding.project_id == project_id)
+                .count()
+                == 4
+            )
+            assert (
+                db.query(GenAITicketClassification)
+                .filter(GenAITicketClassification.project_id == project_id)
+                .count()
+                == 0
+            )
         finally:
             db.close()
     finally:

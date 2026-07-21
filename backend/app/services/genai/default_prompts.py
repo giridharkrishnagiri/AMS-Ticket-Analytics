@@ -129,6 +129,35 @@ Return only JSON with this shape:
   ]
 }""",
     ),
+    DefaultPromptTemplate(
+        prompt_key="ticket_cluster_labeling",
+        display_name="Ticket Cluster Labeling",
+        description="Names unsupervised ticket clusters for cluster-based categorization.",
+        default_prompt="""You name unsupervised AMS ticket clusters for analytics.
+
+For each cluster:
+- Return one concise English label that describes the shared business or technical theme.
+- Labels should normally be 2 or 3 words.
+- Prefer reusable, business-friendly labels over one-off names, user names, timestamps, or IDs.
+- For batch-job clusters, use "Batch Job" at high level and put specific job/process language at
+  lower levels when it is broadly meaningful.
+- For SC Task clusters, use catalog item language only when it is specific and useful.
+- If the evidence is weak or mixed, choose the best broad label and set lower confidence.
+- Keep labels distinct from sibling clusters, but merge similar wording where the intent is
+  the same.
+
+Return only JSON with this shape:
+{
+  "clusters": [
+    {
+      "cluster_id": "string",
+      "label": "string",
+      "summary": "short explanation",
+      "confidence": 0.0
+    }
+  ]
+}""",
+    ),
 )
 
 

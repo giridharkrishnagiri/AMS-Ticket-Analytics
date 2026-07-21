@@ -37,12 +37,17 @@ from app.schemas.genai import (
     GenAITicketClassificationRunResponse,
     GenAITicketClassificationSummaryResponse,
     GenAITicketClassificationUsageRunsResponse,
+    GenAITicketClusterClearRequest,
+    GenAITicketClusterClearResponse,
+    GenAITicketClusterRunRequest,
+    GenAITicketClusterRunResponse,
     GenAIToolCatalogResponse,
     GenAIToolExecuteRequest,
     GenAIToolExecuteResponse,
     GenAIToolRunResponse,
     GenAIUsageLogResponse,
     GenAIUsageSummary,
+    GenAIWorkbenchSettingsResponse,
 )
 from app.services.genai.charts import (
     archive_generated_chart,
@@ -100,6 +105,19 @@ from app.services.genai.ticket_classification import (
 from app.services.genai.ticket_classification import (
     TicketClassificationRunRequest as ServiceTicketClassificationRunRequest,
 )
+from app.services.genai.ticket_clustering import (
+    TicketClusterClearRequest as ServiceTicketClusterClearRequest,
+)
+from app.services.genai.ticket_clustering import (
+    TicketClusteringError,
+    clear_ticket_cluster_analysis,
+    run_ticket_cluster_analysis,
+    ticket_cluster_usage_runs,
+    workbench_settings,
+)
+from app.services.genai.ticket_clustering import (
+    TicketClusterRunRequest as ServiceTicketClusterRunRequest,
+)
 from app.services.genai.tools import execute_tool, list_tool_runs, list_tools
 from app.services.genai.usage_log_service import create_usage_log, list_usage_logs
 
@@ -118,6 +136,11 @@ def put_genai_config(
     db: DbSession,
 ) -> GenAIConfigResponse:
     return update_config(db, request.model_dump(exclude_unset=True))
+
+
+@router.get("/workbench-settings", response_model=GenAIWorkbenchSettingsResponse)
+def get_genai_workbench_settings() -> GenAIWorkbenchSettingsResponse:
+    return workbench_settings()
 
 
 @router.get("/prompts", response_model=list[GenAIPromptTemplateResponse])
@@ -403,6 +426,72 @@ def post_ticket_classification_clear(
             ),
         )
     except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/ticket-cluster-analysis/usage-runs",
+    response_model=GenAITicketClassificationUsageRunsResponse,
+)
+def get_ticket_cluster_analysis_usage_runs(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> GenAITicketClassificationUsageRunsResponse:
+    try:
+        return ticket_cluster_usage_runs(
+            db,
+            project_id,
+            analysis_month,
+            limit=limit,
+        )
+    except (TicketClassificationError, TicketClusteringError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/ticket-cluster-analysis/run",
+    response_model=GenAITicketClusterRunResponse,
+)
+def post_ticket_cluster_analysis_run(
+    request: GenAITicketClusterRunRequest,
+    db: DbSession,
+) -> GenAITicketClusterRunResponse:
+    try:
+        return run_ticket_cluster_analysis(
+            db,
+            ServiceTicketClusterRunRequest(
+                project_id=request.project_id,
+                analysis_month=request.analysis_month,
+                force_reprocess=request.force_reprocess,
+                level_1_count=request.level_1_count,
+                level_2_count=request.level_2_count,
+                level_3_count=request.level_3_count,
+                run_id=request.run_id,
+            ),
+        )
+    except (TicketClassificationError, TicketClusteringError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/ticket-cluster-analysis/clear",
+    response_model=GenAITicketClusterClearResponse,
+)
+def post_ticket_cluster_analysis_clear(
+    request: GenAITicketClusterClearRequest,
+    db: DbSession,
+) -> GenAITicketClusterClearResponse:
+    try:
+        return clear_ticket_cluster_analysis(
+            db,
+            ServiceTicketClusterClearRequest(
+                project_id=request.project_id,
+                analysis_month=request.analysis_month,
+            ),
+        )
+    except (TicketClassificationError, TicketClusteringError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 

@@ -17,6 +17,8 @@ from app.models.genai import (
     GenAIPromptTemplate,
     GenAISafetySettings,
     GenAITicketClassification,
+    GenAITicketClusterLabel,
+    GenAITicketEmbedding,
     GenAIToolRun,
     GenAIUsageLog,
 )
@@ -55,7 +57,9 @@ __all__ = [
     "GenAIGeneratedChart",
     "GenAIPromptTemplate",
     "GenAISafetySettings",
+    "GenAITicketClusterLabel",
     "GenAITicketClassification",
+    "GenAITicketEmbedding",
     "GenAIToolRun",
     "GenAIUsageLog",
     "IngestionJob",

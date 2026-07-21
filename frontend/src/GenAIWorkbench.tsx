@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  clearTicketClusterAnalysis,
   clearTicketClassificationAnalysis,
+  getGenAIWorkbenchSettings,
+  getTicketClusterUsageRuns,
   getTicketClassificationPivot,
   getTicketClassificationSummary,
   getTicketClassificationUsageRuns,
+  runTicketClusterAnalysis,
   runTicketClassificationEnrichment,
 } from "./api/genai";
 import type {
+  GenAIWorkbenchSettings,
+  GenAITicketClusterRunResponse,
   GenAITicketClassificationPivot,
   GenAITicketClassificationSummary,
   GenAITicketClassificationUsageRun,
@@ -74,6 +80,7 @@ function GenAIWorkbench() {
   const [analysisMonth, setAnalysisMonth] = useState("2026-05");
   const [batchSize, setBatchSize] = useState(10);
   const [forceReprocess, setForceReprocess] = useState(false);
+  const [workbenchSettings, setWorkbenchSettings] = useState<GenAIWorkbenchSettings | null>(null);
   const [summary, setSummary] = useState<GenAITicketClassificationSummary | null>(null);
   const [pivot, setPivot] = useState<GenAITicketClassificationPivot | null>(null);
   const [usageRuns, setUsageRuns] = useState<GenAITicketClassificationUsageRun[]>([]);
@@ -84,6 +91,12 @@ function GenAIWorkbench() {
   const [error, setError] = useState<string | null>(null);
 
   const canAct = Boolean(projectId.trim()) && Boolean(analysisMonth.trim());
+  const classificationButtonEnabled =
+    workbenchSettings?.ticket_classification_button_enabled ?? false;
+  const clusterButtonEnabled = workbenchSettings?.ticket_cluster_analysis_button_enabled ?? true;
+  const usageRunsLoader = clusterButtonEnabled
+    ? getTicketClusterUsageRuns
+    : getTicketClassificationUsageRuns;
 
   const qualityRows = useMemo(
     () =>
@@ -92,6 +105,28 @@ function GenAIWorkbench() {
       ),
     [summary?.category_quality_counts]
   );
+
+  useEffect(() => {
+    let isActive = true;
+    getGenAIWorkbenchSettings()
+      .then((settings) => {
+        if (isActive) {
+          setWorkbenchSettings(settings);
+        }
+      })
+      .catch((requestError) => {
+        if (isActive) {
+          setError(
+            requestError instanceof Error
+              ? requestError.message
+              : "Unable to load workbench settings."
+          );
+        }
+      });
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   const loadSummaryAndPivot = useCallback(async () => {
     if (!projectId || !analysisMonth) {
@@ -106,7 +141,7 @@ function GenAIWorkbench() {
       const [nextSummary, nextPivot, nextUsageRuns] = await Promise.all([
         getTicketClassificationSummary(projectId, analysisMonth),
         getTicketClassificationPivot(projectId, analysisMonth),
-        getTicketClassificationUsageRuns(projectId, analysisMonth),
+        usageRunsLoader(projectId, analysisMonth),
       ]);
       setSummary(nextSummary);
       setPivot(nextPivot);
@@ -119,7 +154,7 @@ function GenAIWorkbench() {
     } finally {
       setIsLoading(false);
     }
-  }, [analysisMonth, projectId]);
+  }, [analysisMonth, projectId, usageRunsLoader]);
 
   useEffect(() => {
     void loadSummaryAndPivot();
@@ -229,6 +264,59 @@ function GenAIWorkbench() {
     }
   }
 
+  async function handleRunCluster() {
+    if (!canAct || !clusterButtonEnabled) {
+      return;
+    }
+    if (forceReprocess && !window.confirm(forceReprocessConfirmation)) {
+      return;
+    }
+    setIsRunning(true);
+    setMessage("Starting cluster-based analysis...");
+    setError(null);
+    try {
+      const result: GenAITicketClusterRunResponse = await runTicketClusterAnalysis({
+        project_id: projectId,
+        analysis_month: analysisMonth,
+        force_reprocess: forceReprocess,
+        run_id: createRunId(),
+      });
+      setSummary(result.summary);
+      if (result.usage_run) {
+        setUsageRuns((currentRuns) => [
+          result.usage_run as GenAITicketClassificationUsageRun,
+          ...currentRuns.filter((run) => run.run_id !== result.usage_run?.run_id),
+        ]);
+      }
+
+      const [nextPivot, nextUsageRuns] = await Promise.all([
+        getTicketClassificationPivot(projectId, analysisMonth),
+        getTicketClusterUsageRuns(projectId, analysisMonth),
+      ]);
+      setPivot(nextPivot);
+      setUsageRuns(nextUsageRuns.runs);
+      setMessage(
+        `Cluster analysis complete: ${formatNumber(
+          result.assigned_ticket_count
+        )} tickets assigned across ${formatNumber(result.level_1_cluster_count)} / ${formatNumber(
+          result.level_2_cluster_count
+        )} / ${formatNumber(result.level_3_cluster_count)} clusters. Embeddings: ${formatNumber(
+          result.cached_embedding_count
+        )} cached, ${formatNumber(result.new_embedding_count)} new${
+          result.failed_count > 0
+            ? `; ${formatNumber(result.failed_count)} cluster labels used fallback naming`
+            : ""
+        }.`
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Cluster analysis failed."
+      );
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
   async function handleClear() {
     if (!canAct || !window.confirm(clearConfirmation)) {
       return;
@@ -237,11 +325,23 @@ function GenAIWorkbench() {
     setMessage(null);
     setError(null);
     try {
-      const result = await clearTicketClassificationAnalysis({
-        project_id: projectId,
-        analysis_month: analysisMonth,
-      });
-      setMessage(`Cleared ${formatNumber(result.deleted_count)} analysis rows.`);
+      if (clusterButtonEnabled) {
+        const result = await clearTicketClusterAnalysis({
+          project_id: projectId,
+          analysis_month: analysisMonth,
+        });
+        setMessage(
+          `Cleared ${formatNumber(
+            result.deleted_classification_count
+          )} analysis rows and ${formatNumber(result.deleted_cluster_label_count)} cluster labels.`
+        );
+      } else {
+        const result = await clearTicketClassificationAnalysis({
+          project_id: projectId,
+          analysis_month: analysisMonth,
+        });
+        setMessage(`Cleared ${formatNumber(result.deleted_count)} analysis rows.`);
+      }
       await loadSummaryAndPivot();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Clear failed.");
@@ -289,6 +389,7 @@ function GenAIWorkbench() {
               min={1}
               max={25}
               value={batchSize}
+              disabled={!classificationButtonEnabled}
               onChange={(event) => setBatchSize(Number(event.target.value))}
             />
           </label>
@@ -306,10 +407,24 @@ function GenAIWorkbench() {
           <button
             className="primary-button"
             type="button"
-            disabled={!canAct || isRunning || isClearing}
+            disabled={!canAct || isRunning || isClearing || !classificationButtonEnabled}
             onClick={() => void handleRun()}
           >
-            {isRunning ? "Running Analysis..." : "Run Analysis"}
+            {isRunning && classificationButtonEnabled
+              ? "Running Analysis..."
+              : classificationButtonEnabled
+                ? "Run GenAI Analysis"
+                : "GenAI Analysis Disabled"}
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={!canAct || isRunning || isClearing || !clusterButtonEnabled}
+            onClick={() => void handleRunCluster()}
+          >
+            {isRunning && clusterButtonEnabled
+              ? "Running Cluster Analysis..."
+              : "Run Cluster-Based Analysis"}
           </button>
           <button
             className="secondary-button danger-button"
@@ -323,6 +438,14 @@ function GenAIWorkbench() {
 
         {selectedProject ? (
           <p className="muted-text summary-block">Selected project: {selectedProject.label}</p>
+        ) : null}
+        {workbenchSettings ? (
+          <p className="muted-text summary-block">
+            Cluster targets: L1 {formatNumber(workbenchSettings.cluster_level_1_count)}, L2{" "}
+            {formatNumber(workbenchSettings.cluster_level_2_count)}, L3{" "}
+            {formatNumber(workbenchSettings.cluster_level_3_count)}. Embedding model:{" "}
+            {workbenchSettings.cluster_embedding_model_name}.
+          </p>
         ) : null}
         {message ? <p className="success-text summary-block">{message}</p> : null}
         {error ? <p className="error-text summary-block">{error}</p> : null}

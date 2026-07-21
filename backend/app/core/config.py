@@ -39,8 +39,19 @@ class Settings(BaseSettings):
     no_proxy: str | None = None
     ams_processing_pipeline_version: str = "v1"
     ams_processing_bulk_chunk_size: int = 2000
+    genai_ticket_classification_button_enabled: bool = False
+    genai_ticket_cluster_analysis_button_enabled: bool = True
     genai_ticket_classification_model_name: str | None = None
     genai_ticket_classification_max_output_tokens: int | None = None
+    genai_ticket_cluster_embedding_model_name: str = "text-embedding-3-small"
+    genai_ticket_cluster_label_model_name: str | None = None
+    genai_ticket_cluster_label_max_output_tokens: int | None = None
+    genai_ticket_cluster_embedding_batch_size: int = 100
+    genai_ticket_cluster_label_batch_size: int = 15
+    genai_ticket_cluster_level_1_count: int = 12
+    genai_ticket_cluster_level_2_count: int = 35
+    genai_ticket_cluster_level_3_count: int = 90
+    genai_ticket_cluster_representative_ticket_count: int = 8
 
     @property
     def cors_origins(self) -> list[str]:

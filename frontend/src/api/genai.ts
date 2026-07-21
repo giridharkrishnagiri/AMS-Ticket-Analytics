@@ -78,14 +78,55 @@ export type GenAITicketClassificationRunResponse = {
   usage_run: GenAITicketClassificationUsageRun | null;
 };
 
+export type GenAIWorkbenchSettings = {
+  ticket_classification_button_enabled: boolean;
+  ticket_cluster_analysis_button_enabled: boolean;
+  cluster_embedding_model_name: string;
+  cluster_label_model_name: string | null;
+  cluster_level_1_count: number;
+  cluster_level_2_count: number;
+  cluster_level_3_count: number;
+  cluster_embedding_batch_size: number;
+  cluster_label_batch_size: number;
+};
+
+export type GenAITicketClusterRunResponse = {
+  project_id: string;
+  analysis_month: string;
+  run_id: string;
+  eligible_ticket_count: number;
+  embedded_ticket_count: number;
+  cached_embedding_count: number;
+  new_embedding_count: number;
+  level_1_cluster_count: number;
+  level_2_cluster_count: number;
+  level_3_cluster_count: number;
+  labeled_cluster_count: number;
+  assigned_ticket_count: number;
+  failed_count: number;
+  summary: GenAITicketClassificationSummary;
+  usage_run: GenAITicketClassificationUsageRun | null;
+};
+
 export type GenAITicketClassificationClearResponse = {
   project_id: string;
   analysis_month: string;
   deleted_count: number;
 };
 
+export type GenAITicketClusterClearResponse = {
+  project_id: string;
+  analysis_month: string;
+  deleted_classification_count: number;
+  deleted_cluster_label_count: number;
+};
+
 function queryString(params: Record<string, string>): string {
   return new URLSearchParams(params).toString();
+}
+
+export function getGenAIWorkbenchSettings(): Promise<GenAIWorkbenchSettings> {
+  return requestJson<GenAIWorkbenchSettings>("/genai/workbench-settings");
 }
 
 export function getTicketClassificationSummary(
@@ -125,6 +166,19 @@ export function getTicketClassificationUsageRuns(
   );
 }
 
+export function getTicketClusterUsageRuns(
+  projectId: string,
+  analysisMonth: string
+): Promise<GenAITicketClassificationUsageRuns> {
+  return requestJson<GenAITicketClassificationUsageRuns>(
+    `/genai/ticket-cluster-analysis/usage-runs?${queryString({
+      project_id: projectId,
+      analysis_month: analysisMonth,
+      limit: "10",
+    })}`
+  );
+}
+
 export function runTicketClassificationEnrichment(payload: {
   project_id: string;
   analysis_month: string;
@@ -140,11 +194,35 @@ export function runTicketClassificationEnrichment(payload: {
   });
 }
 
+export function runTicketClusterAnalysis(payload: {
+  project_id: string;
+  analysis_month: string;
+  force_reprocess: boolean;
+  run_id?: string;
+}): Promise<GenAITicketClusterRunResponse> {
+  return requestJson<GenAITicketClusterRunResponse>("/genai/ticket-cluster-analysis/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function clearTicketClassificationAnalysis(payload: {
   project_id: string;
   analysis_month: string;
 }): Promise<GenAITicketClassificationClearResponse> {
   return requestJson<GenAITicketClassificationClearResponse>("/genai/ticket-classification/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function clearTicketClusterAnalysis(payload: {
+  project_id: string;
+  analysis_month: string;
+}): Promise<GenAITicketClusterClearResponse> {
+  return requestJson<GenAITicketClusterClearResponse>("/genai/ticket-cluster-analysis/clear", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

@@ -62,6 +62,17 @@ class LLMCompletionResult:
     error_message: str | None = None
 
 
+@dataclass(frozen=True)
+class LLMEmbeddingResult:
+    ok: bool
+    embeddings: list[list[float]] | None = None
+    prompt_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost: float | None = None
+    duration_ms: int | None = None
+    error_message: str | None = None
+
+
 def provider_model_name(config: GenAIConfig) -> str:
     model_name = (config.model_name or "").strip()
     provider = config.provider.strip().lower()
@@ -111,6 +122,16 @@ def estimated_completion_cost(response: Any) -> float | None:
     except Exception:
         return None
     return float(cost) if cost is not None else None
+
+
+def embedding_vectors(response: Any) -> list[list[float]]:
+    data = value_from_response(response, "data") or []
+    vectors: list[list[float]] = []
+    for item in data:
+        embedding = value_from_response(item, "embedding")
+        if isinstance(embedding, list):
+            vectors.append([float(value) for value in embedding])
+    return vectors
 
 
 def resolved_env_path(value: Path | None) -> str | None:
@@ -168,6 +189,52 @@ def completion_request(config: GenAIConfig, messages: list[LLMMessage]) -> LLMCo
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         logger.exception("GenAI LiteLLM test request failed")
         return LLMCompletionResult(
+            ok=False,
+            duration_ms=duration_ms,
+            error_message=GENERIC_FAILURE_MESSAGE,
+        )
+
+
+def embedding_request(config: GenAIConfig, texts: list[str]) -> LLMEmbeddingResult:
+    apply_network_environment()
+    provider = config.provider.strip().lower()
+    missing_key = missing_api_key_message(provider)
+    if missing_key:
+        return LLMEmbeddingResult(ok=False, error_message=missing_key)
+
+    cleaned_texts = [text.strip() for text in texts if text.strip()]
+    if not cleaned_texts:
+        return LLMEmbeddingResult(ok=True, embeddings=[])
+
+    started_at = time.perf_counter()
+    try:
+        response = litellm.embedding(
+            model=provider_model_name(config),
+            input=cleaned_texts,
+            timeout=config.timeout_seconds,
+        )
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        embeddings = embedding_vectors(response)
+        if len(embeddings) != len(cleaned_texts):
+            return LLMEmbeddingResult(
+                ok=False,
+                duration_ms=duration_ms,
+                error_message="The embedding model returned an unexpected number of vectors.",
+            )
+        prompt_tokens = usage_token(response, "prompt_tokens")
+        total_tokens = usage_token(response, "total_tokens")
+        return LLMEmbeddingResult(
+            ok=True,
+            embeddings=embeddings,
+            prompt_tokens=prompt_tokens,
+            total_tokens=total_tokens,
+            estimated_cost=estimated_completion_cost(response),
+            duration_ms=duration_ms,
+        )
+    except Exception:
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.exception("GenAI LiteLLM embedding request failed")
+        return LLMEmbeddingResult(
             ok=False,
             duration_ms=duration_ms,
             error_message=GENERIC_FAILURE_MESSAGE,

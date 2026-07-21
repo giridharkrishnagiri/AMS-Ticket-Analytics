@@ -228,6 +228,58 @@ class GenAITicketClassificationClearResponse(BaseModel):
     deleted_count: int
 
 
+class GenAIWorkbenchSettingsResponse(BaseModel):
+    ticket_classification_button_enabled: bool
+    ticket_cluster_analysis_button_enabled: bool
+    cluster_embedding_model_name: str
+    cluster_label_model_name: str | None = None
+    cluster_level_1_count: int
+    cluster_level_2_count: int
+    cluster_level_3_count: int
+    cluster_embedding_batch_size: int
+    cluster_label_batch_size: int
+
+
+class GenAITicketClusterRunRequest(BaseModel):
+    project_id: UUID
+    analysis_month: str = Field(default="2026-05", pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    force_reprocess: bool = False
+    level_1_count: int | None = Field(default=None, ge=1, le=50)
+    level_2_count: int | None = Field(default=None, ge=1, le=150)
+    level_3_count: int | None = Field(default=None, ge=1, le=300)
+    run_id: str | None = Field(default=None, max_length=80)
+
+
+class GenAITicketClusterRunResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    run_id: str
+    eligible_ticket_count: int
+    embedded_ticket_count: int
+    cached_embedding_count: int
+    new_embedding_count: int
+    level_1_cluster_count: int
+    level_2_cluster_count: int
+    level_3_cluster_count: int
+    labeled_cluster_count: int
+    assigned_ticket_count: int
+    failed_count: int
+    summary: GenAITicketClassificationSummaryResponse
+    usage_run: GenAITicketClassificationUsageRunResponse | None = None
+
+
+class GenAITicketClusterClearRequest(BaseModel):
+    project_id: UUID
+    analysis_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+class GenAITicketClusterClearResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    deleted_classification_count: int
+    deleted_cluster_label_count: int
+
+
 class GenAIUsageLogResponse(BaseModel):
     id: UUID
     customer_id: UUID | None

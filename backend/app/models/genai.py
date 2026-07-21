@@ -321,3 +321,101 @@ class GenAITicketClassification(UuidPrimaryKeyMixin, TimestampMixin, Base):
 
     customer: Mapped[Client | None] = relationship()
     project: Mapped[Project] = relationship()
+
+
+class GenAITicketEmbedding(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_ticket_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "ticket_number",
+            "input_hash",
+            "embedding_model",
+            name="uq_genai_ticket_embeddings_project_ticket_hash_model",
+        ),
+        Index("ix_genai_ticket_embeddings_project_ticket", "project_id", "ticket_number"),
+        Index("ix_genai_ticket_embeddings_model_hash", "embedding_model", "input_hash"),
+    )
+
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ticket_number: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    ticket_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    normalized_text_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    text_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_json: Mapped[list[float]] = mapped_column(JSONB, nullable=False)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    customer: Mapped[Client | None] = relationship()
+    project: Mapped[Project] = relationship()
+
+
+class GenAITicketClusterLabel(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_ticket_cluster_labels"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "analysis_month",
+            "run_id",
+            "cluster_level",
+            "cluster_key",
+            name="uq_genai_ticket_cluster_labels_run_level_key",
+        ),
+        Index(
+            "ix_genai_ticket_cluster_labels_project_month_run",
+            "project_id",
+            "analysis_month",
+            "run_id",
+        ),
+        Index(
+            "ix_genai_ticket_cluster_labels_level",
+            "project_id",
+            "analysis_month",
+            "cluster_level",
+        ),
+    )
+
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    analysis_month: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    cluster_level: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    cluster_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    parent_cluster_key: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ticket_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    incident_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sc_task_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    representative_tickets_json: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    child_clusters_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    customer: Mapped[Client | None] = relationship()
+    project: Mapped[Project] = relationship()
