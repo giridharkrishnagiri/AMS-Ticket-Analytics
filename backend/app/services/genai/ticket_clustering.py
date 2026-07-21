@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import math
 import re
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -44,6 +47,8 @@ from app.services.genai.ticket_classification import (
     validate_month_key,
 )
 from app.services.genai.usage_log_service import create_usage_log
+
+progress_logger = logging.getLogger("uvicorn.error")
 
 PROMPT_KEY = "ticket_cluster_labeling"
 OUTPUT_PROMPT_KEY = "ticket_cluster_analysis"
@@ -123,6 +128,10 @@ STOP_WORDS = {
 
 class TicketClusteringError(ValueError):
     pass
+
+
+def log_progress(message: str, *args: Any) -> None:
+    progress_logger.info("[ticket-cluster] " + message, *args)
 
 
 @dataclass(frozen=True)
@@ -342,9 +351,24 @@ def ensure_ticket_embeddings(
         minimum=1,
         maximum=500,
     )
+    total_batches = math.ceil(len(pending_rows) / batch_size) if pending_rows else 0
+    log_progress(
+        "embedding cache check complete: %s tickets, %s cached, %s new, batch size %s",
+        len(tickets),
+        cached_count,
+        len(pending_rows),
+        batch_size,
+    )
     for offset in range(0, len(pending_rows), batch_size):
         batch = pending_rows[offset : offset + batch_size]
         texts = [row[1] for row in batch]
+        batch_number = (offset // batch_size) + 1
+        log_progress(
+            "embedding batch %s/%s started for %s tickets",
+            batch_number,
+            total_batches,
+            len(batch),
+        )
         result = embedding_request(config, texts)
         create_usage_log(
             db,
@@ -370,6 +394,12 @@ def ensure_ticket_embeddings(
         )
         if not result.ok or result.embeddings is None:
             db.commit()
+            log_progress(
+                "embedding batch %s/%s failed: %s",
+                batch_number,
+                total_batches,
+                result.error_message or "unknown error",
+            )
             raise TicketClusteringError(result.error_message or "Embedding generation failed.")
         for (ticket, text, text_hash, input_hash, _existing_row), vector in zip(
             batch,
@@ -391,6 +421,12 @@ def ensure_ticket_embeddings(
                 ),
             )
         db.commit()
+        log_progress(
+            "embedding batch %s/%s saved (%s vectors)",
+            batch_number,
+            total_batches,
+            len(batch),
+        )
 
     refreshed_rows = embedding_rows_by_key(db, project_id, tickets, embedding_model)
     inputs: list[TicketTextInput] = []
@@ -687,8 +723,23 @@ def label_cluster_level(
     )
     failed_count = 0
     cluster_items = list(clusters.values())
+    total_batches = math.ceil(len(cluster_items) / batch_size) if cluster_items else 0
+    log_progress(
+        "level %s labeling started: %s clusters, batch size %s",
+        level,
+        len(cluster_items),
+        batch_size,
+    )
     for offset in range(0, len(cluster_items), batch_size):
         batch = cluster_items[offset : offset + batch_size]
+        batch_number = (offset // batch_size) + 1
+        log_progress(
+            "level %s labeling batch %s/%s started for %s clusters",
+            level,
+            batch_number,
+            total_batches,
+            len(batch),
+        )
         payload = {
             "level": level,
             "label_role": {
@@ -746,6 +797,13 @@ def label_cluster_level(
                 parsed_labels = parse_cluster_label_response(result.response_text)
             except TicketClusteringError as exc:
                 failed_count += len(batch)
+                log_progress(
+                    "level %s labeling batch %s/%s returned invalid JSON: %s",
+                    level,
+                    batch_number,
+                    total_batches,
+                    str(exc),
+                )
                 create_usage_log(
                     db,
                     operation="ticket_cluster_labeling_parse",
@@ -766,6 +824,13 @@ def label_cluster_level(
                 )
         else:
             failed_count += len(batch)
+            log_progress(
+                "level %s labeling batch %s/%s failed: %s",
+                level,
+                batch_number,
+                total_batches,
+                result.error_message or "unknown error",
+            )
 
         for cluster in batch:
             parsed_row = parsed_labels.get(cluster.key) or {}
@@ -774,6 +839,22 @@ def label_cluster_level(
             cluster.summary = compact_text(parsed_row.get("summary"), max_chars=1000)
             cluster.confidence = normalize_confidence(parsed_row.get("confidence"))
         db.commit()
+        parsed_label_count = sum(1 for cluster in batch if cluster.key in parsed_labels)
+        fallback_count = len(batch) - parsed_label_count
+        log_progress(
+            "level %s labeling batch %s/%s complete (%s labels, %s fallback labels)",
+            level,
+            batch_number,
+            total_batches,
+            parsed_label_count,
+            fallback_count,
+        )
+    log_progress(
+        "level %s labeling complete: %s clusters, %s fallback/error labels",
+        level,
+        len(cluster_items),
+        failed_count,
+    )
     return failed_count
 
 
@@ -1107,8 +1188,15 @@ def run_ticket_cluster_analysis(
     db: Session,
     request: TicketClusterRunRequest,
 ) -> dict[str, Any]:
+    run_started_at = time.perf_counter()
     month_key = validate_month_key(request.analysis_month)
     run_id = (request.run_id or "").strip() or str(uuid4())
+    log_progress(
+        "run %s started for project %s month %s",
+        run_id,
+        request.project_id,
+        month_key,
+    )
     customer_id = project_customer_id(db, request.project_id)
     base_config = get_or_create_config(db)
     validate_config(base_config)
@@ -1128,6 +1216,7 @@ def run_ticket_cluster_analysis(
     prompt_fingerprint_value = prompt_fingerprint(prompt_text)
 
     if request.force_reprocess:
+        log_progress("run %s force reprocess requested; clearing previous cluster output", run_id)
         clear_ticket_cluster_analysis(
             db,
             TicketClusterClearRequest(
@@ -1138,7 +1227,9 @@ def run_ticket_cluster_analysis(
 
     tickets = db.execute(eligible_ticket_statement(request.project_id, month_key)).scalars().all()
     eligible_count = len(tickets)
+    log_progress("run %s eligible ticket selection complete: %s tickets", run_id, eligible_count)
     if not tickets:
+        log_progress("run %s complete: no eligible tickets", run_id)
         return {
             "project_id": request.project_id,
             "analysis_month": month_key,
@@ -1157,6 +1248,7 @@ def run_ticket_cluster_analysis(
             "usage_run": ticket_cluster_usage_run(db, request.project_id, month_key, run_id),
         }
 
+    stage_started_at = time.perf_counter()
     inputs, cached_embedding_count, new_embedding_count = ensure_ticket_embeddings(
         db,
         project_id=request.project_id,
@@ -1166,7 +1258,22 @@ def run_ticket_cluster_analysis(
         tickets=tickets,
         config=embedding_config,
     )
+    log_progress(
+        "run %s embeddings ready: %s vectors (%s cached, %s new) in %.2fs",
+        run_id,
+        len(inputs),
+        cached_embedding_count,
+        new_embedding_count,
+        time.perf_counter() - stage_started_at,
+    )
+    stage_started_at = time.perf_counter()
     vectors = normalized_matrix(inputs)
+    log_progress(
+        "run %s normalized embedding matrix prepared: %s rows x %s dimensions",
+        run_id,
+        vectors.shape[0],
+        vectors.shape[1] if vectors.ndim == 2 else 0,
+    )
     settings = get_settings()
     level_3_count = clamp_positive(
         request.level_3_count,
@@ -1186,8 +1293,22 @@ def run_ticket_cluster_analysis(
         minimum=1,
         maximum=min(50, level_2_count),
     )
+    log_progress(
+        "run %s clustering targets: level 1=%s, level 2=%s, level 3=%s",
+        run_id,
+        level_1_count,
+        level_2_count,
+        level_3_count,
+    )
 
     level_3_clusters = build_level_3_clusters(inputs, vectors, level_3_count)
+    log_progress(
+        "run %s level 3 clustering complete: %s clusters in %.2fs",
+        run_id,
+        len(level_3_clusters),
+        time.perf_counter() - stage_started_at,
+    )
+    stage_started_at = time.perf_counter()
     level_2_clusters = build_parent_clusters(
         child_clusters=level_3_clusters,
         child_level=3,
@@ -1195,6 +1316,13 @@ def run_ticket_cluster_analysis(
         target_count=min(level_2_count, len(level_3_clusters)),
         inputs=inputs,
     )
+    log_progress(
+        "run %s level 2 rollup complete: %s clusters in %.2fs",
+        run_id,
+        len(level_2_clusters),
+        time.perf_counter() - stage_started_at,
+    )
+    stage_started_at = time.perf_counter()
     level_1_clusters = build_parent_clusters(
         child_clusters=level_2_clusters,
         child_level=2,
@@ -1202,12 +1330,19 @@ def run_ticket_cluster_analysis(
         target_count=min(level_1_count, len(level_2_clusters)),
         inputs=inputs,
     )
+    log_progress(
+        "run %s level 1 rollup complete: %s clusters in %.2fs",
+        run_id,
+        len(level_1_clusters),
+        time.perf_counter() - stage_started_at,
+    )
     clusters_by_level = {
         1: level_1_clusters,
         2: level_2_clusters,
         3: level_3_clusters,
     }
     failed_count = 0
+    log_progress("run %s cluster labeling started", run_id)
     failed_count += label_cluster_level(
         db,
         project_id=request.project_id,
@@ -1260,6 +1395,7 @@ def run_ticket_cluster_analysis(
         "level_3_target": level_3_count,
         "text_version": EMBEDDING_TEXT_VERSION,
     }
+    log_progress("run %s saving cluster labels", run_id)
     labeled_cluster_count = save_cluster_labels(
         db,
         project_id=request.project_id,
@@ -1271,6 +1407,7 @@ def run_ticket_cluster_analysis(
         vectors=vectors,
         metadata=run_metadata,
     )
+    log_progress("run %s saving ticket assignments", run_id)
     assigned_ticket_count = save_ticket_assignments(
         db,
         project_id=request.project_id,
@@ -1283,6 +1420,17 @@ def run_ticket_cluster_analysis(
         prompt_version=prompt_version,
         prompt_fingerprint_value=prompt_fingerprint_value,
         run_metadata=run_metadata,
+    )
+    log_progress(
+        (
+            "run %s complete: %s tickets assigned, %s cluster labels saved, "
+            "%s fallback/error labels, %.2fs elapsed"
+        ),
+        run_id,
+        assigned_ticket_count,
+        labeled_cluster_count,
+        failed_count,
+        time.perf_counter() - run_started_at,
     )
     return {
         "project_id": request.project_id,
