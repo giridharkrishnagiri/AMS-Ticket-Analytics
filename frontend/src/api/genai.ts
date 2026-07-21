@@ -1,4 +1,4 @@
-import { requestJson } from "./client";
+import { apiBaseUrl, requestJson } from "./client";
 
 export type GenAITicketClassificationUsageSummary = {
   prompt_tokens: number | null;
@@ -125,6 +125,18 @@ function queryString(params: Record<string, string>): string {
   return new URLSearchParams(params).toString();
 }
 
+function getDownloadFilename(contentDisposition: string | null): string | null {
+  if (!contentDisposition) {
+    return null;
+  }
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].trim());
+  }
+  const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return filenameMatch?.[1]?.trim() ?? null;
+}
+
 export function getGenAIWorkbenchSettings(): Promise<GenAIWorkbenchSettings> {
   return requestJson<GenAIWorkbenchSettings>("/genai/workbench-settings");
 }
@@ -164,6 +176,38 @@ export function getTicketClassificationUsageRuns(
       limit: "10",
     })}`
   );
+}
+
+export async function downloadTicketClassificationDump(
+  projectId: string,
+  analysisMonth: string
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(
+    `${apiBaseUrl}/genai/ticket-classification/ticket-dump?${queryString({
+      project_id: projectId,
+      analysis_month: analysisMonth,
+    })}`
+  );
+
+  if (!response.ok) {
+    let message = `Request failed with HTTP ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") {
+        message = payload.detail;
+      }
+    } catch {
+      // Keep the HTTP status fallback when the response is not JSON.
+    }
+    throw new Error(message);
+  }
+
+  return {
+    blob: await response.blob(),
+    filename:
+      getDownloadFilename(response.headers.get("Content-Disposition")) ??
+      `genai_ticket_classification_dump_${analysisMonth}.csv`,
+  };
 }
 
 export function getTicketClusterUsageRuns(

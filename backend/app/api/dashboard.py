@@ -51,6 +51,7 @@ from app.schemas.dashboard import (
     VolumetricsAssignmentGroupResponse,
     VolumetricsBacklogResponse,
     VolumetricsBusinessServiceCiResponse,
+    VolumetricsCategoryLevel2TrendsResponse,
     VolumetricsCreatedPatternRequest,
     VolumetricsCreatedPatternResponse,
     VolumetricsCreatedResolvedBacklogResponse,
@@ -106,6 +107,7 @@ from app.services.dashboard import (
     volumetrics_assignment_group_volumetrics,
     volumetrics_backlog,
     volumetrics_business_service_ci_volumetrics,
+    volumetrics_category_level2_trends,
     volumetrics_created_pattern,
     volumetrics_created_resolved_backlog,
     volumetrics_created_resolved_cancelled,
@@ -645,6 +647,20 @@ def get_dashboard_volumetrics_sc_task_catalog_item_proportion(
 ) -> dict[str, object]:
     try:
         return volumetrics_sc_task_catalog_item_proportion(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/category-level2-trends",
+    response_model=VolumetricsCategoryLevel2TrendsResponse,
+)
+def get_dashboard_volumetrics_category_level2_trends(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_category_level2_trends(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

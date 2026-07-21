@@ -981,6 +981,26 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
                 "Needs Review",
             }
 
+            dump_response = client.get(
+                "/api/genai/ticket-classification/ticket-dump",
+                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert dump_response.status_code == 200
+            assert (
+                dump_response.headers["content-disposition"]
+                == 'attachment; filename="genai_ticket_classification_dump_2026-05.csv"'
+            )
+            dump_text = dump_response.text
+            assert "ticket_number" in dump_text
+            assert "genai_category" in dump_text
+            assert "INC-CLASSIFY" in dump_text
+            assert "SCTASK-CLASSIFY" in dump_text
+            assert "Access Issue" in dump_text
+            assert "Needs Review" in dump_text
+            assert "INC-CANCELED" not in dump_text
+            assert "SCTASK-INCOMPLETE" not in dump_text
+            assert "INC-OUT-SCOPE" not in dump_text
+
             usage_response = client.get(
                 "/api/genai/ticket-classification/usage-runs",
                 params={"project_id": project_id_text, "analysis_month": "2026-05"},

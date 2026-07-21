@@ -932,6 +932,20 @@ export type DashboardVolumetricsScTaskCatalogItemProportion = {
   warnings: string[];
 };
 
+export type DashboardVolumetricsCategoryLevel2Row = {
+  genai_category: string;
+  genai_subcategory_1: string;
+  label: string;
+  ticket_count: number;
+};
+
+export type DashboardVolumetricsCategoryLevel2Trends = {
+  incidents: DashboardVolumetricsCategoryLevel2Row[];
+  sc_tasks: DashboardVolumetricsCategoryLevel2Row[];
+  data_notes: string[];
+  warnings: string[];
+};
+
 export type DashboardVolumetricsKpiMttrPoint = {
   period_key: string;
   period_label: string;
@@ -1626,6 +1640,15 @@ export function getDashboardVolumetricsScTaskCatalogItemProportion(
 ): Promise<DashboardVolumetricsScTaskCatalogItemProportion> {
   return postVolumetricsRequest<DashboardVolumetricsScTaskCatalogItemProportion>(
     "/dashboard/volumetrics/sc-task-catalog-item-proportion",
+    input
+  );
+}
+
+export function getDashboardVolumetricsCategoryLevel2Trends(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsCategoryLevel2Trends> {
+  return postVolumetricsRequest<DashboardVolumetricsCategoryLevel2Trends>(
+    "/dashboard/volumetrics/category-level2-trends",
     input
   );
 }

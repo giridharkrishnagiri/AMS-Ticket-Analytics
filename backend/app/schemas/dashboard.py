@@ -1044,6 +1044,20 @@ class VolumetricsScTaskCatalogItemProportionResponse(BaseModel):
     warnings: list[str]
 
 
+class VolumetricsCategoryLevel2Row(BaseModel):
+    genai_category: str
+    genai_subcategory_1: str
+    label: str
+    ticket_count: int
+
+
+class VolumetricsCategoryLevel2TrendsResponse(BaseModel):
+    incidents: list[VolumetricsCategoryLevel2Row]
+    sc_tasks: list[VolumetricsCategoryLevel2Row]
+    data_notes: list[str]
+    warnings: list[str]
+
+
 class VolumetricsKpiMttrPoint(BaseModel):
     period_key: str
     period_label: str

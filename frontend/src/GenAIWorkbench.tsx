@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   clearTicketClusterAnalysis,
   clearTicketClassificationAnalysis,
+  downloadTicketClassificationDump,
   getGenAIWorkbenchSettings,
   getTicketClusterUsageRuns,
   getTicketClassificationPivot,
@@ -52,6 +53,17 @@ function displayLabel(value: string | null | undefined): string {
   return value?.trim() || "-";
 }
 
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function createRunId(): string {
   if (globalThis.crypto?.randomUUID) {
     return globalThis.crypto.randomUUID();
@@ -87,6 +99,7 @@ function GenAIWorkbench() {
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [isDownloadingDump, setIsDownloadingDump] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -350,6 +363,28 @@ function GenAIWorkbench() {
     }
   }
 
+  async function handleDownloadDump() {
+    if (!canAct) {
+      return;
+    }
+    setIsDownloadingDump(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const { blob, filename } = await downloadTicketClassificationDump(projectId, analysisMonth);
+      downloadBlob(blob, filename);
+      setMessage("Ticket classification dump downloaded.");
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Ticket classification dump download failed."
+      );
+    } finally {
+      setIsDownloadingDump(false);
+    }
+  }
+
   return (
     <section className="workbench-layout" aria-labelledby="genai-workbench-heading">
       <div className="panel workbench-control-panel">
@@ -468,9 +503,19 @@ function GenAIWorkbench() {
             <p className="label">Classification Pivot</p>
             <h2 id="classification-pivot-heading">Category, Subcategory, Ticket Type</h2>
           </div>
-          <span className="helper-text">
-            Last processed: {formatDisplayDateTime(summary?.last_processed_at)}
-          </span>
+          <div className="workbench-pivot-actions">
+            <span className="helper-text">
+              Last processed: {formatDisplayDateTime(summary?.last_processed_at)}
+            </span>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!canAct || isDownloadingDump}
+              onClick={() => void handleDownloadDump()}
+            >
+              {isDownloadingDump ? "Preparing CSV..." : "Download Ticket Dump"}
+            </button>
+          </div>
         </div>
         <div className="scroll-frame workbench-table-frame">
           <table>

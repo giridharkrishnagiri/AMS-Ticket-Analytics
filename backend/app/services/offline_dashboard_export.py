@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Float, Integer, case, cast, func, literal, select, union_all
+from sqlalchemy import Float, Integer, and_, case, cast, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -21,6 +21,7 @@ from app.models import (
     AssessmentOutOfScopeProblemRecord,
     AssessmentProblemRecord,
     Client,
+    GenAITicketClassification,
     Project,
     Ticket,
 )
@@ -1859,6 +1860,72 @@ def build_open_ticket_aging_payload(
     }
 
 
+def build_category_level2_payload(
+    db: Session,
+    project_id: UUID,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> dict[str, Any]:
+    request = monthly_request(project_id, start_datetime, end_datetime)
+    source = build_volumetrics_source(project_id)
+    dimensions = volumetrics_dimension_expressions(source)
+    completion_month = func.to_char(func.date_trunc("month", source.c.completion_at), "YYYY-MM")
+    category_expression = volumetrics_display_expression(
+        GenAITicketClassification.genai_category,
+    )
+    subcategory_expression = volumetrics_display_expression(
+        GenAITicketClassification.genai_subcategory_1,
+    )
+    label_expression = func.concat(category_expression, literal(" - "), subcategory_expression)
+    statement = (
+        select(
+            *[expression.label(name) for name, expression in dimensions.items()],
+            category_expression.label("genai_category"),
+            subcategory_expression.label("genai_subcategory_1"),
+            label_expression.label("label"),
+            func.count(source.c.id).label("ticket_count"),
+        )
+        .select_from(source)
+        .join(
+            GenAITicketClassification,
+            and_(
+                GenAITicketClassification.project_id == project_id,
+                GenAITicketClassification.ticket_number == source.c.ticket_number,
+            ),
+        )
+        .where(
+            *volumetrics_base_conditions(source, request, include_date_bounds=False),
+            source.c.completion_at.is_not(None),
+            source.c.completion_at >= normalize_dashboard_datetime(start_datetime),
+            source.c.completion_at <= normalize_dashboard_datetime(end_datetime),
+            volumetrics_resolved_closed_state_expression(source.c),
+            ~volumetrics_cancelled_expression(source),
+            GenAITicketClassification.analysis_month == completion_month,
+            GenAITicketClassification.status == "success",
+        )
+        .group_by(*dimensions.values(), category_expression, subcategory_expression, label_expression)
+        .order_by(func.count(source.c.id).desc(), label_expression.asc())
+    )
+    rows = [
+        {
+            **dimension_dict(dimension_key(row)),
+            "genai_category": str(row["genai_category"]),
+            "genai_subcategory_1": str(row["genai_subcategory_1"]),
+            "label": str(row["label"]),
+            "ticket_count": int(row["ticket_count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return {
+        "rows": rows,
+        "data_notes": [
+            "Category-wise Trends use successfully saved GenAI ticket classification rows.",
+            "Labels are shown as GenAI Category - GenAI SubCategory-1.",
+            "Canceled/cancelled Incidents and SC Tasks in Closed Incomplete state are excluded.",
+        ],
+    }
+
+
 def build_filter_values(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
     functional_values = sorted(
         {row["functional_track_ams_owner"] for row in monthly_rows},
@@ -1925,6 +1992,7 @@ def build_volumetrics_payload(
                 "overall_volume_trends",
                 "overall_sla_trends",
                 "detailed_volume_trends",
+                "category_trends",
                 "kpi_trends",
                 "assignment_group_volumetrics",
                 "business_service_ci_volumetrics",
@@ -1941,6 +2009,7 @@ def build_volumetrics_payload(
                 "split_rows": [],
                 "batch_rule": {},
             },
+            "category_trends": {"rows": [], "data_notes": []},
             "kpi_trends": {
                 "mttr": {"rows": []},
                 "duration_buckets": {"periods": [], "buckets": [], "rows": []},
@@ -1971,6 +2040,7 @@ def build_volumetrics_payload(
                 "overall_volume_trends",
                 "overall_sla_trends",
                 "detailed_volume_trends",
+                "category_trends",
                 "kpi_trends",
                 "assignment_group_volumetrics",
                 "business_service_ci_volumetrics",
@@ -1987,6 +2057,7 @@ def build_volumetrics_payload(
                 "split_rows": [],
                 "batch_rule": {},
             },
+            "category_trends": {"rows": [], "data_notes": []},
             "kpi_trends": {
                 "mttr": {"rows": []},
                 "duration_buckets": {"periods": [], "buckets": [], "rows": []},
@@ -2031,6 +2102,7 @@ def build_volumetrics_payload(
             "overall_volume_trends",
             "overall_sla_trends",
             "detailed_volume_trends",
+            "category_trends",
             "kpi_trends",
             "assignment_group_volumetrics",
             "business_service_ci_volumetrics",
@@ -2060,6 +2132,12 @@ def build_volumetrics_payload(
             project_id,
             detailed_start_datetime,
             detailed_end_datetime,
+        ),
+        "category_trends": build_category_level2_payload(
+            db,
+            project_id,
+            start_datetime,
+            end_datetime,
         ),
         "kpi_trends": {
             "mttr": build_kpi_mttr_payload(db, project_id, start_datetime, end_datetime),
@@ -3715,6 +3793,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const maxValue = Math.max(1, ...data.map((row) => Number(row[valueKey] || 0)));
       const bandHeight = plotHeight / Math.max(1, data.length);
       const barHeight = Math.max(14, Math.min(28, bandHeight * 0.58));
+      const fontSize = options.fontSize || 12;
+      const labelLength = options.labelLength || 36;
       const bars = data.map((row, index) => {
         const value = Number(row[valueKey] || 0);
         const barWidth = (value / maxValue) * plotWidth;
@@ -3722,9 +3802,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         const labelY = y + barHeight / 2 + 4;
         const display = row.displayLabel || fmt(value, options.digits || 0);
         return `
-          <text x="${margin.left - 12}" y="${labelY}" text-anchor="end" font-size="12" font-weight="800" fill="#334155"><title>${esc(row.label)}</title>${esc(truncateLabel(row.label, 36))}</text>
+          <text x="${margin.left - 12}" y="${labelY}" text-anchor="end" font-size="${fontSize}" font-weight="800" fill="#334155"><title>${esc(row.label)}</title>${esc(truncateLabel(row.label, labelLength))}</text>
           <rect x="${margin.left}" y="${y}" width="${barWidth}" height="${barHeight}" rx="5" fill="${options.color || COLORS.teal}"></rect>
-          <text x="${Math.min(width - margin.right + 8, margin.left + barWidth + 8)}" y="${labelY}" font-size="12" font-weight="900" fill="#334155">${esc(display)}</text>
+          <text x="${Math.min(width - margin.right + 8, margin.left + barWidth + 8)}" y="${labelY}" font-size="${fontSize}" font-weight="900" fill="#334155">${esc(display)}</text>
         `;
       });
       return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(options.title || "Horizontal bar chart")}">
@@ -4859,6 +4939,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         overall_volume_trends: "Overall Volume Trends",
         overall_sla_trends: "Overall SLA Trends",
         detailed_volume_trends: "Detailed Volume Trends",
+        category_trends: "Category-wise Trends",
         kpi_trends: "KPI Trends",
         assignment_group_volumetrics: "Assignment Group Volumetrics",
         business_service_ci_volumetrics: "Business Service CI Volumetrics"
@@ -5014,6 +5095,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function renderVolumetricsSubTab(periods) {
       if (state.volSubTab === "overall_sla_trends") return renderSlaTrends();
       if (state.volSubTab === "detailed_volume_trends") return renderDetailedVolumeTrends();
+      if (state.volSubTab === "category_trends") return renderCategoryTrends();
       if (state.volSubTab === "kpi_trends") return renderKpiTrends();
       if (state.volSubTab === "assignment_group_volumetrics") return renderAssignmentGroupVolumetrics();
       if (state.volSubTab === "business_service_ci_volumetrics") return renderBusinessServiceCiVolumetrics();
@@ -5366,6 +5448,50 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         </div>
         ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "hosting_env_distribution_row" })}
       `;
+    }
+    function categoryTrendFilterMatch(row, ticketType) {
+      return (
+        row.ticket_type === ticketType &&
+        (state.volScope === "all" || row.scope === state.volScope) &&
+        (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volServiceEntitlement === "all" || row.service_entitlement === state.volServiceEntitlement) &&
+        (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
+        (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
+      );
+    }
+    function categoryTrendRows(ticketType) {
+      const rows = (DASHBOARD.volumetrics.category_trends?.rows || []).filter((row) =>
+        categoryTrendFilterMatch(row, ticketType)
+      );
+      const totals = new Map();
+      rows.forEach((row) => {
+        const label = row.label || `${row.genai_category || "(blank)"} - ${row.genai_subcategory_1 || "(blank)"}`;
+        const current = totals.get(label) || {
+          label,
+          category: row.genai_category || "(blank)",
+          subcategory: row.genai_subcategory_1 || "(blank)",
+          value: 0
+        };
+        current.value += Number(row.ticket_count || 0);
+        totals.set(label, current);
+      });
+      return [...totals.values()]
+        .filter((row) => row.value > 0)
+        .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
+    }
+    function categoryTrendChart(title, ticketType, color) {
+      const notApplicable = state.volTicketType !== "all" && state.volTicketType !== ticketType;
+      const rows = notApplicable ? [] : categoryTrendRows(ticketType);
+      return `<section class="chart-card panel" data-commentary-key="category_level2_${ticketType === "incident" ? "incidents" : "sc_tasks"}"><h3>${esc(title)}</h3><p class="muted">Ticket count by GenAI Category - GenAI SubCategory-1, sorted by volume.</p><div class="chart-frame chart-stage table-scroll">${notApplicable ? `<p class="muted" style="padding:12px">This category chart is not applicable for the selected ticket type.</p>` : horizontalBarChart(rows, { title, legend: "Tickets", color, emptyMessage: "No analyzed category rows match the filters.", height: Math.max(320, rows.length * 30 + 92), left: 330, right: 92, fontSize: 10, labelLength: 48 })}</div></section>`;
+    }
+    function renderCategoryTrends() {
+      const notes = DASHBOARD.volumetrics.category_trends?.data_notes || [];
+      return `<section class="panel full"><p class="label">Category-wise Trends</p><h3>GenAI Level-2 Ticket Categories</h3><p class="muted">Uses analyzed ticket classification rows for the selected completion date range.</p></section>
+        <div class="chart-grid two">
+          ${categoryTrendChart("Incidents by Category - SubCategory-1", "incident", COLORS.teal)}
+          ${categoryTrendChart("SC Tasks by Category - SubCategory-1", "sc_task", COLORS.blue)}
+        </div>
+        ${notes.length ? `<section class="panel full"><ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul></section>` : ""}`;
     }
     function truncateLabel(value, maxLength = 28) {
       const text = String(value || "");

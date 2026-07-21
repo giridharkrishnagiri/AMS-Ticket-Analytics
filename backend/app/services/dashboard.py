@@ -18,6 +18,7 @@ from app.models import (
     AssessmentProblemRecord,
     Client,
     DashboardFilterFact,
+    GenAITicketClassification,
     IncidentSlaRow,
     Project,
     Ticket,
@@ -3489,6 +3490,7 @@ def volumetrics_source_select(
     return select(
         literal(scope_label).label("scope"),
         model.id.label("id"),
+        model.ticket_number.label("ticket_number"),
         model.ticket_type.label("ticket_type"),
         model.created_at.label("created_at"),
         model.resolved_at.label("resolved_at"),
@@ -6255,6 +6257,99 @@ def volumetrics_sc_task_catalog_item_proportion(
         period["pie_rows"] = sc_task_catalog_pie_rows(raw_rows, total_sc_tasks)
 
     return {"periods": periods, "data_notes": data_notes, "warnings": warnings}
+
+
+def volumetrics_category_level2_label_expression() -> tuple[Any, Any, Any]:
+    category_expression = volumetrics_display_expression(
+        GenAITicketClassification.genai_category,
+    )
+    subcategory_expression = volumetrics_display_expression(
+        GenAITicketClassification.genai_subcategory_1,
+    )
+    label_expression = func.concat(category_expression, literal(" - "), subcategory_expression)
+    return category_expression, subcategory_expression, label_expression
+
+
+def volumetrics_category_level2_rows(
+    db: Session,
+    request: Any,
+    *,
+    ticket_type: str,
+) -> list[dict[str, Any]]:
+    selected_ticket_type = normalize_volumetrics_ticket_type(request.ticket_type)
+    normalized_ticket_type = normalize_volumetrics_ticket_type(ticket_type)
+    if selected_ticket_type != "all" and selected_ticket_type != normalized_ticket_type:
+        return []
+
+    source = volumetrics_source_subquery(request)
+    effective_request = replace_request_value(request, "ticket_type", normalized_ticket_type)
+    completion_month = func.to_char(func.date_trunc("month", source.c.completion_at), "YYYY-MM")
+    category_expression, subcategory_expression, label_expression = (
+        volumetrics_category_level2_label_expression()
+    )
+    conditions = [
+        *volumetrics_base_conditions(source, effective_request, include_date_bounds=False),
+        source.c.completion_at.is_not(None),
+        source.c.completion_at >= normalize_dashboard_datetime(request.start_datetime),
+        source.c.completion_at <= normalize_dashboard_datetime(request.end_datetime),
+        volumetrics_resolved_closed_state_expression(source.c),
+        ~volumetrics_cancelled_expression(source),
+        GenAITicketClassification.project_id == request.project_id,
+        GenAITicketClassification.ticket_number == source.c.ticket_number,
+        GenAITicketClassification.analysis_month == completion_month,
+        GenAITicketClassification.status == "success",
+    ]
+    statement = (
+        select(
+            category_expression.label("genai_category"),
+            subcategory_expression.label("genai_subcategory_1"),
+            label_expression.label("label"),
+            func.count(source.c.id).label("ticket_count"),
+        )
+        .select_from(source)
+        .join(
+            GenAITicketClassification,
+            and_(
+                GenAITicketClassification.project_id == request.project_id,
+                GenAITicketClassification.ticket_number == source.c.ticket_number,
+            ),
+        )
+        .where(*conditions)
+        .group_by(category_expression, subcategory_expression, label_expression)
+        .order_by(func.count(source.c.id).desc(), label_expression.asc())
+    )
+    return [
+        {
+            "genai_category": str(row["genai_category"]),
+            "genai_subcategory_1": str(row["genai_subcategory_1"]),
+            "label": str(row["label"]),
+            "ticket_count": int(row["ticket_count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+
+
+def volumetrics_category_level2_trends(db: Session, request: Any) -> dict[str, Any]:
+    normalize_volumetrics_scope(request.scope)
+    incidents = volumetrics_category_level2_rows(db, request, ticket_type="incident")
+    sc_tasks = volumetrics_category_level2_rows(db, request, ticket_type="sc_task")
+    warnings: list[str] = []
+    if not incidents and normalize_volumetrics_ticket_type(request.ticket_type) != "sc_task":
+        warnings.append("No analyzed Incident category rows match the selected filters.")
+    if not sc_tasks and normalize_volumetrics_ticket_type(request.ticket_type) != "incident":
+        warnings.append("No analyzed SC Task category rows match the selected filters.")
+    return {
+        "incidents": incidents,
+        "sc_tasks": sc_tasks,
+        "data_notes": [
+            "Category-wise Trends use successfully saved GenAI ticket classification rows.",
+            "Counts use completed tickets in the selected date range and the active "
+            "Volumetrics filters.",
+            "Labels are shown as GenAI Category - GenAI SubCategory-1.",
+            "Canceled/cancelled Incidents and SC Tasks in Closed Incomplete state are excluded.",
+        ],
+        "warnings": warnings,
+    }
 
 
 def priority_bucket_expression(source: Any) -> Any:

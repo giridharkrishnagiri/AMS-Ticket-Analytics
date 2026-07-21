@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -31,6 +34,29 @@ MAX_CATEGORY_REUSE_ITEMS = 50
 DEFAULT_BATCH_SIZE = 10
 MAX_BATCH_SIZE = 25
 MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+TICKET_DUMP_EXCLUDED_COLUMNS = {
+    "id",
+    "project_id",
+    "upload_batch_id",
+    "uploaded_file_id",
+    "raw_row_id",
+    "application_dimension_id",
+    "application_inventory_id",
+    "normalized_payload",
+}
+TICKET_DUMP_CLASSIFICATION_COLUMNS = [
+    "genai_category_quality",
+    "genai_category",
+    "genai_subcategory_1",
+    "genai_subcategory_2",
+    "genai_confidence",
+    "genai_status",
+    "genai_prompt_key",
+    "genai_prompt_version",
+    "genai_model_name",
+    "genai_processed_at",
+    "genai_error_message",
+]
 
 
 class TicketClassificationError(ValueError):
@@ -779,6 +805,77 @@ def ticket_classification_pivot(
             ) in rows
         ],
     }
+
+
+def _csv_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def ticket_classification_dump_csv(
+    db: Session,
+    project_id: UUID,
+    analysis_month: str,
+) -> str:
+    month_key = validate_month_key(analysis_month)
+    tickets = db.execute(eligible_ticket_statement(project_id, month_key)).scalars().all()
+    classification_rows = existing_rows_for_month(db, project_id, month_key)
+    ticket_columns = [
+        column.name
+        for column in Ticket.__table__.columns
+        if column.name not in TICKET_DUMP_EXCLUDED_COLUMNS
+    ]
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[*ticket_columns, *TICKET_DUMP_CLASSIFICATION_COLUMNS],
+    )
+    writer.writeheader()
+    for ticket in tickets:
+        classification = classification_rows.get(ticket.ticket_number)
+        row = {column: _csv_value(getattr(ticket, column, None)) for column in ticket_columns}
+        row.update(
+            {
+                "genai_category_quality": (
+                    classification.category_quality if classification is not None else None
+                ),
+                "genai_category": (
+                    classification.genai_category if classification is not None else None
+                ),
+                "genai_subcategory_1": (
+                    classification.genai_subcategory_1 if classification is not None else None
+                ),
+                "genai_subcategory_2": (
+                    classification.genai_subcategory_2 if classification is not None else None
+                ),
+                "genai_confidence": (
+                    classification.confidence if classification is not None else None
+                ),
+                "genai_status": classification.status if classification is not None else None,
+                "genai_prompt_key": (
+                    classification.prompt_key if classification is not None else None
+                ),
+                "genai_prompt_version": (
+                    classification.prompt_version if classification is not None else None
+                ),
+                "genai_model_name": (
+                    classification.model_name if classification is not None else None
+                ),
+                "genai_processed_at": (
+                    _csv_value(classification.processed_at)
+                    if classification is not None
+                    else None
+                ),
+                "genai_error_message": (
+                    classification.error_message if classification is not None else None
+                ),
+            },
+        )
+        writer.writerow(row)
+    return output.getvalue()
 
 
 def _metadata_from_usage_log(row: GenAIUsageLog) -> dict[str, Any]:

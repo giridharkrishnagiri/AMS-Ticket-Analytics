@@ -22,6 +22,7 @@ from app.models import (
     DashboardCommentary,
     DashboardFilterCatalog,
     DashboardFilterFact,
+    GenAITicketClassification,
     IncidentSlaRow,
     InScopeAssignmentGroup,
     Project,
@@ -4725,6 +4726,235 @@ def test_volumetrics_sc_task_catalog_item_proportion_endpoint() -> None:
         cleanup_client(db, client_id)
 
 
+def test_volumetrics_category_level2_trends_use_saved_genai_classification() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        may_10 = dt("2026-05-10T10:00:00")
+        may_11 = dt("2026-05-11T10:00:00")
+        may_12 = dt("2026-05-12T10:00:00")
+        june_1 = dt("2026-06-01T10:00:00")
+
+        for number in ("INC-CAT-1", "INC-CAT-2"):
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                number,
+                "INCIDENT",
+                dt("2026-05-01T09:00:00"),
+                state="Resolved",
+                resolved_at=may_10,
+                functional_track="Data",
+                ams_owner="Owner A",
+                sap_non_sap="SAP",
+                business_critical="Critical",
+            )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-CAT-CANCELLED",
+            "INCIDENT",
+            dt("2026-05-01T09:00:00"),
+            state="Canceled",
+            resolved_at=may_11,
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-CAT-1",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-05-02T09:00:00"),
+            state="Closed Complete",
+            closed_at=may_12,
+            functional_track="Finance",
+            ams_owner="Owner B",
+            sap_non_sap="Non-SAP",
+            business_critical="High",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-CAT-INCOMPLETE",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-05-02T09:00:00"),
+            state="Closed Incomplete",
+            closed_at=may_12,
+            functional_track="Finance",
+            ams_owner="Owner B",
+            sap_non_sap="Non-SAP",
+            business_critical="High",
+        )
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-CAT-JUNE",
+            "INCIDENT",
+            dt("2026-06-01T09:00:00"),
+            state="Resolved",
+            resolved_at=june_1,
+            functional_track="Data",
+            ams_owner="Owner A",
+            sap_non_sap="SAP",
+            business_critical="Critical",
+        )
+        db.add_all(
+            [
+                GenAITicketClassification(
+                    project_id=project_id,
+                    ticket_number="INC-CAT-1",
+                    ticket_type="INCIDENT",
+                    analysis_month="2026-05",
+                    input_hash="hash-inc-cat-1",
+                    prompt_key="ticket_cluster_analysis",
+                    prompt_version=1,
+                    status="success",
+                    genai_category="Access",
+                    genai_subcategory_1="Login",
+                    genai_subcategory_2="Password",
+                    processed_at=may_10,
+                ),
+                GenAITicketClassification(
+                    project_id=project_id,
+                    ticket_number="INC-CAT-2",
+                    ticket_type="INCIDENT",
+                    analysis_month="2026-05",
+                    input_hash="hash-inc-cat-2",
+                    prompt_key="ticket_cluster_analysis",
+                    prompt_version=1,
+                    status="success",
+                    genai_category="Access",
+                    genai_subcategory_1="Login",
+                    genai_subcategory_2="Password",
+                    processed_at=may_10,
+                ),
+                GenAITicketClassification(
+                    project_id=project_id,
+                    ticket_number="INC-CAT-CANCELLED",
+                    ticket_type="INCIDENT",
+                    analysis_month="2026-05",
+                    input_hash="hash-inc-cancelled",
+                    prompt_key="ticket_cluster_analysis",
+                    prompt_version=1,
+                    status="success",
+                    genai_category="Canceled",
+                    genai_subcategory_1="Should Not Count",
+                    processed_at=may_11,
+                ),
+                GenAITicketClassification(
+                    project_id=project_id,
+                    ticket_number="SCTASK-CAT-1",
+                    ticket_type="SERVICE_CATALOG_TASK",
+                    analysis_month="2026-05",
+                    input_hash="hash-sctask-cat-1",
+                    prompt_key="ticket_cluster_analysis",
+                    prompt_version=1,
+                    status="success",
+                    genai_category="User Administration",
+                    genai_subcategory_1="New User",
+                    processed_at=may_12,
+                ),
+                GenAITicketClassification(
+                    project_id=project_id,
+                    ticket_number="SCTASK-CAT-INCOMPLETE",
+                    ticket_type="SERVICE_CATALOG_TASK",
+                    analysis_month="2026-05",
+                    input_hash="hash-sctask-incomplete",
+                    prompt_key="ticket_cluster_analysis",
+                    prompt_version=1,
+                    status="success",
+                    genai_category="Incomplete",
+                    genai_subcategory_1="Should Not Count",
+                    processed_at=may_12,
+                ),
+                GenAITicketClassification(
+                    project_id=project_id,
+                    ticket_number="INC-CAT-JUNE",
+                    ticket_type="INCIDENT",
+                    analysis_month="2026-06",
+                    input_hash="hash-inc-june",
+                    prompt_key="ticket_cluster_analysis",
+                    prompt_version=1,
+                    status="success",
+                    genai_category="Batch Job",
+                    genai_subcategory_1="File Load",
+                    processed_at=june_1,
+                ),
+            ],
+        )
+        db.commit()
+
+        request_body = {
+            "project_id": str(project_id),
+            "scope": "in_scope",
+            "ticket_type": "all",
+            "time_grain": "monthly",
+            "start_datetime": "2026-05-01T00:00:00+00:00",
+            "end_datetime": "2026-05-31T23:59:59+00:00",
+            "filters": {},
+        }
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard/volumetrics/category-level2-trends",
+                json=request_body,
+            )
+            filtered_response = client.post(
+                "/api/dashboard/volumetrics/category-level2-trends",
+                json={
+                    **request_body,
+                    "filters": {"functional_track_ams_owner": ["Data"]},
+                },
+            )
+            incident_only_response = client.post(
+                "/api/dashboard/volumetrics/category-level2-trends",
+                json={**request_body, "ticket_type": "incident"},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["incidents"] == [
+            {
+                "genai_category": "Access",
+                "genai_subcategory_1": "Login",
+                "label": "Access - Login",
+                "ticket_count": 2,
+            },
+        ]
+        assert payload["sc_tasks"] == [
+            {
+                "genai_category": "User Administration",
+                "genai_subcategory_1": "New User",
+                "label": "User Administration - New User",
+                "ticket_count": 1,
+            },
+        ]
+        assert "Should Not Count" not in response.text
+        assert "Batch Job" not in response.text
+
+        assert filtered_response.status_code == 200
+        filtered_payload = filtered_response.json()
+        assert filtered_payload["incidents"][0]["ticket_count"] == 2
+        assert filtered_payload["sc_tasks"] == []
+
+        assert incident_only_response.status_code == 200
+        assert incident_only_response.json()["sc_tasks"] == []
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_volumetrics_prompt17_detailed_splits_mttr_and_duration_buckets() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
@@ -6178,7 +6408,7 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "Overall SLA Trends" in document
         assert "Detailed Volume Trends" in document
         assert "KPI Trends" in document
-        assert "Category-wise Trends" not in document
+        assert "Category-wise Trends" in document
         assert "Created vs Resolved by hour of the day" in document
         assert "Priority-wise ticket distribution" in document
         assert 'slaMode: "sla"' in document
@@ -6547,10 +6777,12 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
             "overall_volume_trends",
             "overall_sla_trends",
             "detailed_volume_trends",
+            "category_trends",
             "kpi_trends",
             "assignment_group_volumetrics",
             "business_service_ci_volumetrics",
         ]
+        assert "category_trends" in payload["volumetrics"]
         assert "business_service_ci_volumetrics" in payload["volumetrics"]
         assert payload["volumetrics"]["created_patterns"]["rows"]
         assert payload["volumetrics"]["overall_volume_trends"][

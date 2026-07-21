@@ -2602,6 +2602,28 @@ h2 {
   align-items: start;
 }
 
+.category-trends-section {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.category-trends-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
+.category-level2-plot {
+  min-height: 320px;
+}
+
+.category-level2-scroll {
+  max-height: 720px;
+  overflow: auto;
+}
+
 .compact-table-wrapper {
   max-width: 100%;
   overflow-x: auto;
@@ -2930,6 +2952,14 @@ h2 {
   margin-top: 18px;
 }
 
+.workbench-pivot-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .workbench-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3022,6 +3052,7 @@ h2 {
   }
 
   .volumetrics-two-column-grid,
+  .category-trends-grid,
   .volumetrics-three-column-grid,
   .open-ticket-aging-chart-grid,
   .performance-pareto-grid,
@@ -3071,6 +3102,7 @@ h2 {
   .multi-filter-grid,
   .dashboard-chart-grid,
   .applications-chart-grid,
+  .category-trends-grid,
   .kpi-grid,
   .workflow-steps,
   .upload-type-grid,

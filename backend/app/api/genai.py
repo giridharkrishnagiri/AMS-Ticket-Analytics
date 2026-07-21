@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -98,6 +98,7 @@ from app.services.genai.ticket_classification import (
     TicketClassificationError,
     clear_ticket_classification,
     run_ticket_classification,
+    ticket_classification_dump_csv,
     ticket_classification_pivot,
     ticket_classification_summary,
     ticket_classification_usage_runs,
@@ -362,6 +363,24 @@ def get_ticket_classification_pivot(
         return ticket_classification_pivot(db, project_id, analysis_month)
     except TicketClassificationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/ticket-classification/ticket-dump")
+def download_ticket_classification_dump(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+) -> Response:
+    try:
+        csv_text = ticket_classification_dump_csv(db, project_id, analysis_month)
+    except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    filename = f"genai_ticket_classification_dump_{analysis_month}.csv"
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get(

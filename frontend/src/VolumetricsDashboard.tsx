@@ -37,6 +37,7 @@ import {
   getDashboardVolumetricsKpiReassignmentHopsTrend,
   getDashboardVolumetricsAssignmentGroupVolumetrics,
   getDashboardVolumetricsBusinessServiceCiVolumetrics,
+  getDashboardVolumetricsCategoryLevel2Trends,
   getDashboardVolumetricsPriorityDistribution,
   getDashboardVolumetricsScTaskCatalogItemProportion,
   getDashboardVolumetricsSlaTrends,
@@ -75,6 +76,8 @@ import type {
   DashboardVolumetricsAssignmentGroupVolumetrics,
   DashboardVolumetricsBusinessServiceCiTable,
   DashboardVolumetricsBusinessServiceCiVolumetrics,
+  DashboardVolumetricsCategoryLevel2Row,
+  DashboardVolumetricsCategoryLevel2Trends,
   DashboardVolumetricsProblemManagementPoint,
   DashboardVolumetricsProblemManagementTrend,
   DashboardVolumetricsPriorityDistribution,
@@ -132,6 +135,7 @@ type VolumetricsSubTab =
   | "overall_volume"
   | "overall_sla"
   | "detailed_volume"
+  | "category_trends"
   | "kpi"
   | "performance"
   | "assignment_group_volumetrics"
@@ -144,6 +148,7 @@ const subTabCommentaryKeys: Record<VolumetricsSubTab, string> = {
   overall_volume: "overall_volume_trends",
   overall_sla: "overall_sla_trends",
   detailed_volume: "detailed_volume_trends",
+  category_trends: "category_trends",
   kpi: "kpi_trends",
   performance: "performance_trends",
   assignment_group_volumetrics: "assignment_group_volumetrics",
@@ -325,6 +330,13 @@ const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
 
 const emptyScTaskCatalogItemProportion: DashboardVolumetricsScTaskCatalogItemProportion = {
   periods: [],
+  data_notes: [],
+  warnings: [],
+};
+
+const emptyCategoryLevel2Trends: DashboardVolumetricsCategoryLevel2Trends = {
+  incidents: [],
+  sc_tasks: [],
   data_notes: [],
   warnings: [],
 };
@@ -1230,6 +1242,9 @@ function VolumetricsDashboard({
   const [scTaskCatalogItemProportion, setScTaskCatalogItemProportion] = useState<
     LoadState<DashboardVolumetricsScTaskCatalogItemProportion>
   >(createLoadState(emptyScTaskCatalogItemProportion));
+  const [categoryLevel2Trends, setCategoryLevel2Trends] = useState<
+    LoadState<DashboardVolumetricsCategoryLevel2Trends>
+  >(createLoadState(emptyCategoryLevel2Trends));
   const [kpiMttrTrends, setKpiMttrTrends] = useState<
     LoadState<DashboardVolumetricsKpiMttrTrends>
   >(createLoadState(emptyKpiMttrTrends));
@@ -1478,6 +1493,7 @@ function VolumetricsDashboard({
     setScTaskCatalogItemProportion(
       createLoadState(emptyScTaskCatalogItemProportion, "loading")
     );
+    setCategoryLevel2Trends(createLoadState(emptyCategoryLevel2Trends, "loading"));
     setKpiMttrTrends(createLoadState(emptyKpiMttrTrends, "loading"));
     setKpiDurationBuckets(createLoadState(emptyDurationBuckets, "loading"));
     setOpenTicketAgingTrend(createLoadState(emptyOpenTicketAgingTrend, "loading"));
@@ -1661,6 +1677,22 @@ function VolumetricsDashboard({
           status: "error",
           data: emptyScTaskCatalogItemProportion,
           error: errorMessage(error, "Unable to load SC Task catalog item proportions"),
+        });
+      });
+
+    void getDashboardVolumetricsCategoryLevel2Trends(requestBody)
+      .then((nextCategoryLevel2Trends) => {
+        setCategoryLevel2Trends({
+          status: "success",
+          data: nextCategoryLevel2Trends,
+          error: nextCategoryLevel2Trends.warnings[0] ?? null,
+        });
+      })
+      .catch((error) => {
+        setCategoryLevel2Trends({
+          status: "error",
+          data: emptyCategoryLevel2Trends,
+          error: errorMessage(error, "Unable to load category-wise trends"),
         });
       });
 
@@ -1873,6 +1905,7 @@ function VolumetricsDashboard({
       setDetailedSplits(createLoadState(emptyDetailedSplits));
       setDistributionSplits(createLoadState(emptyDistributionSplits));
       setScTaskCatalogItemProportion(createLoadState(emptyScTaskCatalogItemProportion));
+      setCategoryLevel2Trends(createLoadState(emptyCategoryLevel2Trends));
       setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
       setKpiDurationBuckets(createLoadState(emptyDurationBuckets));
       setOpenTicketAgingTrend(createLoadState(emptyOpenTicketAgingTrend));
@@ -2451,6 +2484,17 @@ function VolumetricsDashboard({
             }
           />
         ) : null}
+        {activeSubTab === "category_trends" ? (
+          <CategoryWiseTrendsPanel
+            commentaryForChart={(chartKey) =>
+              volumetricsCommentary("category_trends", "category_trends", chartKey)
+            }
+            data={categoryLevel2Trends.data}
+            error={categoryLevel2Trends.error}
+            status={categoryLevel2Trends.status}
+            ticketType={ticketType}
+          />
+        ) : null}
         {activeSubTab === "kpi" ? (
           <KpiTrends
             durationBuckets={kpiDurationBuckets.data}
@@ -2599,6 +2643,7 @@ const volumetricsSubTabs: Array<{ value: VolumetricsSubTab; label: string }> = [
   { value: "overall_volume", label: "Overall Volume Trends" },
   { value: "overall_sla", label: "Overall SLA Trends" },
   { value: "detailed_volume", label: "Detailed Volume Trends" },
+  { value: "category_trends", label: "Category-wise Trends" },
   { value: "kpi", label: "KPI Trends" },
   { value: "performance", label: "Performance Trends" },
   { value: "assignment_group_volumetrics", label: "Assignment Group Volumetrics" },
@@ -3649,6 +3694,189 @@ function DetailedVolumeTrends({
         ticketType={ticketType}
       />
     </>
+  );
+}
+
+function categoryTrendNotApplicable(
+  selectedTicketType: VolumetricsTicketType,
+  valueTicketType: Exclude<VolumetricsTicketType, "all">
+): boolean {
+  return selectedTicketType !== "all" && selectedTicketType !== valueTicketType;
+}
+
+function CategoryLevel2Tooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardVolumetricsCategoryLevel2Row }>;
+}) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+  const row = payload[0].payload;
+  return (
+    <div className="chart-tooltip">
+      <strong>{row.label}</strong>
+      <span>Category: {row.genai_category}</span>
+      <span>SubCategory-1: {row.genai_subcategory_1}</span>
+      <span>Tickets: {formatNumber(row.ticket_count)}</span>
+    </div>
+  );
+}
+
+function CategoryLevel2BarChart({
+  commentary,
+  data,
+  selectedTicketType,
+  status,
+  title,
+  valueTicketType,
+}: {
+  commentary: ReactNode;
+  data: DashboardVolumetricsCategoryLevel2Row[];
+  selectedTicketType: VolumetricsTicketType;
+  status: LoadStatus;
+  title: string;
+  valueTicketType: Exclude<VolumetricsTicketType, "all">;
+}) {
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const notApplicable = categoryTrendNotApplicable(selectedTicketType, valueTicketType);
+  const rows = notApplicable ? [] : data;
+  const hasRows = rows.length > 0;
+  const chartWidth = Math.max(760, plotWidth - 8);
+  const chartHeight = Math.max(300, rows.length * 28 + 88);
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Ticket count by GenAI Category - GenAI SubCategory-1, sorted by volume.
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">
+          This category chart is not applicable for the selected ticket type.
+        </p>
+      ) : null}
+      {status === "loading" && !notApplicable ? (
+        <p className="muted-text chart-state-text">Loading category trends...</p>
+      ) : null}
+      {status !== "loading" && !notApplicable && !hasRows ? (
+        <p className="muted-text chart-state-text">No analyzed category rows match the filters.</p>
+      ) : null}
+      {status !== "loading" && !notApplicable && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot category-level2-plot" ref={chartRef}>
+          <div className="applications-chart-scroll category-level2-scroll">
+            <div className="applications-chart-stage">
+              <BarChart
+                data={rows}
+                height={chartHeight}
+                layout="vertical"
+                margin={{ top: 18, right: 86, bottom: 26, left: 260 }}
+                width={chartWidth}
+              >
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" />
+                <XAxis type="number" tick={{ fontSize: 10, fontWeight: 700 }} />
+                <YAxis
+                  dataKey="label"
+                  interval={0}
+                  tick={{ fontSize: 10, fontWeight: 700 }}
+                  tickFormatter={(value) => truncateLabel(String(value), 42)}
+                  type="category"
+                  width={250}
+                />
+                <Tooltip content={<CategoryLevel2Tooltip />} />
+                <Bar
+                  dataKey="ticket_count"
+                  fill={valueTicketType === "incident" ? chartColors.created : chartColors.pattern}
+                  name="Tickets"
+                  radius={[0, 5, 5, 0]}
+                >
+                  <LabelList dataKey="ticket_count" position="right" fontSize={11} fontWeight={800} />
+                </Bar>
+              </BarChart>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
+    </section>
+  );
+}
+
+function CategoryWiseTrendsPanel({
+  commentaryForChart,
+  data,
+  error,
+  status,
+  ticketType,
+}: {
+  commentaryForChart: (chartKey: string) => ReactNode;
+  data: DashboardVolumetricsCategoryLevel2Trends;
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+}) {
+  return (
+    <section className="panel category-trends-section">
+      <div className="panel-heading">
+        <div>
+          <p className="label">Category-wise Trends</p>
+          <h3>GenAI Level-2 Ticket Categories</h3>
+          <p className="muted-text">
+            Uses analyzed ticket classification rows for the selected completion date range.
+          </p>
+        </div>
+      </div>
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "error" && error ? <p className="muted-text">{error}</p> : null}
+      <div className="category-trends-grid">
+        <CategoryLevel2BarChart
+          commentary={commentaryForChart("category_level2_incidents")}
+          data={data.incidents}
+          selectedTicketType={ticketType}
+          status={status}
+          title="Incidents by Category - SubCategory-1"
+          valueTicketType="incident"
+        />
+        <CategoryLevel2BarChart
+          commentary={commentaryForChart("category_level2_sc_tasks")}
+          data={data.sc_tasks}
+          selectedTicketType={ticketType}
+          status={status}
+          title="SC Tasks by Category - SubCategory-1"
+          valueTicketType="sc_task"
+        />
+      </div>
+      {data.data_notes.length ? (
+        <ul className="muted-text volumetrics-note-list">
+          {data.data_notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+      {data.warnings.length ? (
+        <ul className="error-text volumetrics-note-list">
+          {data.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 
