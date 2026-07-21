@@ -2962,6 +2962,10 @@ h2 {
   max-height: 520px;
 }
 
+.workbench-usage-frame {
+  max-height: 280px;
+}
+
 .quality-strip {
   display: flex;
   flex-wrap: wrap;

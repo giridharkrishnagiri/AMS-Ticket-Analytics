@@ -127,6 +127,31 @@ class GenAITicketClassificationUsageSummary(GenAIUsageSummary):
     duration_ms: int | None = None
 
 
+class GenAITicketClassificationUsageRunResponse(BaseModel):
+    run_id: str
+    project_id: UUID
+    analysis_month: str
+    model_name: str | None = None
+    provider: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost: float | None = None
+    duration_ms: int | None = None
+    ticket_count: int
+    batch_count: int
+    success_batch_count: int
+    error_batch_count: int
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class GenAITicketClassificationUsageRunsResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    runs: list[GenAITicketClassificationUsageRunResponse] = Field(default_factory=list)
+
+
 class GenAITestResponse(BaseModel):
     ok: bool
     provider: str
@@ -183,6 +208,7 @@ class GenAITicketClassificationRunResponse(BaseModel):
     failed_count: int
     summary: GenAITicketClassificationSummaryResponse
     usage: GenAITicketClassificationUsageSummary
+    usage_run: GenAITicketClassificationUsageRunResponse | None = None
 
 
 class GenAITicketClassificationClearRequest(BaseModel):

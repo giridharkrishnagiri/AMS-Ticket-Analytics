@@ -36,6 +36,7 @@ from app.schemas.genai import (
     GenAITicketClassificationRunRequest,
     GenAITicketClassificationRunResponse,
     GenAITicketClassificationSummaryResponse,
+    GenAITicketClassificationUsageRunsResponse,
     GenAIToolCatalogResponse,
     GenAIToolExecuteRequest,
     GenAIToolExecuteResponse,
@@ -94,6 +95,7 @@ from app.services.genai.ticket_classification import (
     run_ticket_classification,
     ticket_classification_pivot,
     ticket_classification_summary,
+    ticket_classification_usage_runs,
 )
 from app.services.genai.ticket_classification import (
     TicketClassificationRunRequest as ServiceTicketClassificationRunRequest,
@@ -335,6 +337,27 @@ def get_ticket_classification_pivot(
 ) -> GenAITicketClassificationPivotResponse:
     try:
         return ticket_classification_pivot(db, project_id, analysis_month)
+    except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/ticket-classification/usage-runs",
+    response_model=GenAITicketClassificationUsageRunsResponse,
+)
+def get_ticket_classification_usage_runs(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> GenAITicketClassificationUsageRunsResponse:
+    try:
+        return ticket_classification_usage_runs(
+            db,
+            project_id,
+            analysis_month,
+            limit=limit,
+        )
     except TicketClassificationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

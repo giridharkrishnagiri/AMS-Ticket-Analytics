@@ -6,12 +6,13 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Select, and_, delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models import GenAIConfig, GenAITicketClassification, Project, Ticket
+from app.core.config import get_settings
+from app.models import GenAIConfig, GenAITicketClassification, GenAIUsageLog, Project, Ticket
 from app.services.genai.config_service import get_or_create_config
 from app.services.genai.llm_client import LLMCompletionResult, chat_completion, provider_model_name
 from app.services.genai.prompt_service import get_prompt_template
@@ -389,6 +390,25 @@ def validate_config(config: GenAIConfig) -> None:
         raise TicketClassificationError("Model name is not configured for GenAI.")
 
 
+def effective_ticket_classification_config(config: GenAIConfig) -> GenAIConfig:
+    model_override = (get_settings().genai_ticket_classification_model_name or "").strip()
+    if not model_override:
+        return config
+    return GenAIConfig(
+        is_enabled=config.is_enabled,
+        provider=config.provider,
+        model_name=model_override,
+        temperature=config.temperature,
+        top_p=config.top_p,
+        max_output_tokens=config.max_output_tokens,
+        timeout_seconds=config.timeout_seconds,
+        max_tool_calls=config.max_tool_calls,
+        allow_recommendations=config.allow_recommendations,
+        allow_chart_generation=config.allow_chart_generation,
+        response_style=config.response_style,
+    )
+
+
 def project_customer_id(db: Session, project_id: UUID) -> UUID:
     customer_id = db.execute(
         select(Project.client_id).where(Project.id == project_id),
@@ -405,7 +425,7 @@ def run_ticket_classification(
     month_key = validate_month_key(request.analysis_month)
     batch_size = clamp_batch_size(request.batch_size)
     customer_id = project_customer_id(db, request.project_id)
-    config = get_or_create_config(db)
+    config = effective_ticket_classification_config(get_or_create_config(db))
     validate_config(config)
     model_name = provider_model_name(config)
     prompt_text, prompt_version = prompt_text_and_version(db)
@@ -441,6 +461,7 @@ def run_ticket_classification(
     estimated_cost = 0.0
     duration_ms = 0
     category_reuse_list = reusable_categories(db, request.project_id)
+    run_id = str(uuid4())
 
     for index in range(0, len(tickets_to_process), batch_size):
         batch = tickets_to_process[index : index + batch_size]
@@ -461,9 +482,12 @@ def run_ticket_classification(
             customer_id=customer_id,
             project_id=request.project_id,
             tools_used_json={
+                "run_id": run_id,
                 "prompt_key": PROMPT_KEY,
                 "batch_size": len(batch_tickets),
+                "ticket_count": len(batch_tickets),
                 "analysis_month": month_key,
+                "force_reprocess": request.force_reprocess,
             },
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -567,6 +591,7 @@ def run_ticket_classification(
         category_reuse_list = reusable_categories(db, request.project_id)
 
     summary = ticket_classification_summary(db, request.project_id, month_key)
+    usage_run = ticket_classification_usage_run(db, request.project_id, month_key, run_id)
     return {
         "project_id": request.project_id,
         "analysis_month": month_key,
@@ -581,6 +606,7 @@ def run_ticket_classification(
             "estimated_cost": estimated_cost or None,
             "duration_ms": duration_ms or None,
         },
+        "usage_run": usage_run,
     }
 
 
@@ -714,6 +740,124 @@ def ticket_classification_pivot(
                 sc_task_count,
             ) in rows
         ],
+    }
+
+
+def _metadata_from_usage_log(row: GenAIUsageLog) -> dict[str, Any]:
+    return row.tools_used_json if isinstance(row.tools_used_json, dict) else {}
+
+
+def _sum_optional(values: list[int | float | None]) -> int | float | None:
+    present_values = [value for value in values if value is not None]
+    if not present_values:
+        return None
+    return sum(present_values)
+
+
+def _usage_run_from_logs(
+    project_id: UUID,
+    month_key: str,
+    run_id: str,
+    logs: list[GenAIUsageLog],
+) -> dict[str, Any]:
+    ordered_logs = sorted(logs, key=lambda row: row.created_at)
+    prompt_tokens = _sum_optional([row.prompt_tokens for row in ordered_logs])
+    completion_tokens = _sum_optional([row.completion_tokens for row in ordered_logs])
+    estimated_cost = _sum_optional([row.estimated_cost for row in ordered_logs])
+    duration_ms = _sum_optional([row.duration_ms for row in ordered_logs])
+    total_tokens = (
+        int((prompt_tokens or 0) + (completion_tokens or 0))
+        if prompt_tokens is not None or completion_tokens is not None
+        else None
+    )
+    ticket_count = sum(
+        int(_metadata_from_usage_log(row).get("ticket_count") or 0) for row in ordered_logs
+    )
+    return {
+        "run_id": run_id,
+        "project_id": project_id,
+        "analysis_month": month_key,
+        "model_name": ordered_logs[-1].model_name if ordered_logs else None,
+        "provider": ordered_logs[-1].provider if ordered_logs else None,
+        "prompt_tokens": int(prompt_tokens) if prompt_tokens is not None else None,
+        "completion_tokens": int(completion_tokens) if completion_tokens is not None else None,
+        "total_tokens": total_tokens,
+        "estimated_cost": float(estimated_cost) if estimated_cost is not None else None,
+        "duration_ms": int(duration_ms) if duration_ms is not None else None,
+        "ticket_count": ticket_count,
+        "batch_count": len(ordered_logs),
+        "success_batch_count": sum(1 for row in ordered_logs if row.status == "success"),
+        "error_batch_count": sum(1 for row in ordered_logs if row.status == "error"),
+        "started_at": ordered_logs[0].created_at if ordered_logs else None,
+        "completed_at": ordered_logs[-1].created_at if ordered_logs else None,
+    }
+
+
+def ticket_classification_usage_run(
+    db: Session,
+    project_id: UUID,
+    analysis_month: str,
+    run_id: str,
+) -> dict[str, Any] | None:
+    month_key = validate_month_key(analysis_month)
+    rows = db.execute(
+        select(GenAIUsageLog)
+        .where(
+            GenAIUsageLog.project_id == project_id,
+            GenAIUsageLog.operation == "ticket_classification_enrichment",
+        )
+        .order_by(GenAIUsageLog.created_at.desc())
+        .limit(1000),
+    ).scalars()
+    logs = [
+        row
+        for row in rows
+        if _metadata_from_usage_log(row).get("analysis_month") == month_key
+        and _metadata_from_usage_log(row).get("run_id") == run_id
+    ]
+    if not logs:
+        return None
+    return _usage_run_from_logs(project_id, month_key, run_id, logs)
+
+
+def ticket_classification_usage_runs(
+    db: Session,
+    project_id: UUID,
+    analysis_month: str,
+    *,
+    limit: int = 10,
+) -> dict[str, Any]:
+    month_key = validate_month_key(analysis_month)
+    rows = db.execute(
+        select(GenAIUsageLog)
+        .where(
+            GenAIUsageLog.project_id == project_id,
+            GenAIUsageLog.operation == "ticket_classification_enrichment",
+        )
+        .order_by(GenAIUsageLog.created_at.desc())
+        .limit(1000),
+    ).scalars()
+    grouped_logs: dict[str, list[GenAIUsageLog]] = {}
+    for row in rows:
+        metadata = _metadata_from_usage_log(row)
+        if metadata.get("analysis_month") != month_key:
+            continue
+        run_id = str(metadata.get("run_id") or "")
+        if not run_id:
+            continue
+        grouped_logs.setdefault(run_id, []).append(row)
+    usage_runs = [
+        _usage_run_from_logs(project_id, month_key, run_id, logs)
+        for run_id, logs in grouped_logs.items()
+    ]
+    usage_runs.sort(
+        key=lambda row: row["completed_at"] or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+    return {
+        "project_id": project_id,
+        "analysis_month": month_key,
+        "runs": usage_runs[: max(1, min(limit, 50))],
     }
 
 

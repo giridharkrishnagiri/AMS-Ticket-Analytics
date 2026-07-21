@@ -7,6 +7,31 @@ export type GenAITicketClassificationUsageSummary = {
   duration_ms: number | null;
 };
 
+export type GenAITicketClassificationUsageRun = {
+  run_id: string;
+  project_id: string;
+  analysis_month: string;
+  model_name: string | null;
+  provider: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost: number | null;
+  duration_ms: number | null;
+  ticket_count: number;
+  batch_count: number;
+  success_batch_count: number;
+  error_batch_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type GenAITicketClassificationUsageRuns = {
+  project_id: string;
+  analysis_month: string;
+  runs: GenAITicketClassificationUsageRun[];
+};
+
 export type GenAITicketClassificationSummary = {
   project_id: string;
   analysis_month: string;
@@ -46,6 +71,7 @@ export type GenAITicketClassificationRunResponse = {
   failed_count: number;
   summary: GenAITicketClassificationSummary;
   usage: GenAITicketClassificationUsageSummary;
+  usage_run: GenAITicketClassificationUsageRun | null;
 };
 
 export type GenAITicketClassificationClearResponse = {
@@ -78,6 +104,19 @@ export function getTicketClassificationPivot(
     `/genai/ticket-classification/pivot?${queryString({
       project_id: projectId,
       analysis_month: analysisMonth,
+    })}`
+  );
+}
+
+export function getTicketClassificationUsageRuns(
+  projectId: string,
+  analysisMonth: string
+): Promise<GenAITicketClassificationUsageRuns> {
+  return requestJson<GenAITicketClassificationUsageRuns>(
+    `/genai/ticket-classification/usage-runs?${queryString({
+      project_id: projectId,
+      analysis_month: analysisMonth,
+      limit: "10",
     })}`
   );
 }

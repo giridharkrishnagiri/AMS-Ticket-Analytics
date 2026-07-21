@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
+from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.main import app
 from app.models import (
@@ -784,6 +785,8 @@ def add_classification_ticket(
 
 def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monkeypatch) -> None:
     reset_genai_tables()
+    monkeypatch.setenv("GENAI_TICKET_CLASSIFICATION_MODEL_NAME", "gpt-ticket-classifier-test")
+    get_settings.cache_clear()
     client_id, project_id, upload_batch_id, uploaded_file_id, _suffix = (
         create_ticket_classification_project()
     )
@@ -842,8 +845,10 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
         )
 
         received_ticket_numbers: list[str] = []
+        model_names_seen: list[str | None] = []
 
         def fake_chat_completion(_config, messages):
+            model_names_seen.append(_config.model_name)
             payload = json.loads(messages[1]["content"].split("\n", 1)[1])
             ticket_rows = payload["tickets"]
             received_ticket_numbers.extend(row["ticket_number"] for row in ticket_rows)
@@ -898,7 +903,14 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
             assert run_payload["eligible_ticket_count"] == 2
             assert run_payload["processed_count"] == 2
             assert run_payload["failed_count"] == 0
+            assert run_payload["usage_run"]["model_name"] == "gpt-ticket-classifier-test"
+            assert run_payload["usage_run"]["prompt_tokens"] == 20
+            assert run_payload["usage_run"]["completion_tokens"] == 30
+            assert run_payload["usage_run"]["total_tokens"] == 50
+            assert run_payload["usage_run"]["estimated_cost"] == 0.001
+            assert run_payload["usage_run"]["ticket_count"] == 2
             assert set(received_ticket_numbers) == {"INC-CLASSIFY", "SCTASK-CLASSIFY"}
+            assert model_names_seen == ["gpt-ticket-classifier-test"]
 
             cached_response = client.post(
                 "/api/genai/ticket-classification/run",
@@ -921,6 +933,18 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
                 "Access Issue",
                 "User Administration",
             }
+
+            usage_response = client.get(
+                "/api/genai/ticket-classification/usage-runs",
+                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert usage_response.status_code == 200
+            usage_runs = usage_response.json()["runs"]
+            assert len(usage_runs) == 1
+            assert usage_runs[0]["model_name"] == "gpt-ticket-classifier-test"
+            assert usage_runs[0]["prompt_tokens"] == 20
+            assert usage_runs[0]["completion_tokens"] == 30
+            assert usage_runs[0]["estimated_cost"] == 0.001
 
             clear_response = client.post(
                 "/api/genai/ticket-classification/clear",
@@ -948,3 +972,4 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
             db.close()
     finally:
         cleanup_classification_client(client_id)
+        get_settings.cache_clear()

@@ -4,11 +4,13 @@ import {
   clearTicketClassificationAnalysis,
   getTicketClassificationPivot,
   getTicketClassificationSummary,
+  getTicketClassificationUsageRuns,
   runTicketClassificationEnrichment,
 } from "./api/genai";
 import type {
   GenAITicketClassificationPivot,
   GenAITicketClassificationSummary,
+  GenAITicketClassificationUsageRun,
 } from "./api/genai";
 import type { ProjectOption } from "./api/projects";
 import CustomerSelector from "./CustomerSelector";
@@ -64,12 +66,12 @@ function GenAIWorkbench() {
   const [forceReprocess, setForceReprocess] = useState(false);
   const [summary, setSummary] = useState<GenAITicketClassificationSummary | null>(null);
   const [pivot, setPivot] = useState<GenAITicketClassificationPivot | null>(null);
+  const [usageRuns, setUsageRuns] = useState<GenAITicketClassificationUsageRun[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [usageMessage, setUsageMessage] = useState<string | null>(null);
 
   const canAct = Boolean(projectId.trim()) && Boolean(analysisMonth.trim());
 
@@ -85,21 +87,25 @@ function GenAIWorkbench() {
     if (!projectId || !analysisMonth) {
       setSummary(null);
       setPivot(null);
+      setUsageRuns([]);
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
-      const [nextSummary, nextPivot] = await Promise.all([
+      const [nextSummary, nextPivot, nextUsageRuns] = await Promise.all([
         getTicketClassificationSummary(projectId, analysisMonth),
         getTicketClassificationPivot(projectId, analysisMonth),
+        getTicketClassificationUsageRuns(projectId, analysisMonth),
       ]);
       setSummary(nextSummary);
       setPivot(nextPivot);
+      setUsageRuns(nextUsageRuns.runs);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to load analysis.");
       setSummary(null);
       setPivot(null);
+      setUsageRuns([]);
     } finally {
       setIsLoading(false);
     }
@@ -113,8 +119,8 @@ function GenAIWorkbench() {
     setProjectId(nextProjectId);
     setSummary(null);
     setPivot(null);
+    setUsageRuns([]);
     setMessage(null);
-    setUsageMessage(null);
     setError(null);
   }
 
@@ -124,7 +130,6 @@ function GenAIWorkbench() {
     }
     setIsRunning(true);
     setMessage(null);
-    setUsageMessage(null);
     setError(null);
     try {
       const result = await runTicketClassificationEnrichment({
@@ -134,17 +139,20 @@ function GenAIWorkbench() {
         force_reprocess: forceReprocess,
       });
       setSummary(result.summary);
-      const nextPivot = await getTicketClassificationPivot(projectId, analysisMonth);
+      const [nextPivot, nextUsageRuns] = await Promise.all([
+        getTicketClassificationPivot(projectId, analysisMonth),
+        getTicketClassificationUsageRuns(projectId, analysisMonth),
+      ]);
       setPivot(nextPivot);
+      setUsageRuns(
+        result.usage_run
+          ? [result.usage_run, ...nextUsageRuns.runs.filter((run) => run.run_id !== result.usage_run?.run_id)]
+          : nextUsageRuns.runs
+      );
       setMessage(
         `Analysis complete: ${formatNumber(result.processed_count)} processed, ${formatNumber(
           result.skipped_cached_count
         )} cached, ${formatNumber(result.failed_count)} failed.`
-      );
-      setUsageMessage(
-        `Tokens: ${formatNumber(result.usage.prompt_tokens)} prompt, ${formatNumber(
-          result.usage.completion_tokens
-        )} completion. Cost: ${formatCurrency(result.usage.estimated_cost)}.`
       );
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Analysis failed.");
@@ -159,7 +167,6 @@ function GenAIWorkbench() {
     }
     setIsClearing(true);
     setMessage(null);
-    setUsageMessage(null);
     setError(null);
     try {
       const result = await clearTicketClassificationAnalysis({
@@ -250,7 +257,6 @@ function GenAIWorkbench() {
           <p className="muted-text summary-block">Selected project: {selectedProject.label}</p>
         ) : null}
         {message ? <p className="success-text summary-block">{message}</p> : null}
-        {usageMessage ? <p className="muted-text summary-block">{usageMessage}</p> : null}
         {error ? <p className="error-text summary-block">{error}</p> : null}
       </div>
 
@@ -305,6 +311,60 @@ function GenAIWorkbench() {
                     <td>{formatNumber(row.incident_count)}</td>
                     <td>{formatNumber(row.sc_task_count)}</td>
                     <td>{formatNumber(row.total_count)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="classification-usage-heading">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Enrichment Usage</p>
+            <h2 id="classification-usage-heading">Token and Cost Summary</h2>
+          </div>
+        </div>
+        <div className="scroll-frame workbench-usage-frame">
+          <table>
+            <thead>
+              <tr>
+                <th>Completed</th>
+                <th>Model</th>
+                <th>Tickets</th>
+                <th>Batches</th>
+                <th>Input Tokens</th>
+                <th>Output Tokens</th>
+                <th>Total Tokens</th>
+                <th>Cost</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usageRuns.length === 0 ? (
+                <tr>
+                  <td colSpan={9}>No enrichment usage rows for the selected month.</td>
+                </tr>
+              ) : (
+                usageRuns.map((run) => (
+                  <tr key={run.run_id}>
+                    <td>{formatDisplayDateTime(run.completed_at)}</td>
+                    <td>{displayLabel(run.model_name)}</td>
+                    <td>{formatNumber(run.ticket_count)}</td>
+                    <td>
+                      {formatNumber(run.batch_count)}
+                      {run.error_batch_count > 0 ? ` (${formatNumber(run.error_batch_count)} failed)` : ""}
+                    </td>
+                    <td>{formatNumber(run.prompt_tokens)}</td>
+                    <td>{formatNumber(run.completion_tokens)}</td>
+                    <td>{formatNumber(run.total_tokens)}</td>
+                    <td>{formatCurrency(run.estimated_cost)}</td>
+                    <td>
+                      {run.duration_ms === null || run.duration_ms === undefined
+                        ? "Not available"
+                        : `${formatNumber(run.duration_ms)} ms`}
+                    </td>
                   </tr>
                 ))
               )}
