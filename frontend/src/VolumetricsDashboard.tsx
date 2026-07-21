@@ -3725,6 +3725,42 @@ function CategoryLevel2Tooltip({
   );
 }
 
+function CategoryLevel2DataTable({
+  rows,
+  title,
+}: {
+  rows: DashboardVolumetricsCategoryLevel2Row[];
+  title: string;
+}) {
+  if (!rows.length) {
+    return null;
+  }
+  return (
+    <div className="compact-table-wrapper category-level2-table-wrapper">
+      <table className="compact-data-table category-level2-data-table" aria-label={`${title} data`}>
+        <thead>
+          <tr>
+            <th>Category - SubCategory-1</th>
+            <th>Category</th>
+            <th>SubCategory-1</th>
+            <th>Tickets</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <td>{row.label}</td>
+              <td>{row.genai_category}</td>
+              <td>{row.genai_subcategory_1}</td>
+              <td>{formatNumber(row.ticket_count)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function CategoryLevel2BarChart({
   commentary,
   data,
@@ -3778,7 +3814,10 @@ function CategoryLevel2BarChart({
         <p className="muted-text chart-state-text">No analyzed category rows match the filters.</p>
       ) : null}
       {status !== "loading" && !notApplicable && hasRows ? (
-        <div className="applications-chart-plot volumetrics-chart-plot category-level2-plot" ref={chartRef}>
+        <div
+          className="applications-chart-plot volumetrics-chart-plot category-level2-plot"
+          ref={chartRef}
+        >
           <div className="applications-chart-scroll category-level2-scroll">
             <div className="applications-chart-stage">
               <BarChart
@@ -3805,12 +3844,20 @@ function CategoryLevel2BarChart({
                   name="Tickets"
                   radius={[0, 5, 5, 0]}
                 >
-                  <LabelList dataKey="ticket_count" position="right" fontSize={11} fontWeight={800} />
+                  <LabelList
+                    dataKey="ticket_count"
+                    position="right"
+                    fontSize={11}
+                    fontWeight={800}
+                  />
                 </Bar>
               </BarChart>
             </div>
           </div>
         </div>
+      ) : null}
+      {status !== "loading" && !notApplicable && hasRows ? (
+        <CategoryLevel2DataTable rows={rows} title={title} />
       ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
       {commentary}

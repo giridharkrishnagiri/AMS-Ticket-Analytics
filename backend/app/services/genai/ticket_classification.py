@@ -823,6 +823,12 @@ def ticket_classification_dump_csv(
     month_key = validate_month_key(analysis_month)
     tickets = db.execute(eligible_ticket_statement(project_id, month_key)).scalars().all()
     classification_rows = existing_rows_for_month(db, project_id, month_key)
+    if not classification_rows:
+        raise TicketClassificationError(
+            f"No saved GenAI ticket classification rows exist for {month_key}. "
+            "Run cluster-based analysis or ticket classification enrichment before downloading "
+            "the ticket dump.",
+        )
     ticket_columns = [
         column.name
         for column in Ticket.__table__.columns

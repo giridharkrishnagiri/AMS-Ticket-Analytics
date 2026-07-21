@@ -2624,6 +2624,16 @@ h2 {
   overflow: auto;
 }
 
+.category-level2-table-wrapper {
+  margin-top: 12px;
+  max-height: 420px;
+}
+
+.category-level2-data-table th,
+.category-level2-data-table td {
+  font-size: 0.78rem;
+}
+
 .compact-table-wrapper {
   max-width: 100%;
   overflow-x: auto;

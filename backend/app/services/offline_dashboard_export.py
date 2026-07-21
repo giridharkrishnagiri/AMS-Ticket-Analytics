@@ -5479,10 +5479,15 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         .filter((row) => row.value > 0)
         .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
     }
+    function categoryTrendTable(rows, tableId) {
+      if (!rows.length) return "";
+      return `<div class="validation-actions table-export-actions"><button type="button" data-copy-table="${tableId}">Copy Table</button><button type="button" data-download-table-csv="${tableId}" data-download-filename="${tableId}.csv">Download CSV</button><span class="copy-chart-status" aria-live="polite"></span></div><div class="table-frame table-scroll compact-table-frame"><table id="${tableId}" class="applications-table compact-export-table"><thead><tr><th>Category - SubCategory-1</th><th>Category</th><th>SubCategory-1</th><th>Tickets</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.category)}</td><td>${esc(row.subcategory)}</td><td>${fmt(row.value)}</td></tr>`).join("")}</tbody></table></div>`;
+    }
     function categoryTrendChart(title, ticketType, color) {
       const notApplicable = state.volTicketType !== "all" && state.volTicketType !== ticketType;
       const rows = notApplicable ? [] : categoryTrendRows(ticketType);
-      return `<section class="chart-card panel" data-commentary-key="category_level2_${ticketType === "incident" ? "incidents" : "sc_tasks"}"><h3>${esc(title)}</h3><p class="muted">Ticket count by GenAI Category - GenAI SubCategory-1, sorted by volume.</p><div class="chart-frame chart-stage table-scroll">${notApplicable ? `<p class="muted" style="padding:12px">This category chart is not applicable for the selected ticket type.</p>` : horizontalBarChart(rows, { title, legend: "Tickets", color, emptyMessage: "No analyzed category rows match the filters.", height: Math.max(320, rows.length * 30 + 92), left: 330, right: 92, fontSize: 10, labelLength: 48 })}</div></section>`;
+      const tableId = `category-level2-${ticketType}`;
+      return `<section class="chart-card panel" data-commentary-key="category_level2_${ticketType === "incident" ? "incidents" : "sc_tasks"}"><h3>${esc(title)}</h3><p class="muted">Ticket count by GenAI Category - GenAI SubCategory-1, sorted by volume.</p><div class="chart-frame chart-stage table-scroll">${notApplicable ? `<p class="muted" style="padding:12px">This category chart is not applicable for the selected ticket type.</p>` : horizontalBarChart(rows, { title, legend: "Tickets", color, emptyMessage: "No analyzed category rows match the filters.", height: Math.max(320, rows.length * 30 + 92), left: 330, right: 92, fontSize: 10, labelLength: 48 })}</div>${notApplicable ? "" : categoryTrendTable(rows, tableId)}</section>`;
     }
     function renderCategoryTrends() {
       const notes = DASHBOARD.volumetrics.category_trends?.data_notes || [];

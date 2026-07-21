@@ -104,6 +104,7 @@ function GenAIWorkbench() {
   const [error, setError] = useState<string | null>(null);
 
   const canAct = Boolean(projectId.trim()) && Boolean(analysisMonth.trim());
+  const hasAnalyzedRows = (summary?.analyzed_ticket_count ?? 0) > 0;
   const classificationButtonEnabled =
     workbenchSettings?.ticket_classification_button_enabled ?? false;
   const clusterButtonEnabled = workbenchSettings?.ticket_cluster_analysis_button_enabled ?? true;
@@ -367,6 +368,10 @@ function GenAIWorkbench() {
     if (!canAct) {
       return;
     }
+    if (!hasAnalyzedRows) {
+      setError("Run cluster-based analysis before downloading the ticket dump.");
+      return;
+    }
     setIsDownloadingDump(true);
     setMessage(null);
     setError(null);
@@ -510,8 +515,13 @@ function GenAIWorkbench() {
             <button
               className="secondary-button"
               type="button"
-              disabled={!canAct || isDownloadingDump}
+              disabled={!canAct || isDownloadingDump || !hasAnalyzedRows}
               onClick={() => void handleDownloadDump()}
+              title={
+                hasAnalyzedRows
+                  ? "Download ticket dump with GenAI categorization columns"
+                  : "Run cluster-based analysis before downloading the ticket dump"
+              }
             >
               {isDownloadingDump ? "Preparing CSV..." : "Download Ticket Dump"}
             </button>

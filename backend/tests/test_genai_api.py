@@ -1020,6 +1020,13 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
             assert clear_response.status_code == 200
             assert clear_response.json()["deleted_count"] == 2
 
+            empty_dump_response = client.get(
+                "/api/genai/ticket-classification/ticket-dump",
+                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert empty_dump_response.status_code == 400
+            assert "No saved GenAI ticket classification rows exist" in empty_dump_response.text
+
             summary_response = client.get(
                 "/api/genai/ticket-classification/summary",
                 params={"project_id": project_id_text, "analysis_month": "2026-05"},
@@ -1203,6 +1210,20 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             )
             assert pivot_response.status_code == 200
             assert sum(row["total_count"] for row in pivot_response.json()["rows"]) == 4
+
+            dump_response = client.get(
+                "/api/genai/ticket-classification/ticket-dump",
+                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert dump_response.status_code == 200
+            dump_text = dump_response.text
+            assert "INC-CLUSTER-A" in dump_text
+            assert "SCTASK-CLUSTER-C" in dump_text
+            assert "Level 1" in dump_text
+            assert "Level 2" in dump_text
+            assert "Level 3" in dump_text
+            assert "INC-CLUSTER-CANCELED" not in dump_text
+            assert "SCTASK-CLUSTER-INCOMPLETE" not in dump_text
 
             usage_response = client.get(
                 "/api/genai/ticket-cluster-analysis/usage-runs",
