@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     ams_processing_pipeline_version: str = "v1"
     ams_processing_bulk_chunk_size: int = 2000
     genai_ticket_classification_model_name: str | None = None
+    genai_ticket_classification_max_output_tokens: int | None = None
 
     @property
     def cors_origins(self) -> list[str]:

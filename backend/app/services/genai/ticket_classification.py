@@ -400,15 +400,16 @@ def validate_config(config: GenAIConfig) -> None:
 
 def effective_ticket_classification_config(config: GenAIConfig) -> GenAIConfig:
     model_override = (get_settings().genai_ticket_classification_model_name or "").strip()
-    if not model_override:
+    max_output_tokens_override = get_settings().genai_ticket_classification_max_output_tokens
+    if not model_override and not max_output_tokens_override:
         return config
     return GenAIConfig(
         is_enabled=config.is_enabled,
         provider=config.provider,
-        model_name=model_override,
+        model_name=model_override or config.model_name,
         temperature=config.temperature,
         top_p=config.top_p,
-        max_output_tokens=config.max_output_tokens,
+        max_output_tokens=max_output_tokens_override or config.max_output_tokens,
         timeout_seconds=config.timeout_seconds,
         max_tool_calls=config.max_tool_calls,
         allow_recommendations=config.allow_recommendations,
@@ -445,7 +446,6 @@ def run_ticket_classification(
 
     tickets_to_process: list[tuple[Ticket, str, GenAITicketClassification | None]] = []
     skipped_cached_count = 0
-    skipped_error_count = 0
     for ticket in tickets:
         ticket_hash = input_hash_for_ticket(
             ticket,
@@ -461,14 +461,6 @@ def run_ticket_classification(
             and not request.force_reprocess
         ):
             skipped_cached_count += 1
-            continue
-        if (
-            existing_row is not None
-            and existing_row.status == "error"
-            and existing_row.input_hash == ticket_hash
-            and not request.force_reprocess
-        ):
-            skipped_error_count += 1
             continue
         tickets_to_process.append((ticket, ticket_hash, existing_row))
 
@@ -553,6 +545,13 @@ def run_ticket_classification(
         try:
             parsed_rows = parsed_rows_by_ticket(result.response_text)
         except TicketClassificationError as exc:
+            parse_error_message = str(exc)
+            if result.completion_tokens and result.completion_tokens >= config.max_output_tokens:
+                parse_error_message = (
+                    f"{parse_error_message} The response likely reached the configured "
+                    f"max output token limit ({config.max_output_tokens}). Reduce batch size or "
+                    "increase GENAI_TICKET_CLASSIFICATION_MAX_OUTPUT_TOKENS."
+                )
             for ticket, ticket_hash, existing_row in batch:
                 upsert_error_row(
                     db,
@@ -563,7 +562,7 @@ def run_ticket_classification(
                     ticket_hash=ticket_hash,
                     prompt_version=prompt_version,
                     model_name=model_name,
-                    error_message=str(exc),
+                    error_message=parse_error_message,
                     metadata=metadata,
                 )
                 failed_count += 1
@@ -623,7 +622,7 @@ def run_ticket_classification(
     summary = ticket_classification_summary(db, request.project_id, month_key)
     usage_run = ticket_classification_usage_run(db, request.project_id, month_key, run_id)
     remaining_ticket_count = max(
-        eligible_count - summary["analyzed_ticket_count"] - summary["error_ticket_count"],
+        eligible_count - summary["analyzed_ticket_count"],
         0,
     )
     return {
@@ -632,7 +631,7 @@ def run_ticket_classification(
         "eligible_ticket_count": eligible_count,
         "processed_count": processed_count,
         "skipped_cached_count": skipped_cached_count,
-        "skipped_error_count": skipped_error_count,
+        "skipped_error_count": 0,
         "failed_count": failed_count,
         "remaining_ticket_count": remaining_ticket_count,
         "processed_batch_count": processed_batch_count,

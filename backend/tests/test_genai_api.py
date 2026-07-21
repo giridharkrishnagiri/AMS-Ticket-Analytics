@@ -786,6 +786,7 @@ def add_classification_ticket(
 def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monkeypatch) -> None:
     reset_genai_tables()
     monkeypatch.setenv("GENAI_TICKET_CLASSIFICATION_MODEL_NAME", "gpt-ticket-classifier-test")
+    monkeypatch.setenv("GENAI_TICKET_CLASSIFICATION_MAX_OUTPUT_TOKENS", "4000")
     get_settings.cache_clear()
     client_id, project_id, upload_batch_id, uploaded_file_id, _suffix = (
         create_ticket_classification_project()
@@ -846,9 +847,11 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
 
         received_ticket_numbers: list[str] = []
         model_names_seen: list[str | None] = []
+        max_output_tokens_seen: list[int] = []
 
         def fake_chat_completion(_config, messages):
             model_names_seen.append(_config.model_name)
+            max_output_tokens_seen.append(_config.max_output_tokens)
             payload = json.loads(messages[1]["content"].split("\n", 1)[1])
             ticket_rows = payload["tickets"]
             received_ticket_numbers.extend(row["ticket_number"] for row in ticket_rows)
@@ -917,6 +920,7 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
             assert run_payload["usage_run"]["ticket_count"] == 1
             assert received_ticket_numbers == ["INC-CLASSIFY"]
             assert model_names_seen == ["gpt-ticket-classifier-test"]
+            assert max_output_tokens_seen == [4000]
 
             second_run_response = client.post(
                 "/api/genai/ticket-classification/run",
@@ -943,6 +947,7 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
                 "gpt-ticket-classifier-test",
                 "gpt-ticket-classifier-test",
             ]
+            assert max_output_tokens_seen == [4000, 4000]
 
             cached_response = client.post(
                 "/api/genai/ticket-classification/run",
