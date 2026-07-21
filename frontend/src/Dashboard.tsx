@@ -35,9 +35,11 @@ import {
 import type {
   CreatedResolvedOpenRow,
   CreationSourceTrendRow,
+  DashboardApplicationsFilters,
   DashboardFilterValues,
   DashboardOverview,
   DashboardQuery,
+  DashboardVolumetricsFilters,
   IncidentSlaNameBreakdown,
   IncidentSlaTrendRow,
   IncidentSlaSummary,
@@ -47,6 +49,7 @@ import type {
   TechnicalFunctionalBreakdown,
   TicketTypeFilter,
   TimeGrain,
+  VolumetricsScope,
 } from "./api/dashboard";
 import ApplicationsDashboard from "./ApplicationsDashboard";
 import CommentaryEditor from "./components/CommentaryEditor";
@@ -103,6 +106,93 @@ const emptyFilterValues: DashboardFilterValues = {
   business_service_ci_names: [],
   parent_application_names: [],
 };
+
+const defaultSharedApplicationsFilters: DashboardApplicationsFilters = {
+  application_scope: ["in_scope"],
+  service_entitlement: [],
+  functional_track_ams_owner: [],
+  assignment_group_owner: [],
+  parent_application_name: [],
+  application_owner: [],
+  supported_by_vendor: [],
+  sap_non_sap: [],
+  architecture_type: [],
+  application_type: [],
+  business_critical: [],
+  install_status: [],
+  install_type: [],
+  hosting_env: [],
+  lifecycle_status_stage: [],
+};
+
+const emptySharedVolumetricsFilters: DashboardVolumetricsFilters = {
+  service_entitlement: [],
+  functional_track_ams_owner: [],
+  assignment_group_support_lead: [],
+  parent_application_name: [],
+  application_owner: [],
+  supported_by_vendor: [],
+  sap_non_sap: [],
+  architecture_type: [],
+  business_critical: [],
+  install_type: [],
+};
+
+function applicationScopeFromVolumetricsScope(scope: VolumetricsScope): string[] {
+  if (scope === "all") {
+    return ["in_scope", "out_of_scope"];
+  }
+  return [scope];
+}
+
+function volumetricsScopeFromApplicationScope(values: string[]): VolumetricsScope {
+  const selected = new Set(values);
+  if (selected.has("in_scope") && selected.has("out_of_scope")) {
+    return "all";
+  }
+  if (selected.has("out_of_scope") && !selected.has("in_scope")) {
+    return "out_of_scope";
+  }
+  return "in_scope";
+}
+
+function volumetricsFiltersFromApplications(
+  filters: DashboardApplicationsFilters,
+  current: DashboardVolumetricsFilters
+): DashboardVolumetricsFilters {
+  return {
+    ...current,
+    service_entitlement: filters.service_entitlement,
+    functional_track_ams_owner: filters.functional_track_ams_owner,
+    assignment_group_support_lead: filters.assignment_group_owner,
+    parent_application_name: filters.parent_application_name,
+    application_owner: filters.application_owner,
+    supported_by_vendor: filters.supported_by_vendor,
+    sap_non_sap: filters.sap_non_sap,
+    architecture_type: filters.architecture_type,
+    business_critical: filters.business_critical,
+    install_type: filters.install_type,
+  };
+}
+
+function applicationsFiltersFromVolumetrics(
+  filters: DashboardVolumetricsFilters,
+  current: DashboardApplicationsFilters
+): DashboardApplicationsFilters {
+  return {
+    ...current,
+    service_entitlement: filters.service_entitlement,
+    functional_track_ams_owner: filters.functional_track_ams_owner,
+    assignment_group_owner: filters.assignment_group_support_lead,
+    parent_application_name: filters.parent_application_name,
+    application_owner: filters.application_owner,
+    supported_by_vendor: filters.supported_by_vendor,
+    sap_non_sap: filters.sap_non_sap,
+    architecture_type: filters.architecture_type,
+    business_critical: filters.business_critical,
+    install_type: filters.install_type,
+  };
+}
 
 const emptyTechnicalFunctional: TechnicalFunctionalBreakdown = {
   technical_count: 0,
@@ -517,6 +607,12 @@ function Dashboard() {
   const [selectedApplicationNames, setSelectedApplicationNames] = useState<string[]>([]);
   const [selectedResponseSlaNames, setSelectedResponseSlaNames] = useState<string[]>([]);
   const [selectedResolutionSlaNames, setSelectedResolutionSlaNames] = useState<string[]>([]);
+  const [sharedApplicationsFilters, setSharedApplicationsFilters] =
+    useState<DashboardApplicationsFilters>(defaultSharedApplicationsFilters);
+  const [sharedVolumetricsFilters, setSharedVolumetricsFilters] =
+    useState<DashboardVolumetricsFilters>(emptySharedVolumetricsFilters);
+  const [sharedVolumetricsScope, setSharedVolumetricsScope] =
+    useState<VolumetricsScope>("in_scope");
   const [filterValues, setFilterValues] = useState<LoadState<DashboardFilterValues>>(
     createLoadState(emptyFilterValues)
   );
@@ -580,6 +676,9 @@ function Dashboard() {
     setPageMessage(null);
     setPowerPointStatus("idle");
     setOverviewShapeRefreshAttempted(false);
+    setSharedApplicationsFilters(defaultSharedApplicationsFilters);
+    setSharedVolumetricsFilters(emptySharedVolumetricsFilters);
+    setSharedVolumetricsScope("in_scope");
     setApplicationsPowerPointContext({
       ...defaultPowerPointExportContext,
       sourceLabel: "Applications",
@@ -599,6 +698,31 @@ function Dashboard() {
     },
     [projectId]
   );
+
+  const handleApplicationsFiltersChange = useCallback((filters: DashboardApplicationsFilters) => {
+    setSharedApplicationsFilters(filters);
+    setSharedVolumetricsFilters((current) =>
+      volumetricsFiltersFromApplications(filters, current)
+    );
+    setSharedVolumetricsScope(
+      volumetricsScopeFromApplicationScope(filters.application_scope)
+    );
+  }, []);
+
+  const handleVolumetricsFiltersChange = useCallback((filters: DashboardVolumetricsFilters) => {
+    setSharedVolumetricsFilters(filters);
+    setSharedApplicationsFilters((current) =>
+      applicationsFiltersFromVolumetrics(filters, current)
+    );
+  }, []);
+
+  const handleVolumetricsScopeChange = useCallback((scope: VolumetricsScope) => {
+    setSharedVolumetricsScope(scope);
+    setSharedApplicationsFilters((current) => ({
+      ...current,
+      application_scope: applicationScopeFromVolumetricsScope(scope),
+    }));
+  }, []);
 
   const handleDownloadDashboard = useCallback(async () => {
     const cleanedProjectId = projectId.trim();
@@ -1168,7 +1292,9 @@ function Dashboard() {
       <div hidden={activeDashboardTab !== "applications"}>
         <ApplicationsDashboard
           customerId={selectedProject?.client_id ?? ""}
+          filters={sharedApplicationsFilters}
           isActive={activeDashboardTab === "applications"}
+          onFiltersChange={handleApplicationsFiltersChange}
           onExportContextChange={handleApplicationsPowerPointContextChange}
           projectId={projectId}
         />
@@ -1177,9 +1303,13 @@ function Dashboard() {
       <div hidden={activeDashboardTab !== "volumetrics"}>
         <VolumetricsDashboard
           customerId={selectedProject?.client_id ?? ""}
+          filters={sharedVolumetricsFilters}
           isActive={activeDashboardTab === "volumetrics"}
+          onFiltersChange={handleVolumetricsFiltersChange}
           onExportContextChange={handleVolumetricsPowerPointContextChange}
+          onScopeChange={handleVolumetricsScopeChange}
           projectId={projectId}
+          scope={sharedVolumetricsScope}
         />
         {false ? (
           <>

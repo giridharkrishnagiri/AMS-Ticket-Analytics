@@ -116,6 +116,10 @@ type VolumetricsDashboardProps = {
   customerId: string;
   projectId: string;
   isActive: boolean;
+  filters: DashboardVolumetricsFilters;
+  onFiltersChange: (filters: DashboardVolumetricsFilters) => void;
+  scope: VolumetricsScope;
+  onScopeChange: (scope: VolumetricsScope) => void;
   onExportContextChange?: (context: {
     functionalTrackAmsOwners: string[];
     scope: VolumetricsScope;
@@ -1154,9 +1158,12 @@ function VolumetricsDashboard({
   customerId,
   projectId,
   isActive,
+  filters,
+  onFiltersChange,
+  scope,
+  onScopeChange,
   onExportContextChange,
 }: VolumetricsDashboardProps) {
-  const [scope, setScope] = useState<VolumetricsScope>("in_scope");
   const [ticketType, setTicketType] = useState<VolumetricsTicketType>("all");
   const [timeGrain, setTimeGrain] = useState<VolumetricsTimeGrain>("monthly");
   const [agreementMode, setAgreementMode] = useState<VolumetricsAgreementMode>("sla");
@@ -1176,7 +1183,6 @@ function VolumetricsDashboard({
   const [topBatchApplicationsN, setTopBatchApplicationsN] = useState<TopNSelection>(10);
   const [performanceLookbackMonths, setPerformanceLookbackMonths] =
     useState<PerformanceLookbackMonths>(3);
-  const [filters, setFilters] = useState<DashboardVolumetricsFilters>(emptyFilters);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardVolumetricsFilterValues>>(
     createLoadState(emptyFilterValues)
   );
@@ -1839,11 +1845,11 @@ function VolumetricsDashboard({
     if (projectId !== loadedProjectId) {
       filterCountsRequestRef.current = 0;
       setLoadedProjectId(projectId);
-      setScope("in_scope");
+      onScopeChange("in_scope");
       setTicketType("all");
       setAssignmentGroupVolumetricsTrack("all");
       setBusinessServiceCiVolumetricsTrack("all");
-      setFilters(emptyFilters);
+      onFiltersChange(emptyFilters);
       setActiveSubTab("overall_volume");
       setHourlyDayType("weekdays");
       setPriorityView("graph");
@@ -1877,7 +1883,7 @@ function VolumetricsDashboard({
       setBusinessServiceCiVolumetrics(createLoadState(emptyBusinessServiceCiVolumetrics));
       setRangeInitializedProjectId("");
     }
-  }, [loadedProjectId, projectId]);
+  }, [loadedProjectId, onFiltersChange, onScopeChange, projectId]);
 
   useEffect(() => {
     if (isActive && hasActiveProjectContext && dataRange.status === "idle") {
@@ -2026,18 +2032,18 @@ function VolumetricsDashboard({
   ]);
 
   function updateFilter(filterName: FilterKey, values: string[]) {
-    setFilters((currentFilters) => ({
-      ...currentFilters,
+    onFiltersChange({
+      ...filters,
       [filterName]: values,
-    }));
+    });
   }
 
   function resetFilters() {
-    setScope("in_scope");
+    onFiltersChange(emptyFilters);
+    onScopeChange("in_scope");
     setTicketType("all");
     setAssignmentGroupVolumetricsTrack("all");
     setBusinessServiceCiVolumetricsTrack("all");
-    setFilters(emptyFilters);
   }
 
   function handleStartWeekChange(value: string) {
@@ -2111,7 +2117,7 @@ function VolumetricsDashboard({
             options={filterOptions.scope}
             selectedValues={[scope]}
             selectionMode="single"
-            onChange={(values) => setScope((values[0] as VolumetricsScope) ?? "in_scope")}
+            onChange={(values) => onScopeChange((values[0] as VolumetricsScope) ?? "in_scope")}
           />
           {isVolumetricsValidationSubTab ? (
             <p className="muted-text">

@@ -62,6 +62,8 @@ type ApplicationsDashboardProps = {
   customerId: string;
   projectId: string;
   isActive: boolean;
+  filters: DashboardApplicationsFilters;
+  onFiltersChange: (filters: DashboardApplicationsFilters) => void;
   onExportContextChange?: (context: { functionalTrackAmsOwners: string[] }) => void;
 };
 
@@ -869,9 +871,10 @@ function ApplicationsDashboard({
   customerId,
   projectId,
   isActive,
+  filters,
+  onFiltersChange,
   onExportContextChange,
 }: ApplicationsDashboardProps) {
-  const [filters, setFilters] = useState<DashboardApplicationsFilters>(defaultFilters);
   const [sort, setSort] = useState<DashboardApplicationsSort>(defaultSort);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardApplicationsFilterValues>>(
     createLoadState(emptyFilterValues)
@@ -1099,7 +1102,7 @@ function ApplicationsDashboard({
   useEffect(() => {
     if (projectId !== loadedProjectId) {
       setLoadedProjectId(projectId);
-      setFilters(defaultFilters);
+      onFiltersChange(defaultFilters);
       setSort(defaultSort);
       setFilterValues(createLoadState(emptyFilterValues));
       setFilterCatalog(null);
@@ -1116,7 +1119,7 @@ function ApplicationsDashboard({
       setAssignmentMappingSort({ column: "assignment_group", direction: "asc" });
       setAssignmentMapping(createLoadState(emptyAssignmentGroupMapping));
     }
-  }, [loadedProjectId, projectId]);
+  }, [loadedProjectId, onFiltersChange, projectId]);
 
   useEffect(() => {
     if (isActive && hasActiveProjectContext && hasFilterCacheContext && !filterCatalog) {
@@ -1172,15 +1175,15 @@ function ApplicationsDashboard({
   ]);
 
   function updateFilter(filterName: FilterKey, values: string[]) {
-    setFilters((currentFilters) => ({
-      ...currentFilters,
+    onFiltersChange({
+      ...filters,
       [filterName]: values,
-    }));
+    });
   }
 
   function resetFilters() {
     if (!filtersEqual(filters, defaultFilters)) {
-      setFilters(defaultFilters);
+      onFiltersChange(defaultFilters);
     }
     setSort(defaultSort);
   }
