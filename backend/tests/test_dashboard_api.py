@@ -23,6 +23,7 @@ from app.models import (
     DashboardFilterCatalog,
     DashboardFilterFact,
     IncidentSlaRow,
+    InScopeAssignmentGroup,
     Project,
     Ticket,
     TicketRawRow,
@@ -1684,6 +1685,39 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
         sc_task.parent_application_name = "Parent B"
         sc_task.application_owner = "Application Owner B"
         sc_task.supported_by_vendor = "Vendor B"
+        project = db.get(Project, project_id)
+        assert project is not None
+        db.add_all(
+            [
+                InScopeAssignmentGroup(
+                    client_id=project.client_id,
+                    project_id=project_id,
+                    assignment_group="IT-SAP-Group A",
+                    assignment_group_key="it-sap-group a",
+                    functional_track="Finance Scope",
+                    is_in_scope=True,
+                    is_active=True,
+                ),
+                InScopeAssignmentGroup(
+                    client_id=project.client_id,
+                    project_id=project_id,
+                    assignment_group="IT-NSA-Group B",
+                    assignment_group_key="it-nsa-group b",
+                    functional_track="Run Scope",
+                    is_in_scope=True,
+                    is_active=True,
+                ),
+                InScopeAssignmentGroup(
+                    client_id=project.client_id,
+                    project_id=project_id,
+                    assignment_group="IT-NSA-Group C",
+                    assignment_group_key="it-nsa-group c",
+                    functional_track="Run Scope",
+                    is_in_scope=False,
+                    is_active=True,
+                ),
+            ]
+        )
         db.commit()
 
         with TestClient(app) as client:
@@ -1769,6 +1803,18 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
             row["value"]: row["baseline_count"]
             for row in applications_catalog["filters"]["service_entitlement"]
         } == {"Bronze": 1, "Gold": 1, "Silver": 1}
+        assert {
+            row["value"]: row["baseline_count"]
+            for row in applications_catalog["filters"]["functional_track_ams_owner"]
+        } == {"Finance Scope": 1, "Run Scope": 2}
+        assert {
+            row["value"]: row["baseline_count"]
+            for row in applications_catalog["filters"]["assignment_group_owner"]
+        } == {
+            "IT-NSA-Group B": 1,
+            "IT-NSA-Group C": 1,
+            "IT-SAP-Group A": 1,
+        }
         assert [row["value"] for row in applications_catalog["filters"]["business_critical"]] == [
             "Critical",
             "Low",
@@ -1787,6 +1833,14 @@ def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
             "Critical",
             "Low",
         ]
+        assert {
+            row["value"]: row["baseline_count"]
+            for row in volumetrics_catalog["filters"]["functional_track_ams_owner"]
+        } == {"Finance Scope": 1, "Run Scope": 1}
+        assert {
+            row["value"]: row["baseline_count"]
+            for row in volumetrics_catalog["filters"]["assignment_group_support_lead"]
+        } == {"IT-NSA-Group B": 1, "IT-SAP-Group A": 1}
 
         assert applications_counts_response.status_code == 200
         applications_counts = applications_counts_response.json()["counts"]
@@ -2076,7 +2130,7 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
                 json={
                     **request_body,
                     "filters": {
-                        "functional_track_ams_owner": ["Data & Analytics - Seshu Avala"],
+                        "functional_track_ams_owner": ["Data & Analytics"],
                         "parent_application_name": ["Parent A"],
                     },
                 },
@@ -2108,13 +2162,13 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         assert filter_response.status_code == 200
         filter_payload = filter_response.json()
         assert [row["label"] for row in filter_payload["functional_track_ams_owner"]] == [
-            "Data & Analytics - Seshu Avala",
-            "Run - Another Owner",
+            "Data & Analytics",
+            "Run",
         ]
         assert [row["label"] for row in filter_payload["assignment_group_owner"]] == [
-            "Group C - (blank)",
-            "IT-NSA-Group B - (blank)",
-            "IT-SAP-Group A - (blank)",
+            "Group C",
+            "IT-NSA-Group B",
+            "IT-SAP-Group A",
         ]
         assert filter_payload["sap_non_sap"] == ["(blank)", "Non-SAP", "SAP"]
         assert filter_payload["hosting_env"] == ["Non-Production", "Production"]
@@ -2135,15 +2189,15 @@ def test_dashboard_applications_tab_apis_use_application_inventory_only() -> Non
         filter_count_payload = filter_count_response.json()
         assert filter_count_payload["functional_track_ams_owner"] == [
             {
-                "label": "Data & Analytics - Seshu Avala",
+                "label": "Data & Analytics",
                 "left_value": "Data & Analytics",
-                "right_value": "Seshu Avala",
+                "right_value": "(blank)",
                 "count": 2,
             },
             {
-                "label": "Run - Another Owner",
+                "label": "Run",
                 "left_value": "Run",
-                "right_value": "Another Owner",
+                "right_value": "(blank)",
                 "count": 1,
             },
         ]
@@ -2507,7 +2561,7 @@ def test_dashboard_applications_charts_include_criticality_hosting_pivot_and_glo
                 json={
                     "project_id": str(project_id),
                     "filters": {
-                        "functional_track_ams_owner": ["Data & Analytics - Seshu Avala"],
+                        "functional_track_ams_owner": ["Data & Analytics"],
                     },
                 },
             )
@@ -2721,7 +2775,7 @@ def test_dashboard_applications_lifecycle_planning_matrix_and_selected_plan() ->
                     "project_id": str(project_id),
                     "selected_plan": "Disinvest",
                     "filters": {
-                        "functional_track_ams_owner": ["Data - Owner A"],
+                        "functional_track_ams_owner": ["Data"],
                     },
                 },
             )
@@ -2876,7 +2930,7 @@ def test_dashboard_top_active_users_groups_by_parent_business_application() -> N
                 "/api/dashboard/applications/top-active-users",
                 json={
                     **request_body,
-                    "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
+                    "filters": {"functional_track_ams_owner": ["Data"]},
                     "top_n": 10,
                 },
             )
@@ -2969,7 +3023,7 @@ def test_dashboard_commentary_upsert_batch_and_context_separation() -> None:
                 "/api/dashboard/commentaries/upsert",
                 json={
                     **base_context,
-                    "functional_track_ams_owner": "Data - Owner A",
+                    "functional_track_ams_owner": "Data",
                     "commentary_html": "<p>Functional owner note</p>",
                     "commentary_text": "Functional owner note",
                 },
@@ -3701,17 +3755,17 @@ def test_volumetrics_endpoints_use_scope_filters_sla_and_backlog() -> None:
             row["label"]: row["count"]
             for row in filter_values["functional_track_ams_owner"]
         } == {
-            "Data - Owner A": 2,
-            "Out - Owner OOS": 1,
-            "Run - Owner B": 1,
+            "Data": 2,
+            "Out": 1,
+            "Run": 1,
         }
         assert {
             row["label"]: row["count"]
             for row in filter_values["assignment_group_support_lead"]
         } == {
-            "Group OOS - Lead OOS": 1,
-            "IT-NSA-Group B - Lead B": 1,
-            "IT-SAP-Group A - Lead A": 2,
+            "Group OOS": 1,
+            "IT-NSA-Group B": 1,
+            "IT-SAP-Group A": 2,
         }
         assert {
             row["label"]: row["count"] for row in filter_values["sap_non_sap"]
@@ -5106,7 +5160,7 @@ def test_volumetrics_open_ticket_aging_trend_buckets_and_exclusions() -> None:
                 "/api/dashboard/volumetrics/kpi-open-ticket-aging-trend",
                 json={
                     **request_body,
-                    "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
+                    "filters": {"functional_track_ams_owner": ["Data"]},
                 },
             )
             backlog_response = client.post(
@@ -5291,7 +5345,7 @@ def test_volumetrics_reassignment_hops_trend_counts_hops_and_filters() -> None:
                 json={
                     **request_body,
                     "scope": "all",
-                    "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
+                    "filters": {"functional_track_ams_owner": ["Data"]},
                 },
             )
 
@@ -5788,14 +5842,14 @@ def test_volumetrics_problem_management_trend_counts_and_filters() -> None:
                 "/api/dashboard/volumetrics/kpi-problem-management-trend",
                 json={
                     **request_body,
-                    "filters": {"functional_track_ams_owner": ["Data - Owner A"]},
+                    "filters": {"functional_track_ams_owner": ["Data"]},
                 },
             )
             comparable_response = client.post(
                 "/api/dashboard/volumetrics/kpi-problem-management-trend",
                 json={
                     **request_body,
-                    "filters": {"functional_track_ams_owner": ["Run - Owner B"]},
+                    "filters": {"functional_track_ams_owner": ["Run"]},
                 },
             )
             unsupported_filter_response = client.post(

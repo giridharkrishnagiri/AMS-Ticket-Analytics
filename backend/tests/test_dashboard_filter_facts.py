@@ -256,8 +256,8 @@ def test_dashboard_filter_fact_refresh_excludes_problem_and_change_records() -> 
         assert {row.scope for row in facts} == {"in_scope", "out_of_scope"}
         assert all("Problem" not in row.functional_track_ams_owner for row in facts)
         assert all("Change" not in row.functional_track_ams_owner for row in facts)
-        assert "Track A - Owner A" in {row.functional_track_ams_owner for row in facts}
-        assert "AMS-A - Lead A" in {row.assignment_group_support_owner for row in facts}
+        assert "Track A" in {row.functional_track_ams_owner for row in facts}
+        assert "AMS-A" in {row.assignment_group_support_owner for row in facts}
         assert {row.hosting_env for row in facts} == {"Production", "Non-Production"}
     finally:
         cleanup_client(db, client_id)
@@ -326,7 +326,7 @@ def test_volumetrics_filter_values_use_dashboard_filter_facts() -> None:
             row["label"]: row["count"]
             for row in filtered_payload["functional_track_ams_owner"]
         }
-        assert functional_counts == {"Track A - Owner A": 2}
+        assert functional_counts == {"Track A": 2}
     finally:
         cleanup_client(db, client_id)
 

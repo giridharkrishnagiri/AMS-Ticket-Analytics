@@ -157,6 +157,8 @@ APPLICATION_LIST_FIELDS = (
 SINGLE_APPLICATION_FILTER_FIELDS = {
     "application_scope": "scope_status",
     "service_entitlement": "service_entitlement",
+    "functional_track_ams_owner": "functional_track",
+    "assignment_group_owner": "assignment_group",
     "parent_application_name": "parent_application_name",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -180,8 +182,6 @@ APPLICATION_LIFECYCLE_HORIZONS = (
 )
 
 COMBINED_APPLICATION_FILTER_FIELDS = {
-    "functional_track_ams_owner": ("functional_track", "ams_owner"),
-    "assignment_group_owner": ("assignment_group", "assignment_group_owner"),
     "lifecycle_status_stage": ("lifecycle_status", "lifecycle_stage_status"),
 }
 
@@ -234,6 +234,8 @@ VOLUMETRICS_CANCELLED_STATES = {
 
 SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "service_entitlement": "service_entitlement",
+    "functional_track_ams_owner": "functional_track",
+    "assignment_group_support_lead": "assignment_group",
     "parent_application_name": "parent_application_name",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -243,13 +245,12 @@ SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "install_type": "install_type",
 }
 
-COMBINED_VOLUMETRICS_FILTER_FIELDS = {
-    "functional_track_ams_owner": ("functional_track", "ams_owner"),
-    "assignment_group_support_lead": ("assignment_group", "support_lead"),
-}
+COMBINED_VOLUMETRICS_FILTER_FIELDS: dict[str, tuple[str, str]] = {}
 
 FACT_SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "service_entitlement": "service_entitlement",
+    "functional_track_ams_owner": "functional_track",
+    "assignment_group_support_lead": "assignment_group",
     "parent_application_name": "parent_business_application",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -259,18 +260,7 @@ FACT_SINGLE_VOLUMETRICS_FILTER_FIELDS = {
     "install_type": "install_type",
 }
 
-FACT_COMBINED_VOLUMETRICS_FILTER_FIELDS = {
-    "functional_track_ams_owner": (
-        "functional_track",
-        "ams_owner",
-        "functional_track_ams_owner",
-    ),
-    "assignment_group_support_lead": (
-        "assignment_group",
-        "support_group_owner",
-        "assignment_group_support_owner",
-    ),
-}
+FACT_COMBINED_VOLUMETRICS_FILTER_FIELDS: dict[str, tuple[str, str, str]] = {}
 
 FACT_TICKET_TYPE_VALUES = {
     "incident": "incident",
@@ -906,6 +896,11 @@ def application_install_status_installed_condition() -> Any:
     return normalized_text_expression(install_status) == "installed"
 
 
+def application_lifecycle_stage_in_use_condition() -> Any:
+    lifecycle_stage_status = application_field_expression("lifecycle_stage_status")
+    return normalized_text_expression(lifecycle_stage_status) == "in use"
+
+
 def canonical_lifecycle_plan_expression(expression: Any) -> Any:
     normalized_expression = normalized_text_expression(expression)
     return case(
@@ -1055,6 +1050,30 @@ def distinct_combined_application_filter_values(
     return rows
 
 
+def distinct_single_as_combined_application_filter_values(
+    db: Session,
+    project_id: UUID,
+    field_name: str,
+    *,
+    filter_name: str | None = None,
+) -> list[dict[str, str]]:
+    expression = application_display_expression(field_name)
+    statement = (
+        select(
+            expression.label("label"),
+            expression.label("left_value"),
+            literal(BLANK_LABEL).label("right_value"),
+        )
+        .where(*applications_base_conditions(project_id))
+        .group_by(expression)
+        .order_by(expression.asc())
+    )
+    rows = [dict(row._mapping) for row in db.execute(statement).all()]
+    if filter_name is not None:
+        rows = sort_filter_count_rows(rows, filter_name=filter_name)
+    return rows
+
+
 def applications_filter_values(db: Session, project_id: UUID) -> dict[str, Any]:
     return {
         "application_scope": distinct_application_filter_values(
@@ -1068,17 +1087,17 @@ def applications_filter_values(db: Session, project_id: UUID) -> dict[str, Any]:
             project_id,
             "service_entitlement",
         ),
-        "functional_track_ams_owner": distinct_combined_application_filter_values(
+        "functional_track_ams_owner": distinct_single_as_combined_application_filter_values(
             db,
             project_id,
             "functional_track",
-            "ams_owner",
+            filter_name="functional_track_ams_owner",
         ),
-        "assignment_group_owner": distinct_combined_application_filter_values(
+        "assignment_group_owner": distinct_single_as_combined_application_filter_values(
             db,
             project_id,
             "assignment_group",
-            "assignment_group_owner",
+            filter_name="assignment_group_owner",
         ),
         "parent_application_name": distinct_application_filter_values(
             db,
@@ -1284,6 +1303,46 @@ def combined_application_filter_value_count_rows(
     )
 
 
+def single_as_combined_application_filter_value_count_rows(
+    db: Session,
+    request: Any,
+    filter_name: str,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    expression = application_display_expression(field_name)
+    statement = (
+        select(
+            expression.label("label"),
+            expression.label("left_value"),
+            literal(BLANK_LABEL).label("right_value"),
+            func.count(ApplicationInventoryItem.id).label("count"),
+        )
+        .where(
+            *applications_filter_conditions(
+                request.project_id,
+                request.filters,
+                excluded_filter_name=filter_name,
+            ),
+        )
+        .group_by(expression)
+        .order_by(expression.asc())
+    )
+    rows = [
+        {
+            "label": row["label"],
+            "left_value": row["left_value"],
+            "right_value": row["right_value"],
+            "count": int(row["count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return add_missing_selected_combined_filter_values(
+        rows,
+        selected_application_filter_values(request.filters, filter_name),
+        filter_name=filter_name,
+    )
+
+
 def applications_filter_value_counts(db: Session, request: Any) -> dict[str, Any]:
     return {
         "application_scope": application_filter_value_count_rows(
@@ -1298,19 +1357,17 @@ def applications_filter_value_counts(db: Session, request: Any) -> dict[str, Any
             "service_entitlement",
             "service_entitlement",
         ),
-        "functional_track_ams_owner": combined_application_filter_value_count_rows(
+        "functional_track_ams_owner": single_as_combined_application_filter_value_count_rows(
             db,
             request,
             "functional_track_ams_owner",
             "functional_track",
-            "ams_owner",
         ),
-        "assignment_group_owner": combined_application_filter_value_count_rows(
+        "assignment_group_owner": single_as_combined_application_filter_value_count_rows(
             db,
             request,
             "assignment_group_owner",
             "assignment_group",
-            "assignment_group_owner",
         ),
         "parent_application_name": application_filter_value_count_rows(
             db,
@@ -1738,6 +1795,7 @@ def applications_lifecycle_matrix_counts(db: Session, request: Any) -> dict[tupl
             ).where(
                 *applications_filter_conditions(request.project_id, request.filters),
                 application_install_status_installed_condition(),
+                application_lifecycle_stage_in_use_condition(),
                 service_expression.is_not(None),
                 plan_expression.is_not(None),
             ),
@@ -1791,6 +1849,7 @@ def applications_lifecycle_in_use_count(db: Session, request: Any) -> int:
     statement = select(func.count(func.distinct(service_expression))).where(
         *applications_filter_conditions(request.project_id, request.filters),
         application_install_status_installed_condition(),
+        application_lifecycle_stage_in_use_condition(),
         service_expression.is_not(None),
     )
     return int(db.scalar(statement) or 0)
@@ -1835,6 +1894,7 @@ def lifecycle_planning_selected_applications(
         .where(
             *applications_filter_conditions(request.project_id, request.filters),
             application_install_status_installed_condition(),
+            application_lifecycle_stage_in_use_condition(),
             service_expression.is_not(None),
             or_(*lifecycle_selected_plan_conditions(selected_plan)),
         )
@@ -3900,6 +3960,45 @@ def combined_volumetrics_filter_fact_value_count_rows(
     )
 
 
+def single_as_combined_volumetrics_filter_fact_value_count_rows(
+    db: Session,
+    request: Any,
+    filter_name: str,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    expression = volumetrics_display_expression(getattr(DashboardFilterFact, field_name))
+    statement = (
+        select(
+            expression.label("label"),
+            expression.label("left_value"),
+            literal(BLANK_LABEL).label("right_value"),
+            func.count(DashboardFilterFact.id).label("count"),
+        )
+        .select_from(DashboardFilterFact)
+        .where(
+            *volumetrics_filter_fact_base_conditions(
+                request,
+                excluded_filter_name=filter_name,
+            ),
+        )
+        .group_by(expression)
+        .order_by(expression.asc())
+    )
+    rows = [
+        {
+            "label": row["label"],
+            "left_value": row["left_value"],
+            "right_value": row["right_value"],
+            "count": int(row["count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+    return add_missing_selected_volumetrics_combined_values(
+        rows,
+        selected_volumetrics_filter_values(request.filters, filter_name),
+    )
+
+
 def count_volumetrics_filter_fact_rows(
     db: Session,
     request: Any,
@@ -3983,21 +4082,19 @@ def volumetrics_filter_value_counts(db: Session, request: Any) -> dict[str, Any]
         "scope": scope_rows,
         "ticket_type": ticket_type_rows,
         "service_entitlement": service_filter_rows,
-        "functional_track_ams_owner": combined_volumetrics_filter_fact_value_count_rows(
+        "functional_track_ams_owner": single_as_combined_volumetrics_filter_fact_value_count_rows(
             db,
             request,
             "functional_track_ams_owner",
             "functional_track",
-            "ams_owner",
-            "functional_track_ams_owner",
         ),
-        "assignment_group_support_lead": combined_volumetrics_filter_fact_value_count_rows(
-            db,
-            request,
-            "assignment_group_support_lead",
-            "assignment_group",
-            "support_group_owner",
-            "assignment_group_support_owner",
+        "assignment_group_support_lead": (
+            single_as_combined_volumetrics_filter_fact_value_count_rows(
+                db,
+                request,
+                "assignment_group_support_lead",
+                "assignment_group",
+            )
         ),
         "parent_application_name": volumetrics_filter_fact_value_count_rows(
             db,
@@ -6917,14 +7014,13 @@ def rounded_percentage(numerator: int, denominator: int) -> float | None:
 
 
 PROBLEM_SINGLE_FILTER_FIELDS = {
+    "functional_track_ams_owner": "functional_track",
     "parent_application_name": "parent_business_application",
     "supported_by_vendor": "supported_by_vendor",
     "sap_non_sap": "sap_non_sap",
 }
 
-PROBLEM_COMBINED_FILTER_FIELDS = {
-    "functional_track_ams_owner": ("functional_track", "ams_owner"),
-}
+PROBLEM_COMBINED_FILTER_FIELDS: dict[str, tuple[str, str]] = {}
 
 PROBLEM_UNSUPPORTED_FILTERS = {
     "assignment_group_support_lead": (

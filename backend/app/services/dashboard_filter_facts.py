@@ -76,6 +76,15 @@ def dashboard_filter_fact_service_field_fragments(db: Session) -> tuple[str, str
     )
 
 
+def normalized_text_key_sql(expression: str) -> str:
+    return (
+        "lower(regexp_replace("
+        f"btrim(replace({expression}, chr(160), ' ')), "
+        "'[[:space:]]+', ' ', 'g'"
+        "))"
+    )
+
+
 def ensure_dashboard_filter_facts(
     db: Session,
     project_id: UUID,
@@ -128,9 +137,33 @@ def insert_in_scope_filter_facts(
     data_version: str | None,
 ) -> int:
     service_columns, service_selects = dashboard_filter_fact_service_field_fragments(db)
+    ticket_assignment_group_key = normalized_text_key_sql("t.assignment_group")
+    scope_assignment_group_key = normalized_text_key_sql("s.assignment_group_key")
+    scoped_functional_track = (
+        "COALESCE(s.functional_track, left(NULLIF(btrim(t.functional_track), ''), 255))"
+    )
+    scoped_assignment_group = (
+        "COALESCE(s.assignment_group, left(NULLIF(btrim(t.assignment_group), ''), 255))"
+    )
     result = db.execute(
         text(
             f"""
+            WITH scope_rows AS (
+                SELECT DISTINCT ON ({scope_assignment_group_key})
+                    {scope_assignment_group_key} AS assignment_group_key,
+                    left(NULLIF(btrim(s.assignment_group), ''), 255) AS assignment_group,
+                    left(NULLIF(btrim(s.functional_track), ''), 255) AS functional_track,
+                    s.is_in_scope
+                FROM in_scope_assignment_groups AS s
+                WHERE s.project_id = CAST(:project_id AS uuid)
+                  AND s.is_active IS true
+                  AND NULLIF({scope_assignment_group_key}, '') IS NOT NULL
+                  AND NULLIF(btrim(s.assignment_group), '') IS NOT NULL
+                ORDER BY {scope_assignment_group_key}, s.is_in_scope DESC, s.assignment_group
+            ),
+            scope_presence AS (
+                SELECT EXISTS(SELECT 1 FROM scope_rows) AS has_scope_rows
+            )
             INSERT INTO dashboard_filter_facts (
                 id,
                 customer_id,
@@ -204,22 +237,12 @@ def insert_in_scope_filter_facts(
                         ELSE COALESCE(t.resolved_at, t.closed_at)
                     END)
                 ) AS date),
-                left(NULLIF(btrim(t.functional_track), ''), 255),
+                {scoped_functional_track},
                 left(NULLIF(btrim(t.ams_owner), ''), 255),
-                left(
-                    COALESCE(NULLIF(btrim(t.functional_track), ''), '(blank)')
-                    || ' - '
-                    || COALESCE(NULLIF(btrim(t.ams_owner), ''), '(blank)'),
-                    512
-                ),
-                left(NULLIF(btrim(t.assignment_group), ''), 255),
+                {scoped_functional_track},
+                {scoped_assignment_group},
                 left(NULLIF(btrim(t.support_lead), ''), 255),
-                left(
-                    COALESCE(NULLIF(btrim(t.assignment_group), ''), '(blank)')
-                    || ' - '
-                    || COALESCE(NULLIF(btrim(t.support_lead), ''), '(blank)'),
-                    512
-                ),
+                {scoped_assignment_group},
                 left(NULLIF(btrim(t.parent_application_name), ''), 255),
                 left(NULLIF(btrim(t.business_service_ci_name), ''), 255),
                 left(NULLIF(btrim(t.application_owner), ''), 255),
@@ -255,9 +278,16 @@ def insert_in_scope_filter_facts(
                 :data_version
             FROM tickets AS t
             JOIN projects AS p ON p.id = t.project_id
+            CROSS JOIN scope_presence
+            LEFT JOIN scope_rows AS s
+              ON {ticket_assignment_group_key} = s.assignment_group_key
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.ticket_type IN ('INCIDENT', 'SERVICE_CATALOG_TASK')
               AND t.is_in_scope IS true
+              AND (
+                  scope_presence.has_scope_rows IS false
+                  OR (s.assignment_group_key IS NOT NULL AND s.is_in_scope IS true)
+              )
             """
         ),
         {"project_id": str(project_id), "data_version": data_version},
@@ -271,9 +301,33 @@ def insert_out_of_scope_filter_facts(
     data_version: str | None,
 ) -> int:
     service_columns, service_selects = dashboard_filter_fact_service_field_fragments(db)
+    ticket_assignment_group_key = normalized_text_key_sql("t.assignment_group")
+    scope_assignment_group_key = normalized_text_key_sql("s.assignment_group_key")
+    scoped_functional_track = (
+        "COALESCE(s.functional_track, left(NULLIF(btrim(t.functional_track), ''), 255))"
+    )
+    scoped_assignment_group = (
+        "COALESCE(s.assignment_group, left(NULLIF(btrim(t.assignment_group), ''), 255))"
+    )
     result = db.execute(
         text(
             f"""
+            WITH scope_rows AS (
+                SELECT DISTINCT ON ({scope_assignment_group_key})
+                    {scope_assignment_group_key} AS assignment_group_key,
+                    left(NULLIF(btrim(s.assignment_group), ''), 255) AS assignment_group,
+                    left(NULLIF(btrim(s.functional_track), ''), 255) AS functional_track,
+                    s.is_in_scope
+                FROM in_scope_assignment_groups AS s
+                WHERE s.project_id = CAST(:project_id AS uuid)
+                  AND s.is_active IS true
+                  AND NULLIF({scope_assignment_group_key}, '') IS NOT NULL
+                  AND NULLIF(btrim(s.assignment_group), '') IS NOT NULL
+                ORDER BY {scope_assignment_group_key}, s.is_in_scope DESC, s.assignment_group
+            ),
+            scope_presence AS (
+                SELECT EXISTS(SELECT 1 FROM scope_rows) AS has_scope_rows
+            )
             INSERT INTO dashboard_filter_facts (
                 id,
                 customer_id,
@@ -347,22 +401,12 @@ def insert_out_of_scope_filter_facts(
                         ELSE COALESCE(t.resolved_at, t.closed_at)
                     END)
                 ) AS date),
-                left(NULLIF(btrim(t.functional_track), ''), 255),
+                {scoped_functional_track},
                 left(NULLIF(btrim(t.ams_owner), ''), 255),
-                left(
-                    COALESCE(NULLIF(btrim(t.functional_track), ''), '(blank)')
-                    || ' - '
-                    || COALESCE(NULLIF(btrim(t.ams_owner), ''), '(blank)'),
-                    512
-                ),
-                left(NULLIF(btrim(t.assignment_group), ''), 255),
+                {scoped_functional_track},
+                {scoped_assignment_group},
                 left(NULLIF(btrim(t.support_lead), ''), 255),
-                left(
-                    COALESCE(NULLIF(btrim(t.assignment_group), ''), '(blank)')
-                    || ' - '
-                    || COALESCE(NULLIF(btrim(t.support_lead), ''), '(blank)'),
-                    512
-                ),
+                {scoped_assignment_group},
                 left(NULLIF(btrim(t.parent_application_name), ''), 255),
                 left(NULLIF(btrim(t.business_service_ci_name), ''), 255),
                 left(NULLIF(btrim(t.application_owner), ''), 255),
@@ -398,9 +442,16 @@ def insert_out_of_scope_filter_facts(
                 :data_version
             FROM tickets AS t
             JOIN projects AS p ON p.id = t.project_id
+            CROSS JOIN scope_presence
+            LEFT JOIN scope_rows AS s
+              ON {ticket_assignment_group_key} = s.assignment_group_key
             WHERE t.project_id = CAST(:project_id AS uuid)
               AND t.ticket_type IN ('INCIDENT', 'SERVICE_CATALOG_TASK')
               AND t.is_in_scope IS false
+              AND (
+                  scope_presence.has_scope_rows IS false
+                  OR s.assignment_group_key IS NOT NULL
+              )
             """
         ),
         {"project_id": str(project_id), "data_version": data_version},

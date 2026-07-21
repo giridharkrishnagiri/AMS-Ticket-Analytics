@@ -69,8 +69,8 @@ VOLUMETRICS_FILTER_KEYS = (
 APPLICATION_FACT_FIELDS = {
     "application_scope": "scope",
     "service_entitlement": "service_entitlement",
-    "functional_track_ams_owner": "functional_track_ams_owner",
-    "assignment_group_owner": "assignment_group_support_owner",
+    "functional_track_ams_owner": "functional_track",
+    "assignment_group_owner": "assignment_group",
     "parent_application_name": "parent_business_application",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -88,8 +88,8 @@ APPLICATION_FACT_FIELDS = {
 
 VOLUMETRICS_FACT_FIELDS = {
     "service_entitlement": "service_entitlement",
-    "functional_track_ams_owner": "functional_track_ams_owner",
-    "assignment_group_support_lead": "assignment_group_support_owner",
+    "functional_track_ams_owner": "functional_track",
+    "assignment_group_support_lead": "assignment_group",
     "parent_application_name": "parent_business_application",
     "application_owner": "application_owner",
     "supported_by_vendor": "supported_by_vendor",
@@ -359,6 +359,15 @@ def cleaned_sql(expression: str, length: int = 255) -> str:
     return f"left(NULLIF(btrim({expression}), ''), {length})"
 
 
+def normalized_text_key_sql(expression: str) -> str:
+    return (
+        "lower(regexp_replace("
+        f"btrim(replace({expression}, chr(160), ' ')), "
+        "'[[:space:]]+', ' ', 'g'"
+        "))"
+    )
+
+
 def dashboard_filter_fact_has_service_fields(db: Session) -> bool:
     inspector = inspect(db.get_bind())
     if "dashboard_filter_facts" not in inspector.get_table_names():
@@ -409,9 +418,33 @@ def refresh_application_filter_facts(
     life_cycle_stage = cleaned_sql(
         payload_text_sql("i", *APPLICATION_PAYLOAD_KEYS["life_cycle_stage"]),
     )
+    inventory_assignment_group_key = normalized_text_key_sql("i.assignment_group")
+    scope_assignment_group_key = normalized_text_key_sql("s.assignment_group_key")
+    scoped_functional_track = (
+        "COALESCE(s.functional_track, left(NULLIF(btrim(i.functional_track), ''), 255))"
+    )
+    scoped_assignment_group = (
+        "COALESCE(s.assignment_group, left(NULLIF(btrim(i.assignment_group), ''), 255))"
+    )
     result = db.execute(
         text(
             f"""
+            WITH scope_rows AS (
+                SELECT DISTINCT ON ({scope_assignment_group_key})
+                    {scope_assignment_group_key} AS assignment_group_key,
+                    left(NULLIF(btrim(s.assignment_group), ''), 255) AS assignment_group,
+                    left(NULLIF(btrim(s.functional_track), ''), 255) AS functional_track,
+                    s.is_in_scope
+                FROM in_scope_assignment_groups AS s
+                WHERE s.project_id = CAST(:project_id AS uuid)
+                  AND s.is_active IS true
+                  AND NULLIF({scope_assignment_group_key}, '') IS NOT NULL
+                  AND NULLIF(btrim(s.assignment_group), '') IS NOT NULL
+                ORDER BY {scope_assignment_group_key}, s.is_in_scope DESC, s.assignment_group
+            ),
+            scope_presence AS (
+                SELECT EXISTS(SELECT 1 FROM scope_rows) AS has_scope_rows
+            )
             INSERT INTO dashboard_filter_facts (
                 id,
                 customer_id,
@@ -453,25 +486,21 @@ def refresh_application_filter_facts(
                 'application',
                 'application_inventory_items',
                 'application',
-                COALESCE(NULLIF(btrim(i.scope_status), ''), 'out_of_scope'),
+                CASE
+                    WHEN s.assignment_group_key IS NOT NULL AND s.is_in_scope IS true
+                        THEN 'in_scope'
+                    WHEN s.assignment_group_key IS NOT NULL
+                        THEN 'out_of_scope'
+                    ELSE COALESCE(NULLIF(btrim(i.scope_status), ''), 'out_of_scope')
+                END,
                 i.id,
                 left(NULLIF(btrim(i.business_service_ci_name), ''), 255),
-                left(NULLIF(btrim(i.functional_track), ''), 255),
+                {scoped_functional_track},
                 left(NULLIF(btrim(i.ams_owner), ''), 255),
-                left(
-                    COALESCE(NULLIF(btrim(i.functional_track), ''), '{BLANK_LABEL}')
-                    || ' - '
-                    || COALESCE(NULLIF(btrim(i.ams_owner), ''), '{BLANK_LABEL}'),
-                    512
-                ),
-                left(NULLIF(btrim(i.assignment_group), ''), 255),
+                {scoped_functional_track},
+                {scoped_assignment_group},
                 left(NULLIF(btrim(i.assignment_group_owner), ''), 255),
-                left(
-                    COALESCE(NULLIF(btrim(i.assignment_group), ''), '{BLANK_LABEL}')
-                    || ' - '
-                    || COALESCE(NULLIF(btrim(i.assignment_group_owner), ''), '{BLANK_LABEL}'),
-                    512
-                ),
+                {scoped_assignment_group},
                 left(NULLIF(btrim(i.parent_application_name), ''), 255),
                 left(NULLIF(btrim(i.business_service_ci_name), ''), 255),
                 left(NULLIF(btrim(i.application_owner), ''), 255),
@@ -489,10 +518,20 @@ def refresh_application_filter_facts(
                 :data_version
             FROM application_inventory_items AS i
             JOIN projects AS p ON p.id = i.project_id
+            CROSS JOIN scope_presence
+            LEFT JOIN scope_rows AS s
+              ON {inventory_assignment_group_key} = s.assignment_group_key
             WHERE i.project_id = CAST(:project_id AS uuid)
               AND i.is_current IS true
               AND NULLIF(btrim(i.business_service_ci_name), '') IS NOT NULL
-            ORDER BY lower(btrim(i.business_service_ci_name)), i.id
+              AND (
+                  scope_presence.has_scope_rows IS false
+                  OR s.assignment_group_key IS NOT NULL
+              )
+            ORDER BY
+                lower(btrim(i.business_service_ci_name)),
+                CASE WHEN s.is_in_scope IS true THEN 0 ELSE 1 END,
+                i.id
             """
         ),
         {"project_id": str(project_id), "data_version": data_version},

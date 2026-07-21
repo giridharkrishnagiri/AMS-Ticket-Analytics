@@ -93,6 +93,11 @@ const emptyFilters: DashboardApplicationsFilters = {
   lifecycle_status_stage: [],
 };
 
+const defaultFilters: DashboardApplicationsFilters = {
+  ...emptyFilters,
+  application_scope: ["in_scope"],
+};
+
 const emptyFilterValues: DashboardApplicationsFilterValues = {
   application_scope: [],
   service_entitlement: [],
@@ -435,11 +440,15 @@ function catalogSingleRows(
   selectedValues: string[]
 ) {
   const dynamicCounts = counts?.counts[filterKey] ?? {};
-  const rows = (catalog?.filters[filterKey] ?? []).map((item) => ({
-    label: item.label,
-    value: item.value,
-    count: dynamicCounts[item.value] ?? item.baseline_count,
-  }));
+  const hasDynamicCounts = counts !== null;
+  const selectedSet = new Set(selectedValues);
+  const rows = (catalog?.filters[filterKey] ?? [])
+    .map((item) => ({
+      label: item.label,
+      value: item.value,
+      count: hasDynamicCounts ? dynamicCounts[item.value] ?? 0 : item.baseline_count,
+    }))
+    .filter((item) => !hasDynamicCounts || item.count > 0 || selectedSet.has(item.value));
   const existing = new Set(rows.map((row) => row.value));
   for (const selectedValue of selectedValues) {
     if (!existing.has(selectedValue)) {
@@ -461,15 +470,19 @@ function catalogCombinedRows(
   selectedValues: string[]
 ) {
   const dynamicCounts = counts?.counts[filterKey] ?? {};
-  const rows = (catalog?.filters[filterKey] ?? []).map((item) => {
-    const splitValue = splitCombinedFilterValue(item.value);
-    return {
-      label: item.label,
-      left_value: splitValue.left_value,
-      right_value: splitValue.right_value,
-      count: dynamicCounts[item.value] ?? item.baseline_count,
-    };
-  });
+  const hasDynamicCounts = counts !== null;
+  const selectedSet = new Set(selectedValues);
+  const rows = (catalog?.filters[filterKey] ?? [])
+    .map((item) => {
+      const splitValue = splitCombinedFilterValue(item.value);
+      return {
+        label: item.label,
+        left_value: splitValue.left_value,
+        right_value: splitValue.right_value,
+        count: hasDynamicCounts ? dynamicCounts[item.value] ?? 0 : item.baseline_count,
+      };
+    })
+    .filter((item) => !hasDynamicCounts || item.count > 0 || selectedSet.has(item.label));
   const existing = new Set(rows.map((row) => row.label));
   for (const selectedValue of selectedValues) {
     if (!existing.has(selectedValue)) {
@@ -858,7 +871,7 @@ function ApplicationsDashboard({
   isActive,
   onExportContextChange,
 }: ApplicationsDashboardProps) {
-  const [filters, setFilters] = useState<DashboardApplicationsFilters>(emptyFilters);
+  const [filters, setFilters] = useState<DashboardApplicationsFilters>(defaultFilters);
   const [sort, setSort] = useState<DashboardApplicationsSort>(defaultSort);
   const [filterValues, setFilterValues] = useState<LoadState<DashboardApplicationsFilterValues>>(
     createLoadState(emptyFilterValues)
@@ -1086,7 +1099,7 @@ function ApplicationsDashboard({
   useEffect(() => {
     if (projectId !== loadedProjectId) {
       setLoadedProjectId(projectId);
-      setFilters(emptyFilters);
+      setFilters(defaultFilters);
       setSort(defaultSort);
       setFilterValues(createLoadState(emptyFilterValues));
       setFilterCatalog(null);
@@ -1166,8 +1179,8 @@ function ApplicationsDashboard({
   }
 
   function resetFilters() {
-    if (!filtersEqual(filters, emptyFilters)) {
-      setFilters(emptyFilters);
+    if (!filtersEqual(filters, defaultFilters)) {
+      setFilters(defaultFilters);
     }
     setSort(defaultSort);
   }
@@ -1322,7 +1335,7 @@ function ApplicationsDashboard({
             />
           ) : null}
           <ExcelMultiSelectFilter
-            label="Functional Track - AMS Owner"
+            label="Functional Track"
             options={filterOptions.functional_track_ams_owner}
             selectedValues={filters.functional_track_ams_owner}
             onChange={(values) => updateFilter("functional_track_ams_owner", values)}
@@ -1334,7 +1347,7 @@ function ApplicationsDashboard({
             onChange={(values) => updateFilter("sap_non_sap", values)}
           />
           <ExcelMultiSelectFilter
-            label="Assignment Group - Support Group Owner"
+            label="Assignment Group"
             options={filterOptions.assignment_group_owner}
             selectedValues={filters.assignment_group_owner}
             onChange={(values) => updateFilter("assignment_group_owner", values)}

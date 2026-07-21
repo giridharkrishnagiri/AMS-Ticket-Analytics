@@ -743,11 +743,15 @@ function catalogSingleRows(
   selectedValues: string[]
 ) {
   const dynamicCounts = counts?.counts[filterKey] ?? {};
-  const rows = (catalog?.filters[filterKey] ?? []).map((item) => ({
-    label: item.label,
-    value: item.value,
-    count: dynamicCounts[item.value] ?? item.baseline_count,
-  }));
+  const hasDynamicCounts = counts !== null;
+  const selectedSet = new Set(selectedValues);
+  const rows = (catalog?.filters[filterKey] ?? [])
+    .map((item) => ({
+      label: item.label,
+      value: item.value,
+      count: hasDynamicCounts ? dynamicCounts[item.value] ?? 0 : item.baseline_count,
+    }))
+    .filter((item) => !hasDynamicCounts || item.count > 0 || selectedSet.has(item.value));
   const existing = new Set(rows.map((row) => row.value));
   for (const selectedValue of selectedValues) {
     if (!existing.has(selectedValue)) {
@@ -769,15 +773,19 @@ function catalogCombinedRows(
   selectedValues: string[]
 ) {
   const dynamicCounts = counts?.counts[filterKey] ?? {};
-  const rows = (catalog?.filters[filterKey] ?? []).map((item) => {
-    const splitValue = splitCombinedFilterValue(item.value);
-    return {
-      label: item.label,
-      left_value: splitValue.left_value,
-      right_value: splitValue.right_value,
-      count: dynamicCounts[item.value] ?? item.baseline_count,
-    };
-  });
+  const hasDynamicCounts = counts !== null;
+  const selectedSet = new Set(selectedValues);
+  const rows = (catalog?.filters[filterKey] ?? [])
+    .map((item) => {
+      const splitValue = splitCombinedFilterValue(item.value);
+      return {
+        label: item.label,
+        left_value: splitValue.left_value,
+        right_value: splitValue.right_value,
+        count: hasDynamicCounts ? dynamicCounts[item.value] ?? 0 : item.baseline_count,
+      };
+    })
+    .filter((item) => !hasDynamicCounts || item.count > 0 || selectedSet.has(item.label));
   const existing = new Set(rows.map((row) => row.label));
   for (const selectedValue of selectedValues) {
     if (!existing.has(selectedValue)) {
@@ -2122,7 +2130,7 @@ function VolumetricsDashboard({
                 }
               />
               <ExcelMultiSelectFilter
-                label="Functional Track - AMS Owner"
+                label="Functional Track"
                 options={filterOptions.functional_track_ams_owner}
                 selectedValues={filters.functional_track_ams_owner}
                 onChange={(values) => updateFilter("functional_track_ams_owner", values)}
@@ -2146,7 +2154,7 @@ function VolumetricsDashboard({
                 onChange={(values) => updateFilter("business_critical", values)}
               />
               <ExcelMultiSelectFilter
-                label="Assignment Group - Support Lead"
+                label="Assignment Group"
                 options={filterOptions.assignment_group_support_lead}
                 selectedValues={filters.assignment_group_support_lead}
                 onChange={(values) => updateFilter("assignment_group_support_lead", values)}
