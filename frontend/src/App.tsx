@@ -1,13 +1,14 @@
 import { useCallback, useState } from "react";
 
 import Dashboard from "./Dashboard";
+import GenAIWorkbench from "./GenAIWorkbench";
 import Maintenance from "./Maintenance";
 import UploadCenter from "./UploadCenter";
 import { getBackendHealth } from "./api/health";
 import type { BackendHealth } from "./api/health";
 import { formatDisplayDateTime } from "./utils/dateFormat";
 
-type AppView = "dashboard" | "maintenance" | "uploads";
+type AppView = "dashboard" | "maintenance" | "uploads" | "genai";
 type HealthState = "unchecked" | "checking" | "healthy" | "degraded" | "offline";
 
 function formatHealthStatus(value: string | null | undefined): string {
@@ -232,6 +233,13 @@ function App() {
                 Upload Center
               </button>
               <button
+                className={activeView === "genai" ? "tab-button active" : "tab-button"}
+                type="button"
+                onClick={() => setActiveView("genai")}
+              >
+                GenAI Workbench
+              </button>
+              <button
                 className={activeView === "maintenance" ? "tab-button active" : "tab-button"}
                 type="button"
                 onClick={() => setActiveView("maintenance")}
@@ -259,6 +267,9 @@ function App() {
         </div>
         <div className="app-view" hidden={activeView !== "uploads"}>
           <UploadCenter />
+        </div>
+        <div className="app-view" hidden={activeView !== "genai"}>
+          <GenAIWorkbench />
         </div>
         <div className="app-view" hidden={activeView !== "maintenance"}>
           <Maintenance />

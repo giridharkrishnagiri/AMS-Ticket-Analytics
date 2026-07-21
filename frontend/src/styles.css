@@ -30,6 +30,10 @@ button {
   font: inherit;
 }
 
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 input,
 select {
   width: 100%;
@@ -2886,6 +2890,84 @@ h2 {
   background: linear-gradient(180deg, #ffffff, #fffbeb);
 }
 
+.workbench-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.workbench-control-panel {
+  border-color: #bfdbfe;
+}
+
+.workbench-controls {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.5fr) minmax(150px, 0.8fr) minmax(120px, 0.6fr) auto;
+  align-items: end;
+  gap: 14px;
+}
+
+.workbench-controls label {
+  display: grid;
+  gap: 7px;
+  color: #334155;
+  font-weight: 800;
+}
+
+.workbench-controls label > span {
+  font-size: 0.88rem;
+}
+
+.workbench-controls .checkbox-label {
+  align-self: center;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.workbench-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.workbench-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.workbench-metric {
+  min-height: 96px;
+  padding: 14px;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgb(31 41 55 / 7%);
+}
+
+.workbench-metric strong {
+  display: block;
+  margin-top: 8px;
+  color: #111827;
+  font-size: 1.28rem;
+}
+
+.workbench-metric.compact {
+  min-width: 180px;
+  min-height: 76px;
+  box-shadow: none;
+}
+
+.workbench-table-frame {
+  max-height: 520px;
+}
+
+.quality-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 @media (max-width: 900px) {
   .status-grid,
   .detail-panel,
@@ -2900,8 +2982,13 @@ h2 {
   .workflow-steps,
   .upload-type-grid,
   .reset-mode-grid,
-  .top-list-grid {
+  .top-list-grid,
+  .workbench-summary-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .workbench-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .applications-dashboard-layout,
@@ -2985,7 +3072,9 @@ h2 {
   .upload-type-grid,
   .reset-mode-grid,
   .split-grid,
-  .top-list-grid {
+  .top-list-grid,
+  .workbench-summary-grid,
+  .workbench-controls {
     grid-template-columns: 1fr;
   }
 

@@ -4,7 +4,18 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -252,3 +263,61 @@ class GenAIGeneratedChart(UuidPrimaryKeyMixin, TimestampMixin, Base):
 
     customer: Mapped[Client | None] = relationship()
     project: Mapped[Project | None] = relationship()
+
+
+class GenAITicketClassification(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_ticket_classifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "analysis_month",
+            "ticket_number",
+            name="uq_genai_ticket_classifications_project_month_ticket",
+        ),
+        Index(
+            "ix_genai_ticket_classifications_project_month_status",
+            "project_id",
+            "analysis_month",
+            "status",
+        ),
+        Index(
+            "ix_genai_ticket_classifications_category",
+            "project_id",
+            "analysis_month",
+            "genai_category",
+            "genai_subcategory_1",
+            "genai_subcategory_2",
+        ),
+    )
+
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ticket_number: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    ticket_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    analysis_month: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    prompt_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    prompt_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="success", index=True)
+    category_quality: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    genai_category: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    genai_subcategory_1: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    genai_subcategory_2: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    customer: Mapped[Client | None] = relationship()
+    project: Mapped[Project] = relationship()

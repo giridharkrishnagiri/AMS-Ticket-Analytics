@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.db.session import SessionLocal
 from app.main import app
@@ -16,9 +18,13 @@ from app.models import (
     GenAIGeneratedChart,
     GenAIPromptTemplate,
     GenAISafetySettings,
+    GenAITicketClassification,
     GenAIToolRun,
     GenAIUsageLog,
     Project,
+    Ticket,
+    UploadBatch,
+    UploadedFile,
 )
 from app.services.genai.default_prompts import DEFAULT_PROMPTS_BY_KEY
 from app.services.genai.llm_client import LLMCompletionResult
@@ -31,6 +37,7 @@ def reset_genai_tables() -> None:
         for model in (
             GenAIToolRun,
             GenAIGeneratedChart,
+            GenAITicketClassification,
             GenAIUsageLog,
             GenAIChatMessage,
             GenAIChatSession,
@@ -667,3 +674,277 @@ def test_genai_chat_data_specific_question_uses_governed_tool_metadata(
     )
     assert "normalized_payload" not in str(payload)
     assert "cmdb_payload" not in str(payload)
+
+
+def create_ticket_classification_project() -> tuple[UUID, UUID, UUID, UUID, str]:
+    db = SessionLocal()
+    suffix = uuid4().hex[:12]
+    try:
+        client_row = Client(name=f"Classification Client {suffix}", code=f"CLS-C-{suffix}")
+        db.add(client_row)
+        db.flush()
+
+        project = Project(
+            client_id=client_row.id,
+            name=f"Classification Project {suffix}",
+            code=f"CLS-P-{suffix}",
+        )
+        db.add(project)
+        db.flush()
+
+        upload_batch = UploadBatch(
+            project_id=project.id,
+            month_key="2026-05",
+            batch_name=f"Classification Batch {suffix}",
+            status="NORMALIZED",
+            file_count=1,
+            total_size_bytes=1,
+        )
+        db.add(upload_batch)
+        db.flush()
+
+        uploaded_file = UploadedFile(
+            upload_batch_id=upload_batch.id,
+            project_id=project.id,
+            ticket_type="INCIDENT",
+            original_filename="classification.csv",
+            saved_filename="classification.csv",
+            storage_path="C:\\temp\\classification.csv",
+            size_bytes=1,
+            status="NORMALIZED",
+        )
+        db.add(uploaded_file)
+        db.flush()
+        db.commit()
+        return (
+            client_row.id,
+            project.id,
+            upload_batch.id,
+            uploaded_file.id,
+            suffix,
+        )
+    finally:
+        db.close()
+
+
+def cleanup_classification_client(client_id: UUID) -> None:
+    db = SessionLocal()
+    try:
+        db.execute(delete(Client).where(Client.id == client_id))
+        db.commit()
+    finally:
+        db.close()
+
+
+def add_classification_ticket(
+    *,
+    project_id: UUID,
+    upload_batch_id: UUID,
+    uploaded_file_id: UUID,
+    ticket_number: str,
+    ticket_type: str,
+    state: str,
+    resolved_at: datetime | None = None,
+    closed_at: datetime | None = None,
+    is_in_scope: bool = True,
+) -> None:
+    db = SessionLocal()
+    try:
+        db.add(
+            Ticket(
+                project_id=project_id,
+                upload_batch_id=upload_batch_id,
+                uploaded_file_id=uploaded_file_id,
+                ticket_number=ticket_number,
+                ticket_type=ticket_type,
+                is_in_scope=is_in_scope,
+                month_key="2026-05",
+                created_at=datetime(2026, 5, 1, tzinfo=UTC),
+                resolved_at=resolved_at,
+                closed_at=closed_at,
+                short_description=f"{ticket_number} short description",
+                description=f"{ticket_number} detailed description",
+                state=state,
+                priority="P3",
+                assignment_group="AMS Support",
+                category="Access",
+                subcategory="User",
+                catalog_item_name=(
+                    "General Service Request"
+                    if ticket_type == "SERVICE_CATALOG_TASK"
+                    else None
+                ),
+                reopen_count=0,
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monkeypatch) -> None:
+    reset_genai_tables()
+    client_id, project_id, upload_batch_id, uploaded_file_id, _suffix = (
+        create_ticket_classification_project()
+    )
+    project_id_text = str(project_id)
+    try:
+        may_5 = datetime(2026, 5, 5, 12, 0, tzinfo=UTC)
+        may_6 = datetime(2026, 5, 6, 12, 0, tzinfo=UTC)
+        may_7 = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
+        may_8 = datetime(2026, 5, 8, 12, 0, tzinfo=UTC)
+
+        add_classification_ticket(
+            project_id=project_id,
+            upload_batch_id=upload_batch_id,
+            uploaded_file_id=uploaded_file_id,
+            ticket_number="INC-CLASSIFY",
+            ticket_type="INCIDENT",
+            state="Resolved",
+            resolved_at=may_5,
+        )
+        add_classification_ticket(
+            project_id=project_id,
+            upload_batch_id=upload_batch_id,
+            uploaded_file_id=uploaded_file_id,
+            ticket_number="INC-CANCELED",
+            ticket_type="INCIDENT",
+            state="Canceled",
+            resolved_at=may_6,
+        )
+        add_classification_ticket(
+            project_id=project_id,
+            upload_batch_id=upload_batch_id,
+            uploaded_file_id=uploaded_file_id,
+            ticket_number="SCTASK-CLASSIFY",
+            ticket_type="SERVICE_CATALOG_TASK",
+            state="Closed Complete",
+            closed_at=may_7,
+        )
+        add_classification_ticket(
+            project_id=project_id,
+            upload_batch_id=upload_batch_id,
+            uploaded_file_id=uploaded_file_id,
+            ticket_number="SCTASK-INCOMPLETE",
+            ticket_type="SERVICE_CATALOG_TASK",
+            state="Closed Incomplete",
+            closed_at=may_8,
+        )
+        add_classification_ticket(
+            project_id=project_id,
+            upload_batch_id=upload_batch_id,
+            uploaded_file_id=uploaded_file_id,
+            ticket_number="INC-OUT-SCOPE",
+            ticket_type="INCIDENT",
+            state="Resolved",
+            resolved_at=may_5,
+            is_in_scope=False,
+        )
+
+        received_ticket_numbers: list[str] = []
+
+        def fake_chat_completion(_config, messages):
+            payload = json.loads(messages[1]["content"].split("\n", 1)[1])
+            ticket_rows = payload["tickets"]
+            received_ticket_numbers.extend(row["ticket_number"] for row in ticket_rows)
+            return LLMCompletionResult(
+                ok=True,
+                response_text=json.dumps(
+                    {
+                        "tickets": [
+                            {
+                                "ticket_number": row["ticket_number"],
+                                "category_quality": "Meaningful",
+                                "genai_category": (
+                                    "Access Issue"
+                                    if row["ticket_type"] == "INCIDENT"
+                                    else "User Administration"
+                                ),
+                                "genai_subcategory_1": (
+                                    "Login Support"
+                                    if row["ticket_type"] == "INCIDENT"
+                                    else "New User"
+                                ),
+                                "genai_subcategory_2": None,
+                                "confidence": 0.92,
+                            }
+                            for row in ticket_rows
+                        ],
+                    },
+                ),
+                prompt_tokens=20,
+                completion_tokens=30,
+                estimated_cost=0.001,
+                duration_ms=15,
+            )
+
+        monkeypatch.setattr(
+            "app.services.genai.ticket_classification.chat_completion",
+            fake_chat_completion,
+        )
+
+        with TestClient(app) as client:
+            configure_genai(client)
+            run_response = client.post(
+                "/api/genai/ticket-classification/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "batch_size": 10,
+                },
+            )
+            assert run_response.status_code == 200
+            run_payload = run_response.json()
+            assert run_payload["eligible_ticket_count"] == 2
+            assert run_payload["processed_count"] == 2
+            assert run_payload["failed_count"] == 0
+            assert set(received_ticket_numbers) == {"INC-CLASSIFY", "SCTASK-CLASSIFY"}
+
+            cached_response = client.post(
+                "/api/genai/ticket-classification/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "batch_size": 10,
+                },
+            )
+            assert cached_response.status_code == 200
+            assert cached_response.json()["skipped_cached_count"] == 2
+
+            pivot_response = client.get(
+                "/api/genai/ticket-classification/pivot",
+                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert pivot_response.status_code == 200
+            pivot_rows = pivot_response.json()["rows"]
+            assert {row["genai_category"] for row in pivot_rows} == {
+                "Access Issue",
+                "User Administration",
+            }
+
+            clear_response = client.post(
+                "/api/genai/ticket-classification/clear",
+                json={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert clear_response.status_code == 200
+            assert clear_response.json()["deleted_count"] == 2
+
+            summary_response = client.get(
+                "/api/genai/ticket-classification/summary",
+                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+            )
+            assert summary_response.status_code == 200
+            assert summary_response.json()["analyzed_ticket_count"] == 0
+
+        db = SessionLocal()
+        try:
+            remaining = db.execute(
+                select(GenAITicketClassification).where(
+                    GenAITicketClassification.project_id == project_id,
+                ),
+            ).scalars().all()
+            assert remaining == []
+        finally:
+            db.close()
+    finally:
+        cleanup_classification_client(client_id)

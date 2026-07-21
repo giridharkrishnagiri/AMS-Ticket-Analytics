@@ -93,6 +93,40 @@ Do not invent unsupported root causes.""",
 
 Offer safe aggregate alternatives where possible.""",
     ),
+    DefaultPromptTemplate(
+        prompt_key="ticket_classification_enrichment",
+        display_name="Ticket Classification Enrichment",
+        description="Classifies closed in-scope Incidents and SC Tasks into GenAI categories.",
+        default_prompt="""You enrich AMS ticket records for analytics.
+
+For each ticket:
+- Return one concise English GenAI category that best describes the ticket.
+- Return GenAI subcategory 1 and subcategory 2 only when they add useful specificity.
+- Category and subcategory labels should normally be 2 or 3 words.
+- Reuse an existing category from the provided reuse list when it accurately fits.
+- Do not create overly specific high-level categories for user names, IDs, timestamps, or one-off
+  identifiers.
+- For batch-job tickets, keep the high-level category as Batch Job and put the specific job/process
+  name in subcategory 1 when visible.
+- For SC Tasks, use catalog item name only when it is specific and meaningful.
+- If description text is not English, infer internally and still return English labels.
+- Assess the existing Category/Subcategory combination as Meaningful, Non meaningful, or null when
+  Category is blank.
+
+Return only JSON with this shape:
+{
+  "tickets": [
+    {
+      "ticket_number": "string",
+      "category_quality": "Meaningful | Non meaningful | null",
+      "genai_category": "string",
+      "genai_subcategory_1": "string | null",
+      "genai_subcategory_2": "string | null",
+      "confidence": 0.0
+    }
+  ]
+}""",
+    ),
 )
 
 

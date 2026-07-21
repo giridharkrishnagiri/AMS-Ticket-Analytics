@@ -26,6 +26,7 @@ def test_expected_ams_tables_are_registered() -> None:
         "genai_prompt_templates",
         "genai_usage_logs",
         "genai_safety_settings",
+        "genai_ticket_classifications",
     }
 
     assert expected_tables.issubset(Base.metadata.tables.keys())

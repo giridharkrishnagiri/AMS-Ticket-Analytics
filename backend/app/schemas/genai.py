@@ -123,6 +123,10 @@ class GenAIUsageSummary(BaseModel):
     estimated_cost: float | None = None
 
 
+class GenAITicketClassificationUsageSummary(GenAIUsageSummary):
+    duration_ms: int | None = None
+
+
 class GenAITestResponse(BaseModel):
     ok: bool
     provider: str
@@ -131,6 +135,65 @@ class GenAITestResponse(BaseModel):
     duration_ms: int | None = None
     usage: GenAIUsageSummary | None = None
     error_message: str | None = None
+
+
+class GenAITicketClassificationSummaryResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    eligible_ticket_count: int
+    analyzed_ticket_count: int
+    error_ticket_count: int
+    category_count: int
+    subcategory_1_count: int
+    subcategory_2_count: int
+    incident_count: int
+    sc_task_count: int
+    last_processed_at: datetime | None = None
+    category_quality_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class GenAITicketClassificationPivotRow(BaseModel):
+    genai_category: str | None
+    genai_subcategory_1: str | None
+    genai_subcategory_2: str | None
+    incident_count: int
+    sc_task_count: int
+    total_count: int
+
+
+class GenAITicketClassificationPivotResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    rows: list[GenAITicketClassificationPivotRow] = Field(default_factory=list)
+
+
+class GenAITicketClassificationRunRequest(BaseModel):
+    project_id: UUID
+    analysis_month: str = Field(default="2026-05", pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    force_reprocess: bool = False
+    batch_size: int = Field(default=10, ge=1, le=25)
+
+
+class GenAITicketClassificationRunResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    eligible_ticket_count: int
+    processed_count: int
+    skipped_cached_count: int
+    failed_count: int
+    summary: GenAITicketClassificationSummaryResponse
+    usage: GenAITicketClassificationUsageSummary
+
+
+class GenAITicketClassificationClearRequest(BaseModel):
+    project_id: UUID
+    analysis_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+class GenAITicketClassificationClearResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    deleted_count: int
 
 
 class GenAIUsageLogResponse(BaseModel):

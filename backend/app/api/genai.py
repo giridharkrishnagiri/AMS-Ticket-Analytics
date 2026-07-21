@@ -30,6 +30,12 @@ from app.schemas.genai import (
     GenAISafetySettingsUpdateRequest,
     GenAITestRequest,
     GenAITestResponse,
+    GenAITicketClassificationClearRequest,
+    GenAITicketClassificationClearResponse,
+    GenAITicketClassificationPivotResponse,
+    GenAITicketClassificationRunRequest,
+    GenAITicketClassificationRunResponse,
+    GenAITicketClassificationSummaryResponse,
     GenAIToolCatalogResponse,
     GenAIToolExecuteRequest,
     GenAIToolExecuteResponse,
@@ -78,6 +84,19 @@ from app.services.genai.prompt_service import (
 from app.services.genai.safety_service import (
     get_or_create_safety_settings,
     update_safety_settings,
+)
+from app.services.genai.ticket_classification import (
+    TicketClassificationClearRequest as ServiceTicketClassificationClearRequest,
+)
+from app.services.genai.ticket_classification import (
+    TicketClassificationError,
+    clear_ticket_classification,
+    run_ticket_classification,
+    ticket_classification_pivot,
+    ticket_classification_summary,
+)
+from app.services.genai.ticket_classification import (
+    TicketClassificationRunRequest as ServiceTicketClassificationRunRequest,
 )
 from app.services.genai.tools import execute_tool, list_tool_runs, list_tools
 from app.services.genai.usage_log_service import create_usage_log, list_usage_logs
@@ -288,6 +307,78 @@ def post_genai_chart_from_tool_result(
     except ChartValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return to_chart_response(chart)
+
+
+@router.get(
+    "/ticket-classification/summary",
+    response_model=GenAITicketClassificationSummaryResponse,
+)
+def get_ticket_classification_summary(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+) -> GenAITicketClassificationSummaryResponse:
+    try:
+        return ticket_classification_summary(db, project_id, analysis_month)
+    except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/ticket-classification/pivot",
+    response_model=GenAITicketClassificationPivotResponse,
+)
+def get_ticket_classification_pivot(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+) -> GenAITicketClassificationPivotResponse:
+    try:
+        return ticket_classification_pivot(db, project_id, analysis_month)
+    except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/ticket-classification/run",
+    response_model=GenAITicketClassificationRunResponse,
+)
+def post_ticket_classification_run(
+    request: GenAITicketClassificationRunRequest,
+    db: DbSession,
+) -> GenAITicketClassificationRunResponse:
+    try:
+        return run_ticket_classification(
+            db,
+            ServiceTicketClassificationRunRequest(
+                project_id=request.project_id,
+                analysis_month=request.analysis_month,
+                force_reprocess=request.force_reprocess,
+                batch_size=request.batch_size,
+            ),
+        )
+    except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/ticket-classification/clear",
+    response_model=GenAITicketClassificationClearResponse,
+)
+def post_ticket_classification_clear(
+    request: GenAITicketClassificationClearRequest,
+    db: DbSession,
+) -> GenAITicketClassificationClearResponse:
+    try:
+        return clear_ticket_classification(
+            db,
+            ServiceTicketClassificationClearRequest(
+                project_id=request.project_id,
+                analysis_month=request.analysis_month,
+            ),
+        )
+    except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/context/customers", response_model=list[GenAIContextOptionResponse])
