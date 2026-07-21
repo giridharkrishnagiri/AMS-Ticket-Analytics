@@ -141,7 +141,10 @@ For each cluster:
 - Prefer reusable, business-friendly labels over one-off names, user names, timestamps, or IDs.
 - For batch-job clusters, use "Batch Job" at high level and put specific job/process language at
   lower levels when it is broadly meaningful.
-- For SC Task clusters, use catalog item language only when it is specific and useful.
+- Incident clusters should be named as production/user-impact issues.
+- SC Task clusters should be named as user request or fulfillment work.
+- Incidents and SC Tasks are clustered separately; do not conceptually merge them just because
+  wording is similar across ticket types.
 - If the evidence is weak or mixed, choose the best broad label and set lower confidence.
 - Keep labels distinct from sibling clusters, but merge similar wording where the intent is
   the same.

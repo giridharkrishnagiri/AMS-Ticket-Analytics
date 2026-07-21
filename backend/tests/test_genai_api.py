@@ -1249,6 +1249,39 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert first_run["llm_cost"] == 0.003
             assert first_run["llm_batch_count"] == 3
 
+            db_check = SessionLocal()
+            try:
+                saved_labels = (
+                    db_check.query(GenAITicketClusterLabel)
+                    .filter(
+                        GenAITicketClusterLabel.project_id == project_id,
+                        GenAITicketClusterLabel.analysis_month == "2026-05",
+                    )
+                    .all()
+                )
+                assert saved_labels
+                assert all(
+                    label.cluster_key.startswith(("INC-", "SCT-")) for label in saved_labels
+                )
+                assert all(
+                    not (label.incident_count and label.sc_task_count)
+                    for label in saved_labels
+                )
+                saved_classifications = (
+                    db_check.query(GenAITicketClassification)
+                    .filter(
+                        GenAITicketClassification.project_id == project_id,
+                        GenAITicketClassification.analysis_month == "2026-05",
+                    )
+                    .all()
+                )
+                assert {
+                    row.genai_category_cluster_id.split("-Category-", maxsplit=1)[0]
+                    for row in saved_classifications
+                } == {"Incident", "SC Task"}
+            finally:
+                db_check.close()
+
             clear_response = client.post(
                 "/api/genai/ticket-cluster-analysis/clear",
                 json={"project_id": project_id_text, "analysis_month": "2026-05"},

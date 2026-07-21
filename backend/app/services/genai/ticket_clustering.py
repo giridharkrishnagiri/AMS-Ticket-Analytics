@@ -53,7 +53,13 @@ progress_logger = logging.getLogger("uvicorn.error")
 
 PROMPT_KEY = "ticket_cluster_labeling"
 OUTPUT_PROMPT_KEY = "ticket_cluster_analysis"
-EMBEDDING_TEXT_VERSION = "cluster-ticket-text-v2-short-description-description"
+EMBEDDING_TEXT_VERSION = "cluster-ticket-text-v3-ticket-type-description"
+TICKET_TYPE_SEPARATION_PROMPT = """Ticket type rule:
+- Incidents and Service Catalog Tasks are clustered separately.
+- Incident labels should describe production/user-impact issues.
+- Service Catalog Task labels should describe user request or fulfillment work.
+- Do not reuse a label because another ticket type has similar wording unless it is truly the best
+  label within the current ticket type."""
 RANDOM_STATE = 42
 MAX_TEXT_CHARS = 2600
 MAX_REPRESENTATIVE_TEXT_CHARS = 500
@@ -175,6 +181,108 @@ class ClusterInfo:
     confidence: float | None = None
 
 
+def ticket_type_partition(ticket_type: str | None) -> str:
+    normalized = (ticket_type or "").upper()
+    if normalized == "INCIDENT":
+        return "incident"
+    if normalized == "SERVICE_CATALOG_TASK":
+        return "sc_task"
+    return "other"
+
+
+def ticket_type_display(ticket_type: str | None) -> str:
+    partition = ticket_type_partition(ticket_type)
+    if partition == "incident":
+        return "Incident"
+    if partition == "sc_task":
+        return "Service Catalog Task"
+    return "Other Ticket"
+
+
+def cluster_key_prefix(partition: str) -> str:
+    if partition == "incident":
+        return "INC"
+    if partition == "sc_task":
+        return "SCT"
+    return "OTH"
+
+
+def partition_input_indices(inputs: list[TicketTextInput]) -> dict[str, list[int]]:
+    partitions: dict[str, list[int]] = {"incident": [], "sc_task": [], "other": []}
+    for index, ticket_input in enumerate(inputs):
+        partitions[ticket_type_partition(ticket_input.ticket.ticket_type)].append(index)
+    return {key: indices for key, indices in partitions.items() if indices}
+
+
+def split_target_count(
+    partitions: dict[str, list[int]],
+    target_count: int,
+    *,
+    maximum_by_partition: dict[str, int] | None = None,
+) -> dict[str, int]:
+    if not partitions or target_count <= 0:
+        return {}
+    maximums = {
+        key: maximum_by_partition.get(key, len(indices)) if maximum_by_partition else len(indices)
+        for key, indices in partitions.items()
+    }
+    capped_target = min(
+        target_count,
+        sum(maximums.values()),
+    )
+    allocation = {key: 0 for key in partitions}
+    if capped_target <= 0:
+        return allocation
+    if capped_target < len(partitions):
+        for key, _indices in sorted(
+            partitions.items(),
+            key=lambda item: len(item[1]),
+            reverse=True,
+        )[:capped_target]:
+            allocation[key] = 1
+        return allocation
+    for key, maximum in maximums.items():
+        if maximum > 0:
+            allocation[key] = 1
+    remaining = max(0, capped_target - sum(allocation.values()))
+    total_items = sum(len(indices) for indices in partitions.values())
+    remainders: list[tuple[float, str]] = []
+    for key, indices in partitions.items():
+        maximum = maximums[key]
+        if maximum <= allocation[key]:
+            continue
+        exact = (len(indices) / total_items) * capped_target if total_items else 0
+        additional = min(maximum - allocation[key], int(math.floor(exact)) - allocation[key])
+        if additional > 0:
+            allocation[key] += additional
+            remaining -= additional
+        remainders.append((exact - math.floor(exact), key))
+    for _remainder, key in sorted(remainders, reverse=True):
+        if remaining <= 0:
+            break
+        maximum = maximums[key]
+        if allocation[key] < maximum:
+            allocation[key] += 1
+            remaining -= 1
+    while remaining > 0:
+        progressed = False
+        for key, _indices in sorted(
+            partitions.items(),
+            key=lambda item: len(item[1]),
+            reverse=True,
+        ):
+            maximum = maximums[key]
+            if allocation[key] < maximum:
+                allocation[key] += 1
+                remaining -= 1
+                progressed = True
+                if remaining <= 0:
+                    break
+        if not progressed:
+            break
+    return allocation
+
+
 def workbench_settings() -> dict[str, Any]:
     settings = get_settings()
     return {
@@ -249,6 +357,7 @@ def effective_label_config(config: GenAIConfig) -> GenAIConfig:
 def normalized_ticket_text(ticket: Ticket) -> str:
     payload = ticket_payload(ticket)
     parts = [
+        f"Ticket class: {ticket_type_display(ticket.ticket_type)}",
         f"Short description: {payload.get('short_description') or ''}",
         f"Description: {payload.get('description') or ''}",
     ]
@@ -481,14 +590,25 @@ def normalized_centroid(vectors: np.ndarray, weights: np.ndarray | None = None) 
     return centroid / norm
 
 
-def ranked_keys(groups: dict[int, list[int]], inputs: list[TicketTextInput]) -> dict[int, str]:
+def cluster_key(level: int, position: int, *, key_prefix: str | None = None) -> str:
+    key = f"L{level}-{position:03d}"
+    return f"{key_prefix}-{key}" if key_prefix else key
+
+
+def ranked_keys(
+    groups: dict[int, list[int]],
+    inputs: list[TicketTextInput],
+    *,
+    level: int,
+    key_prefix: str | None = None,
+) -> dict[int, str]:
     def sort_key(item: tuple[int, list[int]]) -> tuple[int, str]:
         _raw_label, indices = item
         first_ticket = min(inputs[index].ticket.ticket_number for index in indices)
         return (-len(indices), first_ticket)
 
     return {
-        raw_label: f"L3-{position:03d}"
+        raw_label: cluster_key(level, position, key_prefix=key_prefix)
         for position, (raw_label, _indices) in enumerate(
             sorted(groups.items(), key=sort_key),
             start=1,
@@ -500,12 +620,17 @@ def build_level_3_clusters(
     inputs: list[TicketTextInput],
     vectors: np.ndarray,
     target_count: int,
+    *,
+    input_indices: list[int] | None = None,
+    key_prefix: str | None = None,
 ) -> dict[str, ClusterInfo]:
-    raw_labels = cluster_labels(vectors, target_count)
+    scoped_indices = input_indices or list(range(len(inputs)))
+    scoped_vectors = vectors[scoped_indices]
+    raw_labels = cluster_labels(scoped_vectors, target_count)
     groups: dict[int, list[int]] = defaultdict(list)
-    for index, raw_label in enumerate(raw_labels):
-        groups[int(raw_label)].append(index)
-    key_map = ranked_keys(groups, inputs)
+    for scoped_position, raw_label in enumerate(raw_labels):
+        groups[int(raw_label)].append(scoped_indices[scoped_position])
+    key_map = ranked_keys(groups, inputs, level=3, key_prefix=key_prefix)
     clusters: dict[str, ClusterInfo] = {}
     for raw_label, indices in groups.items():
         key = key_map[raw_label]
@@ -527,6 +652,7 @@ def build_parent_clusters(
     parent_level: int,
     target_count: int,
     inputs: list[TicketTextInput],
+    key_prefix: str | None = None,
 ) -> dict[str, ClusterInfo]:
     child_items = list(child_clusters.values())
     child_vectors = np.array([cluster.centroid for cluster in child_items], dtype=float)
@@ -542,9 +668,8 @@ def build_parent_clusters(
         first_child = min(child.key for child in children)
         return (-ticket_count, first_child)
 
-    prefix = f"L{parent_level}"
     key_map = {
-        raw_label: f"{prefix}-{position:03d}"
+        raw_label: cluster_key(parent_level, position, key_prefix=key_prefix)
         for position, (raw_label, _children) in enumerate(
             sorted(grouped_children.items(), key=sort_key),
             start=1,
@@ -574,6 +699,82 @@ def build_parent_clusters(
     return dict(sorted(parent_clusters.items()))
 
 
+def build_type_separated_clusters(
+    inputs: list[TicketTextInput],
+    vectors: np.ndarray,
+    *,
+    level_1_count: int,
+    level_2_count: int,
+    level_3_count: int,
+) -> tuple[dict[str, ClusterInfo], dict[str, ClusterInfo], dict[str, ClusterInfo], dict[str, int]]:
+    partitions = partition_input_indices(inputs)
+    level_3_targets = split_target_count(partitions, level_3_count)
+    level_3_clusters: dict[str, ClusterInfo] = {}
+    level_3_by_partition: dict[str, dict[str, ClusterInfo]] = {}
+    for partition, indices in partitions.items():
+        clusters = build_level_3_clusters(
+            inputs,
+            vectors,
+            min(level_3_targets.get(partition, 0), len(indices)),
+            input_indices=indices,
+            key_prefix=cluster_key_prefix(partition),
+        )
+        level_3_by_partition[partition] = clusters
+        level_3_clusters.update(clusters)
+
+    level_2_targets = split_target_count(
+        partitions,
+        level_2_count,
+        maximum_by_partition={
+            partition: len(clusters) for partition, clusters in level_3_by_partition.items()
+        },
+    )
+    level_2_clusters: dict[str, ClusterInfo] = {}
+    level_2_by_partition: dict[str, dict[str, ClusterInfo]] = {}
+    for partition, child_clusters in level_3_by_partition.items():
+        if not child_clusters:
+            continue
+        clusters = build_parent_clusters(
+            child_clusters=child_clusters,
+            child_level=3,
+            parent_level=2,
+            target_count=min(level_2_targets.get(partition, 0), len(child_clusters)),
+            inputs=inputs,
+            key_prefix=cluster_key_prefix(partition),
+        )
+        level_2_by_partition[partition] = clusters
+        level_2_clusters.update(clusters)
+
+    level_1_targets = split_target_count(
+        partitions,
+        level_1_count,
+        maximum_by_partition={
+            partition: len(clusters) for partition, clusters in level_2_by_partition.items()
+        },
+    )
+    level_1_clusters: dict[str, ClusterInfo] = {}
+    for partition, child_clusters in level_2_by_partition.items():
+        if not child_clusters:
+            continue
+        clusters = build_parent_clusters(
+            child_clusters=child_clusters,
+            child_level=2,
+            parent_level=1,
+            target_count=min(level_1_targets.get(partition, 0), len(child_clusters)),
+            inputs=inputs,
+            key_prefix=cluster_key_prefix(partition),
+        )
+        level_1_clusters.update(clusters)
+
+    partition_counts = {partition: len(indices) for partition, indices in partitions.items()}
+    return (
+        dict(sorted(level_1_clusters.items())),
+        dict(sorted(level_2_clusters.items())),
+        dict(sorted(level_3_clusters.items())),
+        partition_counts,
+    )
+
+
 def representative_tickets(
     inputs: list[TicketTextInput],
     vectors: np.ndarray,
@@ -594,6 +795,7 @@ def representative_tickets(
             {
                 "ticket_number": ticket.ticket_number,
                 "ticket_type": ticket.ticket_type,
+                "ticket_class": ticket_type_display(ticket.ticket_type),
                 "short_description": compact_text(
                     ticket.short_description,
                     max_chars=MAX_REPRESENTATIVE_TEXT_CHARS,
@@ -635,8 +837,15 @@ def cluster_payload(
     representative_limit: int,
 ) -> dict[str, Any]:
     incident_count, sc_task_count = ticket_type_counts(inputs, cluster.ticket_indices)
+    if incident_count and not sc_task_count:
+        ticket_class = "Incident"
+    elif sc_task_count and not incident_count:
+        ticket_class = "Service Catalog Task"
+    else:
+        ticket_class = "Mixed/Other"
     payload: dict[str, Any] = {
         "cluster_id": cluster.key,
+        "ticket_class": ticket_class,
         "ticket_count": len(cluster.ticket_indices),
         "incident_count": incident_count,
         "sc_task_count": sc_task_count,
@@ -1245,6 +1454,7 @@ def run_ticket_cluster_analysis(
         and prompt_template.custom_prompt.strip()
         else prompt_template.default_prompt
     )
+    prompt_text = f"{prompt_text.rstrip()}\n\n{TICKET_TYPE_SEPARATION_PROMPT}"
     prompt_version = prompt_template.version
     prompt_fingerprint_value = prompt_fingerprint(prompt_text)
 
@@ -1334,39 +1544,25 @@ def run_ticket_cluster_analysis(
         level_3_count,
     )
 
-    level_3_clusters = build_level_3_clusters(inputs, vectors, level_3_count)
-    log_progress(
-        "run %s level 3 clustering complete: %s clusters in %.2fs",
-        run_id,
-        len(level_3_clusters),
-        time.perf_counter() - stage_started_at,
-    )
-    stage_started_at = time.perf_counter()
-    level_2_clusters = build_parent_clusters(
-        child_clusters=level_3_clusters,
-        child_level=3,
-        parent_level=2,
-        target_count=min(level_2_count, len(level_3_clusters)),
-        inputs=inputs,
+    level_1_clusters, level_2_clusters, level_3_clusters, partition_counts = (
+        build_type_separated_clusters(
+            inputs,
+            vectors,
+            level_1_count=level_1_count,
+            level_2_count=level_2_count,
+            level_3_count=level_3_count,
+        )
     )
     log_progress(
-        "run %s level 2 rollup complete: %s clusters in %.2fs",
-        run_id,
-        len(level_2_clusters),
-        time.perf_counter() - stage_started_at,
-    )
-    stage_started_at = time.perf_counter()
-    level_1_clusters = build_parent_clusters(
-        child_clusters=level_2_clusters,
-        child_level=2,
-        parent_level=1,
-        target_count=min(level_1_count, len(level_2_clusters)),
-        inputs=inputs,
-    )
-    log_progress(
-        "run %s level 1 rollup complete: %s clusters in %.2fs",
+        (
+            "run %s type-separated clustering complete: %s/%s/%s clusters "
+            "across partitions %s in %.2fs"
+        ),
         run_id,
         len(level_1_clusters),
+        len(level_2_clusters),
+        len(level_3_clusters),
+        partition_counts,
         time.perf_counter() - stage_started_at,
     )
     clusters_by_level = {
@@ -1423,6 +1619,8 @@ def run_ticket_cluster_analysis(
         "embedding_model": provider_model_name(embedding_config),
         "label_model": provider_model_name(label_config),
         "algorithm": "kmeans_hierarchical_centroids",
+        "ticket_type_separated": True,
+        "ticket_type_partition_counts": partition_counts,
         "level_1_target": level_1_count,
         "level_2_target": level_2_count,
         "level_3_target": level_3_count,

@@ -123,7 +123,12 @@ def cluster_display_id(level: int, cluster_key: str | None) -> str | None:
         2: "SubCategory-1",
         3: "SubCategory-2",
     }.get(level)
-    return f"{prefix}-{suffix}" if prefix else cleaned_key
+    display_value = f"{prefix}-{suffix}" if prefix else cleaned_key
+    if cleaned_key.startswith("INC-"):
+        return f"Incident-{display_value}"
+    if cleaned_key.startswith("SCT-"):
+        return f"SC Task-{display_value}"
+    return display_value
 
 
 def classification_cluster_id(
