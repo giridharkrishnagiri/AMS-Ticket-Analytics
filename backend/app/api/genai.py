@@ -96,6 +96,7 @@ from app.services.genai.ticket_classification import (
 )
 from app.services.genai.ticket_classification import (
     TicketClassificationError,
+    analysis_range_slug,
     clear_ticket_classification,
     run_ticket_classification,
     ticket_classification_dump_csv,
@@ -343,9 +344,10 @@ def get_ticket_classification_summary(
     db: DbSession,
     project_id: UUID,
     analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
 ) -> GenAITicketClassificationSummaryResponse:
     try:
-        return ticket_classification_summary(db, project_id, analysis_month)
+        return ticket_classification_summary(db, project_id, analysis_month, analysis_month_to)
     except TicketClassificationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -358,9 +360,10 @@ def get_ticket_classification_pivot(
     db: DbSession,
     project_id: UUID,
     analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
 ) -> GenAITicketClassificationPivotResponse:
     try:
-        return ticket_classification_pivot(db, project_id, analysis_month)
+        return ticket_classification_pivot(db, project_id, analysis_month, analysis_month_to)
     except TicketClassificationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -370,12 +373,21 @@ def download_ticket_classification_dump(
     db: DbSession,
     project_id: UUID,
     analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
 ) -> Response:
     try:
-        csv_text = ticket_classification_dump_csv(db, project_id, analysis_month)
+        csv_text = ticket_classification_dump_csv(
+            db,
+            project_id,
+            analysis_month,
+            analysis_month_to,
+        )
     except TicketClassificationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    filename = f"genai_ticket_classification_dump_{analysis_month}.csv"
+    filename = (
+        "genai_ticket_classification_dump_"
+        f"{analysis_range_slug(analysis_month, analysis_month_to or analysis_month)}.csv"
+    )
     return Response(
         content=csv_text,
         media_type="text/csv; charset=utf-8",
@@ -391,6 +403,7 @@ def get_ticket_classification_usage_runs(
     db: DbSession,
     project_id: UUID,
     analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
 ) -> GenAITicketClassificationUsageRunsResponse:
     try:
@@ -398,6 +411,7 @@ def get_ticket_classification_usage_runs(
             db,
             project_id,
             analysis_month,
+            analysis_month_to=analysis_month_to,
             limit=limit,
         )
     except TicketClassificationError as exc:
@@ -442,6 +456,7 @@ def post_ticket_classification_clear(
             ServiceTicketClassificationClearRequest(
                 project_id=request.project_id,
                 analysis_month=request.analysis_month,
+                analysis_month_to=request.analysis_month_to,
             ),
         )
     except TicketClassificationError as exc:
@@ -456,6 +471,7 @@ def get_ticket_cluster_analysis_usage_runs(
     db: DbSession,
     project_id: UUID,
     analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
 ) -> GenAITicketClassificationUsageRunsResponse:
     try:
@@ -463,6 +479,7 @@ def get_ticket_cluster_analysis_usage_runs(
             db,
             project_id,
             analysis_month,
+            analysis_month_to=analysis_month_to,
             limit=limit,
         )
     except (TicketClassificationError, TicketClusteringError) as exc:
@@ -483,6 +500,7 @@ def post_ticket_cluster_analysis_run(
             ServiceTicketClusterRunRequest(
                 project_id=request.project_id,
                 analysis_month=request.analysis_month,
+                analysis_month_to=request.analysis_month_to,
                 force_reprocess=request.force_reprocess,
                 level_1_count=request.level_1_count,
                 level_2_count=request.level_2_count,
@@ -508,6 +526,7 @@ def post_ticket_cluster_analysis_clear(
             ServiceTicketClusterClearRequest(
                 project_id=request.project_id,
                 analysis_month=request.analysis_month,
+                analysis_month_to=request.analysis_month_to,
             ),
         )
     except (TicketClassificationError, TicketClusteringError) as exc:

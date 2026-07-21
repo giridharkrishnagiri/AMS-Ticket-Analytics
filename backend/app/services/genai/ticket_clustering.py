@@ -35,17 +35,20 @@ from app.services.genai.llm_client import (
 )
 from app.services.genai.prompt_service import get_prompt_template
 from app.services.genai.ticket_classification import (
+    analysis_range_label,
     clean_label,
     cluster_display_id,
     compact_text,
-    eligible_ticket_statement,
+    eligible_ticket_statement_for_month_range,
+    month_keys_in_range,
     normalize_confidence,
     project_customer_id,
     prompt_fingerprint,
+    ticket_analysis_month,
     ticket_classification_summary,
     ticket_payload,
     validate_config,
-    validate_month_key,
+    validate_month_range,
 )
 from app.services.genai.usage_log_service import create_usage_log
 
@@ -145,6 +148,7 @@ def log_progress(message: str, *args: Any) -> None:
 class TicketClusterRunRequest:
     project_id: UUID
     analysis_month: str
+    analysis_month_to: str | None = None
     force_reprocess: bool = False
     level_1_count: int | None = None
     level_2_count: int | None = None
@@ -156,6 +160,7 @@ class TicketClusterRunRequest:
 class TicketClusterClearRequest:
     project_id: UUID
     analysis_month: str
+    analysis_month_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -432,11 +437,13 @@ def ensure_ticket_embeddings(
     project_id: UUID,
     customer_id: UUID | None,
     month_key: str,
+    month_key_to: str,
     run_id: str,
     tickets: list[Ticket],
     config: GenAIConfig,
 ) -> tuple[list[TicketTextInput], int, int]:
     settings = get_settings()
+    range_label = analysis_range_label(month_key, month_key_to)
     embedding_model = provider_model_name(config)
     existing_rows = embedding_rows_by_key(db, project_id, tickets, embedding_model)
     prepared_rows: list[tuple[Ticket, str, str, str, GenAITicketEmbedding | None]] = []
@@ -484,10 +491,12 @@ def ensure_ticket_embeddings(
             model_name=config.model_name,
             customer_id=customer_id,
             project_id=project_id,
-            question=f"{month_key}: {len(batch)} ticket embedding rows",
+            question=f"{range_label}: {len(batch)} ticket embedding rows",
             tools_used_json={
                 "run_id": run_id,
                 "analysis_month": month_key,
+                "analysis_month_from": month_key,
+                "analysis_month_to": month_key_to,
                 "ticket_count": len(batch),
                 "embedding_model": embedding_model,
                 "text_version": EMBEDDING_TEXT_VERSION,
@@ -904,6 +913,7 @@ def label_cluster_level(
     project_id: UUID,
     customer_id: UUID | None,
     month_key: str,
+    month_key_to: str,
     run_id: str,
     level: int,
     clusters: dict[str, ClusterInfo],
@@ -914,6 +924,7 @@ def label_cluster_level(
     config: GenAIConfig,
 ) -> int:
     settings = get_settings()
+    range_label = analysis_range_label(month_key, month_key_to)
     batch_size = clamp_positive(
         settings.genai_ticket_cluster_label_batch_size,
         15,
@@ -983,10 +994,12 @@ def label_cluster_level(
             model_name=config.model_name,
             customer_id=customer_id,
             project_id=project_id,
-            question=f"{month_key}: label {len(batch)} level {level} clusters",
+            question=f"{range_label}: label {len(batch)} level {level} clusters",
             tools_used_json={
                 "run_id": run_id,
                 "analysis_month": month_key,
+                "analysis_month_from": month_key,
+                "analysis_month_to": month_key_to,
                 "cluster_level": level,
                 "cluster_count": len(batch),
                 "ticket_count": batch_ticket_count if level == 3 else 0,
@@ -1018,10 +1031,12 @@ def label_cluster_level(
                     model_name=config.model_name,
                     customer_id=customer_id,
                     project_id=project_id,
-                    question=f"{month_key}: parse level {level} cluster labels",
+                    question=f"{range_label}: parse level {level} cluster labels",
                     tools_used_json={
                         "run_id": run_id,
                         "analysis_month": month_key,
+                        "analysis_month_from": month_key,
+                        "analysis_month_to": month_key_to,
                         "cluster_level": level,
                         "cluster_count": len(batch),
                         "ticket_count": batch_ticket_count if level == 3 else 0,
@@ -1157,7 +1172,7 @@ def save_ticket_assignments(
     *,
     project_id: UUID,
     customer_id: UUID | None,
-    month_key: str,
+    month_keys: list[str],
     run_id: str,
     inputs: list[TicketTextInput],
     clusters_by_level: dict[int, dict[str, ClusterInfo]],
@@ -1169,7 +1184,7 @@ def save_ticket_assignments(
     db.execute(
         delete(GenAITicketClassification).where(
             GenAITicketClassification.project_id == project_id,
-            GenAITicketClassification.analysis_month == month_key,
+            GenAITicketClassification.analysis_month.in_(month_keys),
         ),
     )
     l3_by_ticket_index: dict[int, ClusterInfo] = {}
@@ -1182,6 +1197,7 @@ def save_ticket_assignments(
         l2 = clusters_by_level[2][l3.parent_key] if l3.parent_key else None
         l1 = clusters_by_level[1][l2.parent_key] if l2 and l2.parent_key else None
         ticket = ticket_input.ticket
+        row_month_key = ticket_analysis_month(ticket)
         confidence_values = [
             value
             for value in (
@@ -1200,7 +1216,7 @@ def save_ticket_assignments(
                 project_id=project_id,
                 ticket_number=ticket.ticket_number,
                 ticket_type=ticket.ticket_type,
-                analysis_month=month_key,
+                analysis_month=row_month_key,
                 input_hash=classification_input_hash(
                     ticket_input,
                     run_metadata=run_metadata,
@@ -1222,6 +1238,7 @@ def save_ticket_assignments(
                     **run_metadata,
                     "run_id": run_id,
                     "analysis_mode": "cluster",
+                    "ticket_analysis_month": row_month_key,
                     "cluster_level_1": l1.key if l1 else None,
                     "cluster_level_2": l2.key if l2 else None,
                     "cluster_level_3": l3.key,
@@ -1247,9 +1264,22 @@ def _sum_optional(values: list[int | float | None]) -> int | float | None:
     return sum(present_values)
 
 
+def _metadata_matches_analysis_range(
+    metadata: dict[str, Any],
+    start_month: str,
+    end_month: str,
+) -> bool:
+    metadata_start_month = str(
+        metadata.get("analysis_month_from") or metadata.get("analysis_month") or "",
+    )
+    metadata_end_month = str(metadata.get("analysis_month_to") or metadata_start_month)
+    return metadata_start_month == start_month and metadata_end_month == end_month
+
+
 def _cluster_usage_run_from_logs(
     project_id: UUID,
-    month_key: str,
+    start_month: str,
+    end_month: str,
     run_id: str,
     logs: list[GenAIUsageLog],
 ) -> dict[str, Any]:
@@ -1291,7 +1321,9 @@ def _cluster_usage_run_from_logs(
     return {
         "run_id": run_id,
         "project_id": project_id,
-        "analysis_month": month_key,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
         "model_name": ordered_logs[-1].model_name if ordered_logs else None,
         "provider": ordered_logs[-1].provider if ordered_logs else None,
         "prompt_tokens": int(prompt_tokens) if prompt_tokens is not None else None,
@@ -1325,8 +1357,9 @@ def ticket_cluster_usage_run(
     project_id: UUID,
     analysis_month: str,
     run_id: str,
+    analysis_month_to: str | None = None,
 ) -> dict[str, Any] | None:
-    month_key = validate_month_key(analysis_month)
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
     rows = db.execute(
         select(GenAIUsageLog)
         .where(
@@ -1345,12 +1378,12 @@ def ticket_cluster_usage_run(
     logs = [
         row
         for row in rows
-        if _metadata_from_usage_log(row).get("analysis_month") == month_key
-        and _metadata_from_usage_log(row).get("run_id") == run_id
+        if (metadata := _metadata_from_usage_log(row)).get("run_id") == run_id
+        and _metadata_matches_analysis_range(metadata, start_month, end_month)
     ]
     if not logs:
         return None
-    return _cluster_usage_run_from_logs(project_id, month_key, run_id, logs)
+    return _cluster_usage_run_from_logs(project_id, start_month, end_month, run_id, logs)
 
 
 def ticket_cluster_usage_runs(
@@ -1358,9 +1391,10 @@ def ticket_cluster_usage_runs(
     project_id: UUID,
     analysis_month: str,
     *,
+    analysis_month_to: str | None = None,
     limit: int = 10,
 ) -> dict[str, Any]:
-    month_key = validate_month_key(analysis_month)
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
     rows = db.execute(
         select(GenAIUsageLog)
         .where(
@@ -1379,14 +1413,14 @@ def ticket_cluster_usage_runs(
     grouped_logs: dict[str, list[GenAIUsageLog]] = {}
     for row in rows:
         metadata = _metadata_from_usage_log(row)
-        if metadata.get("analysis_month") != month_key:
+        if not _metadata_matches_analysis_range(metadata, start_month, end_month):
             continue
         run_id = str(metadata.get("run_id") or "")
         if not run_id:
             continue
         grouped_logs.setdefault(run_id, []).append(row)
     usage_runs = [
-        _cluster_usage_run_from_logs(project_id, month_key, grouped_run_id, logs)
+        _cluster_usage_run_from_logs(project_id, start_month, end_month, grouped_run_id, logs)
         for grouped_run_id, logs in grouped_logs.items()
     ]
     usage_runs.sort(
@@ -1395,7 +1429,9 @@ def ticket_cluster_usage_runs(
     )
     return {
         "project_id": project_id,
-        "analysis_month": month_key,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
         "runs": usage_runs[: max(1, min(limit, 50))],
     }
 
@@ -1404,23 +1440,29 @@ def clear_ticket_cluster_analysis(
     db: Session,
     request: TicketClusterClearRequest,
 ) -> dict[str, Any]:
-    month_key = validate_month_key(request.analysis_month)
+    start_month, end_month = validate_month_range(
+        request.analysis_month,
+        request.analysis_month_to,
+    )
+    month_keys = month_keys_in_range(start_month, end_month)
     deleted_classification_count = db.execute(
         delete(GenAITicketClassification).where(
             GenAITicketClassification.project_id == request.project_id,
-            GenAITicketClassification.analysis_month == month_key,
+            GenAITicketClassification.analysis_month.in_(month_keys),
         ),
     ).rowcount
     deleted_cluster_label_count = db.execute(
         delete(GenAITicketClusterLabel).where(
             GenAITicketClusterLabel.project_id == request.project_id,
-            GenAITicketClusterLabel.analysis_month == month_key,
+            GenAITicketClusterLabel.analysis_month.in_(month_keys),
         ),
     ).rowcount
     db.commit()
     return {
         "project_id": request.project_id,
-        "analysis_month": month_key,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
         "deleted_classification_count": int(deleted_classification_count or 0),
         "deleted_cluster_label_count": int(deleted_cluster_label_count or 0),
     }
@@ -1431,13 +1473,18 @@ def run_ticket_cluster_analysis(
     request: TicketClusterRunRequest,
 ) -> dict[str, Any]:
     run_started_at = time.perf_counter()
-    month_key = validate_month_key(request.analysis_month)
+    month_key, month_key_to = validate_month_range(
+        request.analysis_month,
+        request.analysis_month_to,
+    )
+    month_keys = month_keys_in_range(month_key, month_key_to)
+    range_label = analysis_range_label(month_key, month_key_to)
     run_id = (request.run_id or "").strip() or str(uuid4())
     log_progress(
-        "run %s started for project %s month %s",
+        "run %s started for project %s period %s",
         run_id,
         request.project_id,
-        month_key,
+        range_label,
     )
     customer_id = project_customer_id(db, request.project_id)
     base_config = get_or_create_config(db)
@@ -1465,10 +1512,17 @@ def run_ticket_cluster_analysis(
             TicketClusterClearRequest(
                 project_id=request.project_id,
                 analysis_month=month_key,
+                analysis_month_to=month_key_to,
             ),
         )
 
-    tickets = db.execute(eligible_ticket_statement(request.project_id, month_key)).scalars().all()
+    tickets = db.execute(
+        eligible_ticket_statement_for_month_range(
+            request.project_id,
+            month_key,
+            month_key_to,
+        ),
+    ).scalars().all()
     eligible_count = len(tickets)
     log_progress("run %s eligible ticket selection complete: %s tickets", run_id, eligible_count)
     if not tickets:
@@ -1476,6 +1530,8 @@ def run_ticket_cluster_analysis(
         return {
             "project_id": request.project_id,
             "analysis_month": month_key,
+            "analysis_month_from": month_key,
+            "analysis_month_to": month_key_to,
             "run_id": run_id,
             "eligible_ticket_count": 0,
             "embedded_ticket_count": 0,
@@ -1487,8 +1543,19 @@ def run_ticket_cluster_analysis(
             "labeled_cluster_count": 0,
             "assigned_ticket_count": 0,
             "failed_count": 0,
-            "summary": ticket_classification_summary(db, request.project_id, month_key),
-            "usage_run": ticket_cluster_usage_run(db, request.project_id, month_key, run_id),
+            "summary": ticket_classification_summary(
+                db,
+                request.project_id,
+                month_key,
+                month_key_to,
+            ),
+            "usage_run": ticket_cluster_usage_run(
+                db,
+                request.project_id,
+                month_key,
+                run_id,
+                month_key_to,
+            ),
         }
 
     stage_started_at = time.perf_counter()
@@ -1497,6 +1564,7 @@ def run_ticket_cluster_analysis(
         project_id=request.project_id,
         customer_id=customer_id,
         month_key=month_key,
+        month_key_to=month_key_to,
         run_id=run_id,
         tickets=tickets,
         config=embedding_config,
@@ -1577,6 +1645,7 @@ def run_ticket_cluster_analysis(
         project_id=request.project_id,
         customer_id=customer_id,
         month_key=month_key,
+        month_key_to=month_key_to,
         run_id=run_id,
         level=3,
         clusters=level_3_clusters,
@@ -1591,6 +1660,7 @@ def run_ticket_cluster_analysis(
         project_id=request.project_id,
         customer_id=customer_id,
         month_key=month_key,
+        month_key_to=month_key_to,
         run_id=run_id,
         level=2,
         clusters=level_2_clusters,
@@ -1605,6 +1675,7 @@ def run_ticket_cluster_analysis(
         project_id=request.project_id,
         customer_id=customer_id,
         month_key=month_key,
+        month_key_to=month_key_to,
         run_id=run_id,
         level=1,
         clusters=level_1_clusters,
@@ -1616,6 +1687,10 @@ def run_ticket_cluster_analysis(
     )
 
     run_metadata = {
+        "analysis_month": month_key,
+        "analysis_month_from": month_key,
+        "analysis_month_to": month_key_to,
+        "analysis_range": range_label,
         "embedding_model": provider_model_name(embedding_config),
         "label_model": provider_model_name(label_config),
         "algorithm": "kmeans_hierarchical_centroids",
@@ -1643,7 +1718,7 @@ def run_ticket_cluster_analysis(
         db,
         project_id=request.project_id,
         customer_id=customer_id,
-        month_key=month_key,
+        month_keys=month_keys,
         run_id=run_id,
         inputs=inputs,
         clusters_by_level=clusters_by_level,
@@ -1663,7 +1738,13 @@ def run_ticket_cluster_analysis(
         failed_count,
         time.perf_counter() - run_started_at,
     )
-    usage_run = ticket_cluster_usage_run(db, request.project_id, month_key, run_id)
+    usage_run = ticket_cluster_usage_run(
+        db,
+        request.project_id,
+        month_key,
+        run_id,
+        month_key_to,
+    )
     if usage_run:
         log_progress(
             (
@@ -1681,6 +1762,8 @@ def run_ticket_cluster_analysis(
     return {
         "project_id": request.project_id,
         "analysis_month": month_key,
+        "analysis_month_from": month_key,
+        "analysis_month_to": month_key_to,
         "run_id": run_id,
         "eligible_ticket_count": eligible_count,
         "embedded_ticket_count": len(inputs),
@@ -1692,6 +1775,11 @@ def run_ticket_cluster_analysis(
         "labeled_cluster_count": labeled_cluster_count,
         "assigned_ticket_count": assigned_ticket_count,
         "failed_count": failed_count,
-        "summary": ticket_classification_summary(db, request.project_id, month_key),
+        "summary": ticket_classification_summary(
+            db,
+            request.project_id,
+            month_key,
+            month_key_to,
+        ),
         "usage_run": usage_run,
     }

@@ -11,6 +11,8 @@ export type GenAITicketClassificationUsageRun = {
   run_id: string;
   project_id: string;
   analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
   model_name: string | null;
   provider: string | null;
   prompt_tokens: number | null;
@@ -39,12 +41,16 @@ export type GenAITicketClassificationUsageRun = {
 export type GenAITicketClassificationUsageRuns = {
   project_id: string;
   analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
   runs: GenAITicketClassificationUsageRun[];
 };
 
 export type GenAITicketClassificationSummary = {
   project_id: string;
   analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
   eligible_ticket_count: number;
   analyzed_ticket_count: number;
   error_ticket_count: number;
@@ -69,6 +75,8 @@ export type GenAITicketClassificationPivotRow = {
 export type GenAITicketClassificationPivot = {
   project_id: string;
   analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
   rows: GenAITicketClassificationPivotRow[];
 };
 
@@ -103,6 +111,8 @@ export type GenAIWorkbenchSettings = {
 export type GenAITicketClusterRunResponse = {
   project_id: string;
   analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
   run_id: string;
   eligible_ticket_count: number;
   embedded_ticket_count: number;
@@ -121,18 +131,43 @@ export type GenAITicketClusterRunResponse = {
 export type GenAITicketClassificationClearResponse = {
   project_id: string;
   analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
   deleted_count: number;
 };
 
 export type GenAITicketClusterClearResponse = {
   project_id: string;
   analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
   deleted_classification_count: number;
   deleted_cluster_label_count: number;
 };
 
 function queryString(params: Record<string, string>): string {
   return new URLSearchParams(params).toString();
+}
+
+function monthRangeParams(
+  projectId: string,
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
+): Record<string, string> {
+  const params: Record<string, string> = {
+    project_id: projectId,
+    analysis_month: analysisMonthFrom,
+  };
+  if (analysisMonthTo && analysisMonthTo !== analysisMonthFrom) {
+    params.analysis_month_to = analysisMonthTo;
+  }
+  return params;
+}
+
+function monthRangeSlug(analysisMonthFrom: string, analysisMonthTo?: string): string {
+  return analysisMonthTo && analysisMonthTo !== analysisMonthFrom
+    ? `${analysisMonthFrom}_to_${analysisMonthTo}`
+    : analysisMonthFrom;
 }
 
 function getDownloadFilename(contentDisposition: string | null): string | null {
@@ -153,36 +188,36 @@ export function getGenAIWorkbenchSettings(): Promise<GenAIWorkbenchSettings> {
 
 export function getTicketClassificationSummary(
   projectId: string,
-  analysisMonth: string
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
 ): Promise<GenAITicketClassificationSummary> {
   return requestJson<GenAITicketClassificationSummary>(
-    `/genai/ticket-classification/summary?${queryString({
-      project_id: projectId,
-      analysis_month: analysisMonth,
-    })}`
+    `/genai/ticket-classification/summary?${queryString(
+      monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo)
+    )}`
   );
 }
 
 export function getTicketClassificationPivot(
   projectId: string,
-  analysisMonth: string
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
 ): Promise<GenAITicketClassificationPivot> {
   return requestJson<GenAITicketClassificationPivot>(
-    `/genai/ticket-classification/pivot?${queryString({
-      project_id: projectId,
-      analysis_month: analysisMonth,
-    })}`
+    `/genai/ticket-classification/pivot?${queryString(
+      monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo)
+    )}`
   );
 }
 
 export function getTicketClassificationUsageRuns(
   projectId: string,
-  analysisMonth: string
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
 ): Promise<GenAITicketClassificationUsageRuns> {
   return requestJson<GenAITicketClassificationUsageRuns>(
     `/genai/ticket-classification/usage-runs?${queryString({
-      project_id: projectId,
-      analysis_month: analysisMonth,
+      ...monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo),
       limit: "10",
     })}`
   );
@@ -190,13 +225,13 @@ export function getTicketClassificationUsageRuns(
 
 export async function downloadTicketClassificationDump(
   projectId: string,
-  analysisMonth: string
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
 ): Promise<{ blob: Blob; filename: string }> {
   const response = await fetch(
-    `${apiBaseUrl}/genai/ticket-classification/ticket-dump?${queryString({
-      project_id: projectId,
-      analysis_month: analysisMonth,
-    })}`
+    `${apiBaseUrl}/genai/ticket-classification/ticket-dump?${queryString(
+      monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo)
+    )}`
   );
 
   if (!response.ok) {
@@ -216,18 +251,21 @@ export async function downloadTicketClassificationDump(
     blob: await response.blob(),
     filename:
       getDownloadFilename(response.headers.get("Content-Disposition")) ??
-      `genai_ticket_classification_dump_${analysisMonth}.csv`,
+      `genai_ticket_classification_dump_${monthRangeSlug(
+        analysisMonthFrom,
+        analysisMonthTo
+      )}.csv`,
   };
 }
 
 export function getTicketClusterUsageRuns(
   projectId: string,
-  analysisMonth: string
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
 ): Promise<GenAITicketClassificationUsageRuns> {
   return requestJson<GenAITicketClassificationUsageRuns>(
     `/genai/ticket-cluster-analysis/usage-runs?${queryString({
-      project_id: projectId,
-      analysis_month: analysisMonth,
+      ...monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo),
       limit: "10",
     })}`
   );
@@ -251,6 +289,7 @@ export function runTicketClassificationEnrichment(payload: {
 export function runTicketClusterAnalysis(payload: {
   project_id: string;
   analysis_month: string;
+  analysis_month_to?: string;
   force_reprocess: boolean;
   run_id?: string;
 }): Promise<GenAITicketClusterRunResponse> {
@@ -264,6 +303,7 @@ export function runTicketClusterAnalysis(payload: {
 export function clearTicketClassificationAnalysis(payload: {
   project_id: string;
   analysis_month: string;
+  analysis_month_to?: string;
 }): Promise<GenAITicketClassificationClearResponse> {
   return requestJson<GenAITicketClassificationClearResponse>("/genai/ticket-classification/clear", {
     method: "POST",
@@ -275,6 +315,7 @@ export function clearTicketClassificationAnalysis(payload: {
 export function clearTicketClusterAnalysis(payload: {
   project_id: string;
   analysis_month: string;
+  analysis_month_to?: string;
 }): Promise<GenAITicketClusterClearResponse> {
   return requestJson<GenAITicketClusterClearResponse>("/genai/ticket-cluster-analysis/clear", {
     method: "POST",

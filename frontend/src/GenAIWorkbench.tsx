@@ -23,9 +23,9 @@ import type { ProjectOption } from "./api/projects";
 import CustomerSelector from "./CustomerSelector";
 import { formatDisplayDateTime } from "./utils/dateFormat";
 
-const clearConfirmation = "Clear GenAI classification analysis for this month?";
+const clearConfirmation = "Clear GenAI classification analysis for this selected period?";
 const forceReprocessConfirmation =
-  "Force reprocess will clear the existing analysis for this month before starting a new run. Continue?";
+  "Force reprocess will clear the existing analysis for this selected period before starting a new run. Continue?";
 const batchesPerRequest = 1;
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0): string {
@@ -89,7 +89,8 @@ function SummaryMetric({
 function GenAIWorkbench() {
   const [projectId, setProjectId] = useState("");
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
-  const [analysisMonth, setAnalysisMonth] = useState("2026-05");
+  const [analysisMonthFrom, setAnalysisMonthFrom] = useState("2026-05");
+  const [analysisMonthTo, setAnalysisMonthTo] = useState("2026-05");
   const [batchSize, setBatchSize] = useState(10);
   const [forceReprocess, setForceReprocess] = useState(false);
   const [workbenchSettings, setWorkbenchSettings] = useState<GenAIWorkbenchSettings | null>(null);
@@ -103,11 +104,16 @@ function GenAIWorkbench() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const canAct = Boolean(projectId.trim()) && Boolean(analysisMonth.trim());
+  const isMonthRangeValid =
+    Boolean(analysisMonthFrom.trim()) &&
+    Boolean(analysisMonthTo.trim()) &&
+    analysisMonthFrom <= analysisMonthTo;
+  const canAct = Boolean(projectId.trim()) && isMonthRangeValid;
   const hasAnalyzedRows = (summary?.analyzed_ticket_count ?? 0) > 0;
   const classificationButtonEnabled =
     workbenchSettings?.ticket_classification_button_enabled ?? false;
   const clusterButtonEnabled = workbenchSettings?.ticket_cluster_analysis_button_enabled ?? true;
+  const canRunTicketClassification = canAct && analysisMonthFrom === analysisMonthTo;
   const usageRunsLoader = clusterButtonEnabled
     ? getTicketClusterUsageRuns
     : getTicketClassificationUsageRuns;
@@ -143,7 +149,7 @@ function GenAIWorkbench() {
   }, []);
 
   const loadSummaryAndPivot = useCallback(async () => {
-    if (!projectId || !analysisMonth) {
+    if (!projectId || !isMonthRangeValid) {
       setSummary(null);
       setPivot(null);
       setUsageRuns([]);
@@ -153,9 +159,9 @@ function GenAIWorkbench() {
     setError(null);
     try {
       const [nextSummary, nextPivot, nextUsageRuns] = await Promise.all([
-        getTicketClassificationSummary(projectId, analysisMonth),
-        getTicketClassificationPivot(projectId, analysisMonth),
-        usageRunsLoader(projectId, analysisMonth),
+        getTicketClassificationSummary(projectId, analysisMonthFrom, analysisMonthTo),
+        getTicketClassificationPivot(projectId, analysisMonthFrom, analysisMonthTo),
+        usageRunsLoader(projectId, analysisMonthFrom, analysisMonthTo),
       ]);
       setSummary(nextSummary);
       setPivot(nextPivot);
@@ -168,7 +174,7 @@ function GenAIWorkbench() {
     } finally {
       setIsLoading(false);
     }
-  }, [analysisMonth, projectId, usageRunsLoader]);
+  }, [analysisMonthFrom, analysisMonthTo, isMonthRangeValid, projectId, usageRunsLoader]);
 
   useEffect(() => {
     void loadSummaryAndPivot();
@@ -184,7 +190,10 @@ function GenAIWorkbench() {
   }
 
   async function handleRun() {
-    if (!canAct) {
+    if (!canRunTicketClassification) {
+      if (analysisMonthFrom !== analysisMonthTo) {
+        setError("Run GenAI Analysis supports one closed month at a time. Use cluster-based analysis for a period.");
+      }
       return;
     }
     if (forceReprocess && !window.confirm(forceReprocessConfirmation)) {
@@ -197,7 +206,7 @@ function GenAIWorkbench() {
       if (forceReprocess) {
         const clearResult = await clearTicketClassificationAnalysis({
           project_id: projectId,
-          analysis_month: analysisMonth,
+          analysis_month: analysisMonthFrom,
         });
         setMessage(`Cleared ${formatNumber(clearResult.deleted_count)} rows. Starting analysis...`);
       }
@@ -213,7 +222,7 @@ function GenAIWorkbench() {
       while (true) {
         const result = await runTicketClassificationEnrichment({
           project_id: projectId,
-          analysis_month: analysisMonth,
+          analysis_month: analysisMonthFrom,
           batch_size: batchSize,
           batch_limit: batchesPerRequest,
           run_id: runId,
@@ -255,8 +264,8 @@ function GenAIWorkbench() {
       }
 
       const [nextPivot, nextUsageRuns] = await Promise.all([
-        getTicketClassificationPivot(projectId, analysisMonth),
-        getTicketClassificationUsageRuns(projectId, analysisMonth),
+        getTicketClassificationPivot(projectId, analysisMonthFrom, analysisMonthTo),
+        getTicketClassificationUsageRuns(projectId, analysisMonthFrom, analysisMonthTo),
       ]);
       setPivot(nextPivot);
       setUsageRuns(nextUsageRuns.runs);
@@ -291,7 +300,8 @@ function GenAIWorkbench() {
     try {
       const result: GenAITicketClusterRunResponse = await runTicketClusterAnalysis({
         project_id: projectId,
-        analysis_month: analysisMonth,
+        analysis_month: analysisMonthFrom,
+        analysis_month_to: analysisMonthTo,
         force_reprocess: forceReprocess,
         run_id: createRunId(),
       });
@@ -304,8 +314,8 @@ function GenAIWorkbench() {
       }
 
       const [nextPivot, nextUsageRuns] = await Promise.all([
-        getTicketClassificationPivot(projectId, analysisMonth),
-        getTicketClusterUsageRuns(projectId, analysisMonth),
+        getTicketClassificationPivot(projectId, analysisMonthFrom, analysisMonthTo),
+        getTicketClusterUsageRuns(projectId, analysisMonthFrom, analysisMonthTo),
       ]);
       setPivot(nextPivot);
       setUsageRuns(nextUsageRuns.runs);
@@ -342,7 +352,8 @@ function GenAIWorkbench() {
       if (clusterButtonEnabled) {
         const result = await clearTicketClusterAnalysis({
           project_id: projectId,
-          analysis_month: analysisMonth,
+          analysis_month: analysisMonthFrom,
+          analysis_month_to: analysisMonthTo,
         });
         setMessage(
           `Cleared ${formatNumber(
@@ -352,7 +363,8 @@ function GenAIWorkbench() {
       } else {
         const result = await clearTicketClassificationAnalysis({
           project_id: projectId,
-          analysis_month: analysisMonth,
+          analysis_month: analysisMonthFrom,
+          analysis_month_to: analysisMonthTo,
         });
         setMessage(`Cleared ${formatNumber(result.deleted_count)} analysis rows.`);
       }
@@ -376,7 +388,11 @@ function GenAIWorkbench() {
     setMessage(null);
     setError(null);
     try {
-      const { blob, filename } = await downloadTicketClassificationDump(projectId, analysisMonth);
+      const { blob, filename } = await downloadTicketClassificationDump(
+        projectId,
+        analysisMonthFrom,
+        analysisMonthTo
+      );
       downloadBlob(blob, filename);
       setMessage("Ticket classification dump downloaded.");
     } catch (requestError) {
@@ -415,11 +431,25 @@ function GenAIWorkbench() {
             onProjectChange={setSelectedProject}
           />
           <label>
-            <span>Closed Month</span>
+            <span>From Closed Month</span>
             <input
               type="month"
-              value={analysisMonth}
-              onChange={(event) => setAnalysisMonth(event.target.value)}
+              value={analysisMonthFrom}
+              onChange={(event) => {
+                const nextMonth = event.target.value;
+                setAnalysisMonthFrom(nextMonth);
+                if (analysisMonthTo < nextMonth) {
+                  setAnalysisMonthTo(nextMonth);
+                }
+              }}
+            />
+          </label>
+          <label>
+            <span>To Closed Month</span>
+            <input
+              type="month"
+              value={analysisMonthTo}
+              onChange={(event) => setAnalysisMonthTo(event.target.value)}
             />
           </label>
           <label>
@@ -447,7 +477,17 @@ function GenAIWorkbench() {
           <button
             className="primary-button"
             type="button"
-            disabled={!canAct || isRunning || isClearing || !classificationButtonEnabled}
+            disabled={
+              !canRunTicketClassification ||
+              isRunning ||
+              isClearing ||
+              !classificationButtonEnabled
+            }
+            title={
+              analysisMonthFrom === analysisMonthTo
+                ? undefined
+                : "Run GenAI Analysis supports one closed month at a time"
+            }
             onClick={() => void handleRun()}
           >
             {isRunning && classificationButtonEnabled
@@ -485,6 +525,11 @@ function GenAIWorkbench() {
             {formatNumber(workbenchSettings.cluster_level_2_count)}, L3{" "}
             {formatNumber(workbenchSettings.cluster_level_3_count)}. Embedding model:{" "}
             {workbenchSettings.cluster_embedding_model_name}.
+          </p>
+        ) : null}
+        {!isMonthRangeValid ? (
+          <p className="error-text summary-block">
+            To Closed Month must be same as or later than From Closed Month.
           </p>
         ) : null}
         {message ? <p className="success-text summary-block">{message}</p> : null}
@@ -542,7 +587,7 @@ function GenAIWorkbench() {
             <tbody>
               {(pivot?.rows ?? []).length === 0 ? (
                 <tr>
-                  <td colSpan={6}>No classification rows for the selected month.</td>
+                  <td colSpan={6}>No classification rows for the selected period.</td>
                 </tr>
               ) : (
                 pivot?.rows.map((row) => (
@@ -595,7 +640,7 @@ function GenAIWorkbench() {
             <tbody>
               {usageRuns.length === 0 ? (
                 <tr>
-                  <td colSpan={14}>No enrichment usage rows for the selected month.</td>
+                  <td colSpan={14}>No enrichment usage rows for the selected period.</td>
                 </tr>
               ) : (
                 usageRuns.map((run) => {

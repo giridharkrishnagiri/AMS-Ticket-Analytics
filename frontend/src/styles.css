@@ -2933,7 +2933,9 @@ h2 {
 
 .workbench-controls {
   display: grid;
-  grid-template-columns: minmax(260px, 1.5fr) minmax(150px, 0.8fr) minmax(120px, 0.6fr) auto;
+  grid-template-columns:
+    minmax(260px, 1.4fr) minmax(150px, 0.7fr) minmax(150px, 0.7fr)
+    minmax(120px, 0.5fr) auto;
   align-items: end;
   gap: 14px;
 }
@@ -2950,7 +2952,10 @@ h2 {
 }
 
 .workbench-controls .checkbox-label {
+  display: inline-flex;
+  align-items: center;
   align-self: center;
+  gap: 8px;
   margin-top: 0;
   white-space: nowrap;
 }

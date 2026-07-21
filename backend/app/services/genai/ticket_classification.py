@@ -80,6 +80,7 @@ class TicketClassificationRunRequest:
 class TicketClassificationClearRequest:
     project_id: UUID
     analysis_month: str
+    analysis_month_to: str | None = None
 
 
 def validate_month_key(month_key: str) -> str:
@@ -87,6 +88,17 @@ def validate_month_key(month_key: str) -> str:
     if not MONTH_PATTERN.match(normalized):
         raise TicketClassificationError("Analysis month must be in YYYY-MM format.")
     return normalized
+
+
+def validate_month_range(
+    analysis_month: str,
+    analysis_month_to: str | None = None,
+) -> tuple[str, str]:
+    start_month = validate_month_key(analysis_month)
+    end_month = validate_month_key(analysis_month_to) if analysis_month_to else start_month
+    if end_month < start_month:
+        raise TicketClassificationError("To month must be the same as or later than From month.")
+    return start_month, end_month
 
 
 def month_bounds(month_key: str) -> tuple[datetime, datetime]:
@@ -98,6 +110,56 @@ def month_bounds(month_key: str) -> tuple[datetime, datetime]:
     else:
         end = datetime(year, month + 1, 1, tzinfo=UTC)
     return start, end
+
+
+def month_range_bounds(start_month: str, end_month: str) -> tuple[datetime, datetime]:
+    start, _ = month_bounds(start_month)
+    _, end = month_bounds(end_month)
+    return start, end
+
+
+def month_keys_in_range(start_month: str, end_month: str) -> list[str]:
+    start_month, end_month = validate_month_range(start_month, end_month)
+    year, month = (int(part) for part in start_month.split("-"))
+    end_year, end_month_number = (int(part) for part in end_month.split("-"))
+    keys: list[str] = []
+    while (year, month) <= (end_year, end_month_number):
+        keys.append(f"{year:04d}-{month:02d}")
+        if month == 12:
+            year += 1
+            month = 1
+        else:
+            month += 1
+    return keys
+
+
+def analysis_range_label(start_month: str, end_month: str) -> str:
+    return start_month if start_month == end_month else f"{start_month} to {end_month}"
+
+
+def analysis_range_slug(start_month: str, end_month: str) -> str:
+    return start_month if start_month == end_month else f"{start_month}_to_{end_month}"
+
+
+def ticket_completion_datetime(ticket: Ticket) -> datetime | None:
+    ticket_type = (ticket.ticket_type or "").upper()
+    if ticket_type == "INCIDENT":
+        return ticket.resolved_at
+    if ticket_type == "SERVICE_CATALOG_TASK":
+        return ticket.closed_at
+    return ticket.resolved_at or ticket.closed_at
+
+
+def ticket_analysis_month(ticket: Ticket) -> str:
+    completed_at = ticket_completion_datetime(ticket)
+    if completed_at is None:
+        raise TicketClassificationError(
+            f"Ticket {ticket.ticket_number} does not have a completion date.",
+        )
+    if completed_at.tzinfo is None:
+        completed_at = completed_at.replace(tzinfo=UTC)
+    completed_at = completed_at.astimezone(UTC)
+    return f"{completed_at.year:04d}-{completed_at.month:02d}"
 
 
 def clamp_batch_size(value: int | None) -> int:
@@ -254,8 +316,12 @@ def input_hash_for_ticket(
     return hashlib.sha256(normalized_payload.encode("utf-8")).hexdigest()
 
 
-def eligible_ticket_statement(project_id: UUID, month_key: str) -> Select[tuple[Ticket]]:
-    start, end = month_bounds(month_key)
+def eligible_ticket_statement_for_month_range(
+    project_id: UUID,
+    start_month: str,
+    end_month: str,
+) -> Select[tuple[Ticket]]:
+    start, end = month_range_bounds(start_month, end_month)
     completed_at = ticket_completion_datetime_expression(Ticket)
     return (
         select(Ticket)
@@ -271,13 +337,26 @@ def eligible_ticket_statement(project_id: UUID, month_key: str) -> Select[tuple[
     )
 
 
-def eligible_ticket_count(db: Session, project_id: UUID, month_key: str) -> int:
+def eligible_ticket_statement(project_id: UUID, month_key: str) -> Select[tuple[Ticket]]:
+    return eligible_ticket_statement_for_month_range(project_id, month_key, month_key)
+
+
+def eligible_ticket_count_for_month_range(
+    db: Session,
+    project_id: UUID,
+    start_month: str,
+    end_month: str,
+) -> int:
     statement = (
-        eligible_ticket_statement(project_id, month_key)
+        eligible_ticket_statement_for_month_range(project_id, start_month, end_month)
         .order_by(None)
         .with_only_columns(func.count())
     )
     return int(db.execute(statement).scalar_one() or 0)
+
+
+def eligible_ticket_count(db: Session, project_id: UUID, month_key: str) -> int:
+    return eligible_ticket_count_for_month_range(db, project_id, month_key, month_key)
 
 
 def existing_rows_for_month(
@@ -285,10 +364,20 @@ def existing_rows_for_month(
     project_id: UUID,
     month_key: str,
 ) -> dict[str, GenAITicketClassification]:
+    return existing_rows_for_month_range(db, project_id, month_key, month_key)
+
+
+def existing_rows_for_month_range(
+    db: Session,
+    project_id: UUID,
+    start_month: str,
+    end_month: str,
+) -> dict[str, GenAITicketClassification]:
+    month_keys = month_keys_in_range(start_month, end_month)
     rows = db.execute(
         select(GenAITicketClassification).where(
             GenAITicketClassification.project_id == project_id,
-            GenAITicketClassification.analysis_month == month_key,
+            GenAITicketClassification.analysis_month.in_(month_keys),
         ),
     ).scalars()
     return {row.ticket_number: row for row in rows}
@@ -719,12 +808,19 @@ def ticket_classification_summary(
     db: Session,
     project_id: UUID,
     analysis_month: str,
+    analysis_month_to: str | None = None,
 ) -> dict[str, Any]:
-    month_key = validate_month_key(analysis_month)
-    eligible_count = eligible_ticket_count(db, project_id, month_key)
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
+    month_keys = month_keys_in_range(start_month, end_month)
+    eligible_count = eligible_ticket_count_for_month_range(
+        db,
+        project_id,
+        start_month,
+        end_month,
+    )
     base_filters = (
         GenAITicketClassification.project_id == project_id,
-        GenAITicketClassification.analysis_month == month_key,
+        GenAITicketClassification.analysis_month.in_(month_keys),
     )
     success_filters = (*base_filters, GenAITicketClassification.status == "success")
     totals = db.execute(
@@ -775,7 +871,9 @@ def ticket_classification_summary(
     }
     return {
         "project_id": project_id,
-        "analysis_month": month_key,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
         "eligible_ticket_count": eligible_count,
         "analyzed_ticket_count": int(totals[0] or 0),
         "error_ticket_count": int(totals[1] or 0),
@@ -793,8 +891,10 @@ def ticket_classification_pivot(
     db: Session,
     project_id: UUID,
     analysis_month: str,
+    analysis_month_to: str | None = None,
 ) -> dict[str, Any]:
-    month_key = validate_month_key(analysis_month)
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
+    month_keys = month_keys_in_range(start_month, end_month)
     rows = db.execute(
         select(
             GenAITicketClassification.genai_category,
@@ -810,7 +910,7 @@ def ticket_classification_pivot(
         )
         .where(
             GenAITicketClassification.project_id == project_id,
-            GenAITicketClassification.analysis_month == month_key,
+            GenAITicketClassification.analysis_month.in_(month_keys),
             GenAITicketClassification.status == "success",
         )
         .group_by(
@@ -826,7 +926,9 @@ def ticket_classification_pivot(
     ).all()
     return {
         "project_id": project_id,
-        "analysis_month": month_key,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
         "rows": [
             {
                 "genai_category": category,
@@ -860,13 +962,17 @@ def ticket_classification_dump_csv(
     db: Session,
     project_id: UUID,
     analysis_month: str,
+    analysis_month_to: str | None = None,
 ) -> str:
-    month_key = validate_month_key(analysis_month)
-    tickets = db.execute(eligible_ticket_statement(project_id, month_key)).scalars().all()
-    classification_rows = existing_rows_for_month(db, project_id, month_key)
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
+    range_label = analysis_range_label(start_month, end_month)
+    tickets = db.execute(
+        eligible_ticket_statement_for_month_range(project_id, start_month, end_month),
+    ).scalars().all()
+    classification_rows = existing_rows_for_month_range(db, project_id, start_month, end_month)
     if not classification_rows:
         raise TicketClassificationError(
-            f"No saved GenAI ticket classification rows exist for {month_key}. "
+            f"No saved GenAI ticket classification rows exist for {range_label}. "
             "Run cluster-based analysis or ticket classification enrichment before downloading "
             "the ticket dump.",
         )
@@ -947,6 +1053,20 @@ def _metadata_from_usage_log(row: GenAIUsageLog) -> dict[str, Any]:
     return row.tools_used_json if isinstance(row.tools_used_json, dict) else {}
 
 
+def _metadata_matches_analysis_range(
+    metadata: dict[str, Any],
+    start_month: str,
+    end_month: str,
+) -> bool:
+    metadata_start_month = str(
+        metadata.get("analysis_month_from") or metadata.get("analysis_month") or "",
+    )
+    metadata_end_month = str(
+        metadata.get("analysis_month_to") or metadata_start_month,
+    )
+    return metadata_start_month == start_month and metadata_end_month == end_month
+
+
 def _sum_optional(values: list[int | float | None]) -> int | float | None:
     present_values = [value for value in values if value is not None]
     if not present_values:
@@ -956,7 +1076,8 @@ def _sum_optional(values: list[int | float | None]) -> int | float | None:
 
 def _usage_run_from_logs(
     project_id: UUID,
-    month_key: str,
+    start_month: str,
+    end_month: str,
     run_id: str,
     logs: list[GenAIUsageLog],
 ) -> dict[str, Any]:
@@ -976,7 +1097,9 @@ def _usage_run_from_logs(
     return {
         "run_id": run_id,
         "project_id": project_id,
-        "analysis_month": month_key,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
         "model_name": ordered_logs[-1].model_name if ordered_logs else None,
         "provider": ordered_logs[-1].provider if ordered_logs else None,
         "prompt_tokens": int(prompt_tokens) if prompt_tokens is not None else None,
@@ -998,8 +1121,9 @@ def ticket_classification_usage_run(
     project_id: UUID,
     analysis_month: str,
     run_id: str,
+    analysis_month_to: str | None = None,
 ) -> dict[str, Any] | None:
-    month_key = validate_month_key(analysis_month)
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
     rows = db.execute(
         select(GenAIUsageLog)
         .where(
@@ -1012,12 +1136,12 @@ def ticket_classification_usage_run(
     logs = [
         row
         for row in rows
-        if _metadata_from_usage_log(row).get("analysis_month") == month_key
-        and _metadata_from_usage_log(row).get("run_id") == run_id
+        if (metadata := _metadata_from_usage_log(row)).get("run_id") == run_id
+        and _metadata_matches_analysis_range(metadata, start_month, end_month)
     ]
     if not logs:
         return None
-    return _usage_run_from_logs(project_id, month_key, run_id, logs)
+    return _usage_run_from_logs(project_id, start_month, end_month, run_id, logs)
 
 
 def ticket_classification_usage_runs(
@@ -1025,9 +1149,10 @@ def ticket_classification_usage_runs(
     project_id: UUID,
     analysis_month: str,
     *,
+    analysis_month_to: str | None = None,
     limit: int = 10,
 ) -> dict[str, Any]:
-    month_key = validate_month_key(analysis_month)
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
     rows = db.execute(
         select(GenAIUsageLog)
         .where(
@@ -1040,14 +1165,14 @@ def ticket_classification_usage_runs(
     grouped_logs: dict[str, list[GenAIUsageLog]] = {}
     for row in rows:
         metadata = _metadata_from_usage_log(row)
-        if metadata.get("analysis_month") != month_key:
+        if not _metadata_matches_analysis_range(metadata, start_month, end_month):
             continue
         run_id = str(metadata.get("run_id") or "")
         if not run_id:
             continue
         grouped_logs.setdefault(run_id, []).append(row)
     usage_runs = [
-        _usage_run_from_logs(project_id, month_key, run_id, logs)
+        _usage_run_from_logs(project_id, start_month, end_month, run_id, logs)
         for run_id, logs in grouped_logs.items()
     ]
     usage_runs.sort(
@@ -1056,7 +1181,9 @@ def ticket_classification_usage_runs(
     )
     return {
         "project_id": project_id,
-        "analysis_month": month_key,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
         "runs": usage_runs[: max(1, min(limit, 50))],
     }
 
@@ -1065,16 +1192,22 @@ def clear_ticket_classification(
     db: Session,
     request: TicketClassificationClearRequest,
 ) -> dict[str, Any]:
-    month_key = validate_month_key(request.analysis_month)
+    start_month, end_month = validate_month_range(
+        request.analysis_month,
+        request.analysis_month_to,
+    )
+    month_keys = month_keys_in_range(start_month, end_month)
     deleted_count = db.execute(
         delete(GenAITicketClassification).where(
             GenAITicketClassification.project_id == request.project_id,
-            GenAITicketClassification.analysis_month == month_key,
+            GenAITicketClassification.analysis_month.in_(month_keys),
         ),
     ).rowcount
     db.commit()
     return {
         "project_id": request.project_id,
-        "analysis_month": month_key,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
         "deleted_count": int(deleted_count or 0),
     }

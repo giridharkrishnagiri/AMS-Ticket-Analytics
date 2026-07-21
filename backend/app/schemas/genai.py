@@ -131,6 +131,8 @@ class GenAITicketClassificationUsageRunResponse(BaseModel):
     run_id: str
     project_id: UUID
     analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
     model_name: str | None = None
     provider: str | None = None
     prompt_tokens: int | None = None
@@ -159,6 +161,8 @@ class GenAITicketClassificationUsageRunResponse(BaseModel):
 class GenAITicketClassificationUsageRunsResponse(BaseModel):
     project_id: UUID
     analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
     runs: list[GenAITicketClassificationUsageRunResponse] = Field(default_factory=list)
 
 
@@ -175,6 +179,8 @@ class GenAITestResponse(BaseModel):
 class GenAITicketClassificationSummaryResponse(BaseModel):
     project_id: UUID
     analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
     eligible_ticket_count: int
     analyzed_ticket_count: int
     error_ticket_count: int
@@ -199,6 +205,8 @@ class GenAITicketClassificationPivotRow(BaseModel):
 class GenAITicketClassificationPivotResponse(BaseModel):
     project_id: UUID
     analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
     rows: list[GenAITicketClassificationPivotRow] = Field(default_factory=list)
 
 
@@ -230,11 +238,14 @@ class GenAITicketClassificationRunResponse(BaseModel):
 class GenAITicketClassificationClearRequest(BaseModel):
     project_id: UUID
     analysis_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    analysis_month_to: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 class GenAITicketClassificationClearResponse(BaseModel):
     project_id: UUID
     analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
     deleted_count: int
 
 
@@ -253,6 +264,7 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
 class GenAITicketClusterRunRequest(BaseModel):
     project_id: UUID
     analysis_month: str = Field(default="2026-05", pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    analysis_month_to: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
     force_reprocess: bool = False
     level_1_count: int | None = Field(default=None, ge=1, le=50)
     level_2_count: int | None = Field(default=None, ge=1, le=150)
@@ -263,6 +275,8 @@ class GenAITicketClusterRunRequest(BaseModel):
 class GenAITicketClusterRunResponse(BaseModel):
     project_id: UUID
     analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
     run_id: str
     eligible_ticket_count: int
     embedded_ticket_count: int
@@ -281,11 +295,14 @@ class GenAITicketClusterRunResponse(BaseModel):
 class GenAITicketClusterClearRequest(BaseModel):
     project_id: UUID
     analysis_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    analysis_month_to: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 class GenAITicketClusterClearResponse(BaseModel):
     project_id: UUID
     analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
     deleted_classification_count: int
     deleted_cluster_label_count: int
 

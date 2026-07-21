@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -1066,12 +1067,16 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
         may_6 = datetime(2026, 5, 6, 12, 0, tzinfo=UTC)
         may_7 = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
         may_8 = datetime(2026, 5, 8, 12, 0, tzinfo=UTC)
+        june_2 = datetime(2026, 6, 2, 12, 0, tzinfo=UTC)
+        june_3 = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
 
         for ticket_number, ticket_type, state, completed_at in (
             ("INC-CLUSTER-A", "INCIDENT", "Resolved", may_5),
             ("INC-CLUSTER-B", "INCIDENT", "Resolved", may_6),
+            ("INC-CLUSTER-E", "INCIDENT", "Resolved", june_2),
             ("SCTASK-CLUSTER-C", "SERVICE_CATALOG_TASK", "Closed Complete", may_7),
             ("SCTASK-CLUSTER-D", "SERVICE_CATALOG_TASK", "Closed Complete", may_8),
+            ("SCTASK-CLUSTER-F", "SERVICE_CATALOG_TASK", "Closed Complete", june_3),
         ):
             add_classification_ticket(
                 project_id=project_id,
@@ -1110,10 +1115,14 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                 return [1.0, 0.0, 0.0]
             if "INC-CLUSTER-B" in text:
                 return [0.9, 0.1, 0.0]
+            if "INC-CLUSTER-E" in text:
+                return [0.85, 0.15, 0.0]
             if "SCTASK-CLUSTER-C" in text:
                 return [0.0, 1.0, 0.0]
             if "SCTASK-CLUSTER-D" in text:
                 return [0.0, 0.9, 0.1]
+            if "SCTASK-CLUSTER-F" in text:
+                return [0.0, 0.85, 0.15]
             return [0.0, 0.0, 1.0]
 
         def fake_embedding_request(_config, texts):
@@ -1173,20 +1182,23 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                 json={
                     "project_id": project_id_text,
                     "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
                     "force_reprocess": True,
                     "run_id": "cluster-test-run-1",
                 },
             )
             assert run_response.status_code == 200
             run_payload = run_response.json()
-            assert run_payload["eligible_ticket_count"] == 4
-            assert run_payload["assigned_ticket_count"] == 4
-            assert run_payload["new_embedding_count"] == 4
+            assert run_payload["analysis_month_from"] == "2026-05"
+            assert run_payload["analysis_month_to"] == "2026-06"
+            assert run_payload["eligible_ticket_count"] == 6
+            assert run_payload["assigned_ticket_count"] == 6
+            assert run_payload["new_embedding_count"] == 6
             assert run_payload["cached_embedding_count"] == 0
             assert run_payload["level_1_cluster_count"] == 2
             assert run_payload["level_2_cluster_count"] == 3
             assert run_payload["level_3_cluster_count"] == 4
-            assert run_payload["summary"]["analyzed_ticket_count"] == 4
+            assert run_payload["summary"]["analyzed_ticket_count"] == 6
             assert label_model_names
             assert set(label_model_names) == {"cluster-label-test"}
 
@@ -1195,6 +1207,7 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                 json={
                     "project_id": project_id_text,
                     "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
                     "force_reprocess": True,
                     "run_id": "cluster-test-run-2",
                 },
@@ -1202,23 +1215,37 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert second_run_response.status_code == 200
             second_payload = second_run_response.json()
             assert second_payload["new_embedding_count"] == 0
-            assert second_payload["cached_embedding_count"] == 4
+            assert second_payload["cached_embedding_count"] == 6
 
             pivot_response = client.get(
                 "/api/genai/ticket-classification/pivot",
-                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+                params={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
             )
             assert pivot_response.status_code == 200
-            assert sum(row["total_count"] for row in pivot_response.json()["rows"]) == 4
+            assert sum(row["total_count"] for row in pivot_response.json()["rows"]) == 6
 
             dump_response = client.get(
                 "/api/genai/ticket-classification/ticket-dump",
-                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+                params={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
             )
             assert dump_response.status_code == 200
+            assert (
+                dump_response.headers["content-disposition"]
+                == 'attachment; filename="genai_ticket_classification_dump_2026-05_to_2026-06.csv"'
+            )
             dump_text = dump_response.text
             assert "INC-CLUSTER-A" in dump_text
+            assert "INC-CLUSTER-E" in dump_text
             assert "SCTASK-CLUSTER-C" in dump_text
+            assert "SCTASK-CLUSTER-F" in dump_text
             assert "genai_category_cluster_id" in dump_text
             assert "genai_subcategory_1_cluster_id" in dump_text
             assert "genai_subcategory_2_cluster_id" in dump_text
@@ -1233,14 +1260,20 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
 
             usage_response = client.get(
                 "/api/genai/ticket-cluster-analysis/usage-runs",
-                params={"project_id": project_id_text, "analysis_month": "2026-05"},
+                params={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
             )
             assert usage_response.status_code == 200
             usage_runs = usage_response.json()["runs"]
             assert len(usage_runs) == 2
             first_run = next(run for run in usage_runs if run["run_id"] == "cluster-test-run-1")
-            assert first_run["ticket_count"] == 4
-            assert first_run["embedding_tokens"] == 20
+            assert first_run["analysis_month_from"] == "2026-05"
+            assert first_run["analysis_month_to"] == "2026-06"
+            assert first_run["ticket_count"] == 6
+            assert first_run["embedding_tokens"] == 30
             assert first_run["embedding_cost"] == 0.0001
             assert first_run["embedding_batch_count"] == 1
             assert first_run["llm_model_name"] == "cluster-label-test"
@@ -1271,10 +1304,14 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                     db_check.query(GenAITicketClassification)
                     .filter(
                         GenAITicketClassification.project_id == project_id,
-                        GenAITicketClassification.analysis_month == "2026-05",
+                        GenAITicketClassification.analysis_month.in_(("2026-05", "2026-06")),
                     )
                     .all()
                 )
+                assert Counter(row.analysis_month for row in saved_classifications) == {
+                    "2026-05": 4,
+                    "2026-06": 2,
+                }
                 assert {
                     row.genai_category_cluster_id.split("-Category-", maxsplit=1)[0]
                     for row in saved_classifications
@@ -1284,10 +1321,14 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
 
             clear_response = client.post(
                 "/api/genai/ticket-cluster-analysis/clear",
-                json={"project_id": project_id_text, "analysis_month": "2026-05"},
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
             )
             assert clear_response.status_code == 200
-            assert clear_response.json()["deleted_classification_count"] == 4
+            assert clear_response.json()["deleted_classification_count"] == 6
             assert clear_response.json()["deleted_cluster_label_count"] == 9
 
         assert len(embedding_calls) == 1
@@ -1297,7 +1338,7 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                 db.query(GenAITicketEmbedding)
                 .filter(GenAITicketEmbedding.project_id == project_id)
                 .count()
-                == 4
+                == 6
             )
             assert (
                 db.query(GenAITicketClassification)
