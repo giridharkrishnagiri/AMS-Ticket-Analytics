@@ -67,6 +67,7 @@ TICKET_TYPE_SEPARATION_PROMPT = """Ticket type rule:
 RANDOM_STATE = 42
 MAX_TEXT_CHARS = 2600
 MAX_REPRESENTATIVE_TEXT_CHARS = 500
+LEVEL_CLUSTER_MODES = {"capped", "threshold_only"}
 TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_/-]{2,}")
 NOISE_PATTERNS = (
     re.compile(r"\b(?:INC|SCTASK|TASK|RITM|REQ)\d+\b", re.IGNORECASE),
@@ -252,6 +253,8 @@ class ClusterInfo:
     label: str | None = None
     summary: str | None = None
     confidence: float | None = None
+    is_rare: bool = False
+    skip_llm_label: bool = False
 
 
 @dataclass
@@ -366,9 +369,39 @@ def split_target_count(
     return allocation
 
 
+def level_cluster_max_count(
+    *,
+    mode: str,
+    allocated_count: int,
+    seed_count: int,
+    item_count: int,
+) -> int:
+    if mode == "threshold_only":
+        return item_count
+    return max(seed_count, min(allocated_count, item_count))
+
+
 def normalized_cluster_mode(value: str | None) -> str:
     mode = (value or "").strip().lower()
     return mode if mode in {"adaptive", "fixed"} else "adaptive"
+
+
+def normalized_level_cluster_mode(value: str | None, default_value: str = "capped") -> str:
+    default_mode = default_value if default_value in LEVEL_CLUSTER_MODES else "capped"
+    mode = (value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "adaptive": "capped",
+        "cap": "capped",
+        "count_cap": "capped",
+        "count_capped": "capped",
+        "capped": "capped",
+        "distance": "threshold_only",
+        "distance_only": "threshold_only",
+        "fixed": "threshold_only",
+        "threshold": "threshold_only",
+        "threshold_only": "threshold_only",
+    }
+    return aliases.get(mode, default_mode)
 
 
 def workbench_settings() -> dict[str, Any]:
@@ -383,6 +416,18 @@ def workbench_settings() -> dict[str, Any]:
         "cluster_label_model_name": settings.genai_ticket_cluster_label_model_name
         or settings.genai_ticket_classification_model_name,
         "cluster_mode": cluster_mode,
+        "cluster_level_1_mode": normalized_level_cluster_mode(
+            settings.genai_ticket_cluster_level_1_mode,
+            "capped",
+        ),
+        "cluster_level_2_mode": normalized_level_cluster_mode(
+            settings.genai_ticket_cluster_level_2_mode,
+            "capped",
+        ),
+        "cluster_level_3_mode": normalized_level_cluster_mode(
+            settings.genai_ticket_cluster_level_3_mode,
+            "threshold_only",
+        ),
         "cluster_level_1_count": settings.genai_ticket_cluster_level_1_count,
         "cluster_level_2_count": settings.genai_ticket_cluster_level_2_count,
         "cluster_level_3_count": settings.genai_ticket_cluster_level_3_count,
@@ -397,6 +442,9 @@ def workbench_settings() -> dict[str, Any]:
         ),
         "cluster_embedding_batch_size": settings.genai_ticket_cluster_embedding_batch_size,
         "cluster_label_batch_size": settings.genai_ticket_cluster_label_batch_size,
+        "cluster_min_llm_label_ticket_count": (
+            settings.genai_ticket_cluster_min_llm_label_ticket_count
+        ),
     }
 
 
@@ -1060,6 +1108,9 @@ def build_adaptive_type_separated_clusters(
     level_1_count: int,
     level_2_count: int,
     level_3_count: int,
+    level_1_mode: str,
+    level_2_mode: str,
+    level_3_mode: str,
     level_1_threshold: float,
     level_2_threshold: float,
     level_3_threshold: float,
@@ -1067,11 +1118,18 @@ def build_adaptive_type_separated_clusters(
     partitions = partition_input_indices(inputs)
     partition_counts = {partition: len(indices) for partition, indices in partitions.items()}
     level_1_targets = split_target_count(partitions, level_1_count)
+    level_2_targets = split_target_count(partitions, level_2_count)
+    level_3_targets = split_target_count(partitions, level_3_count)
 
     level_1_clusters: dict[str, ClusterInfo] = {}
     level_1_by_partition: dict[str, dict[str, ClusterInfo]] = {}
     for partition, indices in partitions.items():
-        cap = max(1, min(level_1_targets.get(partition, 1), len(indices)))
+        cap = level_cluster_max_count(
+            mode=level_1_mode,
+            allocated_count=level_1_targets.get(partition, 1),
+            seed_count=1,
+            item_count=len(indices),
+        )
         clusters = build_adaptive_clusters(
             inputs,
             vectors,
@@ -1090,6 +1148,12 @@ def build_adaptive_type_separated_clusters(
         if not parent_clusters:
             continue
         indices = partitions[partition]
+        cap = level_cluster_max_count(
+            mode=level_2_mode,
+            allocated_count=level_2_targets.get(partition, len(indices)),
+            seed_count=len(parent_clusters),
+            item_count=len(indices),
+        )
         clusters = build_adaptive_clusters(
             inputs,
             vectors,
@@ -1097,7 +1161,7 @@ def build_adaptive_type_separated_clusters(
                 (parent.key, parent.ticket_indices) for parent in parent_clusters.values()
             ],
             level=2,
-            max_count=len(indices),
+            max_count=cap,
             distance_threshold=level_2_threshold,
             key_prefix=cluster_key_prefix(partition),
         )
@@ -1110,6 +1174,12 @@ def build_adaptive_type_separated_clusters(
         if not parent_clusters:
             continue
         indices = partitions[partition]
+        cap = level_cluster_max_count(
+            mode=level_3_mode,
+            allocated_count=level_3_targets.get(partition, len(indices)),
+            seed_count=len(parent_clusters),
+            item_count=len(indices),
+        )
         clusters = build_adaptive_clusters(
             inputs,
             vectors,
@@ -1117,7 +1187,7 @@ def build_adaptive_type_separated_clusters(
                 (parent.key, parent.ticket_indices) for parent in parent_clusters.values()
             ],
             level=3,
-            max_count=len(indices),
+            max_count=cap,
             distance_threshold=level_3_threshold,
             key_prefix=cluster_key_prefix(partition),
         )
@@ -1132,17 +1202,18 @@ def build_adaptive_type_separated_clusters(
     )
 
 
-def representative_tickets(
+def representative_tickets_for_indices(
     inputs: list[TicketTextInput],
     vectors: np.ndarray,
-    cluster: ClusterInfo,
+    centroid: np.ndarray,
+    ticket_indices: list[int],
     *,
     limit: int,
 ) -> list[dict[str, Any]]:
-    if not cluster.ticket_indices:
+    if not ticket_indices:
         return []
     scored = [
-        (float(np.dot(vectors[index], cluster.centroid)), index) for index in cluster.ticket_indices
+        (float(np.dot(vectors[index], centroid)), index) for index in ticket_indices
     ]
     scored.sort(key=lambda item: (-item[0], inputs[item[1]].ticket.ticket_number))
     representatives: list[dict[str, Any]] = []
@@ -1165,6 +1236,22 @@ def representative_tickets(
             },
         )
     return representatives
+
+
+def representative_tickets(
+    inputs: list[TicketTextInput],
+    vectors: np.ndarray,
+    cluster: ClusterInfo,
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    return representative_tickets_for_indices(
+        inputs,
+        vectors,
+        cluster.centroid,
+        cluster.ticket_indices,
+        limit=limit,
+    )
 
 
 def ticket_type_counts(inputs: list[TicketTextInput], indices: list[int]) -> tuple[int, int]:
@@ -1193,6 +1280,57 @@ def assign_cluster_id_labels(clusters_by_level: dict[int, dict[str, ClusterInfo]
             cluster.confidence = None
 
 
+def rare_cluster_label(level: int, sequence: int) -> str:
+    if level == 3:
+        return f"rare-subcategory-2-{sequence:04d}"
+    if level == 2:
+        return f"rare-subcategory-1-{sequence:04d}"
+    return f"rare-category-1-{sequence:04d}"
+
+
+def apply_low_volume_labeling_rules(
+    clusters_by_level: dict[int, dict[str, ClusterInfo]],
+    *,
+    min_ticket_count: int,
+) -> dict[int, int]:
+    if min_ticket_count <= 1:
+        return {1: 0, 2: 0, 3: 0}
+
+    for clusters in clusters_by_level.values():
+        for cluster in clusters.values():
+            cluster.is_rare = False
+            cluster.skip_llm_label = False
+
+    rare_counts: dict[int, int] = {1: 0, 2: 0, 3: 0}
+    for level in (3, 2, 1):
+        clusters = clusters_by_level.get(level, {})
+        child_clusters = clusters_by_level.get(level + 1, {}) if level < 3 else {}
+        sequence = 1
+        for cluster in sorted(clusters.values(), key=lambda item: item.key):
+            has_only_rare_children = False
+            if child_clusters and cluster.child_keys:
+                child_items = [
+                    child_clusters[child_key]
+                    for child_key in cluster.child_keys
+                    if child_key in child_clusters
+                ]
+                has_only_rare_children = bool(child_items) and all(
+                    child.skip_llm_label for child in child_items
+                )
+            if len(cluster.ticket_indices) < min_ticket_count or has_only_rare_children:
+                cluster.is_rare = True
+                cluster.skip_llm_label = True
+                cluster.label = rare_cluster_label(level, sequence)
+                cluster.summary = (
+                    "LLM naming was skipped because this cluster has low volume or only "
+                    "low-volume child clusters."
+                )
+                cluster.confidence = None
+                rare_counts[level] += 1
+                sequence += 1
+    return rare_counts
+
+
 def cluster_payload(
     *,
     cluster: ClusterInfo,
@@ -1208,6 +1346,27 @@ def cluster_payload(
         ticket_class = "Service Catalog Task"
     else:
         ticket_class = "Mixed/Other"
+    child_context_clusters: list[ClusterInfo] = []
+    if child_clusters and cluster.child_keys:
+        child_context_clusters = [
+            child_clusters[child_key]
+            for child_key in cluster.child_keys
+            if child_key in child_clusters and not child_clusters[child_key].skip_llm_label
+        ]
+    representative_indices = cluster.ticket_indices
+    if child_context_clusters:
+        representative_indices = sorted(
+            {
+                ticket_index
+                for child in child_context_clusters
+                for ticket_index in child.ticket_indices
+            },
+        )
+    payload_top_terms = (
+        top_terms_for_indices(inputs, representative_indices)
+        if child_context_clusters
+        else cluster.top_terms or []
+    )
     payload: dict[str, Any] = {
         "cluster_id": cluster.key,
         "ticket_class": ticket_class,
@@ -1220,30 +1379,33 @@ def cluster_payload(
         "mean_distance_from_centroid": (
             round(cluster.mean_distance, 4) if cluster.mean_distance is not None else None
         ),
-        "top_terms": cluster.top_terms or [],
-        "representative_tickets": representative_tickets(
+        "top_terms": payload_top_terms,
+        "representative_tickets": representative_tickets_for_indices(
             inputs,
             vectors,
-            cluster,
+            cluster.centroid,
+            representative_indices,
             limit=representative_limit,
         ),
     }
-    if child_clusters and cluster.child_keys:
+    if child_context_clusters:
         payload["child_clusters"] = [
             {
-                "cluster_id": child_key,
-                "label": child_clusters[child_key].label,
-                "ticket_count": len(child_clusters[child_key].ticket_indices),
+                "cluster_id": child.key,
+                "label": child.label,
+                "ticket_count": len(child.ticket_indices),
                 "max_distance_from_centroid": (
-                    round(child_clusters[child_key].max_distance, 4)
-                    if child_clusters[child_key].max_distance is not None
+                    round(child.max_distance, 4)
+                    if child.max_distance is not None
                     else None
                 ),
-                "top_terms": child_clusters[child_key].top_terms or [],
+                "top_terms": child.top_terms or [],
             }
-            for child_key in cluster.child_keys
-            if child_key in child_clusters
+            for child in child_context_clusters
         ]
+        skipped_child_count = len(cluster.child_keys or []) - len(child_context_clusters)
+        if skipped_child_count > 0:
+            payload["rare_child_clusters_excluded_from_naming"] = skipped_child_count
     return payload
 
 
@@ -1305,12 +1467,14 @@ def label_cluster_level(
         maximum=20,
     )
     failed_count = 0
-    cluster_items = list(clusters.values())
+    skipped_cluster_count = sum(1 for cluster in clusters.values() if cluster.skip_llm_label)
+    cluster_items = [cluster for cluster in clusters.values() if not cluster.skip_llm_label]
     total_batches = math.ceil(len(cluster_items) / batch_size) if cluster_items else 0
     log_progress(
-        "level %s labeling started: %s clusters, batch size %s",
+        "level %s labeling started: %s clusters, %s skipped as rare, batch size %s",
         level,
         len(cluster_items),
+        skipped_cluster_count,
         batch_size,
     )
     for offset in range(0, len(cluster_items), batch_size):
@@ -1438,9 +1602,10 @@ def label_cluster_level(
             fallback_count,
         )
     log_progress(
-        "level %s labeling complete: %s clusters, %s fallback/error labels",
+        "level %s labeling complete: %s clusters attempted, %s skipped, %s fallback/error labels",
         level,
         len(cluster_items),
+        skipped_cluster_count,
         failed_count,
     )
     return failed_count
@@ -1503,6 +1668,8 @@ def save_cluster_labels(
                                 "cluster_id": child_key,
                                 "label": child_clusters[child_key].label,
                                 "ticket_count": len(child_clusters[child_key].ticket_indices),
+                                "rare_cluster": child_clusters[child_key].is_rare,
+                                "llm_label_skipped": child_clusters[child_key].skip_llm_label,
                             }
                             for child_key in (cluster.child_keys or [])
                             if child_clusters and child_key in child_clusters
@@ -1514,6 +1681,8 @@ def save_cluster_labels(
                         **metadata,
                         "cluster_max_distance_from_centroid": cluster.max_distance,
                         "cluster_mean_distance_from_centroid": cluster.mean_distance,
+                        "rare_cluster": cluster.is_rare,
+                        "llm_label_skipped": cluster.skip_llm_label,
                     },
                 ),
             )
@@ -1617,6 +1786,10 @@ def save_ticket_assignments(
                     "cluster_level_1": l1.key if l1 else None,
                     "cluster_level_2": l2.key if l2 else None,
                     "cluster_level_3": l3.key,
+                    "cluster_level_1_rare": l1.is_rare if l1 else None,
+                    "cluster_level_1_llm_label_skipped": (
+                        l1.skip_llm_label if l1 else None
+                    ),
                     "cluster_level_1_max_distance_from_centroid": (
                         l1.max_distance if l1 else None
                     ),
@@ -1624,6 +1797,10 @@ def save_ticket_assignments(
                         l1.mean_distance if l1 else None
                     ),
                     "cluster_level_1_ticket_distance_from_centroid": l1_ticket_distance,
+                    "cluster_level_2_rare": l2.is_rare if l2 else None,
+                    "cluster_level_2_llm_label_skipped": (
+                        l2.skip_llm_label if l2 else None
+                    ),
                     "cluster_level_2_max_distance_from_centroid": (
                         l2.max_distance if l2 else None
                     ),
@@ -1631,6 +1808,8 @@ def save_ticket_assignments(
                         l2.mean_distance if l2 else None
                     ),
                     "cluster_level_2_ticket_distance_from_centroid": l2_ticket_distance,
+                    "cluster_level_3_rare": l3.is_rare,
+                    "cluster_level_3_llm_label_skipped": l3.skip_llm_label,
                     "cluster_level_3_max_distance_from_centroid": l3.max_distance,
                     "cluster_level_3_mean_distance_from_centroid": l3.mean_distance,
                     "cluster_level_3_ticket_distance_from_centroid": l3_ticket_distance,
@@ -1998,6 +2177,18 @@ def run_ticket_cluster_analysis(
     )
     settings = get_settings()
     cluster_mode = normalized_cluster_mode(settings.genai_ticket_cluster_mode)
+    level_1_mode = normalized_level_cluster_mode(
+        settings.genai_ticket_cluster_level_1_mode,
+        "capped",
+    )
+    level_2_mode = normalized_level_cluster_mode(
+        settings.genai_ticket_cluster_level_2_mode,
+        "capped",
+    )
+    level_3_mode = normalized_level_cluster_mode(
+        settings.genai_ticket_cluster_level_3_mode,
+        "threshold_only",
+    )
     level_3_count = clamp_positive(
         request.level_3_count,
         settings.genai_ticket_cluster_level_3_count,
@@ -2031,12 +2222,13 @@ def run_ticket_cluster_analysis(
     if cluster_mode == "adaptive":
         log_progress(
             (
-                "run %s clustering mode=adaptive caps: level 1=%s, "
-                "level 2=threshold-driven, level 3=threshold-driven; "
-                "configured reference counts=%s/%s/%s; distance thresholds=%s/%s/%s"
+                "run %s clustering mode=adaptive level modes: L1=%s, L2=%s, L3=%s; "
+                "configured counts=%s/%s/%s; distance thresholds=%s/%s/%s"
             ),
             run_id,
-            level_1_count,
+            level_1_mode,
+            level_2_mode,
+            level_3_mode,
             level_1_count,
             level_2_count,
             level_3_count,
@@ -2077,6 +2269,9 @@ def run_ticket_cluster_analysis(
                 level_1_count=level_1_count,
                 level_2_count=level_2_count,
                 level_3_count=level_3_count,
+                level_1_mode=level_1_mode,
+                level_2_mode=level_2_mode,
+                level_3_mode=level_3_mode,
                 level_1_threshold=level_1_threshold,
                 level_2_threshold=level_2_threshold,
                 level_3_threshold=level_3_threshold,
@@ -2101,7 +2296,29 @@ def run_ticket_cluster_analysis(
         3: level_3_clusters,
     }
     failed_count = 0
+    min_llm_label_ticket_count = clamp_positive(
+        settings.genai_ticket_cluster_min_llm_label_ticket_count,
+        3,
+        minimum=1,
+        maximum=len(inputs),
+    )
+    rare_cluster_counts = {1: 0, 2: 0, 3: 0}
     if use_llm_labels:
+        rare_cluster_counts = apply_low_volume_labeling_rules(
+            clusters_by_level,
+            min_ticket_count=min_llm_label_ticket_count,
+        )
+        log_progress(
+            (
+                "run %s low-volume label skip rule applied: min tickets=%s; "
+                "rare clusters L1/L2/L3=%s/%s/%s"
+            ),
+            run_id,
+            min_llm_label_ticket_count,
+            rare_cluster_counts.get(1, 0),
+            rare_cluster_counts.get(2, 0),
+            rare_cluster_counts.get(3, 0),
+        )
         log_progress("run %s cluster labeling started", run_id)
         failed_count += label_cluster_level(
             db,
@@ -2166,25 +2383,22 @@ def run_ticket_cluster_analysis(
             else "kmeans_hierarchical_centroids"
         ),
         "cluster_mode": cluster_mode,
+        "level_1_cluster_mode": level_1_mode if cluster_mode == "adaptive" else "fixed_count",
+        "level_2_cluster_mode": level_2_mode if cluster_mode == "adaptive" else "fixed_count",
+        "level_3_cluster_mode": level_3_mode if cluster_mode == "adaptive" else "fixed_count",
         "ticket_type_separated": True,
         "ticket_type_partition_counts": partition_counts,
         "level_1_target": level_1_count,
         "level_2_target": level_2_count,
         "level_3_target": level_3_count,
-        "level_1_cap_mode": "configured_count",
-        "level_2_cap_mode": (
-            "threshold_driven_up_to_ticket_count"
-            if cluster_mode == "adaptive"
-            else "configured_count"
-        ),
-        "level_3_cap_mode": (
-            "threshold_driven_up_to_ticket_count"
-            if cluster_mode == "adaptive"
-            else "configured_count"
-        ),
+        "level_1_cap_mode": level_1_mode if cluster_mode == "adaptive" else "configured_count",
+        "level_2_cap_mode": level_2_mode if cluster_mode == "adaptive" else "configured_count",
+        "level_3_cap_mode": level_3_mode if cluster_mode == "adaptive" else "configured_count",
         "level_1_distance_threshold": level_1_threshold,
         "level_2_distance_threshold": level_2_threshold,
         "level_3_distance_threshold": level_3_threshold,
+        "min_llm_label_ticket_count": min_llm_label_ticket_count if use_llm_labels else None,
+        "rare_cluster_counts": rare_cluster_counts if use_llm_labels else None,
         "text_version": EMBEDDING_TEXT_VERSION,
     }
     log_progress("run %s saving cluster labels", run_id)

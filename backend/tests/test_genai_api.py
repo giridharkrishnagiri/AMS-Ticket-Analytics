@@ -85,6 +85,77 @@ def usage_log_count() -> int:
         db.close()
 
 
+def test_low_volume_cluster_labeling_marks_rare_parent_clusters() -> None:
+    import numpy as np
+
+    from app.services.genai.ticket_clustering import ClusterInfo, apply_low_volume_labeling_rules
+
+    centroid = np.array([1.0])
+    level_3 = {
+        "L3-A": ClusterInfo(
+            key="L3-A",
+            level=3,
+            ticket_indices=[0],
+            centroid=centroid,
+            parent_key="L2-A",
+        ),
+        "L3-B": ClusterInfo(
+            key="L3-B",
+            level=3,
+            ticket_indices=[1, 2],
+            centroid=centroid,
+            parent_key="L2-A",
+        ),
+        "L3-C": ClusterInfo(
+            key="L3-C",
+            level=3,
+            ticket_indices=[3, 4, 5],
+            centroid=centroid,
+            parent_key="L2-B",
+        ),
+    }
+    level_2 = {
+        "L2-A": ClusterInfo(
+            key="L2-A",
+            level=2,
+            ticket_indices=[0, 1, 2],
+            centroid=centroid,
+            parent_key="L1-A",
+            child_keys=["L3-A", "L3-B"],
+        ),
+        "L2-B": ClusterInfo(
+            key="L2-B",
+            level=2,
+            ticket_indices=[3, 4, 5],
+            centroid=centroid,
+            parent_key="L1-A",
+            child_keys=["L3-C"],
+        ),
+    }
+    level_1 = {
+        "L1-A": ClusterInfo(
+            key="L1-A",
+            level=1,
+            ticket_indices=[0, 1, 2, 3, 4, 5],
+            centroid=centroid,
+            child_keys=["L2-A", "L2-B"],
+        ),
+    }
+
+    rare_counts = apply_low_volume_labeling_rules(
+        {1: level_1, 2: level_2, 3: level_3},
+        min_ticket_count=3,
+    )
+
+    assert rare_counts == {1: 0, 2: 1, 3: 2}
+    assert level_3["L3-A"].label == "rare-subcategory-2-0001"
+    assert level_3["L3-B"].label == "rare-subcategory-2-0002"
+    assert level_2["L2-A"].label == "rare-subcategory-1-0001"
+    assert level_2["L2-A"].skip_llm_label is True
+    assert level_2["L2-B"].skip_llm_label is False
+    assert level_1["L1-A"].skip_llm_label is False
+
+
 def create_chat_session(client: TestClient, **overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "customer_id": None,
@@ -1055,6 +1126,9 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_EMBEDDING_MODEL_NAME", "embedding-test")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LABEL_MODEL_NAME", "cluster-label-test")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_MODE", "adaptive")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_1_MODE", "capped")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_2_MODE", "capped")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_3_MODE", "threshold_only")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_1_COUNT", "2")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_2_COUNT", "3")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_3_COUNT", "4")
@@ -1204,6 +1278,9 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert settings_response.status_code == 200
             assert settings_response.json()["ticket_cluster_analysis_button_enabled"] is True
             assert settings_response.json()["cluster_mode"] == "adaptive"
+            assert settings_response.json()["cluster_level_1_mode"] == "capped"
+            assert settings_response.json()["cluster_level_2_mode"] == "capped"
+            assert settings_response.json()["cluster_level_3_mode"] == "threshold_only"
             assert settings_response.json()["cluster_level_3_distance_threshold"] == 1.5
 
             run_response = client.post(
@@ -1278,6 +1355,7 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert "genai_category_cluster_id" in dump_text
             assert "genai_subcategory_1_cluster_id" in dump_text
             assert "genai_subcategory_2_cluster_id" in dump_text
+            assert "genai_subcategory_2_rare_cluster" in dump_text
             assert "genai_category_ticket_distance" in dump_text
             assert "genai_subcategory_1_ticket_distance" in dump_text
             assert "genai_subcategory_2_ticket_distance" in dump_text

@@ -60,6 +60,13 @@ function displayLabel(value: string | null | undefined): string {
   return value?.trim() || "-";
 }
 
+function formatClusterMode(value: string | null | undefined): string {
+  if (value === "threshold_only") {
+    return "threshold-only";
+  }
+  return value?.replace(/_/g, " ") || "-";
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -711,18 +718,18 @@ function GenAIWorkbench() {
         ) : null}
         {workbenchSettings ? (
           <p className="muted-text summary-block">
-            Cluster {workbenchSettings.cluster_mode === "adaptive" ? "settings" : "targets"}: L1{" "}
-            {formatNumber(workbenchSettings.cluster_level_1_count)}
-            {workbenchSettings.cluster_mode === "adaptive"
-              ? ", L2 threshold-driven, L3 threshold-driven"
-              : `, L2 ${formatNumber(workbenchSettings.cluster_level_2_count)}, L3 ${formatNumber(
-                  workbenchSettings.cluster_level_3_count
-                )}`}
-            . Mode: {workbenchSettings.cluster_mode}. Thresholds:{" "}
+            Cluster settings: L1 {formatNumber(workbenchSettings.cluster_level_1_count)} (
+            {formatClusterMode(workbenchSettings.cluster_level_1_mode)}), L2{" "}
+            {formatNumber(workbenchSettings.cluster_level_2_count)} (
+            {formatClusterMode(workbenchSettings.cluster_level_2_mode)}), L3{" "}
+            {formatNumber(workbenchSettings.cluster_level_3_count)} (
+            {formatClusterMode(workbenchSettings.cluster_level_3_mode)}). Mode:{" "}
+            {workbenchSettings.cluster_mode}. Thresholds:{" "}
             {workbenchSettings.cluster_level_1_distance_threshold.toFixed(2)} /{" "}
             {workbenchSettings.cluster_level_2_distance_threshold.toFixed(2)} /{" "}
-            {workbenchSettings.cluster_level_3_distance_threshold.toFixed(2)}. Embedding model:{" "}
-            {workbenchSettings.cluster_embedding_model_name}.
+            {workbenchSettings.cluster_level_3_distance_threshold.toFixed(2)}. Rare label skip:{" "}
+            below {formatNumber(workbenchSettings.cluster_min_llm_label_ticket_count)} tickets.
+            Embedding model: {workbenchSettings.cluster_embedding_model_name}.
           </p>
         ) : null}
         {!isMonthRangeValid ? (

@@ -286,6 +286,9 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
     cluster_embedding_model_name: str
     cluster_label_model_name: str | None = None
     cluster_mode: str
+    cluster_level_1_mode: str
+    cluster_level_2_mode: str
+    cluster_level_3_mode: str
     cluster_level_1_count: int
     cluster_level_2_count: int
     cluster_level_3_count: int
@@ -294,6 +297,7 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
     cluster_level_3_distance_threshold: float
     cluster_embedding_batch_size: int
     cluster_label_batch_size: int
+    cluster_min_llm_label_ticket_count: int
 
 
 class GenAITicketClusterRunRequest(BaseModel):

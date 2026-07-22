@@ -123,6 +123,9 @@ export type GenAIWorkbenchSettings = {
   cluster_embedding_model_name: string;
   cluster_label_model_name: string | null;
   cluster_mode: string;
+  cluster_level_1_mode: string;
+  cluster_level_2_mode: string;
+  cluster_level_3_mode: string;
   cluster_level_1_count: number;
   cluster_level_2_count: number;
   cluster_level_3_count: number;
@@ -131,6 +134,7 @@ export type GenAIWorkbenchSettings = {
   cluster_level_3_distance_threshold: number;
   cluster_embedding_batch_size: number;
   cluster_label_batch_size: number;
+  cluster_min_llm_label_ticket_count: number;
 };
 
 export type GenAITicketClusterRunResponse = {

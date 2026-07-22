@@ -52,6 +52,8 @@ TICKET_DUMP_CLASSIFICATION_COLUMNS = [
     "genai_category_cluster_max_distance",
     "genai_category_cluster_mean_distance",
     "genai_category_distance_threshold",
+    "genai_category_rare_cluster",
+    "genai_category_llm_label_skipped",
     "genai_category_quality",
     "genai_category",
     "genai_subcategory_1_cluster_id",
@@ -59,12 +61,16 @@ TICKET_DUMP_CLASSIFICATION_COLUMNS = [
     "genai_subcategory_1_cluster_max_distance",
     "genai_subcategory_1_cluster_mean_distance",
     "genai_subcategory_1_distance_threshold",
+    "genai_subcategory_1_rare_cluster",
+    "genai_subcategory_1_llm_label_skipped",
     "genai_subcategory_1",
     "genai_subcategory_2_cluster_id",
     "genai_subcategory_2_ticket_distance",
     "genai_subcategory_2_cluster_max_distance",
     "genai_subcategory_2_cluster_mean_distance",
     "genai_subcategory_2_distance_threshold",
+    "genai_subcategory_2_rare_cluster",
+    "genai_subcategory_2_llm_label_skipped",
     "genai_subcategory_2",
     "genai_confidence",
     "genai_status",
@@ -1385,6 +1391,10 @@ def ticket_classification_dump_csv(
                 "genai_category_distance_threshold": metadata.get(
                     "level_1_distance_threshold",
                 ),
+                "genai_category_rare_cluster": metadata.get("cluster_level_1_rare"),
+                "genai_category_llm_label_skipped": metadata.get(
+                    "cluster_level_1_llm_label_skipped",
+                ),
                 "genai_category_quality": (
                     classification.category_quality if classification is not None else None
                 ),
@@ -1409,6 +1419,10 @@ def ticket_classification_dump_csv(
                 "genai_subcategory_1_distance_threshold": metadata.get(
                     "level_2_distance_threshold",
                 ),
+                "genai_subcategory_1_rare_cluster": metadata.get("cluster_level_2_rare"),
+                "genai_subcategory_1_llm_label_skipped": metadata.get(
+                    "cluster_level_2_llm_label_skipped",
+                ),
                 "genai_subcategory_1": (
                     classification.genai_subcategory_1 if classification is not None else None
                 ),
@@ -1429,6 +1443,10 @@ def ticket_classification_dump_csv(
                 ),
                 "genai_subcategory_2_distance_threshold": metadata.get(
                     "level_3_distance_threshold",
+                ),
+                "genai_subcategory_2_rare_cluster": metadata.get("cluster_level_3_rare"),
+                "genai_subcategory_2_llm_label_skipped": metadata.get(
+                    "cluster_level_3_llm_label_skipped",
                 ),
                 "genai_subcategory_2": (
                     classification.genai_subcategory_2 if classification is not None else None
