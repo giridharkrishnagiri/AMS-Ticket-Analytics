@@ -344,6 +344,15 @@ class GenAITicketClusterClearResponse(BaseModel):
     deleted_cluster_label_count: int
 
 
+class GenAITicketEmbeddingClearRequest(BaseModel):
+    project_id: UUID
+
+
+class GenAITicketEmbeddingClearResponse(BaseModel):
+    project_id: UUID
+    deleted_embedding_count: int
+
+
 class GenAIUsageLogResponse(BaseModel):
     id: UUID
     customer_id: UUID | None

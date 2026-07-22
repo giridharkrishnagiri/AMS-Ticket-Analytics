@@ -171,6 +171,11 @@ export type GenAITicketClusterClearResponse = {
   deleted_cluster_label_count: number;
 };
 
+export type GenAITicketEmbeddingClearResponse = {
+  project_id: string;
+  deleted_embedding_count: number;
+};
+
 function queryString(params: Record<string, string>): string {
   return new URLSearchParams(params).toString();
 }
@@ -377,6 +382,16 @@ export function clearTicketClusterAnalysis(payload: {
   analysis_month_to?: string;
 }): Promise<GenAITicketClusterClearResponse> {
   return requestJson<GenAITicketClusterClearResponse>("/genai/ticket-cluster-analysis/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function clearProjectTicketEmbeddings(payload: {
+  project_id: string;
+}): Promise<GenAITicketEmbeddingClearResponse> {
+  return requestJson<GenAITicketEmbeddingClearResponse>("/genai/ticket-embeddings/clear", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

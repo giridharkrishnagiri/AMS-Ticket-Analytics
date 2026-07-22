@@ -225,6 +225,11 @@ class TicketClusterClearRequest:
 
 
 @dataclass(frozen=True)
+class TicketEmbeddingClearRequest:
+    project_id: UUID
+
+
+@dataclass(frozen=True)
 class TicketTextInput:
     ticket: Ticket
     normalized_text: str
@@ -1834,6 +1839,22 @@ def clear_ticket_cluster_analysis(
         "analysis_month_to": end_month,
         "deleted_classification_count": int(deleted_classification_count or 0),
         "deleted_cluster_label_count": int(deleted_cluster_label_count or 0),
+    }
+
+
+def clear_project_ticket_embeddings(
+    db: Session,
+    request: TicketEmbeddingClearRequest,
+) -> dict[str, Any]:
+    deleted_embedding_count = db.execute(
+        delete(GenAITicketEmbedding).where(
+            GenAITicketEmbedding.project_id == request.project_id,
+        ),
+    ).rowcount
+    db.commit()
+    return {
+        "project_id": request.project_id,
+        "deleted_embedding_count": int(deleted_embedding_count or 0),
     }
 
 

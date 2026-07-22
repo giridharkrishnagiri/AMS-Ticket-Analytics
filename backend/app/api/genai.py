@@ -43,6 +43,8 @@ from app.schemas.genai import (
     GenAITicketClusterClearResponse,
     GenAITicketClusterRunRequest,
     GenAITicketClusterRunResponse,
+    GenAITicketEmbeddingClearRequest,
+    GenAITicketEmbeddingClearResponse,
     GenAIToolCatalogResponse,
     GenAIToolExecuteRequest,
     GenAIToolExecuteResponse,
@@ -119,6 +121,7 @@ from app.services.genai.ticket_clustering import (
 )
 from app.services.genai.ticket_clustering import (
     TicketClusteringError,
+    clear_project_ticket_embeddings,
     clear_ticket_cluster_analysis,
     run_ticket_cluster_analysis,
     ticket_cluster_usage_runs,
@@ -126,6 +129,9 @@ from app.services.genai.ticket_clustering import (
 )
 from app.services.genai.ticket_clustering import (
     TicketClusterRunRequest as ServiceTicketClusterRunRequest,
+)
+from app.services.genai.ticket_clustering import (
+    TicketEmbeddingClearRequest as ServiceTicketEmbeddingClearRequest,
 )
 from app.services.genai.tools import execute_tool, list_tool_runs, list_tools
 from app.services.genai.usage_log_service import create_usage_log, list_usage_logs
@@ -586,6 +592,23 @@ def post_ticket_cluster_analysis_clear(
             ),
         )
     except (TicketClassificationError, TicketClusteringError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/ticket-embeddings/clear",
+    response_model=GenAITicketEmbeddingClearResponse,
+)
+def post_ticket_embeddings_clear(
+    request: GenAITicketEmbeddingClearRequest,
+    db: DbSession,
+) -> GenAITicketEmbeddingClearResponse:
+    try:
+        return clear_project_ticket_embeddings(
+            db,
+            ServiceTicketEmbeddingClearRequest(project_id=request.project_id),
+        )
+    except TicketClusteringError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 

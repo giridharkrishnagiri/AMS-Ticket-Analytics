@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  clearProjectTicketEmbeddings,
   clearTicketClusterAnalysis,
   clearTicketClassificationAnalysis,
   downloadTicketClassificationDump,
@@ -30,6 +31,8 @@ const forceReprocessConfirmation =
   "Force reprocess will clear the existing analysis for this selected period before starting a new run. Continue?";
 const categoryQualityForceConfirmation =
   "Force reprocess will reassess category quality for the selected period. Continue?";
+const clearProjectEmbeddingsConfirmation =
+  "This will clear all saved ticket embeddings for the selected project. The next cluster run will recreate them. Continue?";
 const batchesPerRequest = 1;
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0): string {
@@ -106,6 +109,7 @@ function GenAIWorkbench() {
   const [isRunning, setIsRunning] = useState(false);
   const [isCategoryQualityRunning, setIsCategoryQualityRunning] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [isClearingEmbeddings, setIsClearingEmbeddings] = useState(false);
   const [isDownloadingDump, setIsDownloadingDump] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -507,6 +511,31 @@ function GenAIWorkbench() {
     }
   }
 
+  async function handleClearEmbeddings() {
+    if (!projectId || !window.confirm(clearProjectEmbeddingsConfirmation)) {
+      return;
+    }
+    setIsClearingEmbeddings(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = await clearProjectTicketEmbeddings({
+        project_id: projectId,
+      });
+      setMessage(
+        `Cleared ${formatNumber(
+          result.deleted_embedding_count
+        )} saved ticket embeddings for the selected project.`
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Embedding cache clear failed."
+      );
+    } finally {
+      setIsClearingEmbeddings(false);
+    }
+  }
+
   async function handleDownloadDump() {
     if (!canAct) {
       return;
@@ -656,16 +685,24 @@ function GenAIWorkbench() {
         </div>
 
         <div className="workbench-analysis-actions">
-          <span className="label">Separate Analyses</span>
+          <span className="label">Workbench Actions</span>
           <button
             className="secondary-button"
             type="button"
-            disabled={!canAct || isRunning || isClearing}
+            disabled={!canAct || isRunning || isClearing || isClearingEmbeddings}
             onClick={() => void handleRunCategoryQuality()}
           >
             {isCategoryQualityRunning
               ? "Running Category Quality..."
               : "Run Category Quality Analysis"}
+          </button>
+          <button
+            className="secondary-button danger-button"
+            type="button"
+            disabled={!projectId || isRunning || isClearing || isClearingEmbeddings}
+            onClick={() => void handleClearEmbeddings()}
+          >
+            {isClearingEmbeddings ? "Clearing Embeddings..." : "Clear Project Embeddings"}
           </button>
         </div>
 

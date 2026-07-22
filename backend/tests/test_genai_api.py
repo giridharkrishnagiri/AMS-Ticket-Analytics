@@ -1494,6 +1494,20 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert second_clear_response.json()["deleted_classification_count"] == 6
             assert second_clear_response.json()["deleted_cluster_label_count"] == 6
 
+            embedding_clear_response = client.post(
+                "/api/genai/ticket-embeddings/clear",
+                json={"project_id": project_id_text},
+            )
+            assert embedding_clear_response.status_code == 200
+            assert embedding_clear_response.json()["deleted_embedding_count"] == 6
+
+            second_embedding_clear_response = client.post(
+                "/api/genai/ticket-embeddings/clear",
+                json={"project_id": project_id_text},
+            )
+            assert second_embedding_clear_response.status_code == 200
+            assert second_embedding_clear_response.json()["deleted_embedding_count"] == 0
+
         assert len(embedding_calls) == 1
         db = SessionLocal()
         try:
@@ -1501,7 +1515,7 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                 db.query(GenAITicketEmbedding)
                 .filter(GenAITicketEmbedding.project_id == project_id)
                 .count()
-                == 6
+                == 0
             )
             assert (
                 db.query(GenAITicketClassification)
