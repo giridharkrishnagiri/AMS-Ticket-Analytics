@@ -270,9 +270,9 @@ class GenAITicketClusterRunRequest(BaseModel):
     analysis_month: str = Field(default="2026-05", pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
     analysis_month_to: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
     force_reprocess: bool = False
-    level_1_count: int | None = Field(default=None, ge=1, le=50)
-    level_2_count: int | None = Field(default=None, ge=1, le=150)
-    level_3_count: int | None = Field(default=None, ge=1, le=300)
+    level_1_count: int | None = Field(default=None, ge=1)
+    level_2_count: int | None = Field(default=None, ge=1)
+    level_3_count: int | None = Field(default=None, ge=1)
     run_id: str | None = Field(default=None, max_length=80)
 
 

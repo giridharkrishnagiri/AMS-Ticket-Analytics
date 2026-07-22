@@ -1873,19 +1873,19 @@ def run_ticket_cluster_analysis(
         request.level_3_count,
         settings.genai_ticket_cluster_level_3_count,
         minimum=1,
-        maximum=min(300, len(inputs)),
+        maximum=len(inputs),
     )
     level_2_count = clamp_positive(
         request.level_2_count,
         settings.genai_ticket_cluster_level_2_count,
         minimum=1,
-        maximum=min(150, level_3_count),
+        maximum=min(level_3_count, len(inputs)),
     )
     level_1_count = clamp_positive(
         request.level_1_count,
         settings.genai_ticket_cluster_level_1_count,
         minimum=1,
-        maximum=min(50, level_2_count),
+        maximum=min(level_2_count, len(inputs)),
     )
     level_1_threshold = clamp_distance_threshold(
         settings.genai_ticket_cluster_level_1_distance_threshold,
