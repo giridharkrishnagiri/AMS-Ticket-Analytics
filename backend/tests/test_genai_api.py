@@ -1278,6 +1278,9 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert "genai_category_cluster_id" in dump_text
             assert "genai_subcategory_1_cluster_id" in dump_text
             assert "genai_subcategory_2_cluster_id" in dump_text
+            assert "genai_category_ticket_distance" in dump_text
+            assert "genai_subcategory_1_ticket_distance" in dump_text
+            assert "genai_subcategory_2_ticket_distance" in dump_text
             assert "genai_category_cluster_max_distance" in dump_text
             assert "genai_subcategory_1_cluster_max_distance" in dump_text
             assert "genai_subcategory_2_cluster_max_distance" in dump_text
@@ -1419,6 +1422,7 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                 assert all(
                     isinstance(row.metadata_json, dict)
                     and "cluster_level_3_max_distance_from_centroid" in row.metadata_json
+                    and "cluster_level_3_ticket_distance_from_centroid" in row.metadata_json
                     and "level_3_distance_threshold" in row.metadata_json
                     for row in saved_classifications
                 )

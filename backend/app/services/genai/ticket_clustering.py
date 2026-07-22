@@ -732,6 +732,17 @@ def cluster_distance_metrics(
     return float(np.max(distances)), float(np.mean(distances))
 
 
+def ticket_distance_from_cluster_centroid(
+    vectors: np.ndarray,
+    ticket_index: int,
+    cluster: ClusterInfo | None,
+) -> float | None:
+    if cluster is None:
+        return None
+    distance = 1.0 - np.clip(float(vectors[ticket_index] @ cluster.centroid), -1.0, 1.0)
+    return float(distance)
+
+
 def new_adaptive_leaf(
     *,
     parent_key: str | None,
@@ -1535,6 +1546,7 @@ def save_ticket_assignments(
     month_keys: list[str],
     run_id: str,
     inputs: list[TicketTextInput],
+    vectors: np.ndarray,
     clusters_by_level: dict[int, dict[str, ClusterInfo]],
     label_model_name: str | None,
     prompt_version: int,
@@ -1570,6 +1582,9 @@ def save_ticket_assignments(
         confidence = (
             float(sum(confidence_values) / len(confidence_values)) if confidence_values else None
         )
+        l1_ticket_distance = ticket_distance_from_cluster_centroid(vectors, ticket_index, l1)
+        l2_ticket_distance = ticket_distance_from_cluster_centroid(vectors, ticket_index, l2)
+        l3_ticket_distance = ticket_distance_from_cluster_centroid(vectors, ticket_index, l3)
         db.add(
             GenAITicketClassification(
                 customer_id=customer_id,
@@ -1608,14 +1623,17 @@ def save_ticket_assignments(
                     "cluster_level_1_mean_distance_from_centroid": (
                         l1.mean_distance if l1 else None
                     ),
+                    "cluster_level_1_ticket_distance_from_centroid": l1_ticket_distance,
                     "cluster_level_2_max_distance_from_centroid": (
                         l2.max_distance if l2 else None
                     ),
                     "cluster_level_2_mean_distance_from_centroid": (
                         l2.mean_distance if l2 else None
                     ),
+                    "cluster_level_2_ticket_distance_from_centroid": l2_ticket_distance,
                     "cluster_level_3_max_distance_from_centroid": l3.max_distance,
                     "cluster_level_3_mean_distance_from_centroid": l3.mean_distance,
+                    "cluster_level_3_ticket_distance_from_centroid": l3_ticket_distance,
                     "normalized_text_hash": ticket_input.normalized_text_hash,
                 },
                 error_message=None,
@@ -2189,6 +2207,7 @@ def run_ticket_cluster_analysis(
         month_keys=month_keys,
         run_id=run_id,
         inputs=inputs,
+        vectors=vectors,
         clusters_by_level=clusters_by_level,
         label_model_name=provider_model_name(label_config) if use_llm_labels else None,
         prompt_version=prompt_version,
