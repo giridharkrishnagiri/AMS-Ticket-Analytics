@@ -1144,6 +1144,25 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             label_model_names.append(config.model_name)
             content = messages[1]["content"]
             payload = json.loads(content[content.find("{") :])
+            if "tickets" in payload:
+                return LLMCompletionResult(
+                    ok=True,
+                    response_text=json.dumps(
+                        {
+                            "tickets": [
+                                {
+                                    "ticket_number": ticket["ticket_number"],
+                                    "category_quality": "Meaningful",
+                                }
+                                for ticket in payload["tickets"]
+                            ],
+                        },
+                    ),
+                    prompt_tokens=15,
+                    completion_tokens=10,
+                    estimated_cost=0.0005,
+                    duration_ms=15,
+                )
             level = payload["level"]
             return LLMCompletionResult(
                 ok=True,
@@ -1172,6 +1191,10 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
         )
         monkeypatch.setattr(
             "app.services.genai.ticket_clustering.chat_completion",
+            fake_chat_completion,
+        )
+        monkeypatch.setattr(
+            "app.services.genai.ticket_classification.chat_completion",
             fake_chat_completion,
         )
 
@@ -1269,6 +1292,71 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert "Level 3" in dump_text
             assert "INC-CLUSTER-CANCELED" not in dump_text
             assert "SCTASK-CLUSTER-INCOMPLETE" not in dump_text
+
+            quality_response = client.post(
+                "/api/genai/ticket-category-quality/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                    "batch_size": 25,
+                    "batch_limit": 1,
+                    "force_reprocess": False,
+                    "run_id": "category-quality-test-run-1",
+                },
+            )
+            assert quality_response.status_code == 200
+            quality_payload = quality_response.json()
+            assert quality_payload["eligible_ticket_count"] == 6
+            assert quality_payload["existing_classification_count"] == 6
+            assert quality_payload["processed_count"] == 6
+            assert quality_payload["skipped_missing_classification_count"] == 0
+            assert quality_payload["skipped_blank_category_count"] == 0
+            assert quality_payload["summary"]["category_quality_counts"] == {"Meaningful": 6}
+            assert quality_payload["usage_run"]["run_id"] == "category-quality-test-run-1"
+            assert quality_payload["usage_run"]["ticket_count"] == 6
+
+            cached_quality_response = client.post(
+                "/api/genai/ticket-category-quality/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                    "batch_size": 25,
+                    "batch_limit": 1,
+                    "force_reprocess": False,
+                    "run_id": "category-quality-test-run-2",
+                },
+            )
+            assert cached_quality_response.status_code == 200
+            cached_quality_payload = cached_quality_response.json()
+            assert cached_quality_payload["processed_count"] == 0
+            assert cached_quality_payload["skipped_cached_count"] == 6
+            assert cached_quality_payload["usage_run"] is None
+
+            quality_dump_response = client.get(
+                "/api/genai/ticket-classification/ticket-dump",
+                params={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
+            )
+            assert quality_dump_response.status_code == 200
+            assert "Meaningful" in quality_dump_response.text
+
+            quality_usage_response = client.get(
+                "/api/genai/ticket-category-quality/usage-runs",
+                params={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
+            )
+            assert quality_usage_response.status_code == 200
+            quality_usage_runs = quality_usage_response.json()["runs"]
+            assert len(quality_usage_runs) == 1
+            assert quality_usage_runs[0]["run_id"] == "category-quality-test-run-1"
 
             usage_response = client.get(
                 "/api/genai/ticket-cluster-analysis/usage-runs",

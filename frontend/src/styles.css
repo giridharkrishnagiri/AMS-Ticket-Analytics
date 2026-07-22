@@ -2967,6 +2967,16 @@ h2 {
   margin-top: 18px;
 }
 
+.workbench-analysis-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #dbeafe;
+}
+
 .workbench-pivot-actions {
   display: inline-flex;
   align-items: center;

@@ -30,6 +30,8 @@ from app.schemas.genai import (
     GenAISafetySettingsUpdateRequest,
     GenAITestRequest,
     GenAITestResponse,
+    GenAITicketCategoryQualityRunRequest,
+    GenAITicketCategoryQualityRunResponse,
     GenAITicketClassificationClearRequest,
     GenAITicketClassificationClearResponse,
     GenAITicketClassificationPivotResponse,
@@ -92,13 +94,18 @@ from app.services.genai.safety_service import (
     update_safety_settings,
 )
 from app.services.genai.ticket_classification import (
+    TicketCategoryQualityRunRequest as ServiceTicketCategoryQualityRunRequest,
+)
+from app.services.genai.ticket_classification import (
     TicketClassificationClearRequest as ServiceTicketClassificationClearRequest,
 )
 from app.services.genai.ticket_classification import (
     TicketClassificationError,
     analysis_range_slug,
     clear_ticket_classification,
+    run_ticket_category_quality_analysis,
     run_ticket_classification,
+    ticket_category_quality_usage_runs,
     ticket_classification_dump_csv,
     ticket_classification_pivot,
     ticket_classification_summary,
@@ -418,6 +425,29 @@ def get_ticket_classification_usage_runs(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+@router.get(
+    "/ticket-category-quality/usage-runs",
+    response_model=GenAITicketClassificationUsageRunsResponse,
+)
+def get_ticket_category_quality_usage_runs(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> GenAITicketClassificationUsageRunsResponse:
+    try:
+        return ticket_category_quality_usage_runs(
+            db,
+            project_id,
+            analysis_month,
+            analysis_month_to=analysis_month_to,
+            limit=limit,
+        )
+    except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.post(
     "/ticket-classification/run",
     response_model=GenAITicketClassificationRunResponse,
@@ -432,6 +462,31 @@ def post_ticket_classification_run(
             ServiceTicketClassificationRunRequest(
                 project_id=request.project_id,
                 analysis_month=request.analysis_month,
+                force_reprocess=request.force_reprocess,
+                batch_size=request.batch_size,
+                batch_limit=request.batch_limit,
+                run_id=request.run_id,
+            ),
+        )
+    except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/ticket-category-quality/run",
+    response_model=GenAITicketCategoryQualityRunResponse,
+)
+def post_ticket_category_quality_run(
+    request: GenAITicketCategoryQualityRunRequest,
+    db: DbSession,
+) -> GenAITicketCategoryQualityRunResponse:
+    try:
+        return run_ticket_category_quality_analysis(
+            db,
+            ServiceTicketCategoryQualityRunRequest(
+                project_id=request.project_id,
+                analysis_month=request.analysis_month,
+                analysis_month_to=request.analysis_month_to,
                 force_reprocess=request.force_reprocess,
                 batch_size=request.batch_size,
                 batch_limit=request.batch_limit,

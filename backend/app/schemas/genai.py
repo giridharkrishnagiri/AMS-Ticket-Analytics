@@ -235,6 +235,37 @@ class GenAITicketClassificationRunResponse(BaseModel):
     usage_run: GenAITicketClassificationUsageRunResponse | None = None
 
 
+class GenAITicketCategoryQualityRunRequest(BaseModel):
+    project_id: UUID
+    analysis_month: str = Field(default="2026-05", pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    analysis_month_to: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    force_reprocess: bool = False
+    batch_size: int = Field(default=10, ge=1, le=25)
+    batch_limit: int | None = Field(default=None, ge=1, le=50)
+    run_id: str | None = Field(default=None, max_length=80)
+
+
+class GenAITicketCategoryQualityRunResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
+    run_id: str
+    eligible_ticket_count: int
+    existing_classification_count: int
+    processed_count: int
+    skipped_cached_count: int
+    skipped_missing_classification_count: int
+    skipped_blank_category_count: int
+    failed_count: int
+    remaining_ticket_count: int
+    processed_batch_count: int
+    total_batch_count: int
+    summary: GenAITicketClassificationSummaryResponse
+    usage: GenAITicketClassificationUsageSummary
+    usage_run: GenAITicketClassificationUsageRunResponse | None = None
+
+
 class GenAITicketClassificationClearRequest(BaseModel):
     project_id: UUID
     analysis_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")

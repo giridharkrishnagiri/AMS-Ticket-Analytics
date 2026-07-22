@@ -27,6 +27,8 @@ from app.services.genai.tools.validation import (
 from app.services.genai.usage_log_service import create_usage_log
 
 PROMPT_KEY = "ticket_classification_enrichment"
+CATEGORY_QUALITY_PROMPT_KEY = "ticket_category_quality_analysis"
+CATEGORY_QUALITY_OPERATION = "ticket_category_quality_analysis"
 FALLBACK_CATEGORY = "Needs Review"
 MAX_DESCRIPTION_CHARS = 1800
 MAX_SHORT_DESCRIPTION_CHARS = 500
@@ -79,6 +81,17 @@ class TicketClassificationError(ValueError):
 class TicketClassificationRunRequest:
     project_id: UUID
     analysis_month: str
+    force_reprocess: bool = False
+    batch_size: int = DEFAULT_BATCH_SIZE
+    batch_limit: int | None = None
+    run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class TicketCategoryQualityRunRequest:
+    project_id: UUID
+    analysis_month: str
+    analysis_month_to: str | None = None
     force_reprocess: bool = False
     batch_size: int = DEFAULT_BATCH_SIZE
     batch_limit: int | None = None
@@ -275,6 +288,16 @@ def prompt_text_and_version(db: Session) -> tuple[str, int]:
     return prompt_text, row.version
 
 
+def category_quality_prompt_text_and_version(db: Session) -> tuple[str, int]:
+    row = get_prompt_template(db, CATEGORY_QUALITY_PROMPT_KEY)
+    prompt_text = (
+        row.custom_prompt.strip()
+        if row.is_custom_enabled and row.custom_prompt and row.custom_prompt.strip()
+        else row.default_prompt
+    )
+    return prompt_text, row.version
+
+
 def prompt_fingerprint(prompt_text: str) -> str:
     return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:16]
 
@@ -293,6 +316,20 @@ def ticket_payload(ticket: Ticket) -> dict[str, Any]:
         "existing_subcategory": compact_text(ticket.subcategory, max_chars=255),
         "catalog_item": compact_text(ticket.catalog_item, max_chars=255),
         "catalog_item_name": compact_text(ticket.catalog_item_name, max_chars=255),
+    }
+
+
+def category_quality_ticket_payload(ticket: Ticket) -> dict[str, Any]:
+    return {
+        "ticket_number": ticket.ticket_number,
+        "ticket_type": ticket.ticket_type,
+        "short_description": compact_text(
+            ticket.short_description,
+            max_chars=MAX_SHORT_DESCRIPTION_CHARS,
+        ),
+        "description": compact_text(ticket.description, max_chars=MAX_DESCRIPTION_CHARS),
+        "existing_category": compact_text(ticket.category, max_chars=255),
+        "existing_subcategory": compact_text(ticket.subcategory, max_chars=255),
     }
 
 
@@ -318,6 +355,27 @@ def input_hash_for_ticket(
         "catalog_item_name": compact_text(ticket.catalog_item_name, max_chars=255),
         "model_name": model_name,
         "prompt_key": PROMPT_KEY,
+        "prompt_version": prompt_version,
+        "prompt_fingerprint": prompt_fingerprint_value,
+    }
+    normalized_payload = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(normalized_payload.encode("utf-8")).hexdigest()
+
+
+def category_quality_input_hash_for_ticket(
+    ticket: Ticket,
+    *,
+    model_name: str | None,
+    prompt_version: int,
+    prompt_fingerprint_value: str,
+) -> str:
+    payload = {
+        "ticket_number": ticket.ticket_number,
+        "ticket_type": ticket.ticket_type,
+        "state": ticket.state,
+        "category_quality_payload": category_quality_ticket_payload(ticket),
+        "model_name": model_name,
+        "prompt_key": CATEGORY_QUALITY_PROMPT_KEY,
         "prompt_version": prompt_version,
         "prompt_fingerprint": prompt_fingerprint_value,
     }
@@ -427,6 +485,27 @@ def build_messages(
             "role": "user",
             "content": (
                 "Classify the tickets in this JSON payload. Return only the requested JSON.\n"
+                f"{json.dumps(request_payload, ensure_ascii=False)}"
+            ),
+        },
+    ]
+
+
+def build_category_quality_messages(
+    *,
+    prompt_text: str,
+    tickets: list[Ticket],
+) -> list[dict[str, str]]:
+    request_payload = {
+        "tickets": [category_quality_ticket_payload(ticket) for ticket in tickets],
+    }
+    return [
+        {"role": "system", "content": prompt_text},
+        {
+            "role": "user",
+            "content": (
+                "Assess only the existing category/subcategory quality for the tickets in this "
+                "JSON payload. Return only the requested JSON.\n"
                 f"{json.dumps(request_payload, ensure_ascii=False)}"
             ),
         },
@@ -798,6 +877,285 @@ def run_ticket_classification(
         "processed_count": processed_count,
         "skipped_cached_count": skipped_cached_count,
         "skipped_error_count": 0,
+        "failed_count": failed_count,
+        "remaining_ticket_count": remaining_ticket_count,
+        "processed_batch_count": processed_batch_count,
+        "total_batch_count": total_batches_to_process,
+        "summary": summary,
+        "usage": {
+            "prompt_tokens": prompt_tokens or None,
+            "completion_tokens": completion_tokens or None,
+            "estimated_cost": estimated_cost or None,
+            "duration_ms": duration_ms or None,
+        },
+        "usage_run": usage_run,
+    }
+
+
+def _classification_metadata(row: GenAITicketClassification) -> dict[str, Any]:
+    return dict(row.metadata_json) if isinstance(row.metadata_json, dict) else {}
+
+
+def _set_category_quality_metadata(
+    row: GenAITicketClassification,
+    *,
+    status: str,
+    run_id: str,
+    input_hash: str,
+    prompt_version: int,
+    model_name: str | None,
+    prompt_fingerprint_value: str,
+    error_message: str | None = None,
+) -> None:
+    metadata = _classification_metadata(row)
+    analysis_metadata: dict[str, Any] = {
+        "status": status,
+        "run_id": run_id,
+        "input_hash": input_hash,
+        "prompt_key": CATEGORY_QUALITY_PROMPT_KEY,
+        "prompt_version": prompt_version,
+        "model_name": model_name,
+        "prompt_fingerprint": prompt_fingerprint_value,
+        "processed_at": datetime.now(UTC).isoformat(),
+    }
+    if error_message:
+        analysis_metadata["error_message"] = error_message[:2000]
+    metadata["category_quality_analysis"] = analysis_metadata
+    row.metadata_json = metadata
+    row.processed_at = datetime.now(UTC)
+
+
+def _category_quality_is_cached(row: GenAITicketClassification, input_hash: str) -> bool:
+    metadata = _classification_metadata(row)
+    analysis_metadata = metadata.get("category_quality_analysis")
+    if not isinstance(analysis_metadata, dict):
+        return False
+    if analysis_metadata.get("input_hash") != input_hash:
+        return False
+    return analysis_metadata.get("status") in {"success", "category_blank"}
+
+
+def run_ticket_category_quality_analysis(
+    db: Session,
+    request: TicketCategoryQualityRunRequest,
+) -> dict[str, Any]:
+    start_month, end_month = validate_month_range(
+        request.analysis_month,
+        request.analysis_month_to,
+    )
+    range_label = analysis_range_label(start_month, end_month)
+    batch_size = clamp_batch_size(request.batch_size)
+    batch_limit = clamp_batch_limit(request.batch_limit)
+    customer_id = project_customer_id(db, request.project_id)
+    config = effective_ticket_classification_config(get_or_create_config(db))
+    validate_config(config)
+    model_name = provider_model_name(config)
+    prompt_text, prompt_version = category_quality_prompt_text_and_version(db)
+    fingerprint = prompt_fingerprint(prompt_text)
+    tickets = db.execute(
+        eligible_ticket_statement_for_month_range(request.project_id, start_month, end_month),
+    ).scalars().all()
+    eligible_count = len(tickets)
+    existing_rows = existing_rows_for_month_range(db, request.project_id, start_month, end_month)
+    run_id = (request.run_id or "").strip() or str(uuid4())
+
+    tickets_to_process: list[tuple[Ticket, str, GenAITicketClassification]] = []
+    skipped_cached_count = 0
+    skipped_missing_classification_count = 0
+    skipped_blank_category_count = 0
+    for ticket in tickets:
+        existing_row = existing_rows.get(ticket.ticket_number)
+        if existing_row is None:
+            skipped_missing_classification_count += 1
+            continue
+        ticket_hash = category_quality_input_hash_for_ticket(
+            ticket,
+            model_name=model_name,
+            prompt_version=prompt_version,
+            prompt_fingerprint_value=fingerprint,
+        )
+        if not compact_text(ticket.category, max_chars=255):
+            _set_category_quality_metadata(
+                existing_row,
+                status="category_blank",
+                run_id=run_id,
+                input_hash=ticket_hash,
+                prompt_version=prompt_version,
+                model_name=model_name,
+                prompt_fingerprint_value=fingerprint,
+            )
+            existing_row.category_quality = None
+            db.add(existing_row)
+            skipped_blank_category_count += 1
+            continue
+        if (
+            not request.force_reprocess
+            and existing_row.category_quality is not None
+            and _category_quality_is_cached(existing_row, ticket_hash)
+        ):
+            skipped_cached_count += 1
+            continue
+        tickets_to_process.append((ticket, ticket_hash, existing_row))
+    if skipped_blank_category_count:
+        db.commit()
+
+    total_batches_to_process = (
+        (len(tickets_to_process) + batch_size - 1) // batch_size if tickets_to_process else 0
+    )
+    request_tickets_to_process = (
+        tickets_to_process[: batch_limit * batch_size] if batch_limit else tickets_to_process
+    )
+
+    processed_count = 0
+    failed_count = 0
+    prompt_tokens = 0
+    completion_tokens = 0
+    estimated_cost = 0.0
+    duration_ms = 0
+    processed_batch_count = 0
+
+    for index in range(0, len(request_tickets_to_process), batch_size):
+        batch = request_tickets_to_process[index : index + batch_size]
+        batch_tickets = [ticket for ticket, _ticket_hash, _existing_row in batch]
+        messages = build_category_quality_messages(
+            prompt_text=prompt_text,
+            tickets=batch_tickets,
+        )
+        result: LLMCompletionResult = chat_completion(config, messages)
+        create_usage_log(
+            db,
+            operation=CATEGORY_QUALITY_OPERATION,
+            status="success" if result.ok else "error",
+            provider=config.provider,
+            model_name=config.model_name,
+            question=f"{range_label}: {len(batch_tickets)} category quality rows",
+            customer_id=customer_id,
+            project_id=request.project_id,
+            tools_used_json={
+                "run_id": run_id,
+                "prompt_key": CATEGORY_QUALITY_PROMPT_KEY,
+                "batch_size": len(batch_tickets),
+                "ticket_count": len(batch_tickets),
+                "analysis_month": start_month,
+                "analysis_month_from": start_month,
+                "analysis_month_to": end_month,
+                "force_reprocess": request.force_reprocess,
+                "batch_limit": batch_limit,
+            },
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            estimated_cost=result.estimated_cost,
+            duration_ms=result.duration_ms,
+            error_message=result.error_message,
+        )
+        prompt_tokens += result.prompt_tokens or 0
+        completion_tokens += result.completion_tokens or 0
+        estimated_cost += result.estimated_cost or 0.0
+        duration_ms += result.duration_ms or 0
+        if not result.ok:
+            error = result.error_message or "The model request failed."
+            for _ticket, ticket_hash, existing_row in batch:
+                _set_category_quality_metadata(
+                    existing_row,
+                    status="error",
+                    run_id=run_id,
+                    input_hash=ticket_hash,
+                    prompt_version=prompt_version,
+                    model_name=model_name,
+                    prompt_fingerprint_value=fingerprint,
+                    error_message=error,
+                )
+                db.add(existing_row)
+                failed_count += 1
+            db.commit()
+            processed_batch_count += 1
+            continue
+        try:
+            parsed_rows = parsed_rows_by_ticket(result.response_text)
+        except TicketClassificationError as exc:
+            parse_error_message = str(exc)
+            if result.completion_tokens and result.completion_tokens >= config.max_output_tokens:
+                parse_error_message = (
+                    f"{parse_error_message} The response likely reached the configured "
+                    f"max output token limit ({config.max_output_tokens}). Reduce batch size or "
+                    "increase GENAI_TICKET_CLASSIFICATION_MAX_OUTPUT_TOKENS."
+                )
+            for _ticket, ticket_hash, existing_row in batch:
+                _set_category_quality_metadata(
+                    existing_row,
+                    status="error",
+                    run_id=run_id,
+                    input_hash=ticket_hash,
+                    prompt_version=prompt_version,
+                    model_name=model_name,
+                    prompt_fingerprint_value=fingerprint,
+                    error_message=parse_error_message,
+                )
+                db.add(existing_row)
+                failed_count += 1
+            db.commit()
+            processed_batch_count += 1
+            continue
+
+        for ticket, ticket_hash, existing_row in batch:
+            parsed_row = parsed_rows.get(ticket.ticket_number)
+            if parsed_row is None:
+                _set_category_quality_metadata(
+                    existing_row,
+                    status="error",
+                    run_id=run_id,
+                    input_hash=ticket_hash,
+                    prompt_version=prompt_version,
+                    model_name=model_name,
+                    prompt_fingerprint_value=fingerprint,
+                    error_message="The model response did not include this ticket.",
+                )
+                db.add(existing_row)
+                failed_count += 1
+                continue
+            quality = normalize_category_quality(
+                parsed_row.get("category_quality"),
+                category_was_blank=False,
+            )
+            existing_row.category_quality = quality
+            _set_category_quality_metadata(
+                existing_row,
+                status="success",
+                run_id=run_id,
+                input_hash=ticket_hash,
+                prompt_version=prompt_version,
+                model_name=model_name,
+                prompt_fingerprint_value=fingerprint,
+            )
+            db.add(existing_row)
+            processed_count += 1
+        db.commit()
+        processed_batch_count += 1
+
+    summary = ticket_classification_summary(db, request.project_id, start_month, end_month)
+    usage_run = ticket_category_quality_usage_run(
+        db,
+        request.project_id,
+        start_month,
+        run_id,
+        end_month,
+    )
+    remaining_ticket_count = max(
+        len(tickets_to_process) - len(request_tickets_to_process),
+        0,
+    )
+    return {
+        "project_id": request.project_id,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
+        "run_id": run_id,
+        "eligible_ticket_count": eligible_count,
+        "existing_classification_count": len(existing_rows),
+        "processed_count": processed_count,
+        "skipped_cached_count": skipped_cached_count,
+        "skipped_missing_classification_count": skipped_missing_classification_count,
+        "skipped_blank_category_count": skipped_blank_category_count,
         "failed_count": failed_count,
         "remaining_ticket_count": remaining_ticket_count,
         "processed_batch_count": processed_batch_count,
@@ -1199,6 +1557,78 @@ def ticket_classification_usage_runs(
         .where(
             GenAIUsageLog.project_id == project_id,
             GenAIUsageLog.operation == "ticket_classification_enrichment",
+        )
+        .order_by(GenAIUsageLog.created_at.desc())
+        .limit(1000),
+    ).scalars()
+    grouped_logs: dict[str, list[GenAIUsageLog]] = {}
+    for row in rows:
+        metadata = _metadata_from_usage_log(row)
+        if not _metadata_matches_analysis_range(metadata, start_month, end_month):
+            continue
+        run_id = str(metadata.get("run_id") or "")
+        if not run_id:
+            continue
+        grouped_logs.setdefault(run_id, []).append(row)
+    usage_runs = [
+        _usage_run_from_logs(project_id, start_month, end_month, run_id, logs)
+        for run_id, logs in grouped_logs.items()
+    ]
+    usage_runs.sort(
+        key=lambda row: row["completed_at"] or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+    return {
+        "project_id": project_id,
+        "analysis_month": start_month,
+        "analysis_month_from": start_month,
+        "analysis_month_to": end_month,
+        "runs": usage_runs[: max(1, min(limit, 50))],
+    }
+
+
+def ticket_category_quality_usage_run(
+    db: Session,
+    project_id: UUID,
+    analysis_month: str,
+    run_id: str,
+    analysis_month_to: str | None = None,
+) -> dict[str, Any] | None:
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
+    rows = db.execute(
+        select(GenAIUsageLog)
+        .where(
+            GenAIUsageLog.project_id == project_id,
+            GenAIUsageLog.operation == CATEGORY_QUALITY_OPERATION,
+        )
+        .order_by(GenAIUsageLog.created_at.desc())
+        .limit(1000),
+    ).scalars()
+    logs = [
+        row
+        for row in rows
+        if (metadata := _metadata_from_usage_log(row)).get("run_id") == run_id
+        and _metadata_matches_analysis_range(metadata, start_month, end_month)
+    ]
+    if not logs:
+        return None
+    return _usage_run_from_logs(project_id, start_month, end_month, run_id, logs)
+
+
+def ticket_category_quality_usage_runs(
+    db: Session,
+    project_id: UUID,
+    analysis_month: str,
+    *,
+    analysis_month_to: str | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    start_month, end_month = validate_month_range(analysis_month, analysis_month_to)
+    rows = db.execute(
+        select(GenAIUsageLog)
+        .where(
+            GenAIUsageLog.project_id == project_id,
+            GenAIUsageLog.operation == CATEGORY_QUALITY_OPERATION,
         )
         .order_by(GenAIUsageLog.created_at.desc())
         .limit(1000),

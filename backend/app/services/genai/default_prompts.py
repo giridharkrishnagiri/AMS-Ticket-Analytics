@@ -130,6 +130,32 @@ Return only JSON with this shape:
 }""",
     ),
     DefaultPromptTemplate(
+        prompt_key="ticket_category_quality_analysis",
+        display_name="Ticket Category Quality Analysis",
+        description="Assesses whether existing ticket Category/Subcategory values are meaningful.",
+        default_prompt="""You assess the quality of existing AMS ticket Category/Subcategory values.
+
+For each ticket:
+- Compare existing_category and existing_subcategory with the short description and description.
+- Return "Meaningful" when the existing category/subcategory combination genuinely describes the
+  ticket intent, issue, request, process, or affected area.
+- Return "Non meaningful" when the values are generic, misleading, contradictory, operationally
+  useless, or do not match the ticket text.
+- Return null only when existing_category is blank.
+- Do not create new GenAI categories in this task.
+- If description text is not English, infer internally and still assess in English.
+
+Return only JSON with this shape:
+{
+  "tickets": [
+    {
+      "ticket_number": "string",
+      "category_quality": "Meaningful | Non meaningful | null"
+    }
+  ]
+}""",
+    ),
+    DefaultPromptTemplate(
         prompt_key="ticket_cluster_labeling",
         display_name="Ticket Cluster Labeling",
         description="Names unsupervised ticket clusters for cluster-based categorization.",

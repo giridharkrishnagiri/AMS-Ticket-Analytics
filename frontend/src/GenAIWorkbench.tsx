@@ -5,10 +5,12 @@ import {
   clearTicketClassificationAnalysis,
   downloadTicketClassificationDump,
   getGenAIWorkbenchSettings,
+  getTicketCategoryQualityUsageRuns,
   getTicketClusterUsageRuns,
   getTicketClassificationPivot,
   getTicketClassificationSummary,
   getTicketClassificationUsageRuns,
+  runTicketCategoryQualityAnalysis,
   runTicketClusterAnalysis,
   runTicketClassificationEnrichment,
 } from "./api/genai";
@@ -26,6 +28,8 @@ import { formatDisplayDateTime } from "./utils/dateFormat";
 const clearConfirmation = "Clear GenAI classification analysis for this selected period?";
 const forceReprocessConfirmation =
   "Force reprocess will clear the existing analysis for this selected period before starting a new run. Continue?";
+const categoryQualityForceConfirmation =
+  "Force reprocess will reassess category quality for the selected period. Continue?";
 const batchesPerRequest = 1;
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0): string {
@@ -100,6 +104,7 @@ function GenAIWorkbench() {
   const [usageRuns, setUsageRuns] = useState<GenAITicketClassificationUsageRun[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [isCategoryQualityRunning, setIsCategoryQualityRunning] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [isDownloadingDump, setIsDownloadingDump] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -115,9 +120,6 @@ function GenAIWorkbench() {
     workbenchSettings?.ticket_classification_button_enabled ?? false;
   const clusterButtonEnabled = workbenchSettings?.ticket_cluster_analysis_button_enabled ?? true;
   const canRunTicketClassification = canAct && analysisMonthFrom === analysisMonthTo;
-  const usageRunsLoader = clusterButtonEnabled
-    ? getTicketClusterUsageRuns
-    : getTicketClassificationUsageRuns;
 
   const qualityRows = useMemo(
     () =>
@@ -149,6 +151,32 @@ function GenAIWorkbench() {
     };
   }, []);
 
+  const loadUsageRuns = useCallback(async () => {
+    if (!projectId || !isMonthRangeValid) {
+      return [];
+    }
+    const primaryUsageRuns = clusterButtonEnabled
+      ? getTicketClusterUsageRuns(projectId, analysisMonthFrom, analysisMonthTo)
+      : getTicketClassificationUsageRuns(projectId, analysisMonthFrom, analysisMonthTo);
+    const categoryQualityUsageRuns = getTicketCategoryQualityUsageRuns(
+      projectId,
+      analysisMonthFrom,
+      analysisMonthTo
+    );
+    const usageResults = await Promise.all([primaryUsageRuns, categoryQualityUsageRuns]);
+    const runsById = new Map<string, GenAITicketClassificationUsageRun>();
+    for (const result of usageResults) {
+      for (const run of result.runs) {
+        runsById.set(run.run_id, run);
+      }
+    }
+    return Array.from(runsById.values())
+      .sort((left, right) =>
+        String(right.completed_at ?? "").localeCompare(String(left.completed_at ?? ""))
+      )
+      .slice(0, 10);
+  }, [analysisMonthFrom, analysisMonthTo, clusterButtonEnabled, isMonthRangeValid, projectId]);
+
   const loadSummaryAndPivot = useCallback(async () => {
     if (!projectId || !isMonthRangeValid) {
       setSummary(null);
@@ -162,11 +190,11 @@ function GenAIWorkbench() {
       const [nextSummary, nextPivot, nextUsageRuns] = await Promise.all([
         getTicketClassificationSummary(projectId, analysisMonthFrom, analysisMonthTo),
         getTicketClassificationPivot(projectId, analysisMonthFrom, analysisMonthTo),
-        usageRunsLoader(projectId, analysisMonthFrom, analysisMonthTo),
+        loadUsageRuns(),
       ]);
       setSummary(nextSummary);
       setPivot(nextPivot);
-      setUsageRuns(nextUsageRuns.runs);
+      setUsageRuns(nextUsageRuns);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to load analysis.");
       setSummary(null);
@@ -175,7 +203,7 @@ function GenAIWorkbench() {
     } finally {
       setIsLoading(false);
     }
-  }, [analysisMonthFrom, analysisMonthTo, isMonthRangeValid, projectId, usageRunsLoader]);
+  }, [analysisMonthFrom, analysisMonthTo, isMonthRangeValid, loadUsageRuns, projectId]);
 
   useEffect(() => {
     void loadSummaryAndPivot();
@@ -341,6 +369,105 @@ function GenAIWorkbench() {
         requestError instanceof Error ? requestError.message : "Cluster analysis failed."
       );
     } finally {
+      setIsRunning(false);
+    }
+  }
+
+  async function handleRunCategoryQuality() {
+    if (!canAct) {
+      return;
+    }
+    if (forceReprocess && !window.confirm(categoryQualityForceConfirmation)) {
+      return;
+    }
+    setIsRunning(true);
+    setIsCategoryQualityRunning(true);
+    setMessage("Starting category quality analysis...");
+    setError(null);
+    try {
+      const runId = createRunId();
+      let latestResult = null as Awaited<
+        ReturnType<typeof runTicketCategoryQualityAnalysis>
+      > | null;
+      let requestCount = 0;
+      let totalProcessedThisRun = 0;
+      let totalFailedThisRun = 0;
+
+      while (true) {
+        const result = await runTicketCategoryQualityAnalysis({
+          project_id: projectId,
+          analysis_month: analysisMonthFrom,
+          analysis_month_to: analysisMonthTo,
+          batch_size: batchSize,
+          batch_limit: batchesPerRequest,
+          force_reprocess: forceReprocess,
+          run_id: runId,
+        });
+        latestResult = result;
+        requestCount += 1;
+        totalProcessedThisRun += result.processed_count;
+        totalFailedThisRun += result.failed_count;
+        setSummary(result.summary);
+        if (result.usage_run) {
+          setUsageRuns((currentRuns) => [
+            result.usage_run as GenAITicketClassificationUsageRun,
+            ...currentRuns.filter((run) => run.run_id !== result.usage_run?.run_id),
+          ]);
+        }
+        setMessage(
+          `Running category quality... ${formatNumber(totalProcessedThisRun)} assessed in this run, ${formatNumber(
+            result.skipped_cached_count
+          )} cached, ${formatNumber(result.skipped_blank_category_count)} blank-category tickets skipped, ${formatNumber(
+            result.remaining_ticket_count
+          )} remaining${
+            result.failed_count > 0
+              ? `; ${formatNumber(result.failed_count)} ticket-level issue logged in this batch`
+              : ""
+          }.`
+        );
+
+        if (result.failed_count > 0 && result.processed_count === 0) {
+          setError(
+            `Stopped because this request made no progress and returned ${formatNumber(
+              result.failed_count
+            )} failed tickets.`
+          );
+          break;
+        }
+        if (result.remaining_ticket_count <= 0 || result.processed_batch_count === 0) {
+          break;
+        }
+      }
+
+      const [nextSummary, nextPivot, nextUsageRuns] = await Promise.all([
+        getTicketClassificationSummary(projectId, analysisMonthFrom, analysisMonthTo),
+        getTicketClassificationPivot(projectId, analysisMonthFrom, analysisMonthTo),
+        loadUsageRuns(),
+      ]);
+      setSummary(nextSummary);
+      setPivot(nextPivot);
+      setUsageRuns(nextUsageRuns);
+      if (latestResult) {
+        setMessage(
+          `Category quality analysis complete: ${formatNumber(
+            totalProcessedThisRun
+          )} assessed across ${formatNumber(requestCount)} requests, ${formatNumber(
+            latestResult.skipped_cached_count
+          )} cached, ${formatNumber(
+            latestResult.skipped_blank_category_count
+          )} blank-category tickets skipped, ${formatNumber(
+            latestResult.skipped_missing_classification_count
+          )} tickets skipped because no classification row exists, ${formatNumber(
+            totalFailedThisRun
+          )} failed.`
+        );
+      }
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Category quality analysis failed."
+      );
+    } finally {
+      setIsCategoryQualityRunning(false);
       setIsRunning(false);
     }
   }
@@ -525,6 +652,20 @@ function GenAIWorkbench() {
             onClick={() => void handleClear()}
           >
             {isClearing ? "Clearing..." : "Clear GenAI Analysis"}
+          </button>
+        </div>
+
+        <div className="workbench-analysis-actions">
+          <span className="label">Separate Analyses</span>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={!canAct || isRunning || isClearing}
+            onClick={() => void handleRunCategoryQuality()}
+          >
+            {isCategoryQualityRunning
+              ? "Running Category Quality..."
+              : "Run Category Quality Analysis"}
           </button>
         </div>
 

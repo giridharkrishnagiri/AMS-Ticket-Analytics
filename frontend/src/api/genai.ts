@@ -96,6 +96,27 @@ export type GenAITicketClassificationRunResponse = {
   usage_run: GenAITicketClassificationUsageRun | null;
 };
 
+export type GenAITicketCategoryQualityRunResponse = {
+  project_id: string;
+  analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
+  run_id: string;
+  eligible_ticket_count: number;
+  existing_classification_count: number;
+  processed_count: number;
+  skipped_cached_count: number;
+  skipped_missing_classification_count: number;
+  skipped_blank_category_count: number;
+  failed_count: number;
+  remaining_ticket_count: number;
+  processed_batch_count: number;
+  total_batch_count: number;
+  summary: GenAITicketClassificationSummary;
+  usage: GenAITicketClassificationUsageSummary;
+  usage_run: GenAITicketClassificationUsageRun | null;
+};
+
 export type GenAIWorkbenchSettings = {
   ticket_classification_button_enabled: boolean;
   ticket_cluster_analysis_button_enabled: boolean;
@@ -276,6 +297,19 @@ export function getTicketClusterUsageRuns(
   );
 }
 
+export function getTicketCategoryQualityUsageRuns(
+  projectId: string,
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
+): Promise<GenAITicketClassificationUsageRuns> {
+  return requestJson<GenAITicketClassificationUsageRuns>(
+    `/genai/ticket-category-quality/usage-runs?${queryString({
+      ...monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo),
+      limit: "10",
+    })}`
+  );
+}
+
 export function runTicketClassificationEnrichment(payload: {
   project_id: string;
   analysis_month: string;
@@ -289,6 +323,25 @@ export function runTicketClassificationEnrichment(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+export function runTicketCategoryQualityAnalysis(payload: {
+  project_id: string;
+  analysis_month: string;
+  analysis_month_to?: string;
+  force_reprocess: boolean;
+  batch_size: number;
+  batch_limit?: number;
+  run_id?: string;
+}): Promise<GenAITicketCategoryQualityRunResponse> {
+  return requestJson<GenAITicketCategoryQualityRunResponse>(
+    "/genai/ticket-category-quality/run",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
 }
 
 export function runTicketClusterAnalysis(payload: {
