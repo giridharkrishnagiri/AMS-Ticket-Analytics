@@ -254,9 +254,13 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
     ticket_cluster_analysis_button_enabled: bool
     cluster_embedding_model_name: str
     cluster_label_model_name: str | None = None
+    cluster_mode: str
     cluster_level_1_count: int
     cluster_level_2_count: int
     cluster_level_3_count: int
+    cluster_level_1_distance_threshold: float
+    cluster_level_2_distance_threshold: float
+    cluster_level_3_distance_threshold: float
     cluster_embedding_batch_size: int
     cluster_label_batch_size: int
 

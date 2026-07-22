@@ -521,9 +521,14 @@ function GenAIWorkbench() {
         ) : null}
         {workbenchSettings ? (
           <p className="muted-text summary-block">
-            Cluster targets: L1 {formatNumber(workbenchSettings.cluster_level_1_count)}, L2{" "}
+            Cluster {workbenchSettings.cluster_mode === "adaptive" ? "caps" : "targets"}: L1{" "}
+            {formatNumber(workbenchSettings.cluster_level_1_count)}, L2{" "}
             {formatNumber(workbenchSettings.cluster_level_2_count)}, L3{" "}
-            {formatNumber(workbenchSettings.cluster_level_3_count)}. Embedding model:{" "}
+            {formatNumber(workbenchSettings.cluster_level_3_count)}. Mode:{" "}
+            {workbenchSettings.cluster_mode}. Thresholds:{" "}
+            {workbenchSettings.cluster_level_1_distance_threshold.toFixed(2)} /{" "}
+            {workbenchSettings.cluster_level_2_distance_threshold.toFixed(2)} /{" "}
+            {workbenchSettings.cluster_level_3_distance_threshold.toFixed(2)}. Embedding model:{" "}
             {workbenchSettings.cluster_embedding_model_name}.
           </p>
         ) : null}

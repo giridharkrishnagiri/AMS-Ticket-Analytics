@@ -178,12 +178,24 @@ class ClusterInfo:
     level: int
     ticket_indices: list[int]
     centroid: np.ndarray
+    max_distance: float | None = None
+    mean_distance: float | None = None
     parent_key: str | None = None
     child_keys: list[str] | None = None
     top_terms: list[str] | None = None
     label: str | None = None
     summary: str | None = None
     confidence: float | None = None
+
+
+@dataclass
+class AdaptiveLeaf:
+    parent_key: str | None
+    ticket_indices: list[int]
+    centroid: np.ndarray
+    max_distance: float
+    mean_distance: float
+    splittable: bool = True
 
 
 def ticket_type_partition(ticket_type: str | None) -> str:
@@ -288,8 +300,14 @@ def split_target_count(
     return allocation
 
 
+def normalized_cluster_mode(value: str | None) -> str:
+    mode = (value or "").strip().lower()
+    return mode if mode in {"adaptive", "fixed"} else "adaptive"
+
+
 def workbench_settings() -> dict[str, Any]:
     settings = get_settings()
+    cluster_mode = normalized_cluster_mode(settings.genai_ticket_cluster_mode)
     return {
         "ticket_classification_button_enabled": settings.genai_ticket_classification_button_enabled,
         "ticket_cluster_analysis_button_enabled": (
@@ -298,9 +316,19 @@ def workbench_settings() -> dict[str, Any]:
         "cluster_embedding_model_name": settings.genai_ticket_cluster_embedding_model_name,
         "cluster_label_model_name": settings.genai_ticket_cluster_label_model_name
         or settings.genai_ticket_classification_model_name,
+        "cluster_mode": cluster_mode,
         "cluster_level_1_count": settings.genai_ticket_cluster_level_1_count,
         "cluster_level_2_count": settings.genai_ticket_cluster_level_2_count,
         "cluster_level_3_count": settings.genai_ticket_cluster_level_3_count,
+        "cluster_level_1_distance_threshold": (
+            settings.genai_ticket_cluster_level_1_distance_threshold
+        ),
+        "cluster_level_2_distance_threshold": (
+            settings.genai_ticket_cluster_level_2_distance_threshold
+        ),
+        "cluster_level_3_distance_threshold": (
+            settings.genai_ticket_cluster_level_3_distance_threshold
+        ),
         "cluster_embedding_batch_size": settings.genai_ticket_cluster_embedding_batch_size,
         "cluster_label_batch_size": settings.genai_ticket_cluster_label_batch_size,
     }
@@ -310,6 +338,12 @@ def clamp_positive(value: int | None, default_value: int, *, minimum: int, maxim
     if value is None:
         value = default_value
     return max(minimum, min(int(value), maximum))
+
+
+def clamp_distance_threshold(value: float | None, default_value: float) -> float:
+    if value is None:
+        value = default_value
+    return max(0.01, min(float(value), 1.5))
 
 
 def derived_config(
@@ -599,6 +633,121 @@ def normalized_centroid(vectors: np.ndarray, weights: np.ndarray | None = None) 
     return centroid / norm
 
 
+def cluster_distance_metrics(
+    vectors: np.ndarray,
+    indices: list[int],
+    centroid: np.ndarray,
+) -> tuple[float, float]:
+    if not indices:
+        return 0.0, 0.0
+    distances = 1.0 - np.clip(vectors[indices] @ centroid, -1.0, 1.0)
+    return float(np.max(distances)), float(np.mean(distances))
+
+
+def new_adaptive_leaf(
+    *,
+    parent_key: str | None,
+    indices: list[int],
+    vectors: np.ndarray,
+) -> AdaptiveLeaf:
+    centroid = normalized_centroid(vectors[indices])
+    max_distance, mean_distance = cluster_distance_metrics(vectors, indices, centroid)
+    return AdaptiveLeaf(
+        parent_key=parent_key,
+        ticket_indices=sorted(indices),
+        centroid=centroid,
+        max_distance=max_distance,
+        mean_distance=mean_distance,
+    )
+
+
+def split_leaf_once(leaf: AdaptiveLeaf, vectors: np.ndarray) -> list[AdaptiveLeaf] | None:
+    if len(leaf.ticket_indices) < 2:
+        return None
+    scoped_vectors = vectors[leaf.ticket_indices]
+    unique_vectors = np.unique(np.round(scoped_vectors, decimals=8), axis=0)
+    if len(unique_vectors) < 2:
+        return None
+    raw_labels = cluster_labels(scoped_vectors, 2)
+    groups: dict[int, list[int]] = defaultdict(list)
+    for scoped_position, raw_label in enumerate(raw_labels):
+        groups[int(raw_label)].append(leaf.ticket_indices[scoped_position])
+    if len(groups) < 2:
+        return None
+    child_leaves = [
+        new_adaptive_leaf(parent_key=leaf.parent_key, indices=indices, vectors=vectors)
+        for indices in groups.values()
+        if indices
+    ]
+    if len(child_leaves) < 2:
+        return None
+    return child_leaves
+
+
+def build_adaptive_clusters(
+    inputs: list[TicketTextInput],
+    vectors: np.ndarray,
+    *,
+    seed_groups: list[tuple[str | None, list[int]]],
+    level: int,
+    max_count: int,
+    distance_threshold: float,
+    key_prefix: str | None = None,
+) -> dict[str, ClusterInfo]:
+    if not seed_groups:
+        return {}
+    max_count = max(len(seed_groups), max_count)
+    leaves = [
+        new_adaptive_leaf(parent_key=parent_key, indices=indices, vectors=vectors)
+        for parent_key, indices in seed_groups
+        if indices
+    ]
+
+    while len(leaves) < max_count:
+        candidate_positions = [
+            position
+            for position, leaf in enumerate(leaves)
+            if leaf.splittable
+            and len(leaf.ticket_indices) >= 2
+            and leaf.max_distance > distance_threshold
+        ]
+        if not candidate_positions:
+            break
+        split_position = max(
+            candidate_positions,
+            key=lambda position: (
+                leaves[position].max_distance,
+                len(leaves[position].ticket_indices),
+                -position,
+            ),
+        )
+        split_leaf = leaves[split_position]
+        child_leaves = split_leaf_once(split_leaf, vectors)
+        if child_leaves is None:
+            split_leaf.splittable = False
+            continue
+        leaves = leaves[:split_position] + child_leaves + leaves[split_position + 1 :]
+
+    def sort_key(leaf: AdaptiveLeaf) -> tuple[int, str]:
+        first_ticket = min(inputs[index].ticket.ticket_number for index in leaf.ticket_indices)
+        return (-len(leaf.ticket_indices), first_ticket)
+
+    clusters: dict[str, ClusterInfo] = {}
+    for position, leaf in enumerate(sorted(leaves, key=sort_key), start=1):
+        key = cluster_key(level, position, key_prefix=key_prefix)
+        clusters[key] = ClusterInfo(
+            key=key,
+            level=level,
+            ticket_indices=leaf.ticket_indices,
+            centroid=leaf.centroid,
+            max_distance=leaf.max_distance,
+            mean_distance=leaf.mean_distance,
+            parent_key=leaf.parent_key,
+            top_terms=top_terms_for_indices(inputs, leaf.ticket_indices),
+        )
+    return dict(sorted(clusters.items()))
+
+
 def cluster_key(level: int, position: int, *, key_prefix: str | None = None) -> str:
     key = f"L{level}-{position:03d}"
     return f"{key_prefix}-{key}" if key_prefix else key
@@ -644,11 +793,14 @@ def build_level_3_clusters(
     for raw_label, indices in groups.items():
         key = key_map[raw_label]
         centroid = normalized_centroid(vectors[indices])
+        max_distance, mean_distance = cluster_distance_metrics(vectors, indices, centroid)
         clusters[key] = ClusterInfo(
             key=key,
             level=3,
             ticket_indices=indices,
             centroid=centroid,
+            max_distance=max_distance,
+            mean_distance=mean_distance,
             top_terms=top_terms_for_indices(inputs, indices),
         )
     return dict(sorted(clusters.items()))
@@ -661,6 +813,7 @@ def build_parent_clusters(
     parent_level: int,
     target_count: int,
     inputs: list[TicketTextInput],
+    vectors: np.ndarray,
     key_prefix: str | None = None,
 ) -> dict[str, ClusterInfo]:
     child_items = list(child_clusters.values())
@@ -695,11 +848,14 @@ def build_parent_clusters(
             np.array([child.centroid for child in children], dtype=float),
             np.array([len(child.ticket_indices) for child in children], dtype=float),
         )
+        max_distance, mean_distance = cluster_distance_metrics(vectors, ticket_indices, centroid)
         parent_clusters[key] = ClusterInfo(
             key=key,
             level=parent_level,
             ticket_indices=ticket_indices,
             centroid=centroid,
+            max_distance=max_distance,
+            mean_distance=mean_distance,
             child_keys=child_keys,
             top_terms=top_terms_for_indices(inputs, ticket_indices),
         )
@@ -749,6 +905,7 @@ def build_type_separated_clusters(
             parent_level=2,
             target_count=min(level_2_targets.get(partition, 0), len(child_clusters)),
             inputs=inputs,
+            vectors=vectors,
             key_prefix=cluster_key_prefix(partition),
         )
         level_2_by_partition[partition] = clusters
@@ -771,11 +928,121 @@ def build_type_separated_clusters(
             parent_level=1,
             target_count=min(level_1_targets.get(partition, 0), len(child_clusters)),
             inputs=inputs,
+            vectors=vectors,
             key_prefix=cluster_key_prefix(partition),
         )
         level_1_clusters.update(clusters)
 
     partition_counts = {partition: len(indices) for partition, indices in partitions.items()}
+    return (
+        dict(sorted(level_1_clusters.items())),
+        dict(sorted(level_2_clusters.items())),
+        dict(sorted(level_3_clusters.items())),
+        partition_counts,
+    )
+
+
+def attach_child_keys(
+    parent_clusters: dict[str, ClusterInfo],
+    child_clusters: dict[str, ClusterInfo],
+) -> None:
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for child in child_clusters.values():
+        if child.parent_key and child.parent_key in parent_clusters:
+            grouped[child.parent_key].append(child.key)
+    for parent in parent_clusters.values():
+        parent.child_keys = sorted(grouped.get(parent.key, []))
+
+
+def build_adaptive_type_separated_clusters(
+    inputs: list[TicketTextInput],
+    vectors: np.ndarray,
+    *,
+    level_1_count: int,
+    level_2_count: int,
+    level_3_count: int,
+    level_1_threshold: float,
+    level_2_threshold: float,
+    level_3_threshold: float,
+) -> tuple[dict[str, ClusterInfo], dict[str, ClusterInfo], dict[str, ClusterInfo], dict[str, int]]:
+    partitions = partition_input_indices(inputs)
+    partition_counts = {partition: len(indices) for partition, indices in partitions.items()}
+    level_1_targets = split_target_count(partitions, level_1_count)
+
+    level_1_clusters: dict[str, ClusterInfo] = {}
+    level_1_by_partition: dict[str, dict[str, ClusterInfo]] = {}
+    for partition, indices in partitions.items():
+        cap = max(1, min(level_1_targets.get(partition, 1), len(indices)))
+        clusters = build_adaptive_clusters(
+            inputs,
+            vectors,
+            seed_groups=[(None, indices)],
+            level=1,
+            max_count=cap,
+            distance_threshold=level_1_threshold,
+            key_prefix=cluster_key_prefix(partition),
+        )
+        level_1_by_partition[partition] = clusters
+        level_1_clusters.update(clusters)
+
+    level_2_targets = split_target_count(
+        partitions,
+        level_2_count,
+        maximum_by_partition={partition: len(indices) for partition, indices in partitions.items()},
+    )
+    level_2_clusters: dict[str, ClusterInfo] = {}
+    level_2_by_partition: dict[str, dict[str, ClusterInfo]] = {}
+    for partition, parent_clusters in level_1_by_partition.items():
+        if not parent_clusters:
+            continue
+        indices = partitions[partition]
+        cap = max(
+            len(parent_clusters),
+            min(level_2_targets.get(partition, len(parent_clusters)), len(indices)),
+        )
+        clusters = build_adaptive_clusters(
+            inputs,
+            vectors,
+            seed_groups=[
+                (parent.key, parent.ticket_indices) for parent in parent_clusters.values()
+            ],
+            level=2,
+            max_count=cap,
+            distance_threshold=level_2_threshold,
+            key_prefix=cluster_key_prefix(partition),
+        )
+        attach_child_keys(parent_clusters, clusters)
+        level_2_by_partition[partition] = clusters
+        level_2_clusters.update(clusters)
+
+    level_3_targets = split_target_count(
+        partitions,
+        level_3_count,
+        maximum_by_partition={partition: len(indices) for partition, indices in partitions.items()},
+    )
+    level_3_clusters: dict[str, ClusterInfo] = {}
+    for partition, parent_clusters in level_2_by_partition.items():
+        if not parent_clusters:
+            continue
+        indices = partitions[partition]
+        cap = max(
+            len(parent_clusters),
+            min(level_3_targets.get(partition, len(parent_clusters)), len(indices)),
+        )
+        clusters = build_adaptive_clusters(
+            inputs,
+            vectors,
+            seed_groups=[
+                (parent.key, parent.ticket_indices) for parent in parent_clusters.values()
+            ],
+            level=3,
+            max_count=cap,
+            distance_threshold=level_3_threshold,
+            key_prefix=cluster_key_prefix(partition),
+        )
+        attach_child_keys(parent_clusters, clusters)
+        level_3_clusters.update(clusters)
+
     return (
         dict(sorted(level_1_clusters.items())),
         dict(sorted(level_2_clusters.items())),
@@ -858,6 +1125,12 @@ def cluster_payload(
         "ticket_count": len(cluster.ticket_indices),
         "incident_count": incident_count,
         "sc_task_count": sc_task_count,
+        "max_distance_from_centroid": (
+            round(cluster.max_distance, 4) if cluster.max_distance is not None else None
+        ),
+        "mean_distance_from_centroid": (
+            round(cluster.mean_distance, 4) if cluster.mean_distance is not None else None
+        ),
         "top_terms": cluster.top_terms or [],
         "representative_tickets": representative_tickets(
             inputs,
@@ -872,6 +1145,11 @@ def cluster_payload(
                 "cluster_id": child_key,
                 "label": child_clusters[child_key].label,
                 "ticket_count": len(child_clusters[child_key].ticket_indices),
+                "max_distance_from_centroid": (
+                    round(child_clusters[child_key].max_distance, 4)
+                    if child_clusters[child_key].max_distance is not None
+                    else None
+                ),
                 "top_terms": child_clusters[child_key].top_terms or [],
             }
             for child_key in cluster.child_keys
@@ -1143,7 +1421,11 @@ def save_cluster_labels(
                         if child_clusters
                         else None
                     ),
-                    metadata_json=metadata,
+                    metadata_json={
+                        **metadata,
+                        "cluster_max_distance_from_centroid": cluster.max_distance,
+                        "cluster_mean_distance_from_centroid": cluster.mean_distance,
+                    },
                 ),
             )
             saved_count += 1
@@ -1586,6 +1868,7 @@ def run_ticket_cluster_analysis(
         vectors.shape[1] if vectors.ndim == 2 else 0,
     )
     settings = get_settings()
+    cluster_mode = normalized_cluster_mode(settings.genai_ticket_cluster_mode)
     level_3_count = clamp_positive(
         request.level_3_count,
         settings.genai_ticket_cluster_level_3_count,
@@ -1604,29 +1887,63 @@ def run_ticket_cluster_analysis(
         minimum=1,
         maximum=min(50, level_2_count),
     )
-    log_progress(
-        "run %s clustering targets: level 1=%s, level 2=%s, level 3=%s",
-        run_id,
-        level_1_count,
-        level_2_count,
-        level_3_count,
+    level_1_threshold = clamp_distance_threshold(
+        settings.genai_ticket_cluster_level_1_distance_threshold,
+        0.42,
     )
-
-    level_1_clusters, level_2_clusters, level_3_clusters, partition_counts = (
-        build_type_separated_clusters(
-            inputs,
-            vectors,
-            level_1_count=level_1_count,
-            level_2_count=level_2_count,
-            level_3_count=level_3_count,
-        )
+    level_2_threshold = clamp_distance_threshold(
+        settings.genai_ticket_cluster_level_2_distance_threshold,
+        0.32,
+    )
+    level_3_threshold = clamp_distance_threshold(
+        settings.genai_ticket_cluster_level_3_distance_threshold,
+        0.24,
     )
     log_progress(
         (
-            "run %s type-separated clustering complete: %s/%s/%s clusters "
+            "run %s clustering mode=%s caps/targets: level 1=%s, level 2=%s, "
+            "level 3=%s; distance thresholds=%s/%s/%s"
+        ),
+        run_id,
+        cluster_mode,
+        level_1_count,
+        level_2_count,
+        level_3_count,
+        level_1_threshold,
+        level_2_threshold,
+        level_3_threshold,
+    )
+
+    if cluster_mode == "fixed":
+        level_1_clusters, level_2_clusters, level_3_clusters, partition_counts = (
+            build_type_separated_clusters(
+                inputs,
+                vectors,
+                level_1_count=level_1_count,
+                level_2_count=level_2_count,
+                level_3_count=level_3_count,
+            )
+        )
+    else:
+        level_1_clusters, level_2_clusters, level_3_clusters, partition_counts = (
+            build_adaptive_type_separated_clusters(
+                inputs,
+                vectors,
+                level_1_count=level_1_count,
+                level_2_count=level_2_count,
+                level_3_count=level_3_count,
+                level_1_threshold=level_1_threshold,
+                level_2_threshold=level_2_threshold,
+                level_3_threshold=level_3_threshold,
+            )
+        )
+    log_progress(
+        (
+            "run %s %s clustering complete: %s/%s/%s clusters "
             "across partitions %s in %.2fs"
         ),
         run_id,
+        cluster_mode,
         len(level_1_clusters),
         len(level_2_clusters),
         len(level_3_clusters),
@@ -1693,12 +2010,20 @@ def run_ticket_cluster_analysis(
         "analysis_range": range_label,
         "embedding_model": provider_model_name(embedding_config),
         "label_model": provider_model_name(label_config),
-        "algorithm": "kmeans_hierarchical_centroids",
+        "algorithm": (
+            "adaptive_recursive_kmeans_centroid_radius"
+            if cluster_mode == "adaptive"
+            else "kmeans_hierarchical_centroids"
+        ),
+        "cluster_mode": cluster_mode,
         "ticket_type_separated": True,
         "ticket_type_partition_counts": partition_counts,
         "level_1_target": level_1_count,
         "level_2_target": level_2_count,
         "level_3_target": level_3_count,
+        "level_1_distance_threshold": level_1_threshold,
+        "level_2_distance_threshold": level_2_threshold,
+        "level_3_distance_threshold": level_3_threshold,
         "text_version": EMBEDDING_TEXT_VERSION,
     }
     log_progress("run %s saving cluster labels", run_id)

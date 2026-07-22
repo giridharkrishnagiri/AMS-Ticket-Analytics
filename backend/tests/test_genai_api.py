@@ -1054,9 +1054,13 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
     reset_genai_tables()
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_EMBEDDING_MODEL_NAME", "embedding-test")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LABEL_MODEL_NAME", "cluster-label-test")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_MODE", "adaptive")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_1_COUNT", "2")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_2_COUNT", "3")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_3_COUNT", "4")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_1_DISTANCE_THRESHOLD", "1.5")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_2_DISTANCE_THRESHOLD", "1.5")
+    monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_3_DISTANCE_THRESHOLD", "1.5")
     get_settings.cache_clear()
     client_id, project_id, upload_batch_id, uploaded_file_id, _suffix = (
         create_ticket_classification_project()
@@ -1176,6 +1180,8 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             settings_response = client.get("/api/genai/workbench-settings")
             assert settings_response.status_code == 200
             assert settings_response.json()["ticket_cluster_analysis_button_enabled"] is True
+            assert settings_response.json()["cluster_mode"] == "adaptive"
+            assert settings_response.json()["cluster_level_3_distance_threshold"] == 1.5
 
             run_response = client.post(
                 "/api/genai/ticket-cluster-analysis/run",
@@ -1196,8 +1202,8 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert run_payload["new_embedding_count"] == 6
             assert run_payload["cached_embedding_count"] == 0
             assert run_payload["level_1_cluster_count"] == 2
-            assert run_payload["level_2_cluster_count"] == 3
-            assert run_payload["level_3_cluster_count"] == 4
+            assert run_payload["level_2_cluster_count"] == 2
+            assert run_payload["level_3_cluster_count"] == 2
             assert run_payload["summary"]["analyzed_ticket_count"] == 6
             assert label_model_names
             assert set(label_model_names) == {"cluster-label-test"}
@@ -1329,7 +1335,7 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             )
             assert clear_response.status_code == 200
             assert clear_response.json()["deleted_classification_count"] == 6
-            assert clear_response.json()["deleted_cluster_label_count"] == 9
+            assert clear_response.json()["deleted_cluster_label_count"] == 6
 
         assert len(embedding_calls) == 1
         db = SessionLocal()

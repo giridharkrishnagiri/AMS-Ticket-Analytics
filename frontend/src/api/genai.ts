@@ -101,9 +101,13 @@ export type GenAIWorkbenchSettings = {
   ticket_cluster_analysis_button_enabled: boolean;
   cluster_embedding_model_name: string;
   cluster_label_model_name: string | null;
+  cluster_mode: string;
   cluster_level_1_count: number;
   cluster_level_2_count: number;
   cluster_level_3_count: number;
+  cluster_level_1_distance_threshold: number;
+  cluster_level_2_distance_threshold: number;
+  cluster_level_3_distance_threshold: number;
   cluster_embedding_batch_size: number;
   cluster_label_batch_size: number;
 };
