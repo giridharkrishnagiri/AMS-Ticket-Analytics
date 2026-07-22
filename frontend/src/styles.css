@@ -2935,7 +2935,7 @@ h2 {
   display: grid;
   grid-template-columns:
     minmax(260px, 1.4fr) minmax(150px, 0.7fr) minmax(150px, 0.7fr)
-    minmax(120px, 0.5fr) auto;
+    minmax(120px, 0.5fr) auto auto;
   align-items: end;
   gap: 14px;
 }

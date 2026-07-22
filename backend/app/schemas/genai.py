@@ -273,6 +273,7 @@ class GenAITicketClusterRunRequest(BaseModel):
     level_1_count: int | None = Field(default=None, ge=1)
     level_2_count: int | None = Field(default=None, ge=1)
     level_3_count: int | None = Field(default=None, ge=1)
+    use_llm_labels: bool = True
     run_id: str | None = Field(default=None, max_length=80)
 
 
@@ -292,6 +293,7 @@ class GenAITicketClusterRunResponse(BaseModel):
     labeled_cluster_count: int
     assigned_ticket_count: int
     failed_count: int
+    llm_labeling_enabled: bool = True
     summary: GenAITicketClassificationSummaryResponse
     usage_run: GenAITicketClassificationUsageRunResponse | None = None
 

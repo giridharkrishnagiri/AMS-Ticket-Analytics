@@ -505,6 +505,7 @@ def post_ticket_cluster_analysis_run(
                 level_1_count=request.level_1_count,
                 level_2_count=request.level_2_count,
                 level_3_count=request.level_3_count,
+                use_llm_labels=request.use_llm_labels,
                 run_id=request.run_id,
             ),
         )

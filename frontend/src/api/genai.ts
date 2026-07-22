@@ -128,6 +128,7 @@ export type GenAITicketClusterRunResponse = {
   labeled_cluster_count: number;
   assigned_ticket_count: number;
   failed_count: number;
+  llm_labeling_enabled: boolean;
   summary: GenAITicketClassificationSummary;
   usage_run: GenAITicketClassificationUsageRun | null;
 };
@@ -295,6 +296,7 @@ export function runTicketClusterAnalysis(payload: {
   analysis_month: string;
   analysis_month_to?: string;
   force_reprocess: boolean;
+  use_llm_labels: boolean;
   run_id?: string;
 }): Promise<GenAITicketClusterRunResponse> {
   return requestJson<GenAITicketClusterRunResponse>("/genai/ticket-cluster-analysis/run", {

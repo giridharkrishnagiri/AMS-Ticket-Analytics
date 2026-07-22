@@ -1255,6 +1255,12 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert "genai_category_cluster_id" in dump_text
             assert "genai_subcategory_1_cluster_id" in dump_text
             assert "genai_subcategory_2_cluster_id" in dump_text
+            assert "genai_category_cluster_max_distance" in dump_text
+            assert "genai_subcategory_1_cluster_max_distance" in dump_text
+            assert "genai_subcategory_2_cluster_max_distance" in dump_text
+            assert "genai_category_distance_threshold" in dump_text
+            assert "genai_subcategory_1_distance_threshold" in dump_text
+            assert "genai_subcategory_2_distance_threshold" in dump_text
             assert "Category-000" in dump_text
             assert "SubCategory-1-000" in dump_text
             assert "SubCategory-2-000" in dump_text
@@ -1322,6 +1328,12 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                     row.genai_category_cluster_id.split("-Category-", maxsplit=1)[0]
                     for row in saved_classifications
                 } == {"Incident", "SC Task"}
+                assert all(
+                    isinstance(row.metadata_json, dict)
+                    and "cluster_level_3_max_distance_from_centroid" in row.metadata_json
+                    and "level_3_distance_threshold" in row.metadata_json
+                    for row in saved_classifications
+                )
             finally:
                 db_check.close()
 
@@ -1336,6 +1348,63 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert clear_response.status_code == 200
             assert clear_response.json()["deleted_classification_count"] == 6
             assert clear_response.json()["deleted_cluster_label_count"] == 6
+
+            label_model_names.clear()
+            no_label_response = client.post(
+                "/api/genai/ticket-cluster-analysis/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                    "force_reprocess": True,
+                    "use_llm_labels": False,
+                    "run_id": "cluster-test-run-no-llm",
+                },
+            )
+            assert no_label_response.status_code == 200
+            no_label_payload = no_label_response.json()
+            assert no_label_payload["llm_labeling_enabled"] is False
+            assert no_label_payload["failed_count"] == 0
+            assert no_label_payload["assigned_ticket_count"] == 6
+            assert no_label_payload["new_embedding_count"] == 0
+            assert no_label_payload["cached_embedding_count"] == 6
+            assert label_model_names == []
+
+            db_check = SessionLocal()
+            try:
+                no_label_classifications = (
+                    db_check.query(GenAITicketClassification)
+                    .filter(
+                        GenAITicketClassification.project_id == project_id,
+                        GenAITicketClassification.analysis_month.in_(("2026-05", "2026-06")),
+                    )
+                    .all()
+                )
+                assert len(no_label_classifications) == 6
+                assert all(row.model_name is None for row in no_label_classifications)
+                assert all(
+                    isinstance(row.metadata_json, dict)
+                    and row.metadata_json.get("llm_labeling_enabled") is False
+                    for row in no_label_classifications
+                )
+                assert {
+                    row.genai_category_cluster_id.split("-Category-", maxsplit=1)[0]
+                    for row in no_label_classifications
+                } == {"Incident", "SC Task"}
+            finally:
+                db_check.close()
+
+            second_clear_response = client.post(
+                "/api/genai/ticket-cluster-analysis/clear",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
+            )
+            assert second_clear_response.status_code == 200
+            assert second_clear_response.json()["deleted_classification_count"] == 6
+            assert second_clear_response.json()["deleted_cluster_label_count"] == 6
 
         assert len(embedding_calls) == 1
         db = SessionLocal()

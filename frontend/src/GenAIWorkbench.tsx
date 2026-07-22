@@ -93,6 +93,7 @@ function GenAIWorkbench() {
   const [analysisMonthTo, setAnalysisMonthTo] = useState("2026-05");
   const [batchSize, setBatchSize] = useState(10);
   const [forceReprocess, setForceReprocess] = useState(false);
+  const [useLlmLabels, setUseLlmLabels] = useState(true);
   const [workbenchSettings, setWorkbenchSettings] = useState<GenAIWorkbenchSettings | null>(null);
   const [summary, setSummary] = useState<GenAITicketClassificationSummary | null>(null);
   const [pivot, setPivot] = useState<GenAITicketClassificationPivot | null>(null);
@@ -303,6 +304,7 @@ function GenAIWorkbench() {
         analysis_month: analysisMonthFrom,
         analysis_month_to: analysisMonthTo,
         force_reprocess: forceReprocess,
+        use_llm_labels: useLlmLabels,
         run_id: createRunId(),
       });
       setSummary(result.summary);
@@ -327,6 +329,8 @@ function GenAIWorkbench() {
         )} / ${formatNumber(result.level_3_cluster_count)} clusters. Embeddings: ${formatNumber(
           result.cached_embedding_count
         )} cached, ${formatNumber(result.new_embedding_count)} new${
+          result.llm_labeling_enabled ? "" : "; LLM naming skipped"
+        }${
           result.failed_count > 0
             ? `; ${formatNumber(result.failed_count)} cluster labels used fallback naming`
             : ""
@@ -471,6 +475,14 @@ function GenAIWorkbench() {
             />
             <span>Force reprocess</span>
           </label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={useLlmLabels}
+              onChange={(event) => setUseLlmLabels(event.target.checked)}
+            />
+            <span>Use LLM labels</span>
+          </label>
         </div>
 
         <div className="workbench-actions">
@@ -521,11 +533,14 @@ function GenAIWorkbench() {
         ) : null}
         {workbenchSettings ? (
           <p className="muted-text summary-block">
-            Cluster {workbenchSettings.cluster_mode === "adaptive" ? "caps" : "targets"}: L1{" "}
-            {formatNumber(workbenchSettings.cluster_level_1_count)}, L2{" "}
-            {formatNumber(workbenchSettings.cluster_level_2_count)}, L3{" "}
-            {formatNumber(workbenchSettings.cluster_level_3_count)}. Mode:{" "}
-            {workbenchSettings.cluster_mode}. Thresholds:{" "}
+            Cluster {workbenchSettings.cluster_mode === "adaptive" ? "settings" : "targets"}: L1{" "}
+            {formatNumber(workbenchSettings.cluster_level_1_count)}
+            {workbenchSettings.cluster_mode === "adaptive"
+              ? ", L2 threshold-driven, L3 threshold-driven"
+              : `, L2 ${formatNumber(workbenchSettings.cluster_level_2_count)}, L3 ${formatNumber(
+                  workbenchSettings.cluster_level_3_count
+                )}`}
+            . Mode: {workbenchSettings.cluster_mode}. Thresholds:{" "}
             {workbenchSettings.cluster_level_1_distance_threshold.toFixed(2)} /{" "}
             {workbenchSettings.cluster_level_2_distance_threshold.toFixed(2)} /{" "}
             {workbenchSettings.cluster_level_3_distance_threshold.toFixed(2)}. Embedding model:{" "}

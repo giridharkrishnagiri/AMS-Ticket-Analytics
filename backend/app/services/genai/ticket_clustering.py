@@ -35,6 +35,7 @@ from app.services.genai.llm_client import (
 )
 from app.services.genai.prompt_service import get_prompt_template
 from app.services.genai.ticket_classification import (
+    MAX_DESCRIPTION_CHARS,
     analysis_range_label,
     clean_label,
     cluster_display_id,
@@ -56,7 +57,7 @@ progress_logger = logging.getLogger("uvicorn.error")
 
 PROMPT_KEY = "ticket_cluster_labeling"
 OUTPUT_PROMPT_KEY = "ticket_cluster_analysis"
-EMBEDDING_TEXT_VERSION = "cluster-ticket-text-v3-ticket-type-description"
+EMBEDDING_TEXT_VERSION = "cluster-ticket-text-v4-ticket-type-clean-description"
 TICKET_TYPE_SEPARATION_PROMPT = """Ticket type rule:
 - Incidents and Service Catalog Tasks are clustered separately.
 - Incident labels should describe production/user-impact issues.
@@ -73,6 +74,65 @@ NOISE_PATTERNS = (
     re.compile(r"\b\d{4}-\d{2}-\d{2}\b"),
     re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b"),
     re.compile(r"\b[A-F0-9]{16,}\b"),
+)
+DESCRIPTION_PERSONAL_FIELD_LABELS = (
+    "best contact number",
+    "business phone",
+    "contact number",
+    "contact no",
+    "contact",
+    "caller",
+    "country",
+    "date",
+    "department",
+    "e-mail",
+    "email address",
+    "email",
+    "emp id",
+    "employee id",
+    "first name",
+    "full name",
+    "job title",
+    "lan id",
+    "lanid",
+    "last name",
+    "line manager",
+    "location",
+    "manager",
+    "mobile number",
+    "mobile",
+    "name",
+    "office location",
+    "opened by",
+    "phone number",
+    "phone",
+    "preferred contact",
+    "requester",
+    "requestor",
+    "requested by",
+    "submitted by",
+    "telephone",
+    "time",
+    "user id",
+    "userid",
+)
+DESCRIPTION_PERSONAL_FIELD_PATTERN = re.compile(
+    rf"\b(?:{'|'.join(re.escape(label) for label in DESCRIPTION_PERSONAL_FIELD_LABELS)})"
+    r"\s*[:=\-]\s*.*?(?=\s+[A-Za-z][A-Za-z /_-]{1,35}\s*[:=\-]|[;|\n]|$)",
+    re.IGNORECASE,
+)
+DESCRIPTION_EMAIL_PATTERN = re.compile(
+    r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+    re.IGNORECASE,
+)
+DESCRIPTION_PHONE_PATTERN = re.compile(r"\b(?:\+?\d[\d\s().-]{7,}\d)\b")
+DESCRIPTION_GREETING_PATTERN = re.compile(
+    r"^\s*(?:hi|hello|dear)\b[^,.;:\n]{0,80}[:,.;-]?\s*",
+    re.IGNORECASE,
+)
+DESCRIPTION_SIGNATURE_PATTERN = re.compile(
+    r"^\s*(?:best regards|kind regards|regards|thanks|thank you)\b.*$",
+    re.IGNORECASE,
 )
 STOP_WORDS = {
     "about",
@@ -153,6 +213,7 @@ class TicketClusterRunRequest:
     level_1_count: int | None = None
     level_2_count: int | None = None
     level_3_count: int | None = None
+    use_llm_labels: bool = True
     run_id: str | None = None
 
 
@@ -393,12 +454,34 @@ def effective_label_config(config: GenAIConfig) -> GenAIConfig:
     )
 
 
+def cleaned_description_for_embedding(value: Any) -> str:
+    if value is None:
+        return ""
+    bounded_text = str(value)[:MAX_DESCRIPTION_CHARS]
+    cleaned_lines: list[str] = []
+    for raw_line in bounded_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if DESCRIPTION_SIGNATURE_PATTERN.match(line):
+            continue
+        line = DESCRIPTION_GREETING_PATTERN.sub("", line)
+        line = DESCRIPTION_EMAIL_PATTERN.sub(" ", line)
+        line = DESCRIPTION_PHONE_PATTERN.sub(" ", line)
+        line = DESCRIPTION_PERSONAL_FIELD_PATTERN.sub(" ", line)
+        line = re.sub(r"\s+", " ", line).strip(" ,;|-")
+        if line:
+            cleaned_lines.append(line)
+    text = " ".join(cleaned_lines)
+    return compact_text(text, max_chars=MAX_DESCRIPTION_CHARS) or ""
+
+
 def normalized_ticket_text(ticket: Ticket) -> str:
     payload = ticket_payload(ticket)
     parts = [
         f"Ticket class: {ticket_type_display(ticket.ticket_type)}",
         f"Short description: {payload.get('short_description') or ''}",
-        f"Description: {payload.get('description') or ''}",
+        f"Description: {cleaned_description_for_embedding(ticket.description)}",
     ]
     text = " ".join(part for part in parts if part.strip())
     for pattern in NOISE_PATTERNS:
@@ -985,21 +1068,12 @@ def build_adaptive_type_separated_clusters(
         level_1_by_partition[partition] = clusters
         level_1_clusters.update(clusters)
 
-    level_2_targets = split_target_count(
-        partitions,
-        level_2_count,
-        maximum_by_partition={partition: len(indices) for partition, indices in partitions.items()},
-    )
     level_2_clusters: dict[str, ClusterInfo] = {}
     level_2_by_partition: dict[str, dict[str, ClusterInfo]] = {}
     for partition, parent_clusters in level_1_by_partition.items():
         if not parent_clusters:
             continue
         indices = partitions[partition]
-        cap = max(
-            len(parent_clusters),
-            min(level_2_targets.get(partition, len(parent_clusters)), len(indices)),
-        )
         clusters = build_adaptive_clusters(
             inputs,
             vectors,
@@ -1007,7 +1081,7 @@ def build_adaptive_type_separated_clusters(
                 (parent.key, parent.ticket_indices) for parent in parent_clusters.values()
             ],
             level=2,
-            max_count=cap,
+            max_count=len(indices),
             distance_threshold=level_2_threshold,
             key_prefix=cluster_key_prefix(partition),
         )
@@ -1015,20 +1089,11 @@ def build_adaptive_type_separated_clusters(
         level_2_by_partition[partition] = clusters
         level_2_clusters.update(clusters)
 
-    level_3_targets = split_target_count(
-        partitions,
-        level_3_count,
-        maximum_by_partition={partition: len(indices) for partition, indices in partitions.items()},
-    )
     level_3_clusters: dict[str, ClusterInfo] = {}
     for partition, parent_clusters in level_2_by_partition.items():
         if not parent_clusters:
             continue
         indices = partitions[partition]
-        cap = max(
-            len(parent_clusters),
-            min(level_3_targets.get(partition, len(parent_clusters)), len(indices)),
-        )
         clusters = build_adaptive_clusters(
             inputs,
             vectors,
@@ -1036,7 +1101,7 @@ def build_adaptive_type_separated_clusters(
                 (parent.key, parent.ticket_indices) for parent in parent_clusters.values()
             ],
             level=3,
-            max_count=cap,
+            max_count=len(indices),
             distance_threshold=level_3_threshold,
             key_prefix=cluster_key_prefix(partition),
         )
@@ -1102,6 +1167,14 @@ def fallback_label(cluster: ClusterInfo) -> str:
     terms = [term.replace("_", " ").replace("-", " ").title() for term in (cluster.top_terms or [])]
     label = " ".join(terms[:2]).strip()
     return clean_label(label) or f"Cluster {cluster.key}"
+
+
+def assign_cluster_id_labels(clusters_by_level: dict[int, dict[str, ClusterInfo]]) -> None:
+    for level, clusters in clusters_by_level.items():
+        for cluster in clusters.values():
+            cluster.label = cluster_display_id(level, cluster.key) or f"Cluster {cluster.key}"
+            cluster.summary = "LLM cluster naming was skipped for this calibration run."
+            cluster.confidence = None
 
 
 def cluster_payload(
@@ -1524,6 +1597,20 @@ def save_ticket_assignments(
                     "cluster_level_1": l1.key if l1 else None,
                     "cluster_level_2": l2.key if l2 else None,
                     "cluster_level_3": l3.key,
+                    "cluster_level_1_max_distance_from_centroid": (
+                        l1.max_distance if l1 else None
+                    ),
+                    "cluster_level_1_mean_distance_from_centroid": (
+                        l1.mean_distance if l1 else None
+                    ),
+                    "cluster_level_2_max_distance_from_centroid": (
+                        l2.max_distance if l2 else None
+                    ),
+                    "cluster_level_2_mean_distance_from_centroid": (
+                        l2.mean_distance if l2 else None
+                    ),
+                    "cluster_level_3_max_distance_from_centroid": l3.max_distance,
+                    "cluster_level_3_mean_distance_from_centroid": l3.mean_distance,
                     "normalized_text_hash": ticket_input.normalized_text_hash,
                 },
                 error_message=None,
@@ -1773,8 +1860,10 @@ def run_ticket_cluster_analysis(
     validate_config(base_config)
     embedding_config = effective_embedding_config(base_config)
     label_config = effective_label_config(base_config)
+    use_llm_labels = bool(request.use_llm_labels)
     validate_config(embedding_config)
-    validate_config(label_config)
+    if use_llm_labels:
+        validate_config(label_config)
     prompt_template = get_prompt_template(db, PROMPT_KEY)
     prompt_text = (
         prompt_template.custom_prompt.strip()
@@ -1825,6 +1914,7 @@ def run_ticket_cluster_analysis(
             "labeled_cluster_count": 0,
             "assigned_ticket_count": 0,
             "failed_count": 0,
+            "llm_labeling_enabled": use_llm_labels,
             "summary": ticket_classification_summary(
                 db,
                 request.project_id,
@@ -1899,20 +1989,36 @@ def run_ticket_cluster_analysis(
         settings.genai_ticket_cluster_level_3_distance_threshold,
         0.24,
     )
-    log_progress(
-        (
-            "run %s clustering mode=%s caps/targets: level 1=%s, level 2=%s, "
-            "level 3=%s; distance thresholds=%s/%s/%s"
-        ),
-        run_id,
-        cluster_mode,
-        level_1_count,
-        level_2_count,
-        level_3_count,
-        level_1_threshold,
-        level_2_threshold,
-        level_3_threshold,
-    )
+    if cluster_mode == "adaptive":
+        log_progress(
+            (
+                "run %s clustering mode=adaptive caps: level 1=%s, "
+                "level 2=threshold-driven, level 3=threshold-driven; "
+                "configured reference counts=%s/%s/%s; distance thresholds=%s/%s/%s"
+            ),
+            run_id,
+            level_1_count,
+            level_1_count,
+            level_2_count,
+            level_3_count,
+            level_1_threshold,
+            level_2_threshold,
+            level_3_threshold,
+        )
+    else:
+        log_progress(
+            (
+                "run %s clustering mode=fixed targets: level 1=%s, level 2=%s, "
+                "level 3=%s; distance thresholds=%s/%s/%s"
+            ),
+            run_id,
+            level_1_count,
+            level_2_count,
+            level_3_count,
+            level_1_threshold,
+            level_2_threshold,
+            level_3_threshold,
+        )
 
     if cluster_mode == "fixed":
         level_1_clusters, level_2_clusters, level_3_clusters, partition_counts = (
@@ -1956,52 +2062,56 @@ def run_ticket_cluster_analysis(
         3: level_3_clusters,
     }
     failed_count = 0
-    log_progress("run %s cluster labeling started", run_id)
-    failed_count += label_cluster_level(
-        db,
-        project_id=request.project_id,
-        customer_id=customer_id,
-        month_key=month_key,
-        month_key_to=month_key_to,
-        run_id=run_id,
-        level=3,
-        clusters=level_3_clusters,
-        inputs=inputs,
-        vectors=vectors,
-        child_clusters=None,
-        prompt_text=prompt_text,
-        config=label_config,
-    )
-    failed_count += label_cluster_level(
-        db,
-        project_id=request.project_id,
-        customer_id=customer_id,
-        month_key=month_key,
-        month_key_to=month_key_to,
-        run_id=run_id,
-        level=2,
-        clusters=level_2_clusters,
-        inputs=inputs,
-        vectors=vectors,
-        child_clusters=level_3_clusters,
-        prompt_text=prompt_text,
-        config=label_config,
-    )
-    failed_count += label_cluster_level(
-        db,
-        project_id=request.project_id,
-        customer_id=customer_id,
-        month_key=month_key,
-        month_key_to=month_key_to,
-        run_id=run_id,
-        level=1,
-        clusters=level_1_clusters,
-        inputs=inputs,
-        vectors=vectors,
-        child_clusters=level_2_clusters,
-        prompt_text=prompt_text,
-        config=label_config,
-    )
+    if use_llm_labels:
+        log_progress("run %s cluster labeling started", run_id)
+        failed_count += label_cluster_level(
+            db,
+            project_id=request.project_id,
+            customer_id=customer_id,
+            month_key=month_key,
+            month_key_to=month_key_to,
+            run_id=run_id,
+            level=3,
+            clusters=level_3_clusters,
+            inputs=inputs,
+            vectors=vectors,
+            child_clusters=None,
+            prompt_text=prompt_text,
+            config=label_config,
+        )
+        failed_count += label_cluster_level(
+            db,
+            project_id=request.project_id,
+            customer_id=customer_id,
+            month_key=month_key,
+            month_key_to=month_key_to,
+            run_id=run_id,
+            level=2,
+            clusters=level_2_clusters,
+            inputs=inputs,
+            vectors=vectors,
+            child_clusters=level_3_clusters,
+            prompt_text=prompt_text,
+            config=label_config,
+        )
+        failed_count += label_cluster_level(
+            db,
+            project_id=request.project_id,
+            customer_id=customer_id,
+            month_key=month_key,
+            month_key_to=month_key_to,
+            run_id=run_id,
+            level=1,
+            clusters=level_1_clusters,
+            inputs=inputs,
+            vectors=vectors,
+            child_clusters=level_2_clusters,
+            prompt_text=prompt_text,
+            config=label_config,
+        )
+    else:
+        log_progress("run %s cluster labeling skipped; using cluster IDs as labels", run_id)
+        assign_cluster_id_labels(clusters_by_level)
 
     run_metadata = {
         "analysis_month": month_key,
@@ -2009,7 +2119,8 @@ def run_ticket_cluster_analysis(
         "analysis_month_to": month_key_to,
         "analysis_range": range_label,
         "embedding_model": provider_model_name(embedding_config),
-        "label_model": provider_model_name(label_config),
+        "label_model": provider_model_name(label_config) if use_llm_labels else None,
+        "llm_labeling_enabled": use_llm_labels,
         "algorithm": (
             "adaptive_recursive_kmeans_centroid_radius"
             if cluster_mode == "adaptive"
@@ -2021,6 +2132,17 @@ def run_ticket_cluster_analysis(
         "level_1_target": level_1_count,
         "level_2_target": level_2_count,
         "level_3_target": level_3_count,
+        "level_1_cap_mode": "configured_count",
+        "level_2_cap_mode": (
+            "threshold_driven_up_to_ticket_count"
+            if cluster_mode == "adaptive"
+            else "configured_count"
+        ),
+        "level_3_cap_mode": (
+            "threshold_driven_up_to_ticket_count"
+            if cluster_mode == "adaptive"
+            else "configured_count"
+        ),
         "level_1_distance_threshold": level_1_threshold,
         "level_2_distance_threshold": level_2_threshold,
         "level_3_distance_threshold": level_3_threshold,
@@ -2047,7 +2169,7 @@ def run_ticket_cluster_analysis(
         run_id=run_id,
         inputs=inputs,
         clusters_by_level=clusters_by_level,
-        label_model_name=provider_model_name(label_config),
+        label_model_name=provider_model_name(label_config) if use_llm_labels else None,
         prompt_version=prompt_version,
         prompt_fingerprint_value=prompt_fingerprint_value,
         run_metadata=run_metadata,
@@ -2100,6 +2222,7 @@ def run_ticket_cluster_analysis(
         "labeled_cluster_count": labeled_cluster_count,
         "assigned_ticket_count": assigned_ticket_count,
         "failed_count": failed_count,
+        "llm_labeling_enabled": use_llm_labels,
         "summary": ticket_classification_summary(
             db,
             request.project_id,

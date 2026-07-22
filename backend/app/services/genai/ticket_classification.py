@@ -46,11 +46,20 @@ TICKET_DUMP_EXCLUDED_COLUMNS = {
 }
 TICKET_DUMP_CLASSIFICATION_COLUMNS = [
     "genai_category_cluster_id",
+    "genai_category_cluster_max_distance",
+    "genai_category_cluster_mean_distance",
+    "genai_category_distance_threshold",
     "genai_category_quality",
     "genai_category",
     "genai_subcategory_1_cluster_id",
+    "genai_subcategory_1_cluster_max_distance",
+    "genai_subcategory_1_cluster_mean_distance",
+    "genai_subcategory_1_distance_threshold",
     "genai_subcategory_1",
     "genai_subcategory_2_cluster_id",
+    "genai_subcategory_2_cluster_max_distance",
+    "genai_subcategory_2_cluster_mean_distance",
+    "genai_subcategory_2_distance_threshold",
     "genai_subcategory_2",
     "genai_confidence",
     "genai_status",
@@ -989,6 +998,11 @@ def ticket_classification_dump_csv(
     writer.writeheader()
     for ticket in tickets:
         classification = classification_rows.get(ticket.ticket_number)
+        metadata = (
+            classification.metadata_json
+            if classification is not None and isinstance(classification.metadata_json, dict)
+            else {}
+        )
         row = {column: _csv_value(getattr(ticket, column, None)) for column in ticket_columns}
         row.update(
             {
@@ -997,6 +1011,15 @@ def ticket_classification_dump_csv(
                     column_name="genai_category_cluster_id",
                     metadata_key="cluster_level_1",
                     level=1,
+                ),
+                "genai_category_cluster_max_distance": metadata.get(
+                    "cluster_level_1_max_distance_from_centroid",
+                ),
+                "genai_category_cluster_mean_distance": metadata.get(
+                    "cluster_level_1_mean_distance_from_centroid",
+                ),
+                "genai_category_distance_threshold": metadata.get(
+                    "level_1_distance_threshold",
                 ),
                 "genai_category_quality": (
                     classification.category_quality if classification is not None else None
@@ -1010,6 +1033,15 @@ def ticket_classification_dump_csv(
                     metadata_key="cluster_level_2",
                     level=2,
                 ),
+                "genai_subcategory_1_cluster_max_distance": metadata.get(
+                    "cluster_level_2_max_distance_from_centroid",
+                ),
+                "genai_subcategory_1_cluster_mean_distance": metadata.get(
+                    "cluster_level_2_mean_distance_from_centroid",
+                ),
+                "genai_subcategory_1_distance_threshold": metadata.get(
+                    "level_2_distance_threshold",
+                ),
                 "genai_subcategory_1": (
                     classification.genai_subcategory_1 if classification is not None else None
                 ),
@@ -1018,6 +1050,15 @@ def ticket_classification_dump_csv(
                     column_name="genai_subcategory_2_cluster_id",
                     metadata_key="cluster_level_3",
                     level=3,
+                ),
+                "genai_subcategory_2_cluster_max_distance": metadata.get(
+                    "cluster_level_3_max_distance_from_centroid",
+                ),
+                "genai_subcategory_2_cluster_mean_distance": metadata.get(
+                    "cluster_level_3_mean_distance_from_centroid",
+                ),
+                "genai_subcategory_2_distance_threshold": metadata.get(
+                    "level_3_distance_threshold",
                 ),
                 "genai_subcategory_2": (
                     classification.genai_subcategory_2 if classification is not None else None

@@ -139,6 +139,14 @@ For each cluster:
 - Return one concise English label that describes the shared business or technical theme.
 - Labels should normally be 2 or 3 words.
 - Prefer reusable, business-friendly labels over one-off names, user names, timestamps, or IDs.
+- Ignore boilerplate requester metadata such as person names, LAN IDs, emails, phone numbers,
+  greetings, and signatures.
+- Focus on the shared application, process, error, request intent, failed job, access pattern,
+  or fulfillment activity visible across the representative tickets.
+- For level 3 clusters, be specific enough to help identify automation opportunities. Avoid broad
+  labels such as "SAP Application Issues" unless the evidence is genuinely broad and mixed.
+- For level 2 and level 1 clusters, use the child cluster names and representative tickets to name
+  the broader shared theme without collapsing distinct sibling meanings.
 - For batch-job clusters, use "Batch Job" at high level and put specific job/process language at
   lower levels when it is broadly meaningful.
 - Incident clusters should be named as production/user-impact issues.
@@ -160,6 +168,7 @@ Return only JSON with this shape:
     }
   ]
 }""",
+        version=2,
     ),
 )
 
