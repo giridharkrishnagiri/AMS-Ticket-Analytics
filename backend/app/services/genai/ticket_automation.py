@@ -4,6 +4,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import re
 import time
 from collections import Counter
@@ -40,6 +41,7 @@ from app.services.genai.ticket_classification import (
 from app.services.genai.ticket_clustering import _metadata_matches_analysis_range
 from app.services.genai.usage_log_service import create_usage_log
 
+progress_logger = logging.getLogger("app.services.genai.progress")
 PROMPT_KEY = "ticket_automation_analysis"
 OPERATION = "ticket_automation_analysis"
 MAX_DESCRIPTION_CHARS = 1200
@@ -69,6 +71,10 @@ RESOLUTION_PATHS = {
 
 class TicketAutomationAnalysisError(ValueError):
     pass
+
+
+def log_progress(message: str, *args: Any) -> None:
+    progress_logger.info("[ticket-automation] " + message, *args)
 
 
 @dataclass(frozen=True)
@@ -900,8 +906,20 @@ def run_ticket_automation_analysis(
     prompt_fingerprint_value = prompt_fingerprint(prompt_text)
     run_id = (request.run_id or "").strip() or str(uuid4())
     cluster_limit = clamp_cluster_limit(request.cluster_limit)
+    log_progress(
+        "run %s started for project %s, period %s, model %s, request cluster limit %s",
+        run_id,
+        request.project_id,
+        range_label,
+        model_name,
+        cluster_limit,
+    )
 
     if request.force_reprocess:
+        log_progress(
+            "run %s force reprocess requested; clearing previous automation output",
+            run_id,
+        )
         clear_ticket_automation_analysis(
             db,
             TicketAutomationAnalysisClearRequest(
@@ -911,6 +929,7 @@ def run_ticket_automation_analysis(
             ),
         )
 
+    log_progress("run %s selecting eligible SubCategory-2 clusters", run_id)
     candidates = automation_cluster_candidates(
         db,
         project_id=request.project_id,
@@ -968,6 +987,17 @@ def run_ticket_automation_analysis(
         )
 
     request_candidates = candidates_to_process[:cluster_limit]
+    log_progress(
+        (
+            "run %s candidate selection complete: %s eligible clusters, "
+            "%s cached, %s pending, processing %s in this request"
+        ),
+        run_id,
+        len(candidates),
+        skipped_cached_count,
+        len(candidates_to_process),
+        len(request_candidates),
+    )
     processed_count = 0
     failed_count = 0
     prompt_tokens = 0
@@ -982,6 +1012,16 @@ def run_ticket_automation_analysis(
         input_hash,
         existing_row,
     ) in request_candidates:
+        cluster_number = processed_count + failed_count + 1
+        log_progress(
+            "run %s cluster %s/%s started: %s (%s tickets, %s representatives)",
+            run_id,
+            cluster_number,
+            len(request_candidates),
+            candidate.cluster_key,
+            candidate.ticket_count,
+            len(representative_tickets),
+        )
         messages = build_automation_messages(
             prompt_text=prompt_text,
             candidate=candidate,
@@ -1040,6 +1080,13 @@ def run_ticket_automation_analysis(
             )
             db.commit()
             failed_count += 1
+            log_progress(
+                "run %s cluster %s/%s failed: %s",
+                run_id,
+                cluster_number,
+                len(request_candidates),
+                result.error_message or "model request failed",
+            )
             continue
 
         try:
@@ -1064,6 +1111,13 @@ def run_ticket_automation_analysis(
             )
             db.commit()
             failed_count += 1
+            log_progress(
+                "run %s cluster %s/%s parse failed: %s",
+                run_id,
+                cluster_number,
+                len(request_candidates),
+                str(exc),
+            )
             continue
 
         save_automation_success(
@@ -1085,10 +1139,30 @@ def run_ticket_automation_analysis(
         )
         db.commit()
         processed_count += 1
+        log_progress(
+            "run %s cluster %s/%s complete: %s potential, %s path",
+            run_id,
+            cluster_number,
+            len(request_candidates),
+            normalize_automation_potential(parsed.get("automation_potential")),
+            normalize_resolution_path(parsed.get("recommended_resolution_path")),
+        )
 
     remaining_cluster_count = max(len(candidates_to_process) - len(request_candidates), 0)
     summary = automation_summary(db, request.project_id, start_month, end_month)
     usage_run = automation_usage_run(db, request.project_id, start_month, run_id, end_month)
+    log_progress(
+        (
+            "run %s request complete: %s processed, %s failed, %s cached, "
+            "%s remaining, duration %s ms"
+        ),
+        run_id,
+        processed_count,
+        failed_count,
+        skipped_cached_count,
+        remaining_cluster_count,
+        int((time.perf_counter() - run_started_at) * 1000),
+    )
     return {
         "project_id": request.project_id,
         "analysis_month": start_month,
