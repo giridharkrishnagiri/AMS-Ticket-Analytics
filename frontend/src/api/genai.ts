@@ -57,6 +57,14 @@ export type GenAITicketClassificationSummary = {
   category_count: number;
   subcategory_1_count: number;
   subcategory_2_count: number;
+  category_llm_assessed_count: number;
+  category_rare_count: number;
+  subcategory_1_llm_assessed_count: number;
+  subcategory_1_rare_count: number;
+  subcategory_2_llm_assessed_count: number;
+  subcategory_2_rare_count: number;
+  llm_assessed_ticket_count: number;
+  rare_ticket_count: number;
   incident_count: number;
   sc_task_count: number;
   last_processed_at: string | null;
@@ -376,7 +384,7 @@ export async function downloadTicketClassificationDump(
       `genai_ticket_classification_dump_${monthRangeSlug(
         analysisMonthFrom,
         analysisMonthTo
-      )}.csv`,
+      )}.xlsx`,
   };
 }
 
@@ -462,7 +470,7 @@ export async function downloadTicketAutomationAnalysis(
       `genai_ticket_automation_analysis_${monthRangeSlug(
         analysisMonthFrom,
         analysisMonthTo
-      )}.csv`,
+      )}.xlsx`,
   };
 }
 

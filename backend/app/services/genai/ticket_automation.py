@@ -1226,7 +1226,7 @@ def automation_analysis_csv(
         )
         raise TicketAutomationAnalysisError(
             f"No saved automation analysis rows exist for {range_label}. "
-            "Run Automation Analysis before downloading the CSV.",
+            "Run Automation Analysis before downloading the workbook.",
         )
     output = io.StringIO(newline="")
     fieldnames = [

@@ -1245,6 +1245,10 @@ def ticket_classification_summary(
     category_quality_counts = {
         quality or "Not assessed": int(count or 0) for quality, count in quality_rows
     }
+    success_rows = db.execute(
+        select(GenAITicketClassification).where(*success_filters),
+    ).scalars().all()
+    labeling_split = _cluster_labeling_split(success_rows)
     return {
         "project_id": project_id,
         "analysis_month": start_month,
@@ -1260,6 +1264,7 @@ def ticket_classification_summary(
         "sc_task_count": int(sc_task_count or 0),
         "last_processed_at": totals[5],
         "category_quality_counts": category_quality_counts,
+        **labeling_split,
     }
 
 
@@ -1323,6 +1328,87 @@ def ticket_classification_pivot(
                 sc_task_count,
             ) in rows
         ],
+    }
+
+
+def _metadata_bool(metadata: dict[str, Any], key: str) -> bool:
+    value = metadata.get(key)
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y"}
+    return False
+
+
+def _rare_label(value: str | None) -> bool:
+    return bool(value and value.strip().lower().startswith("rare-"))
+
+
+def _cluster_level_id(
+    row: GenAITicketClassification,
+    metadata: dict[str, Any],
+    level: int,
+) -> str | None:
+    column_name = {
+        1: "genai_category_cluster_id",
+        2: "genai_subcategory_1_cluster_id",
+        3: "genai_subcategory_2_cluster_id",
+    }[level]
+    metadata_key = f"cluster_level_{level}"
+    value = getattr(row, column_name, None) or metadata.get(metadata_key)
+    return str(value).strip() if value else None
+
+
+def _cluster_level_label(row: GenAITicketClassification, level: int) -> str | None:
+    column_name = {
+        1: "genai_category",
+        2: "genai_subcategory_1",
+        3: "genai_subcategory_2",
+    }[level]
+    value = getattr(row, column_name, None)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _cluster_level_is_rare(
+    row: GenAITicketClassification,
+    metadata: dict[str, Any],
+    level: int,
+) -> bool:
+    return (
+        _metadata_bool(metadata, f"cluster_level_{level}_rare")
+        or _metadata_bool(metadata, f"cluster_level_{level}_llm_label_skipped")
+        or _rare_label(_cluster_level_label(row, level))
+    )
+
+
+def _cluster_labeling_split(
+    rows: list[GenAITicketClassification],
+) -> dict[str, int]:
+    llm_clusters: dict[int, set[str]] = {1: set(), 2: set(), 3: set()}
+    rare_clusters: dict[int, set[str]] = {1: set(), 2: set(), 3: set()}
+    llm_ticket_count = 0
+    rare_ticket_count = 0
+    for row in rows:
+        metadata = _classification_metadata(row)
+        for level in (1, 2, 3):
+            cluster_id = _cluster_level_id(row, metadata, level) or _cluster_level_label(row, level)
+            if not cluster_id:
+                continue
+            target = rare_clusters if _cluster_level_is_rare(row, metadata, level) else llm_clusters
+            target[level].add(cluster_id)
+        if _cluster_level_is_rare(row, metadata, 3):
+            rare_ticket_count += 1
+        else:
+            llm_ticket_count += 1
+    return {
+        "category_llm_assessed_count": len(llm_clusters[1]),
+        "category_rare_count": len(rare_clusters[1]),
+        "subcategory_1_llm_assessed_count": len(llm_clusters[2]),
+        "subcategory_1_rare_count": len(rare_clusters[2]),
+        "subcategory_2_llm_assessed_count": len(llm_clusters[3]),
+        "subcategory_2_rare_count": len(rare_clusters[3]),
+        "llm_assessed_ticket_count": llm_ticket_count,
+        "rare_ticket_count": rare_ticket_count,
     }
 
 

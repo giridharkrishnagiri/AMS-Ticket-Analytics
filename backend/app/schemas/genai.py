@@ -187,6 +187,14 @@ class GenAITicketClassificationSummaryResponse(BaseModel):
     category_count: int
     subcategory_1_count: int
     subcategory_2_count: int
+    category_llm_assessed_count: int = 0
+    category_rare_count: int = 0
+    subcategory_1_llm_assessed_count: int = 0
+    subcategory_1_rare_count: int = 0
+    subcategory_2_llm_assessed_count: int = 0
+    subcategory_2_rare_count: int = 0
+    llm_assessed_ticket_count: int = 0
+    rare_ticket_count: int = 0
     incident_count: int
     sc_task_count: int
     last_processed_at: datetime | None = None

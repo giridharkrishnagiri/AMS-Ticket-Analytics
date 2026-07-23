@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import csv
+import io
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from openpyxl import Workbook
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -157,6 +160,18 @@ from app.services.genai.usage_log_service import create_usage_log, list_usage_lo
 
 router = APIRouter(prefix="/genai", tags=["genai"])
 DbSession = Annotated[Session, Depends(get_db)]
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def csv_text_to_xlsx_bytes(csv_text: str, sheet_name: str) -> bytes:
+    workbook = Workbook(write_only=True)
+    worksheet = workbook.create_sheet(title=sheet_name[:31] or "Export")
+    reader = csv.reader(io.StringIO(csv_text))
+    for row in reader:
+        worksheet.append(row)
+    output = io.BytesIO()
+    workbook.save(output)
+    return output.getvalue()
 
 
 @router.get("/config", response_model=GenAIConfigResponse)
@@ -418,11 +433,11 @@ def download_ticket_classification_dump(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     filename = (
         "genai_ticket_classification_dump_"
-        f"{analysis_range_slug(analysis_month, analysis_month_to or analysis_month)}.csv"
+        f"{analysis_range_slug(analysis_month, analysis_month_to or analysis_month)}.xlsx"
     )
     return Response(
-        content=csv_text,
-        media_type="text/csv; charset=utf-8",
+        content=csv_text_to_xlsx_bytes(csv_text, "Ticket Classification"),
+        media_type=XLSX_MEDIA_TYPE,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -501,11 +516,11 @@ def download_ticket_automation_analysis(
         start_month, end_month = analysis_month, analysis_month_to or analysis_month
         filename = (
             "genai_ticket_automation_analysis_"
-            f"{analysis_range_slug(start_month, end_month)}.csv"
+            f"{analysis_range_slug(start_month, end_month)}.xlsx"
         )
         return Response(
-            content=csv_text,
-            media_type="text/csv",
+            content=csv_text_to_xlsx_bytes(csv_text, "Automation Analysis"),
+            media_type=XLSX_MEDIA_TYPE,
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except (TicketClassificationError, TicketAutomationAnalysisError) as exc:

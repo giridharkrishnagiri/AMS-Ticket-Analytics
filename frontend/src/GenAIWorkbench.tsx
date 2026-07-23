@@ -763,7 +763,7 @@ function GenAIWorkbench() {
         analysisMonthTo
       );
       downloadBlob(blob, filename);
-      setMessage("Ticket classification dump downloaded.");
+      setMessage("Ticket classification workbook downloaded.");
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -780,7 +780,7 @@ function GenAIWorkbench() {
       return;
     }
     if (!hasAutomationRows) {
-      setError("Run automation analysis before downloading the automation CSV.");
+      setError("Run automation analysis before downloading the automation workbook.");
       return;
     }
     setIsDownloadingAutomation(true);
@@ -793,12 +793,12 @@ function GenAIWorkbench() {
         analysisMonthTo
       );
       downloadBlob(blob, filename);
-      setMessage("Automation analysis CSV downloaded.");
+      setMessage("Automation analysis workbook downloaded.");
     } catch (requestError) {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "Automation analysis CSV download failed."
+          : "Automation analysis workbook download failed."
       );
     } finally {
       setIsDownloadingAutomation(false);
@@ -955,7 +955,7 @@ function GenAIWorkbench() {
             disabled={!canAct || isRunning || isClearing || isClearingAutomation || !hasAutomationRows}
             onClick={() => void handleDownloadAutomation()}
           >
-            {isDownloadingAutomation ? "Preparing Automation CSV..." : "Download Automation CSV"}
+            {isDownloadingAutomation ? "Preparing Automation XLSX..." : "Download Automation XLSX"}
           </button>
           <button
             className="secondary-button danger-button"
@@ -1018,6 +1018,23 @@ function GenAIWorkbench() {
       </div>
 
       <div className="workbench-summary-grid">
+        <SummaryMetric label="LLM Categories" value={summary?.category_llm_assessed_count} />
+        <SummaryMetric label="Rare Categories" value={summary?.category_rare_count} />
+        <SummaryMetric
+          label="LLM Subcat 1"
+          value={summary?.subcategory_1_llm_assessed_count}
+        />
+        <SummaryMetric label="Rare Subcat 1" value={summary?.subcategory_1_rare_count} />
+        <SummaryMetric
+          label="LLM Subcat 2"
+          value={summary?.subcategory_2_llm_assessed_count}
+        />
+        <SummaryMetric label="Rare Subcat 2" value={summary?.subcategory_2_rare_count} />
+        <SummaryMetric label="LLM Tickets" value={summary?.llm_assessed_ticket_count} />
+        <SummaryMetric label="Rare Tickets" value={summary?.rare_ticket_count} />
+      </div>
+
+      <div className="workbench-summary-grid">
         <SummaryMetric
           label="Automation Clusters"
           value={automationResults?.summary.assessed_cluster_count}
@@ -1061,7 +1078,7 @@ function GenAIWorkbench() {
                   : "Run cluster-based analysis before downloading the ticket dump"
               }
             >
-              {isDownloadingDump ? "Preparing CSV..." : "Download Ticket Dump"}
+              {isDownloadingDump ? "Preparing XLSX..." : "Download Ticket Dump XLSX"}
             </button>
           </div>
         </div>
