@@ -492,6 +492,23 @@ def normalize_resolution_path(value: Any) -> str:
     return "L2/L3 resolution"
 
 
+def resolved_automation_potential(
+    automation_potential: Any,
+    recommended_resolution_path: Any,
+) -> str:
+    resolution_path = normalize_resolution_path(recommended_resolution_path)
+    if resolution_path == "Problem Management":
+        return "Not Recommended"
+    return normalize_automation_potential(automation_potential)
+
+
+def row_automation_potential(row: GenAITicketAutomationAssessment) -> str:
+    return resolved_automation_potential(
+        row.automation_potential,
+        row.recommended_resolution_path,
+    )
+
+
 def text_or_none(value: Any, *, max_chars: int = MAX_SUMMARY_CHARS) -> str | None:
     return compact_text(value, max_chars=max_chars)
 
@@ -553,11 +570,12 @@ def save_automation_success(
     row.prompt_version = prompt_version
     row.model_name = model_name
     row.status = "success"
-    row.automation_potential = normalize_automation_potential(
-        parsed.get("automation_potential"),
-    )
     row.recommended_resolution_path = normalize_resolution_path(
         parsed.get("recommended_resolution_path"),
+    )
+    row.automation_potential = resolved_automation_potential(
+        parsed.get("automation_potential"),
+        row.recommended_resolution_path,
     )
     row.primary_automation_type = text_or_none(
         parsed.get("primary_automation_type"),
@@ -585,6 +603,9 @@ def save_automation_success(
         "analysis_month_from": analysis_month,
         "analysis_month_to": analysis_month_to,
         "prompt_fingerprint": prompt_fingerprint_value,
+        "model_automation_potential": normalize_automation_potential(
+            parsed.get("automation_potential"),
+        ),
         "representative_ticket_count": len(representative_tickets),
         "source_ticket_numbers": sorted(ticket.ticket_number for _row, ticket in candidate.rows),
     }
@@ -671,7 +692,7 @@ def automation_summary(
         ),
     ).scalars().all()
     success_rows = [row for row in rows if row.status == "success"]
-    potential_counts = Counter(row.automation_potential or "Not assessed" for row in success_rows)
+    potential_counts = Counter(row_automation_potential(row) for row in success_rows)
     path_counts = Counter(row.recommended_resolution_path or "Not assessed" for row in success_rows)
     return {
         "project_id": project_id,
@@ -706,7 +727,9 @@ def automation_row_payload(row: GenAITicketAutomationAssessment) -> dict[str, An
         "ticket_count": row.ticket_count,
         "incident_count": row.incident_count,
         "sc_task_count": row.sc_task_count,
-        "automation_potential": row.automation_potential,
+        "automation_potential": (
+            row_automation_potential(row) if row.status == "success" else row.automation_potential
+        ),
         "recommended_resolution_path": row.recommended_resolution_path,
         "primary_automation_type": row.primary_automation_type,
         "pattern_summary": row.pattern_summary,

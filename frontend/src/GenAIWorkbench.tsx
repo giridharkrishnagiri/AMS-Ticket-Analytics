@@ -211,7 +211,7 @@ function AutomationSummaryTable({
       <div className="panel-heading compact-heading">
         <div>
           <p className="label">Automation Analysis</p>
-          <h2 id="automation-summary-heading">Coverage and Automation Potential</h2>
+          <h2 id="automation-summary-heading">Coverage and Automation Potential Clusters</h2>
         </div>
       </div>
       <div className="scroll-frame workbench-summary-table-frame">
@@ -219,7 +219,7 @@ function AutomationSummaryTable({
           <thead>
             <tr>
               <th colSpan={3}>Coverage</th>
-              <th colSpan={5}>Automation Potential</th>
+              <th colSpan={5}>Automation Potential Clusters</th>
               <th>Error</th>
             </tr>
             <tr>

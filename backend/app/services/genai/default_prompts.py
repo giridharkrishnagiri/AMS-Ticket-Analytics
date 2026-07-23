@@ -228,6 +228,10 @@ a credible automation, self-service, self-help, or L1.5 resolution. For Incident
 recommend Problem Management when the pattern and generic technical knowledge make a permanent fix
 plausible, but mark assumptions clearly.
 
+If recommended_resolution_path is "Problem Management", set automation_potential to
+"Not Recommended" because the primary recommendation is permanent remediation rather than an
+automation opportunity.
+
 Return only JSON with this shape:
 {
   "automation_potential": "High | Medium | Low | Not Recommended | Insufficient information",
