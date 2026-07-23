@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
@@ -37,6 +38,13 @@ from app.services.genai.usage_log_service import create_usage_log
 
 
 def reset_genai_tables() -> None:
+    database_url = str(get_settings().database_url)
+    allow_destructive_reset = os.environ.get("AMS_ALLOW_DESTRUCTIVE_GENAI_TEST_RESET") == "1"
+    if not allow_destructive_reset and "test" not in database_url.lower():
+        raise RuntimeError(
+            "Refusing to clear GenAI tables on a non-test database. "
+            "Use a dedicated test database or set AMS_ALLOW_DESTRUCTIVE_GENAI_TEST_RESET=1."
+        )
     db = SessionLocal()
     try:
         for model in (
