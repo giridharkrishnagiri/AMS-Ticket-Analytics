@@ -21,6 +21,7 @@ import {
   runTicketClassificationEnrichment,
 } from "./api/genai";
 import type {
+  GenAITicketAutomationSummary,
   GenAITicketAutomationResults,
   GenAIWorkbenchSettings,
   GenAITicketClusterRunResponse,
@@ -136,6 +137,119 @@ function SummaryMetric({
       <span className="label">{label}</span>
       <strong>{typeof value === "number" ? formatNumber(value) : value || "Not available"}</strong>
     </div>
+  );
+}
+
+function ClusterSummaryTable({
+  summary,
+}: {
+  summary: GenAITicketClassificationSummary | null;
+}) {
+  return (
+    <section className="panel workbench-summary-panel" aria-labelledby="cluster-summary-heading">
+      <div className="panel-heading compact-heading">
+        <div>
+          <p className="label">Cluster Ticket Analysis</p>
+          <h2 id="cluster-summary-heading">LLM-Assessed and Rare Cluster Split</h2>
+        </div>
+      </div>
+      <div className="scroll-frame workbench-summary-table-frame">
+        <table className="workbench-summary-table">
+          <thead>
+            <tr>
+              <th colSpan={4}>Ticket Count</th>
+              <th colSpan={3}>Categories</th>
+              <th colSpan={3}>SubCategory-1</th>
+              <th colSpan={3}>SubCategory-2</th>
+            </tr>
+            <tr>
+              <th>Eligible</th>
+              <th>Analyzed</th>
+              <th>LLM Assessed</th>
+              <th>Rare</th>
+              <th>Total</th>
+              <th>LLM Assessed</th>
+              <th>Rare</th>
+              <th>Total</th>
+              <th>LLM Assessed</th>
+              <th>Rare</th>
+              <th>Total</th>
+              <th>LLM Assessed</th>
+              <th>Rare</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{formatNumber(summary?.eligible_ticket_count)}</td>
+              <td>{formatNumber(summary?.analyzed_ticket_count)}</td>
+              <td>{formatNumber(summary?.llm_assessed_ticket_count)}</td>
+              <td>{formatNumber(summary?.rare_ticket_count)}</td>
+              <td>{formatNumber(summary?.category_count)}</td>
+              <td>{formatNumber(summary?.category_llm_assessed_count)}</td>
+              <td>{formatNumber(summary?.category_rare_count)}</td>
+              <td>{formatNumber(summary?.subcategory_1_count)}</td>
+              <td>{formatNumber(summary?.subcategory_1_llm_assessed_count)}</td>
+              <td>{formatNumber(summary?.subcategory_1_rare_count)}</td>
+              <td>{formatNumber(summary?.subcategory_2_count)}</td>
+              <td>{formatNumber(summary?.subcategory_2_llm_assessed_count)}</td>
+              <td>{formatNumber(summary?.subcategory_2_rare_count)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function AutomationSummaryTable({
+  summary,
+}: {
+  summary: GenAITicketAutomationSummary | null | undefined;
+}) {
+  return (
+    <section className="panel workbench-summary-panel" aria-labelledby="automation-summary-heading">
+      <div className="panel-heading compact-heading">
+        <div>
+          <p className="label">Automation Analysis</p>
+          <h2 id="automation-summary-heading">Coverage and Automation Potential</h2>
+        </div>
+      </div>
+      <div className="scroll-frame workbench-summary-table-frame">
+        <table className="workbench-summary-table">
+          <thead>
+            <tr>
+              <th colSpan={3}>Coverage</th>
+              <th colSpan={5}>Automation Potential</th>
+              <th>Error</th>
+            </tr>
+            <tr>
+              <th>Clusters Assessed</th>
+              <th>Tickets Covered</th>
+              <th>Last Processed</th>
+              <th>High</th>
+              <th>Medium</th>
+              <th>Low</th>
+              <th>Insufficient Info</th>
+              <th>Not Recommended</th>
+              <th>Clusters</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{formatNumber(summary?.assessed_cluster_count)}</td>
+              <td>{formatNumber(summary?.ticket_count)}</td>
+              <td>{formatDisplayDateTime(summary?.last_processed_at)}</td>
+              <td>{formatNumber(summary?.high_potential_count)}</td>
+              <td>{formatNumber(summary?.medium_potential_count)}</td>
+              <td>{formatNumber(summary?.low_potential_count)}</td>
+              <td>{formatNumber(summary?.insufficient_information_count)}</td>
+              <td>{formatNumber(summary?.not_recommended_count)}</td>
+              <td>{formatNumber(summary?.error_cluster_count)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -1006,56 +1120,9 @@ function GenAIWorkbench() {
         {error ? <p className="error-text summary-block">{error}</p> : null}
       </div>
 
-      <div className="workbench-summary-grid">
-        <SummaryMetric label="Eligible" value={summary?.eligible_ticket_count} />
-        <SummaryMetric label="Analyzed" value={summary?.analyzed_ticket_count} />
-        <SummaryMetric label="Errors" value={summary?.error_ticket_count} />
-        <SummaryMetric label="Categories" value={summary?.category_count} />
-        <SummaryMetric label="Subcategory 1" value={summary?.subcategory_1_count} />
-        <SummaryMetric label="Subcategory 2" value={summary?.subcategory_2_count} />
-        <SummaryMetric label="Incidents" value={summary?.incident_count} />
-        <SummaryMetric label="SC Tasks" value={summary?.sc_task_count} />
-      </div>
+      <ClusterSummaryTable summary={summary} />
 
-      <div className="workbench-summary-grid">
-        <SummaryMetric label="LLM Categories" value={summary?.category_llm_assessed_count} />
-        <SummaryMetric label="Rare Categories" value={summary?.category_rare_count} />
-        <SummaryMetric
-          label="LLM Subcat 1"
-          value={summary?.subcategory_1_llm_assessed_count}
-        />
-        <SummaryMetric label="Rare Subcat 1" value={summary?.subcategory_1_rare_count} />
-        <SummaryMetric
-          label="LLM Subcat 2"
-          value={summary?.subcategory_2_llm_assessed_count}
-        />
-        <SummaryMetric label="Rare Subcat 2" value={summary?.subcategory_2_rare_count} />
-        <SummaryMetric label="LLM Tickets" value={summary?.llm_assessed_ticket_count} />
-        <SummaryMetric label="Rare Tickets" value={summary?.rare_ticket_count} />
-      </div>
-
-      <div className="workbench-summary-grid">
-        <SummaryMetric
-          label="Automation Clusters"
-          value={automationResults?.summary.assessed_cluster_count}
-        />
-        <SummaryMetric label="Tickets Covered" value={automationResults?.summary.ticket_count} />
-        <SummaryMetric label="High Potential" value={automationResults?.summary.high_potential_count} />
-        <SummaryMetric
-          label="Medium Potential"
-          value={automationResults?.summary.medium_potential_count}
-        />
-        <SummaryMetric label="Low Potential" value={automationResults?.summary.low_potential_count} />
-        <SummaryMetric
-          label="Insufficient Info"
-          value={automationResults?.summary.insufficient_information_count}
-        />
-        <SummaryMetric
-          label="Not Recommended"
-          value={automationResults?.summary.not_recommended_count}
-        />
-        <SummaryMetric label="Automation Errors" value={automationResults?.summary.error_cluster_count} />
-      </div>
+      <AutomationSummaryTable summary={automationResults?.summary} />
 
       <section className="panel" aria-labelledby="classification-pivot-heading">
         <div className="panel-heading">

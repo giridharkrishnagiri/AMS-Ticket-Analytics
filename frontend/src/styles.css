@@ -3013,6 +3013,48 @@ h2 {
   box-shadow: none;
 }
 
+.workbench-summary-panel {
+  padding: 14px 16px 16px;
+}
+
+.workbench-summary-panel .panel-heading {
+  margin-bottom: 10px;
+}
+
+.workbench-summary-table-frame {
+  max-height: none;
+}
+
+.workbench-summary-table {
+  min-width: 980px;
+  table-layout: fixed;
+}
+
+.workbench-summary-table th {
+  padding: 6px 8px;
+  border: 1px solid #1f2937;
+  background: #fbbf24;
+  color: #111827;
+  font-size: 0.78rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.workbench-summary-table thead tr:first-child th {
+  background: #f59e0b;
+  font-size: 0.82rem;
+}
+
+.workbench-summary-table td {
+  padding: 8px;
+  border: 1px solid #d9e2ec;
+  color: #111827;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+}
+
 .workbench-table-frame {
   max-height: 520px;
 }
