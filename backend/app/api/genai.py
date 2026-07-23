@@ -30,6 +30,11 @@ from app.schemas.genai import (
     GenAISafetySettingsUpdateRequest,
     GenAITestRequest,
     GenAITestResponse,
+    GenAITicketAutomationClearRequest,
+    GenAITicketAutomationClearResponse,
+    GenAITicketAutomationResultsResponse,
+    GenAITicketAutomationRunRequest,
+    GenAITicketAutomationRunResponse,
     GenAITicketCategoryQualityRunRequest,
     GenAITicketCategoryQualityRunResponse,
     GenAITicketClassificationClearRequest,
@@ -94,6 +99,20 @@ from app.services.genai.prompt_service import (
 from app.services.genai.safety_service import (
     get_or_create_safety_settings,
     update_safety_settings,
+)
+from app.services.genai.ticket_automation import (
+    TicketAutomationAnalysisClearRequest as ServiceTicketAutomationAnalysisClearRequest,
+)
+from app.services.genai.ticket_automation import (
+    TicketAutomationAnalysisError,
+    automation_analysis_csv,
+    automation_results,
+    automation_usage_runs,
+    clear_ticket_automation_analysis,
+    run_ticket_automation_analysis,
+)
+from app.services.genai.ticket_automation import (
+    TicketAutomationAnalysisRunRequest as ServiceTicketAutomationAnalysisRunRequest,
 )
 from app.services.genai.ticket_classification import (
     TicketCategoryQualityRunRequest as ServiceTicketCategoryQualityRunRequest,
@@ -451,6 +470,113 @@ def get_ticket_category_quality_usage_runs(
             limit=limit,
         )
     except TicketClassificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/ticket-automation-analysis/results",
+    response_model=GenAITicketAutomationResultsResponse,
+)
+def get_ticket_automation_analysis_results(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
+) -> GenAITicketAutomationResultsResponse:
+    try:
+        return automation_results(db, project_id, analysis_month, analysis_month_to)
+    except (TicketClassificationError, TicketAutomationAnalysisError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/ticket-automation-analysis/download")
+def download_ticket_automation_analysis(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
+) -> Response:
+    try:
+        csv_text = automation_analysis_csv(db, project_id, analysis_month, analysis_month_to)
+        start_month, end_month = analysis_month, analysis_month_to or analysis_month
+        filename = (
+            "genai_ticket_automation_analysis_"
+            f"{analysis_range_slug(start_month, end_month)}.csv"
+        )
+        return Response(
+            content=csv_text,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except (TicketClassificationError, TicketAutomationAnalysisError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/ticket-automation-analysis/usage-runs",
+    response_model=GenAITicketClassificationUsageRunsResponse,
+)
+def get_ticket_automation_analysis_usage_runs(
+    db: DbSession,
+    project_id: UUID,
+    analysis_month: str = "2026-05",
+    analysis_month_to: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> GenAITicketClassificationUsageRunsResponse:
+    try:
+        return automation_usage_runs(
+            db,
+            project_id,
+            analysis_month,
+            analysis_month_to=analysis_month_to,
+            limit=limit,
+        )
+    except (TicketClassificationError, TicketAutomationAnalysisError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/ticket-automation-analysis/run",
+    response_model=GenAITicketAutomationRunResponse,
+)
+def post_ticket_automation_analysis_run(
+    request: GenAITicketAutomationRunRequest,
+    db: DbSession,
+) -> GenAITicketAutomationRunResponse:
+    try:
+        return run_ticket_automation_analysis(
+            db,
+            ServiceTicketAutomationAnalysisRunRequest(
+                project_id=request.project_id,
+                analysis_month=request.analysis_month,
+                analysis_month_to=request.analysis_month_to,
+                force_reprocess=request.force_reprocess,
+                cluster_limit=request.cluster_limit,
+                run_id=request.run_id,
+            ),
+        )
+    except (TicketClassificationError, TicketAutomationAnalysisError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post(
+    "/ticket-automation-analysis/clear",
+    response_model=GenAITicketAutomationClearResponse,
+)
+def post_ticket_automation_analysis_clear(
+    request: GenAITicketAutomationClearRequest,
+    db: DbSession,
+) -> GenAITicketAutomationClearResponse:
+    try:
+        return clear_ticket_automation_analysis(
+            db,
+            ServiceTicketAutomationAnalysisClearRequest(
+                project_id=request.project_id,
+                analysis_month=request.analysis_month,
+                analysis_month_to=request.analysis_month_to,
+            ),
+        )
+    except (TicketClassificationError, TicketAutomationAnalysisError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 

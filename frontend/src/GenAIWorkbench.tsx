@@ -2,20 +2,26 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   clearProjectTicketEmbeddings,
+  clearTicketAutomationAnalysis,
   clearTicketClusterAnalysis,
   clearTicketClassificationAnalysis,
+  downloadTicketAutomationAnalysis,
   downloadTicketClassificationDump,
   getGenAIWorkbenchSettings,
+  getTicketAutomationResults,
+  getTicketAutomationUsageRuns,
   getTicketCategoryQualityUsageRuns,
   getTicketClusterUsageRuns,
   getTicketClassificationPivot,
   getTicketClassificationSummary,
   getTicketClassificationUsageRuns,
   runTicketCategoryQualityAnalysis,
+  runTicketAutomationAnalysis,
   runTicketClusterAnalysis,
   runTicketClassificationEnrichment,
 } from "./api/genai";
 import type {
+  GenAITicketAutomationResults,
   GenAIWorkbenchSettings,
   GenAITicketClusterRunResponse,
   GenAITicketClassificationPivot,
@@ -31,6 +37,10 @@ const forceReprocessConfirmation =
   "Force reprocess will clear the existing analysis for this selected period before starting a new run. Continue?";
 const categoryQualityForceConfirmation =
   "Force reprocess will reassess category quality for the selected period. Continue?";
+const automationForceConfirmation =
+  "Force reprocess will clear saved automation analysis for the selected period before starting a new run. Continue?";
+const clearAutomationConfirmation =
+  "Clear saved automation analysis for this selected period?";
 const clearProjectEmbeddingsConfirmation =
   "This will clear all saved ticket embeddings for the selected project. The next cluster run will recreate them. Continue?";
 const batchesPerRequest = 1;
@@ -65,6 +75,35 @@ function formatClusterMode(value: string | null | undefined): string {
     return "threshold-only";
   }
   return value?.replace(/_/g, " ") || "-";
+}
+
+function formatTicketType(value: string | null | undefined): string {
+  if (value === "INCIDENT") {
+    return "Incident";
+  }
+  if (value === "SERVICE_CATALOG_TASK") {
+    return "SC Task";
+  }
+  return displayLabel(value);
+}
+
+function formatBusinessServices(values: Record<string, number> | null | undefined): string {
+  const entries = Object.entries(values ?? {});
+  if (entries.length === 0) {
+    return "-";
+  }
+  return entries
+    .slice(0, 3)
+    .map(([label, count]) => `${label}: ${formatNumber(count)}`)
+    .join("; ");
+}
+
+function evidenceText(evidence: Record<string, unknown> | null | undefined, key: string): string {
+  const value = evidence?.[key];
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).join("; ") || "-";
+  }
+  return typeof value === "string" && value.trim() ? value : "-";
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -111,13 +150,18 @@ function GenAIWorkbench() {
   const [workbenchSettings, setWorkbenchSettings] = useState<GenAIWorkbenchSettings | null>(null);
   const [summary, setSummary] = useState<GenAITicketClassificationSummary | null>(null);
   const [pivot, setPivot] = useState<GenAITicketClassificationPivot | null>(null);
+  const [automationResults, setAutomationResults] =
+    useState<GenAITicketAutomationResults | null>(null);
   const [usageRuns, setUsageRuns] = useState<GenAITicketClassificationUsageRun[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isCategoryQualityRunning, setIsCategoryQualityRunning] = useState(false);
+  const [isAutomationRunning, setIsAutomationRunning] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [isClearingAutomation, setIsClearingAutomation] = useState(false);
   const [isClearingEmbeddings, setIsClearingEmbeddings] = useState(false);
   const [isDownloadingDump, setIsDownloadingDump] = useState(false);
+  const [isDownloadingAutomation, setIsDownloadingAutomation] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -130,7 +174,10 @@ function GenAIWorkbench() {
   const classificationButtonEnabled =
     workbenchSettings?.ticket_classification_button_enabled ?? false;
   const clusterButtonEnabled = workbenchSettings?.ticket_cluster_analysis_button_enabled ?? true;
+  const automationButtonEnabled =
+    workbenchSettings?.ticket_automation_analysis_button_enabled ?? true;
   const canRunTicketClassification = canAct && analysisMonthFrom === analysisMonthTo;
+  const hasAutomationRows = (automationResults?.rows.length ?? 0) > 0;
 
   const qualityRows = useMemo(
     () =>
@@ -174,7 +221,16 @@ function GenAIWorkbench() {
       analysisMonthFrom,
       analysisMonthTo
     );
-    const usageResults = await Promise.all([primaryUsageRuns, categoryQualityUsageRuns]);
+    const automationUsageRuns = getTicketAutomationUsageRuns(
+      projectId,
+      analysisMonthFrom,
+      analysisMonthTo
+    );
+    const usageResults = await Promise.all([
+      primaryUsageRuns,
+      categoryQualityUsageRuns,
+      automationUsageRuns,
+    ]);
     const runsById = new Map<string, GenAITicketClassificationUsageRun>();
     for (const result of usageResults) {
       for (const run of result.runs) {
@@ -192,24 +248,28 @@ function GenAIWorkbench() {
     if (!projectId || !isMonthRangeValid) {
       setSummary(null);
       setPivot(null);
+      setAutomationResults(null);
       setUsageRuns([]);
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
-      const [nextSummary, nextPivot, nextUsageRuns] = await Promise.all([
+      const [nextSummary, nextPivot, nextAutomationResults, nextUsageRuns] = await Promise.all([
         getTicketClassificationSummary(projectId, analysisMonthFrom, analysisMonthTo),
         getTicketClassificationPivot(projectId, analysisMonthFrom, analysisMonthTo),
+        getTicketAutomationResults(projectId, analysisMonthFrom, analysisMonthTo),
         loadUsageRuns(),
       ]);
       setSummary(nextSummary);
       setPivot(nextPivot);
+      setAutomationResults(nextAutomationResults);
       setUsageRuns(nextUsageRuns);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to load analysis.");
       setSummary(null);
       setPivot(null);
+      setAutomationResults(null);
       setUsageRuns([]);
     } finally {
       setIsLoading(false);
@@ -224,6 +284,7 @@ function GenAIWorkbench() {
     setProjectId(nextProjectId);
     setSummary(null);
     setPivot(null);
+    setAutomationResults(null);
     setUsageRuns([]);
     setMessage(null);
     setError(null);
@@ -354,11 +415,13 @@ function GenAIWorkbench() {
         ]);
       }
 
-      const [nextPivot, nextUsageRuns] = await Promise.all([
+      const [nextPivot, nextAutomationResults, nextUsageRuns] = await Promise.all([
         getTicketClassificationPivot(projectId, analysisMonthFrom, analysisMonthTo),
+        getTicketAutomationResults(projectId, analysisMonthFrom, analysisMonthTo),
         getTicketClusterUsageRuns(projectId, analysisMonthFrom, analysisMonthTo),
       ]);
       setPivot(nextPivot);
+      setAutomationResults(nextAutomationResults);
       setUsageRuns(nextUsageRuns.runs);
       setMessage(
         `Cluster analysis complete: ${formatNumber(
@@ -483,6 +546,141 @@ function GenAIWorkbench() {
     }
   }
 
+  async function handleRunAutomation() {
+    if (!canAct || !automationButtonEnabled) {
+      return;
+    }
+    if (forceReprocess && !window.confirm(automationForceConfirmation)) {
+      return;
+    }
+    setIsRunning(true);
+    setIsAutomationRunning(true);
+    setMessage("Starting automation analysis...");
+    setError(null);
+    try {
+      if (forceReprocess) {
+        const clearResult = await clearTicketAutomationAnalysis({
+          project_id: projectId,
+          analysis_month: analysisMonthFrom,
+          analysis_month_to: analysisMonthTo,
+        });
+        setMessage(
+          `Cleared ${formatNumber(
+            clearResult.deleted_count
+          )} automation analysis rows. Starting analysis...`
+        );
+      }
+
+      const runId = createRunId();
+      let latestResult = null as Awaited<ReturnType<typeof runTicketAutomationAnalysis>> | null;
+      let requestCount = 0;
+      let totalProcessedThisRun = 0;
+      let totalFailedThisRun = 0;
+      let totalCachedThisRun = 0;
+
+      while (true) {
+        const result = await runTicketAutomationAnalysis({
+          project_id: projectId,
+          analysis_month: analysisMonthFrom,
+          analysis_month_to: analysisMonthTo,
+          force_reprocess: false,
+          cluster_limit: workbenchSettings?.automation_clusters_per_request,
+          run_id: runId,
+        });
+        latestResult = result;
+        requestCount += 1;
+        totalProcessedThisRun += result.processed_count;
+        totalFailedThisRun += result.failed_count;
+        totalCachedThisRun += result.skipped_cached_count;
+        if (result.usage_run) {
+          setUsageRuns((currentRuns) => [
+            result.usage_run as GenAITicketClassificationUsageRun,
+            ...currentRuns.filter((run) => run.run_id !== result.usage_run?.run_id),
+          ]);
+        }
+        setMessage(
+          `Running automation analysis... ${formatNumber(
+            totalProcessedThisRun
+          )} clusters assessed in this run, ${formatNumber(
+            totalCachedThisRun
+          )} cached, ${formatNumber(result.remaining_cluster_count)} remaining${
+            result.failed_count > 0
+              ? `; ${formatNumber(result.failed_count)} cluster-level issue logged in this request`
+              : ""
+          }.`
+        );
+
+        if (result.failed_count > 0 && result.processed_count === 0) {
+          setError(
+            `Stopped because this request made no progress and returned ${formatNumber(
+              result.failed_count
+            )} failed clusters.`
+          );
+          break;
+        }
+        if (result.remaining_cluster_count <= 0 || result.processed_batch_count === 0) {
+          break;
+        }
+      }
+
+      const [nextAutomationResults, nextUsageRuns] = await Promise.all([
+        getTicketAutomationResults(projectId, analysisMonthFrom, analysisMonthTo),
+        loadUsageRuns(),
+      ]);
+      setAutomationResults(nextAutomationResults);
+      setUsageRuns(nextUsageRuns);
+      if (latestResult) {
+        setMessage(
+          `Automation analysis complete: ${formatNumber(
+            latestResult.summary.assessed_cluster_count
+          )} clusters assessed, covering ${formatNumber(
+            latestResult.summary.ticket_count
+          )} tickets. This run processed ${formatNumber(
+            totalProcessedThisRun
+          )} clusters across ${formatNumber(requestCount)} requests, ${formatNumber(
+            totalCachedThisRun
+          )} cached, ${formatNumber(totalFailedThisRun)} failed.`
+        );
+      }
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Automation analysis failed."
+      );
+    } finally {
+      setIsAutomationRunning(false);
+      setIsRunning(false);
+    }
+  }
+
+  async function handleClearAutomation() {
+    if (!canAct || !window.confirm(clearAutomationConfirmation)) {
+      return;
+    }
+    setIsClearingAutomation(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = await clearTicketAutomationAnalysis({
+        project_id: projectId,
+        analysis_month: analysisMonthFrom,
+        analysis_month_to: analysisMonthTo,
+      });
+      setMessage(`Cleared ${formatNumber(result.deleted_count)} automation analysis rows.`);
+      const [nextAutomationResults, nextUsageRuns] = await Promise.all([
+        getTicketAutomationResults(projectId, analysisMonthFrom, analysisMonthTo),
+        loadUsageRuns(),
+      ]);
+      setAutomationResults(nextAutomationResults);
+      setUsageRuns(nextUsageRuns);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Automation analysis clear failed."
+      );
+    } finally {
+      setIsClearingAutomation(false);
+    }
+  }
+
   async function handleClear() {
     if (!canAct || !window.confirm(clearConfirmation)) {
       return;
@@ -500,7 +698,11 @@ function GenAIWorkbench() {
         setMessage(
           `Cleared ${formatNumber(
             result.deleted_classification_count
-          )} analysis rows and ${formatNumber(result.deleted_cluster_label_count)} cluster labels.`
+          )} analysis rows, ${formatNumber(
+            result.deleted_cluster_label_count
+          )} cluster labels, and ${formatNumber(
+            result.deleted_automation_assessment_count
+          )} automation rows.`
         );
       } else {
         const result = await clearTicketClassificationAnalysis({
@@ -570,6 +772,36 @@ function GenAIWorkbench() {
       );
     } finally {
       setIsDownloadingDump(false);
+    }
+  }
+
+  async function handleDownloadAutomation() {
+    if (!canAct) {
+      return;
+    }
+    if (!hasAutomationRows) {
+      setError("Run automation analysis before downloading the automation CSV.");
+      return;
+    }
+    setIsDownloadingAutomation(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const { blob, filename } = await downloadTicketAutomationAnalysis(
+        projectId,
+        analysisMonthFrom,
+        analysisMonthTo
+      );
+      downloadBlob(blob, filename);
+      setMessage("Automation analysis CSV downloaded.");
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Automation analysis CSV download failed."
+      );
+    } finally {
+      setIsDownloadingAutomation(false);
     }
   }
 
@@ -704,6 +936,36 @@ function GenAIWorkbench() {
               : "Run Category Quality Analysis"}
           </button>
           <button
+            className="secondary-button"
+            type="button"
+            disabled={
+              !canAct ||
+              isRunning ||
+              isClearing ||
+              isClearingAutomation ||
+              !automationButtonEnabled
+            }
+            onClick={() => void handleRunAutomation()}
+          >
+            {isAutomationRunning ? "Running Automation..." : "Run Automation Analysis"}
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={!canAct || isRunning || isClearing || isClearingAutomation || !hasAutomationRows}
+            onClick={() => void handleDownloadAutomation()}
+          >
+            {isDownloadingAutomation ? "Preparing Automation CSV..." : "Download Automation CSV"}
+          </button>
+          <button
+            className="secondary-button danger-button"
+            type="button"
+            disabled={!canAct || isRunning || isClearing || isClearingAutomation}
+            onClick={() => void handleClearAutomation()}
+          >
+            {isClearingAutomation ? "Clearing Automation..." : "Clear Automation Analysis"}
+          </button>
+          <button
             className="secondary-button danger-button"
             type="button"
             disabled={!projectId || isRunning || isClearing || isClearingEmbeddings}
@@ -729,7 +991,10 @@ function GenAIWorkbench() {
             {workbenchSettings.cluster_level_2_distance_threshold.toFixed(2)} /{" "}
             {workbenchSettings.cluster_level_3_distance_threshold.toFixed(2)}. Rare label skip:{" "}
             below {formatNumber(workbenchSettings.cluster_min_llm_label_ticket_count)} tickets.
-            Embedding model: {workbenchSettings.cluster_embedding_model_name}.
+            Embedding model: {workbenchSettings.cluster_embedding_model_name}. Automation model:{" "}
+            {displayLabel(workbenchSettings.automation_model_name)}; representatives:{" "}
+            {formatNumber(workbenchSettings.automation_representative_ticket_count)} tickets,
+            {formatNumber(workbenchSettings.automation_clusters_per_request)} clusters/request.
           </p>
         ) : null}
         {!isMonthRangeValid ? (
@@ -750,6 +1015,29 @@ function GenAIWorkbench() {
         <SummaryMetric label="Subcategory 2" value={summary?.subcategory_2_count} />
         <SummaryMetric label="Incidents" value={summary?.incident_count} />
         <SummaryMetric label="SC Tasks" value={summary?.sc_task_count} />
+      </div>
+
+      <div className="workbench-summary-grid">
+        <SummaryMetric
+          label="Automation Clusters"
+          value={automationResults?.summary.assessed_cluster_count}
+        />
+        <SummaryMetric label="Tickets Covered" value={automationResults?.summary.ticket_count} />
+        <SummaryMetric label="High Potential" value={automationResults?.summary.high_potential_count} />
+        <SummaryMetric
+          label="Medium Potential"
+          value={automationResults?.summary.medium_potential_count}
+        />
+        <SummaryMetric label="Low Potential" value={automationResults?.summary.low_potential_count} />
+        <SummaryMetric
+          label="Insufficient Info"
+          value={automationResults?.summary.insufficient_information_count}
+        />
+        <SummaryMetric
+          label="Not Recommended"
+          value={automationResults?.summary.not_recommended_count}
+        />
+        <SummaryMetric label="Automation Errors" value={automationResults?.summary.error_cluster_count} />
       </div>
 
       <section className="panel" aria-labelledby="classification-pivot-heading">
@@ -807,6 +1095,70 @@ function GenAIWorkbench() {
                     <td>{formatNumber(row.incident_count)}</td>
                     <td>{formatNumber(row.sc_task_count)}</td>
                     <td>{formatNumber(row.total_count)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="automation-analysis-heading">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Automation Analysis</p>
+            <h2 id="automation-analysis-heading">Cluster-Level Automation Opportunities</h2>
+          </div>
+          <span className="helper-text">
+            Last processed:{" "}
+            {formatDisplayDateTime(automationResults?.summary.last_processed_at)}
+          </span>
+        </div>
+        <div className="scroll-frame workbench-table-frame">
+          <table>
+            <thead>
+              <tr>
+                <th>SubCategory-2 Cluster</th>
+                <th>Type</th>
+                <th>Tickets</th>
+                <th>Potential</th>
+                <th>Path</th>
+                <th>Automation Type</th>
+                <th>Business Service</th>
+                <th>Recommendation</th>
+                <th>Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(automationResults?.rows ?? []).length === 0 ? (
+                <tr>
+                  <td colSpan={9}>
+                    No automation analysis rows for the selected period.
+                  </td>
+                </tr>
+              ) : (
+                automationResults?.rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{displayLabel(row.cluster_label)}</strong>
+                      <div className="helper-text">{row.cluster_key}</div>
+                      <div className="helper-text">
+                        {displayLabel(row.category)} - {displayLabel(row.subcategory_1)}
+                      </div>
+                    </td>
+                    <td>{formatTicketType(row.ticket_type)}</td>
+                    <td>{formatNumber(row.ticket_count)}</td>
+                    <td>{displayLabel(row.automation_potential)}</td>
+                    <td>{displayLabel(row.recommended_resolution_path)}</td>
+                    <td>{displayLabel(row.primary_automation_type)}</td>
+                    <td>{formatBusinessServices(row.business_services)}</td>
+                    <td>
+                      <div>{displayLabel(row.automation_recommendation)}</div>
+                      <div className="helper-text">
+                        Evidence: {evidenceText(row.evidence, "evidence_from_tickets")}
+                      </div>
+                    </td>
+                    <td>{formatNumber(row.confidence, 2)}</td>
                   </tr>
                 ))
               )}

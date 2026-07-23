@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models import (
     GenAIConfig,
+    GenAITicketAutomationAssessment,
     GenAITicketClassification,
     GenAITicketClusterLabel,
     GenAITicketEmbedding,
@@ -412,8 +413,13 @@ def workbench_settings() -> dict[str, Any]:
         "ticket_cluster_analysis_button_enabled": (
             settings.genai_ticket_cluster_analysis_button_enabled
         ),
+        "ticket_automation_analysis_button_enabled": (
+            settings.genai_ticket_automation_analysis_button_enabled
+        ),
         "cluster_embedding_model_name": settings.genai_ticket_cluster_embedding_model_name,
         "cluster_label_model_name": settings.genai_ticket_cluster_label_model_name
+        or settings.genai_ticket_classification_model_name,
+        "automation_model_name": settings.genai_ticket_automation_model_name
         or settings.genai_ticket_classification_model_name,
         "cluster_mode": cluster_mode,
         "cluster_level_1_mode": normalized_level_cluster_mode(
@@ -445,6 +451,10 @@ def workbench_settings() -> dict[str, Any]:
         "cluster_min_llm_label_ticket_count": (
             settings.genai_ticket_cluster_min_llm_label_ticket_count
         ),
+        "automation_representative_ticket_count": (
+            settings.genai_ticket_automation_representative_ticket_count
+        ),
+        "automation_clusters_per_request": settings.genai_ticket_automation_clusters_per_request,
     }
 
 
@@ -2028,6 +2038,13 @@ def clear_ticket_cluster_analysis(
             GenAITicketClusterLabel.analysis_month.in_(month_keys),
         ),
     ).rowcount
+    deleted_automation_assessment_count = db.execute(
+        delete(GenAITicketAutomationAssessment).where(
+            GenAITicketAutomationAssessment.project_id == request.project_id,
+            GenAITicketAutomationAssessment.analysis_month == start_month,
+            GenAITicketAutomationAssessment.analysis_month_to == end_month,
+        ),
+    ).rowcount
     db.commit()
     return {
         "project_id": request.project_id,
@@ -2036,6 +2053,7 @@ def clear_ticket_cluster_analysis(
         "analysis_month_to": end_month,
         "deleted_classification_count": int(deleted_classification_count or 0),
         "deleted_cluster_label_count": int(deleted_cluster_label_count or 0),
+        "deleted_automation_assessment_count": int(deleted_automation_assessment_count or 0),
     }
 
 

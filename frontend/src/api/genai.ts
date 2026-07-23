@@ -80,6 +80,62 @@ export type GenAITicketClassificationPivot = {
   rows: GenAITicketClassificationPivotRow[];
 };
 
+export type GenAITicketAutomationSummary = {
+  project_id: string;
+  analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
+  assessed_cluster_count: number;
+  error_cluster_count: number;
+  ticket_count: number;
+  high_potential_count: number;
+  medium_potential_count: number;
+  low_potential_count: number;
+  not_recommended_count: number;
+  insufficient_information_count: number;
+  potential_counts: Record<string, number>;
+  resolution_path_counts: Record<string, number>;
+  last_processed_at: string | null;
+};
+
+export type GenAITicketAutomationRow = {
+  id: string;
+  cluster_key: string;
+  cluster_label: string;
+  category: string | null;
+  subcategory_1: string | null;
+  ticket_type: string;
+  ticket_count: number;
+  incident_count: number;
+  sc_task_count: number;
+  automation_potential: string | null;
+  recommended_resolution_path: string | null;
+  primary_automation_type: string | null;
+  pattern_summary: string | null;
+  current_resolution_summary: string | null;
+  likely_root_cause: string | null;
+  automation_recommendation: string | null;
+  implementation_approach: string | null;
+  prerequisites: string | null;
+  expected_benefits: string | null;
+  risks_or_constraints: string | null;
+  confidence: number | null;
+  business_services: Record<string, number>;
+  evidence: Record<string, unknown>;
+  status: string;
+  error_message: string | null;
+  processed_at: string | null;
+};
+
+export type GenAITicketAutomationResults = {
+  project_id: string;
+  analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
+  summary: GenAITicketAutomationSummary;
+  rows: GenAITicketAutomationRow[];
+};
+
 export type GenAITicketClassificationRunResponse = {
   project_id: string;
   analysis_month: string;
@@ -120,8 +176,10 @@ export type GenAITicketCategoryQualityRunResponse = {
 export type GenAIWorkbenchSettings = {
   ticket_classification_button_enabled: boolean;
   ticket_cluster_analysis_button_enabled: boolean;
+  ticket_automation_analysis_button_enabled: boolean;
   cluster_embedding_model_name: string;
   cluster_label_model_name: string | null;
+  automation_model_name: string | null;
   cluster_mode: string;
   cluster_level_1_mode: string;
   cluster_level_2_mode: string;
@@ -135,6 +193,8 @@ export type GenAIWorkbenchSettings = {
   cluster_embedding_batch_size: number;
   cluster_label_batch_size: number;
   cluster_min_llm_label_ticket_count: number;
+  automation_representative_ticket_count: number;
+  automation_clusters_per_request: number;
 };
 
 export type GenAITicketClusterRunResponse = {
@@ -158,6 +218,24 @@ export type GenAITicketClusterRunResponse = {
   usage_run: GenAITicketClassificationUsageRun | null;
 };
 
+export type GenAITicketAutomationRunResponse = {
+  project_id: string;
+  analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
+  run_id: string;
+  eligible_cluster_count: number;
+  processed_count: number;
+  skipped_cached_count: number;
+  failed_count: number;
+  remaining_cluster_count: number;
+  processed_batch_count: number;
+  total_batch_count: number;
+  summary: GenAITicketAutomationSummary;
+  usage: GenAITicketClassificationUsageSummary;
+  usage_run: GenAITicketClassificationUsageRun | null;
+};
+
 export type GenAITicketClassificationClearResponse = {
   project_id: string;
   analysis_month: string;
@@ -173,6 +251,15 @@ export type GenAITicketClusterClearResponse = {
   analysis_month_to?: string | null;
   deleted_classification_count: number;
   deleted_cluster_label_count: number;
+  deleted_automation_assessment_count: number;
+};
+
+export type GenAITicketAutomationClearResponse = {
+  project_id: string;
+  analysis_month: string;
+  analysis_month_from?: string | null;
+  analysis_month_to?: string | null;
+  deleted_count: number;
 };
 
 export type GenAITicketEmbeddingClearResponse = {
@@ -319,6 +406,66 @@ export function getTicketCategoryQualityUsageRuns(
   );
 }
 
+export function getTicketAutomationResults(
+  projectId: string,
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
+): Promise<GenAITicketAutomationResults> {
+  return requestJson<GenAITicketAutomationResults>(
+    `/genai/ticket-automation-analysis/results?${queryString(
+      monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo)
+    )}`
+  );
+}
+
+export function getTicketAutomationUsageRuns(
+  projectId: string,
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
+): Promise<GenAITicketClassificationUsageRuns> {
+  return requestJson<GenAITicketClassificationUsageRuns>(
+    `/genai/ticket-automation-analysis/usage-runs?${queryString({
+      ...monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo),
+      limit: "10",
+    })}`
+  );
+}
+
+export async function downloadTicketAutomationAnalysis(
+  projectId: string,
+  analysisMonthFrom: string,
+  analysisMonthTo?: string
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(
+    `${apiBaseUrl}/genai/ticket-automation-analysis/download?${queryString(
+      monthRangeParams(projectId, analysisMonthFrom, analysisMonthTo)
+    )}`
+  );
+
+  if (!response.ok) {
+    let message = `Request failed with HTTP ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") {
+        message = payload.detail;
+      }
+    } catch {
+      // Keep the HTTP status fallback when the response is not JSON.
+    }
+    throw new Error(message);
+  }
+
+  return {
+    blob: await response.blob(),
+    filename:
+      getDownloadFilename(response.headers.get("Content-Disposition")) ??
+      `genai_ticket_automation_analysis_${monthRangeSlug(
+        analysisMonthFrom,
+        analysisMonthTo
+      )}.csv`,
+  };
+}
+
 export function runTicketClassificationEnrichment(payload: {
   project_id: string;
   analysis_month: string;
@@ -368,6 +515,24 @@ export function runTicketClusterAnalysis(payload: {
   });
 }
 
+export function runTicketAutomationAnalysis(payload: {
+  project_id: string;
+  analysis_month: string;
+  analysis_month_to?: string;
+  force_reprocess: boolean;
+  cluster_limit?: number;
+  run_id?: string;
+}): Promise<GenAITicketAutomationRunResponse> {
+  return requestJson<GenAITicketAutomationRunResponse>(
+    "/genai/ticket-automation-analysis/run",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
 export function clearTicketClassificationAnalysis(payload: {
   project_id: string;
   analysis_month: string;
@@ -390,6 +555,21 @@ export function clearTicketClusterAnalysis(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+export function clearTicketAutomationAnalysis(payload: {
+  project_id: string;
+  analysis_month: string;
+  analysis_month_to?: string;
+}): Promise<GenAITicketAutomationClearResponse> {
+  return requestJson<GenAITicketAutomationClearResponse>(
+    "/genai/ticket-automation-analysis/clear",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
 }
 
 export function clearProjectTicketEmbeddings(payload: {

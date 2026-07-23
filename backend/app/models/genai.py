@@ -434,3 +434,88 @@ class GenAITicketClusterLabel(UuidPrimaryKeyMixin, TimestampMixin, Base):
 
     customer: Mapped[Client | None] = relationship()
     project: Mapped[Project] = relationship()
+
+
+class GenAITicketAutomationAssessment(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_ticket_automation_assessments"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "analysis_month",
+            "analysis_month_to",
+            "cluster_run_id",
+            "cluster_key",
+            name="uq_genai_ticket_automation_project_period_run_cluster",
+        ),
+        Index(
+            "ix_genai_ticket_automation_project_period",
+            "project_id",
+            "analysis_month",
+            "analysis_month_to",
+        ),
+        Index(
+            "ix_genai_ticket_automation_potential",
+            "project_id",
+            "analysis_month",
+            "automation_potential",
+        ),
+        Index(
+            "ix_genai_ticket_automation_cluster_key",
+            "project_id",
+            "cluster_key",
+        ),
+    )
+
+    customer_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    analysis_month: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    analysis_month_to: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    cluster_run_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    cluster_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    cluster_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subcategory_1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ticket_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    ticket_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    incident_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sc_task_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    prompt_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    prompt_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="success", index=True)
+    automation_potential: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    recommended_resolution_path: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    primary_automation_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    pattern_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_resolution_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    likely_root_cause: Mapped[str | None] = mapped_column(Text, nullable=True)
+    automation_recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    implementation_approach: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prerequisites: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_benefits: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risks_or_constraints: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    business_services_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    representative_tickets_json: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+    evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    customer: Mapped[Client | None] = relationship()
+    project: Mapped[Project] = relationship()

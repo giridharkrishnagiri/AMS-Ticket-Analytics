@@ -20,6 +20,7 @@ from app.models import (
     GenAIGeneratedChart,
     GenAIPromptTemplate,
     GenAISafetySettings,
+    GenAITicketAutomationAssessment,
     GenAITicketClassification,
     GenAITicketClusterLabel,
     GenAITicketEmbedding,
@@ -41,6 +42,7 @@ def reset_genai_tables() -> None:
         for model in (
             GenAIToolRun,
             GenAIGeneratedChart,
+            GenAITicketAutomationAssessment,
             GenAITicketClusterLabel,
             GenAITicketClassification,
             GenAITicketEmbedding,
@@ -969,6 +971,10 @@ def test_ticket_classification_enrichment_filters_caches_pivots_and_clears(monke
             "app.services.genai.ticket_classification.chat_completion",
             fake_chat_completion,
         )
+        monkeypatch.setattr(
+            "app.services.genai.ticket_automation.chat_completion",
+            fake_chat_completion,
+        )
 
         with TestClient(app) as client:
             configure_genai(client)
@@ -1125,6 +1131,9 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
     reset_genai_tables()
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_EMBEDDING_MODEL_NAME", "embedding-test")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LABEL_MODEL_NAME", "cluster-label-test")
+    monkeypatch.setenv("GENAI_TICKET_AUTOMATION_MODEL_NAME", "automation-test")
+    monkeypatch.setenv("GENAI_TICKET_AUTOMATION_CLUSTERS_PER_REQUEST", "1")
+    monkeypatch.setenv("GENAI_TICKET_AUTOMATION_REPRESENTATIVE_TICKET_COUNT", "2")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_MODE", "adaptive")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_1_MODE", "capped")
     monkeypatch.setenv("GENAI_TICKET_CLUSTER_LEVEL_2_MODE", "capped")
@@ -1218,6 +1227,38 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             label_model_names.append(config.model_name)
             content = messages[1]["content"]
             payload = json.loads(content[content.find("{") :])
+            if "cluster" in payload and "representative_tickets" in payload:
+                return LLMCompletionResult(
+                    ok=True,
+                    response_text=json.dumps(
+                        {
+                            "automation_potential": "High",
+                            "recommended_resolution_path": "Problem Management",
+                            "primary_automation_type": "Monitoring-triggered remediation",
+                            "pattern_summary": (
+                                f"Recurring {payload['cluster']['subcategory_2_label']}"
+                            ),
+                            "current_resolution_summary": "Engineers resolve similar tickets.",
+                            "likely_root_cause": "Recurring operational condition",
+                            "automation_recommendation": (
+                                "Create a permanent fix and automate checks."
+                            ),
+                            "implementation_approach": (
+                                "Add monitoring, RCA rules, and remediation."
+                            ),
+                            "prerequisites": "Validated SOP and safe execution access.",
+                            "expected_benefits": "Reduced repeated tickets.",
+                            "risks_or_constraints": "Needs application owner approval.",
+                            "evidence_from_tickets": ["Repeated cluster evidence"],
+                            "generic_knowledge_inferences": ["Monitoring can prevent repeats"],
+                            "confidence": 0.8,
+                        },
+                    ),
+                    prompt_tokens=30,
+                    completion_tokens=25,
+                    estimated_cost=0.002,
+                    duration_ms=25,
+                )
             if "tickets" in payload:
                 return LLMCompletionResult(
                     ok=True,
@@ -1269,6 +1310,10 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
         )
         monkeypatch.setattr(
             "app.services.genai.ticket_classification.chat_completion",
+            fake_chat_completion,
+        )
+        monkeypatch.setattr(
+            "app.services.genai.ticket_automation.chat_completion",
             fake_chat_completion,
         )
 
@@ -1374,6 +1419,72 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert "INC-CLUSTER-CANCELED" not in dump_text
             assert "SCTASK-CLUSTER-INCOMPLETE" not in dump_text
 
+            automation_first_response = client.post(
+                "/api/genai/ticket-automation-analysis/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                    "cluster_limit": 1,
+                    "force_reprocess": False,
+                    "run_id": "automation-test-run-1",
+                },
+            )
+            assert automation_first_response.status_code == 200
+            automation_first_payload = automation_first_response.json()
+            assert automation_first_payload["eligible_cluster_count"] == 2
+            assert automation_first_payload["processed_count"] == 1
+            assert automation_first_payload["remaining_cluster_count"] == 1
+            assert automation_first_payload["usage_run"]["model_name"] == "automation-test"
+
+            automation_second_response = client.post(
+                "/api/genai/ticket-automation-analysis/run",
+                json={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                    "cluster_limit": 10,
+                    "force_reprocess": False,
+                    "run_id": "automation-test-run-1",
+                },
+            )
+            assert automation_second_response.status_code == 200
+            automation_second_payload = automation_second_response.json()
+            assert automation_second_payload["processed_count"] == 1
+            assert automation_second_payload["skipped_cached_count"] == 1
+            assert automation_second_payload["remaining_cluster_count"] == 0
+            assert automation_second_payload["summary"]["assessed_cluster_count"] == 2
+            assert automation_second_payload["summary"]["high_potential_count"] == 2
+
+            automation_results_response = client.get(
+                "/api/genai/ticket-automation-analysis/results",
+                params={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
+            )
+            assert automation_results_response.status_code == 200
+            automation_results = automation_results_response.json()
+            assert len(automation_results["rows"]) == 2
+            assert all(
+                row["automation_potential"] == "High" for row in automation_results["rows"]
+            )
+            assert all(row["ticket_count"] == 3 for row in automation_results["rows"])
+            assert all(row["business_services"] for row in automation_results["rows"])
+
+            automation_download_response = client.get(
+                "/api/genai/ticket-automation-analysis/download",
+                params={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
+            )
+            assert automation_download_response.status_code == 200
+            assert "automation_potential" in automation_download_response.text
+            assert "Monitoring-triggered remediation" in automation_download_response.text
+
             quality_response = client.post(
                 "/api/genai/ticket-category-quality/run",
                 json={
@@ -1463,6 +1574,23 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert first_run["llm_cost"] == 0.003
             assert first_run["llm_batch_count"] == 3
 
+            automation_usage_response = client.get(
+                "/api/genai/ticket-automation-analysis/usage-runs",
+                params={
+                    "project_id": project_id_text,
+                    "analysis_month": "2026-05",
+                    "analysis_month_to": "2026-06",
+                },
+            )
+            assert automation_usage_response.status_code == 200
+            automation_usage_runs = automation_usage_response.json()["runs"]
+            assert len(automation_usage_runs) == 1
+            assert automation_usage_runs[0]["run_id"] == "automation-test-run-1"
+            assert automation_usage_runs[0]["ticket_count"] == 6
+            assert automation_usage_runs[0]["llm_batch_count"] == 2
+            assert automation_usage_runs[0]["llm_prompt_tokens"] == 60
+            assert automation_usage_runs[0]["llm_completion_tokens"] == 50
+
             db_check = SessionLocal()
             try:
                 saved_labels = (
@@ -1504,6 +1632,23 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
                     and "level_3_distance_threshold" in row.metadata_json
                     for row in saved_classifications
                 )
+                saved_automation_rows = (
+                    db_check.query(GenAITicketAutomationAssessment)
+                    .filter(
+                        GenAITicketAutomationAssessment.project_id == project_id,
+                        GenAITicketAutomationAssessment.analysis_month == "2026-05",
+                        GenAITicketAutomationAssessment.analysis_month_to == "2026-06",
+                    )
+                    .all()
+                )
+                assert len(saved_automation_rows) == 2
+                assert {row.automation_potential for row in saved_automation_rows} == {"High"}
+                assert all(row.ticket_count == 3 for row in saved_automation_rows)
+                assert all(
+                    isinstance(row.representative_tickets_json, list)
+                    and len(row.representative_tickets_json) <= 2
+                    for row in saved_automation_rows
+                )
             finally:
                 db_check.close()
 
@@ -1518,6 +1663,7 @@ def test_ticket_cluster_analysis_clusters_labels_caches_and_clears(monkeypatch) 
             assert clear_response.status_code == 200
             assert clear_response.json()["deleted_classification_count"] == 6
             assert clear_response.json()["deleted_cluster_label_count"] == 6
+            assert clear_response.json()["deleted_automation_assessment_count"] == 2
 
             label_model_names.clear()
             no_label_response = client.post(

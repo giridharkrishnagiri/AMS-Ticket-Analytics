@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     genai_ticket_cluster_level_3_distance_threshold: float = 0.24
     genai_ticket_cluster_min_llm_label_ticket_count: int = 3
     genai_ticket_cluster_representative_ticket_count: int = 8
+    genai_ticket_automation_analysis_button_enabled: bool = True
+    genai_ticket_automation_model_name: str | None = None
+    genai_ticket_automation_max_output_tokens: int | None = None
+    genai_ticket_automation_representative_ticket_count: int = 12
+    genai_ticket_automation_clusters_per_request: int = 10
 
     @property
     def cors_origins(self) -> list[str]:

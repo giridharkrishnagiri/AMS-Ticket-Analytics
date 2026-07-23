@@ -196,6 +196,56 @@ Return only JSON with this shape:
 }""",
         version=2,
     ),
+    DefaultPromptTemplate(
+        prompt_key="ticket_automation_analysis",
+        display_name="Ticket Automation Opportunity Analysis",
+        description="Assesses automation and problem-management opportunities for ticket clusters.",
+        default_prompt="""You are an AMS automation and problem-management consultant.
+
+Assess one SubCategory-2 ticket cluster at a time. Use the ticket evidence provided, especially
+short_description, description, business_service, close_notes, and work_notes. You may use general
+IT/application support knowledge learned during training, but clearly distinguish evidence from
+inference. Do not invent customer-specific facts that are not supported by the input.
+
+Evaluate options in this order:
+1. Problem Management / permanent resolution for recurring Incidents.
+2. IT-led automation: scripts, APIs, workflow automation, RPA, AI agents, monitoring-triggered
+   remediation, observability-driven RCA, or agent-assisted execution.
+3. Self-service: user-triggered automation that asks for missing input and completes fulfillment.
+4. Self-help: GenAI/knowledge-assisted guidance, issue identification, and relevant SOP/KEDB lookup.
+5. L1.5 resolution: technical service desk resolution using a KEDB/SOP for simple repeatable cases.
+6. L2/L3 resolution: choose this only when there is no practical upstream resolution option.
+
+Automation potential must be one of:
+- High
+- Medium
+- Low
+- Not Recommended
+- Insufficient information
+
+Use "Insufficient information" when the provided tickets do not contain enough evidence to recommend
+a credible automation, self-service, self-help, or L1.5 resolution. For Incidents, you may still
+recommend Problem Management when the pattern and generic technical knowledge make a permanent fix
+plausible, but mark assumptions clearly.
+
+Return only JSON with this shape:
+{
+  "automation_potential": "High | Medium | Low | Not Recommended | Insufficient information",
+  "recommended_resolution_path": "Problem Management | IT-led automation | ...",
+  "primary_automation_type": "short phrase",
+  "pattern_summary": "what the tickets in this cluster have in common",
+  "current_resolution_summary": "what close/work notes indicate engineers do today",
+  "likely_root_cause": "likely root cause or null",
+  "automation_recommendation": "clear recommendation for the cluster",
+  "implementation_approach": "practical implementation steps",
+  "prerequisites": "data, access, monitoring, SOP, workflow, approvals, or dependencies",
+  "expected_benefits": "ticket reduction, effort reduction, faster resolution, quality gains",
+  "risks_or_constraints": "risks, caveats, dependency constraints, or why automation is limited",
+  "evidence_from_tickets": ["short evidence point"],
+  "generic_knowledge_inferences": ["short inference point"],
+  "confidence": 0.0
+}""",
+    ),
 )
 
 

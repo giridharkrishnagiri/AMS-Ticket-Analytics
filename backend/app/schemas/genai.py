@@ -210,6 +210,62 @@ class GenAITicketClassificationPivotResponse(BaseModel):
     rows: list[GenAITicketClassificationPivotRow] = Field(default_factory=list)
 
 
+class GenAITicketAutomationSummaryResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
+    assessed_cluster_count: int
+    error_cluster_count: int
+    ticket_count: int
+    high_potential_count: int
+    medium_potential_count: int
+    low_potential_count: int
+    not_recommended_count: int
+    insufficient_information_count: int
+    potential_counts: dict[str, int] = Field(default_factory=dict)
+    resolution_path_counts: dict[str, int] = Field(default_factory=dict)
+    last_processed_at: datetime | None = None
+
+
+class GenAITicketAutomationRowResponse(BaseModel):
+    id: UUID
+    cluster_key: str
+    cluster_label: str
+    category: str | None = None
+    subcategory_1: str | None = None
+    ticket_type: str
+    ticket_count: int
+    incident_count: int
+    sc_task_count: int
+    automation_potential: str | None = None
+    recommended_resolution_path: str | None = None
+    primary_automation_type: str | None = None
+    pattern_summary: str | None = None
+    current_resolution_summary: str | None = None
+    likely_root_cause: str | None = None
+    automation_recommendation: str | None = None
+    implementation_approach: str | None = None
+    prerequisites: str | None = None
+    expected_benefits: str | None = None
+    risks_or_constraints: str | None = None
+    confidence: float | None = None
+    business_services: dict[str, int] = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    error_message: str | None = None
+    processed_at: datetime | None = None
+
+
+class GenAITicketAutomationResultsResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
+    summary: GenAITicketAutomationSummaryResponse
+    rows: list[GenAITicketAutomationRowResponse] = Field(default_factory=list)
+
+
 class GenAITicketClassificationRunRequest(BaseModel):
     project_id: UUID
     analysis_month: str = Field(default="2026-05", pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -266,6 +322,47 @@ class GenAITicketCategoryQualityRunResponse(BaseModel):
     usage_run: GenAITicketClassificationUsageRunResponse | None = None
 
 
+class GenAITicketAutomationRunRequest(BaseModel):
+    project_id: UUID
+    analysis_month: str = Field(default="2026-05", pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    analysis_month_to: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    force_reprocess: bool = False
+    cluster_limit: int | None = Field(default=None, ge=1, le=50)
+    run_id: str | None = Field(default=None, max_length=80)
+
+
+class GenAITicketAutomationRunResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
+    run_id: str
+    eligible_cluster_count: int
+    processed_count: int
+    skipped_cached_count: int
+    failed_count: int
+    remaining_cluster_count: int
+    processed_batch_count: int
+    total_batch_count: int
+    summary: GenAITicketAutomationSummaryResponse
+    usage: GenAITicketClassificationUsageSummary
+    usage_run: GenAITicketClassificationUsageRunResponse | None = None
+
+
+class GenAITicketAutomationClearRequest(BaseModel):
+    project_id: UUID
+    analysis_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    analysis_month_to: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+class GenAITicketAutomationClearResponse(BaseModel):
+    project_id: UUID
+    analysis_month: str
+    analysis_month_from: str | None = None
+    analysis_month_to: str | None = None
+    deleted_count: int
+
+
 class GenAITicketClassificationClearRequest(BaseModel):
     project_id: UUID
     analysis_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -283,8 +380,10 @@ class GenAITicketClassificationClearResponse(BaseModel):
 class GenAIWorkbenchSettingsResponse(BaseModel):
     ticket_classification_button_enabled: bool
     ticket_cluster_analysis_button_enabled: bool
+    ticket_automation_analysis_button_enabled: bool
     cluster_embedding_model_name: str
     cluster_label_model_name: str | None = None
+    automation_model_name: str | None = None
     cluster_mode: str
     cluster_level_1_mode: str
     cluster_level_2_mode: str
@@ -298,6 +397,8 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
     cluster_embedding_batch_size: int
     cluster_label_batch_size: int
     cluster_min_llm_label_ticket_count: int
+    automation_representative_ticket_count: int
+    automation_clusters_per_request: int
 
 
 class GenAITicketClusterRunRequest(BaseModel):
@@ -346,6 +447,7 @@ class GenAITicketClusterClearResponse(BaseModel):
     analysis_month_to: str | None = None
     deleted_classification_count: int
     deleted_cluster_label_count: int
+    deleted_automation_assessment_count: int = 0
 
 
 class GenAITicketEmbeddingClearRequest(BaseModel):
