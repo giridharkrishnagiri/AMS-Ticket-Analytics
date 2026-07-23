@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from typing import Annotated
 from uuid import UUID
 
@@ -161,6 +162,11 @@ from app.services.genai.usage_log_service import create_usage_log, list_usage_lo
 router = APIRouter(prefix="/genai", tags=["genai"])
 DbSession = Annotated[Session, Depends(get_db)]
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+EXCEL_ILLEGAL_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]")
+
+
+def xlsx_safe_value(value: str) -> str:
+    return EXCEL_ILLEGAL_CHARACTERS.sub("", value)
 
 
 def csv_text_to_xlsx_bytes(csv_text: str, sheet_name: str) -> bytes:
@@ -168,7 +174,7 @@ def csv_text_to_xlsx_bytes(csv_text: str, sheet_name: str) -> bytes:
     worksheet = workbook.create_sheet(title=sheet_name[:31] or "Export")
     reader = csv.reader(io.StringIO(csv_text))
     for row in reader:
-        worksheet.append(row)
+        worksheet.append([xlsx_safe_value(value) for value in row])
     output = io.BytesIO()
     workbook.save(output)
     return output.getvalue()
