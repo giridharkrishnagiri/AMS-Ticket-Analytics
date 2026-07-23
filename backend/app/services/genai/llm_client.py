@@ -49,6 +49,11 @@ GENERIC_FAILURE_MESSAGE = (
 )
 NETWORK_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
 LLMMessage = dict[str, str]
+DEFAULT_TEMPERATURE_ONLY_MODEL_PREFIXES = (
+    "gpt-5",
+    "openai/gpt-5",
+    "azure/gpt-5",
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,29 @@ def provider_model_name(config: GenAIConfig) -> str:
     if provider == "ollama" and not model_name.startswith("ollama/"):
         return f"ollama/{model_name}"
     return model_name
+
+
+def uses_default_sampling_only(model_name: str | None) -> bool:
+    normalized = (model_name or "").strip().lower()
+    return any(
+        normalized == prefix
+        or normalized.startswith(f"{prefix}.")
+        or normalized.startswith(f"{prefix}-")
+        for prefix in DEFAULT_TEMPERATURE_ONLY_MODEL_PREFIXES
+    )
+
+
+def completion_parameters(config: GenAIConfig) -> dict[str, Any]:
+    model_name = provider_model_name(config)
+    parameters: dict[str, Any] = {
+        "model": model_name,
+        "max_tokens": config.max_output_tokens,
+        "timeout": config.timeout_seconds,
+    }
+    if not uses_default_sampling_only(model_name):
+        parameters["temperature"] = config.temperature
+        parameters["top_p"] = config.top_p
+    return parameters
 
 
 def missing_api_key_message(provider: str) -> str | None:
@@ -169,12 +197,8 @@ def completion_request(config: GenAIConfig, messages: list[LLMMessage]) -> LLMCo
     started_at = time.perf_counter()
     try:
         response = litellm.completion(
-            model=provider_model_name(config),
             messages=messages,
-            temperature=config.temperature,
-            top_p=config.top_p,
-            max_tokens=config.max_output_tokens,
-            timeout=config.timeout_seconds,
+            **completion_parameters(config),
         )
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         return LLMCompletionResult(
