@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     genai_ticket_cluster_analysis_button_enabled: bool = True
     genai_ticket_classification_model_name: str | None = None
     genai_ticket_classification_max_output_tokens: int | None = None
+    genai_ticket_classification_batch_size: int = 10
     genai_ticket_cluster_embedding_model_name: str = "text-embedding-3-small"
     genai_ticket_cluster_label_model_name: str | None = None
     genai_ticket_cluster_label_max_output_tokens: int | None = None

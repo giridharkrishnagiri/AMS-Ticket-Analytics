@@ -290,6 +290,7 @@ function WorkbenchSettingsSummary({
     `Cluster mode: ${settings.cluster_mode}`,
     `Embedding model: ${settings.cluster_embedding_model_name}`,
     `Cluster label model: ${displayLabel(settings.cluster_label_model_name)}`,
+    `Ticket analysis batch: ${formatNumber(settings.ticket_classification_batch_size)} tickets/request`,
     `Automation model: ${displayLabel(settings.automation_model_name)}`,
     `Automation representatives: ${formatNumber(
       settings.automation_representative_ticket_count
@@ -405,6 +406,18 @@ function WorkbenchSettingsPanel({
     );
   };
 
+  const renderHelpfulNumberInput = (
+    label: string,
+    key: WorkbenchSettingsKey,
+    helpText: string,
+    options: { min?: number; max?: number; step?: number; allowBlank?: boolean } = {}
+  ) => (
+    <div className="workbench-setting-help">
+      {renderNumberInput(label, key, options)}
+      <p>{helpText}</p>
+    </div>
+  );
+
   const renderModeSelect = (label: string, key: WorkbenchSettingsKey) => (
     <label>
       <span>{label}</span>
@@ -498,6 +511,12 @@ function WorkbenchSettingsPanel({
               "ticket_classification_max_output_tokens",
               { min: 500, max: 32000, allowBlank: true }
             )}
+            {renderHelpfulNumberInput(
+              "Ticket analysis batch size",
+              "ticket_classification_batch_size",
+              "Number of tickets sent in one LLM request for Category Quality. It also applies to legacy per-ticket enrichment if that path is enabled later. Smaller batches reduce JSON truncation risk; larger batches reduce request count.",
+              { min: 1, max: 25 }
+            )}
           </fieldset>
 
           <fieldset className="workbench-compact-settings">
@@ -509,14 +528,24 @@ function WorkbenchSettingsPanel({
               max: 32000,
               allowBlank: true,
             })}
-            {renderNumberInput("Embedding batch size", "cluster_embedding_batch_size", {
-              min: 1,
-              max: 500,
-            })}
-            {renderNumberInput("Cluster label batch size", "cluster_label_batch_size", {
-              min: 1,
-              max: 50,
-            })}
+            {renderHelpfulNumberInput(
+              "Embedding batch size",
+              "cluster_embedding_batch_size",
+              "Number of ticket texts sent together to the embedding API during cluster analysis.",
+              {
+                min: 1,
+                max: 500,
+              }
+            )}
+            {renderHelpfulNumberInput(
+              "Cluster label batch size",
+              "cluster_label_batch_size",
+              "Number of clusters sent in one LLM request for naming Category, SubCategory-1 and SubCategory-2 labels.",
+              {
+                min: 1,
+                max: 50,
+              }
+            )}
             <label>
               <span>Cluster build mode</span>
               <select
@@ -623,7 +652,6 @@ function GenAIWorkbench() {
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
   const [analysisMonthFrom, setAnalysisMonthFrom] = useState("2026-05");
   const [analysisMonthTo, setAnalysisMonthTo] = useState("2026-05");
-  const [batchSize, setBatchSize] = useState(10);
   const [forceReprocess, setForceReprocess] = useState(false);
   const [useLlmLabels, setUseLlmLabels] = useState(true);
   const [workbenchSettings, setWorkbenchSettings] = useState<GenAIWorkbenchSettings | null>(null);
@@ -828,7 +856,7 @@ function GenAIWorkbench() {
         const result = await runTicketClassificationEnrichment({
           project_id: projectId,
           analysis_month: analysisMonthFrom,
-          batch_size: batchSize,
+          batch_size: workbenchSettings?.ticket_classification_batch_size ?? 10,
           batch_limit: batchesPerRequest,
           run_id: runId,
           force_reprocess: false,
@@ -976,7 +1004,7 @@ function GenAIWorkbench() {
           project_id: projectId,
           analysis_month: analysisMonthFrom,
           analysis_month_to: analysisMonthTo,
-          batch_size: batchSize,
+          batch_size: workbenchSettings?.ticket_classification_batch_size ?? 10,
           batch_limit: batchesPerRequest,
           force_reprocess: forceReprocess,
           run_id: runId,
@@ -1353,17 +1381,6 @@ function GenAIWorkbench() {
               type="month"
               value={analysisMonthTo}
               onChange={(event) => setAnalysisMonthTo(event.target.value)}
-            />
-          </label>
-          <label>
-            <span>Batch Size</span>
-            <input
-              type="number"
-              min={1}
-              max={25}
-              value={batchSize}
-              disabled={!classificationButtonEnabled}
-              onChange={(event) => setBatchSize(Number(event.target.value))}
             />
           </label>
           <label className="checkbox-label">

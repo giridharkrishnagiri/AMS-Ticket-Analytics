@@ -3040,6 +3040,20 @@ h2 {
   gap: 8px;
 }
 
+.workbench-setting-help {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workbench-setting-help p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .workbench-settings-wide {
   grid-column: 1 / -1;
 }

@@ -145,6 +145,7 @@ class GenAIWorkbenchRuntimeSettings:
     genai_ticket_automation_analysis_button_enabled: bool
     genai_ticket_classification_model_name: str | None
     genai_ticket_classification_max_output_tokens: int | None
+    genai_ticket_classification_batch_size: int
     genai_ticket_cluster_embedding_model_name: str
     genai_ticket_cluster_label_model_name: str | None
     genai_ticket_cluster_label_max_output_tokens: int | None
@@ -271,6 +272,7 @@ def env_default_settings() -> dict[str, Any]:
         "ticket_classification_max_output_tokens": (
             settings.genai_ticket_classification_max_output_tokens
         ),
+        "ticket_classification_batch_size": settings.genai_ticket_classification_batch_size,
         "cluster_embedding_model_name": settings.genai_ticket_cluster_embedding_model_name,
         "cluster_label_model_name": settings.genai_ticket_cluster_label_model_name,
         "cluster_label_max_output_tokens": settings.genai_ticket_cluster_label_max_output_tokens,
@@ -334,6 +336,12 @@ def normalize_workbench_settings(raw_settings: dict[str, Any] | None = None) -> 
             defaults.get("ticket_classification_max_output_tokens"),
             minimum=500,
             maximum=32000,
+        ),
+        "ticket_classification_batch_size": _int_setting(
+            values.get("ticket_classification_batch_size"),
+            int(defaults["ticket_classification_batch_size"]),
+            minimum=1,
+            maximum=25,
         ),
         "cluster_embedding_model_name": _clean_string(
             values.get("cluster_embedding_model_name"),
@@ -462,6 +470,7 @@ def settings_to_runtime(settings: dict[str, Any]) -> GenAIWorkbenchRuntimeSettin
         genai_ticket_classification_max_output_tokens=settings[
             "ticket_classification_max_output_tokens"
         ],
+        genai_ticket_classification_batch_size=settings["ticket_classification_batch_size"],
         genai_ticket_cluster_embedding_model_name=settings["cluster_embedding_model_name"],
         genai_ticket_cluster_label_model_name=settings["cluster_label_model_name"],
         genai_ticket_cluster_label_max_output_tokens=settings["cluster_label_max_output_tokens"],
@@ -569,6 +578,7 @@ def runtime_settings_response(settings: GenAIWorkbenchRuntimeSettings) -> dict[s
         "ticket_classification_max_output_tokens": (
             settings.genai_ticket_classification_max_output_tokens
         ),
+        "ticket_classification_batch_size": settings.genai_ticket_classification_batch_size,
         "cluster_embedding_model_name": settings.genai_ticket_cluster_embedding_model_name,
         "cluster_label_model_name": settings.genai_ticket_cluster_label_model_name,
         "cluster_label_max_output_tokens": (

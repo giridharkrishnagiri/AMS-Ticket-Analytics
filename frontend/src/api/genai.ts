@@ -187,6 +187,7 @@ export type GenAIWorkbenchSettings = {
   ticket_automation_analysis_button_enabled: boolean;
   ticket_classification_model_name: string | null;
   ticket_classification_max_output_tokens: number | null;
+  ticket_classification_batch_size: number;
   cluster_embedding_model_name: string;
   cluster_label_model_name: string | null;
   cluster_label_max_output_tokens: number | null;

@@ -391,6 +391,7 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
     ticket_automation_analysis_button_enabled: bool
     ticket_classification_model_name: str | None = None
     ticket_classification_max_output_tokens: int | None = None
+    ticket_classification_batch_size: int
     cluster_embedding_model_name: str
     cluster_label_model_name: str | None = None
     cluster_label_max_output_tokens: int | None = None
@@ -424,6 +425,7 @@ class GenAIWorkbenchSettingsUpdateRequest(BaseModel):
     ticket_automation_analysis_button_enabled: bool | None = None
     ticket_classification_model_name: str | None = Field(default=None, max_length=255)
     ticket_classification_max_output_tokens: int | None = Field(default=None, ge=500, le=32000)
+    ticket_classification_batch_size: int | None = Field(default=None, ge=1, le=25)
     cluster_embedding_model_name: str | None = Field(default=None, max_length=255)
     cluster_label_model_name: str | None = Field(default=None, max_length=255)
     cluster_label_max_output_tokens: int | None = Field(default=None, ge=500, le=32000)

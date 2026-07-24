@@ -18,6 +18,7 @@ def test_workbench_settings_normalize_modes_counts_and_columns() -> None:
             "cluster_level_3_distance_threshold": "0.07",
             "clustering_columns": ["short_description", "not_a_column"],
             "automation_clusters_per_request": "12",
+            "ticket_classification_batch_size": "99",
         },
     )
 
@@ -27,6 +28,7 @@ def test_workbench_settings_normalize_modes_counts_and_columns() -> None:
     assert settings["cluster_level_3_distance_threshold"] == 0.07
     assert settings["clustering_columns"] == ["short_description"]
     assert settings["automation_clusters_per_request"] == 12
+    assert settings["ticket_classification_batch_size"] == 25
 
 
 def test_selected_ticket_payload_extracts_direct_and_raw_payload_fields() -> None:
