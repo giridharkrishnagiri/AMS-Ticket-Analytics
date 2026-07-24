@@ -131,7 +131,7 @@ function editableWorkbenchSettings(
   settings: GenAIWorkbenchSettings
 ): GenAIWorkbenchSettingsUpdate {
   const { available_ticket_columns: _availableTicketColumns, ...payload } = settings;
-  return payload;
+  return { ...payload, ticket_classification_button_enabled: false };
 }
 
 function SummaryMetric({
@@ -414,16 +414,6 @@ function WorkbenchSettingsPanel({
             <label className="checkbox-label">
               <input
                 type="checkbox"
-                checked={settings.ticket_classification_button_enabled}
-                onChange={(event) =>
-                  updateField("ticket_classification_button_enabled", event.target.checked)
-                }
-              />
-              <span>Enable ticket classification enrichment</span>
-            </label>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
                 checked={settings.ticket_cluster_analysis_button_enabled}
                 onChange={(event) =>
                   updateField("ticket_cluster_analysis_button_enabled", event.target.checked)
@@ -597,8 +587,7 @@ function GenAIWorkbench() {
     analysisMonthFrom <= analysisMonthTo;
   const canAct = Boolean(projectId.trim()) && isMonthRangeValid;
   const hasAnalyzedRows = (summary?.analyzed_ticket_count ?? 0) > 0;
-  const classificationButtonEnabled =
-    workbenchSettings?.ticket_classification_button_enabled ?? false;
+  const classificationButtonEnabled = false;
   const clusterButtonEnabled = workbenchSettings?.ticket_cluster_analysis_button_enabled ?? true;
   const automationButtonEnabled =
     workbenchSettings?.ticket_automation_analysis_button_enabled ?? true;
