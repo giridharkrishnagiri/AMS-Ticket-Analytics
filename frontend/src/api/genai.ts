@@ -339,6 +339,7 @@ export function updateGenAIWorkbenchSettings(
 ): Promise<GenAIWorkbenchSettings> {
   return requestJson<GenAIWorkbenchSettings>("/genai/workbench-settings", {
     method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 }

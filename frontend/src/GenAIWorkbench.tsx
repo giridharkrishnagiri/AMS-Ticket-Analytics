@@ -48,6 +48,11 @@ const clearProjectEmbeddingsConfirmation =
   "This will clear all saved ticket embeddings for the selected project. The next cluster run will recreate them. Continue?";
 const batchesPerRequest = 1;
 
+type SaveWorkbenchSettingsOptions = {
+  onlyIfDirty?: boolean;
+  showMessage?: boolean;
+};
+
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "Not available";
@@ -138,6 +143,10 @@ function editableWorkbenchSettings(
     ...payload
   } = settings;
   return { ...payload, ticket_classification_button_enabled: false };
+}
+
+function workbenchSettingsPayloadKey(settings: GenAIWorkbenchSettings | null): string {
+  return settings ? JSON.stringify(editableWorkbenchSettings(settings)) : "";
 }
 
 function SummaryMetric({
@@ -681,28 +690,46 @@ function GenAIWorkbench() {
     };
   }, []);
 
-  const handleSaveWorkbenchSettings = useCallback(async () => {
+  const saveWorkbenchSettingsDraft = useCallback(async (
+    options: SaveWorkbenchSettingsOptions = {}
+  ) => {
     if (!settingsDraft) {
-      return;
+      return workbenchSettings;
+    }
+    if (
+      options.onlyIfDirty &&
+      workbenchSettingsPayloadKey(settingsDraft) === workbenchSettingsPayloadKey(workbenchSettings)
+    ) {
+      return workbenchSettings;
     }
     setIsSavingSettings(true);
     setError(null);
-    setMessage(null);
+    if (options.showMessage ?? true) {
+      setMessage(null);
+    }
     try {
       const savedSettings = await updateGenAIWorkbenchSettings(
         editableWorkbenchSettings(settingsDraft)
       );
       setWorkbenchSettings(savedSettings);
       setSettingsDraft(savedSettings);
-      setMessage("GenAI Workbench settings saved. The next run will use these values.");
+      if (options.showMessage ?? true) {
+        setMessage("GenAI Workbench settings saved. The next run will use these values.");
+      }
+      return savedSettings;
     } catch (requestError) {
       setError(
         requestError instanceof Error ? requestError.message : "Unable to save Workbench settings."
       );
+      return null;
     } finally {
       setIsSavingSettings(false);
     }
-  }, [settingsDraft]);
+  }, [settingsDraft, workbenchSettings]);
+
+  const handleSaveWorkbenchSettings = useCallback(async () => {
+    await saveWorkbenchSettingsDraft({ showMessage: true });
+  }, [saveWorkbenchSettingsDraft]);
 
   const loadUsageRuns = useCallback(async () => {
     if (!projectId || !isMonthRangeValid) {
@@ -792,6 +819,13 @@ function GenAIWorkbench() {
     if (forceReprocess && !window.confirm(forceReprocessConfirmation)) {
       return;
     }
+    const savedSettings = await saveWorkbenchSettingsDraft({
+      onlyIfDirty: true,
+      showMessage: false,
+    });
+    if (!savedSettings) {
+      return;
+    }
     setIsRunning(true);
     setMessage("Starting cluster-based analysis...");
     setError(null);
@@ -849,6 +883,13 @@ function GenAIWorkbench() {
       return;
     }
     if (forceReprocess && !window.confirm(categoryQualityForceConfirmation)) {
+      return;
+    }
+    const savedSettings = await saveWorkbenchSettingsDraft({
+      onlyIfDirty: true,
+      showMessage: false,
+    });
+    if (!savedSettings) {
       return;
     }
     setIsRunning(true);
@@ -948,6 +989,13 @@ function GenAIWorkbench() {
       return;
     }
     if (forceReprocess && !window.confirm(automationForceConfirmation)) {
+      return;
+    }
+    const savedSettings = await saveWorkbenchSettingsDraft({
+      onlyIfDirty: true,
+      showMessage: false,
+    });
+    if (!savedSettings) {
       return;
     }
     setIsRunning(true);
@@ -1271,7 +1319,13 @@ function GenAIWorkbench() {
             <button
               className="primary-button"
               type="button"
-              disabled={!canAct || isRunning || isClearing || !clusterButtonEnabled}
+              disabled={
+                !canAct ||
+                isRunning ||
+                isSavingSettings ||
+                isClearing ||
+                !clusterButtonEnabled
+              }
               onClick={() => void handleRunCluster()}
             >
               {isRunning && clusterButtonEnabled
@@ -1284,6 +1338,7 @@ function GenAIWorkbench() {
               disabled={
                 !canAct ||
                 isRunning ||
+                isSavingSettings ||
                 isClearing ||
                 isClearingAutomation ||
                 !automationButtonEnabled
@@ -1295,7 +1350,13 @@ function GenAIWorkbench() {
             <button
               className="secondary-button"
               type="button"
-              disabled={!canAct || isRunning || isClearing || isClearingEmbeddings}
+              disabled={
+                !canAct ||
+                isRunning ||
+                isSavingSettings ||
+                isClearing ||
+                isClearingEmbeddings
+              }
               onClick={() => void handleRunCategoryQuality()}
             >
               {isCategoryQualityRunning
@@ -1307,7 +1368,13 @@ function GenAIWorkbench() {
             <button
               className="secondary-button danger-button"
               type="button"
-              disabled={!projectId || isRunning || isClearing || isClearingEmbeddings}
+              disabled={
+                !projectId ||
+                isRunning ||
+                isSavingSettings ||
+                isClearing ||
+                isClearingEmbeddings
+              }
               onClick={() => void handleClearEmbeddings()}
             >
               {isClearingEmbeddings ? "Clearing Embeddings..." : "Clear Project Embeddings"}
@@ -1315,7 +1382,13 @@ function GenAIWorkbench() {
             <button
               className="secondary-button danger-button"
               type="button"
-              disabled={!canAct || isRunning || isClearing || isClearingAutomation}
+              disabled={
+                !canAct ||
+                isRunning ||
+                isSavingSettings ||
+                isClearing ||
+                isClearingAutomation
+              }
               onClick={() => void handleClear()}
               title="Clears GenAI classification rows, cluster labels, and dependent automation analysis for the selected period"
             >
@@ -1324,7 +1397,13 @@ function GenAIWorkbench() {
             <button
               className="secondary-button danger-button"
               type="button"
-              disabled={!canAct || isRunning || isClearing || isClearingAutomation}
+              disabled={
+                !canAct ||
+                isRunning ||
+                isSavingSettings ||
+                isClearing ||
+                isClearingAutomation
+              }
               onClick={() => void handleClearAutomation()}
             >
               {isClearingAutomation ? "Clearing Automation..." : "Clear Automation Analysis"}
