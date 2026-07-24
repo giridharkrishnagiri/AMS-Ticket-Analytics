@@ -1410,7 +1410,7 @@ function GenAIWorkbench() {
                   : "Run cluster-based analysis before downloading the ticket dump"
               }
             >
-              {isDownloadingDump ? "Preparing..." : "Download Ticket Dump"}
+              {isDownloadingDump ? "Preparing..." : "Download Classification Enriched Tickets"}
             </button>
           </div>
         </div>
@@ -1475,7 +1475,7 @@ function GenAIWorkbench() {
               }
               onClick={() => void handleDownloadAutomation()}
             >
-              {isDownloadingAutomation ? "Preparing..." : "Download Automation"}
+              {isDownloadingAutomation ? "Preparing..." : "Download Automation Analysis"}
             </button>
           </div>
         </div>
