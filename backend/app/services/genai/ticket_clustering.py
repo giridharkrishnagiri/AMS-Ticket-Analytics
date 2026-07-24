@@ -17,7 +17,6 @@ from sklearn.cluster import KMeans
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models import (
     GenAIConfig,
     GenAITicketAutomationAssessment,
@@ -48,11 +47,17 @@ from app.services.genai.ticket_classification import (
     prompt_fingerprint,
     ticket_analysis_month,
     ticket_classification_summary,
-    ticket_payload,
     validate_config,
     validate_month_range,
 )
 from app.services.genai.usage_log_service import create_usage_log
+from app.services.genai.workbench_settings import (
+    DEFAULT_CLUSTERING_COLUMNS,
+    GenAIWorkbenchRuntimeSettings,
+    get_effective_workbench_settings,
+    runtime_settings_metadata,
+    selected_ticket_payload,
+)
 
 progress_logger = logging.getLogger("uvicorn.error")
 
@@ -405,59 +410,6 @@ def normalized_level_cluster_mode(value: str | None, default_value: str = "cappe
     return aliases.get(mode, default_mode)
 
 
-def workbench_settings() -> dict[str, Any]:
-    settings = get_settings()
-    cluster_mode = normalized_cluster_mode(settings.genai_ticket_cluster_mode)
-    return {
-        "ticket_classification_button_enabled": settings.genai_ticket_classification_button_enabled,
-        "ticket_cluster_analysis_button_enabled": (
-            settings.genai_ticket_cluster_analysis_button_enabled
-        ),
-        "ticket_automation_analysis_button_enabled": (
-            settings.genai_ticket_automation_analysis_button_enabled
-        ),
-        "cluster_embedding_model_name": settings.genai_ticket_cluster_embedding_model_name,
-        "cluster_label_model_name": settings.genai_ticket_cluster_label_model_name
-        or settings.genai_ticket_classification_model_name,
-        "automation_model_name": settings.genai_ticket_automation_model_name
-        or settings.genai_ticket_classification_model_name,
-        "cluster_mode": cluster_mode,
-        "cluster_level_1_mode": normalized_level_cluster_mode(
-            settings.genai_ticket_cluster_level_1_mode,
-            "capped",
-        ),
-        "cluster_level_2_mode": normalized_level_cluster_mode(
-            settings.genai_ticket_cluster_level_2_mode,
-            "capped",
-        ),
-        "cluster_level_3_mode": normalized_level_cluster_mode(
-            settings.genai_ticket_cluster_level_3_mode,
-            "threshold_only",
-        ),
-        "cluster_level_1_count": settings.genai_ticket_cluster_level_1_count,
-        "cluster_level_2_count": settings.genai_ticket_cluster_level_2_count,
-        "cluster_level_3_count": settings.genai_ticket_cluster_level_3_count,
-        "cluster_level_1_distance_threshold": (
-            settings.genai_ticket_cluster_level_1_distance_threshold
-        ),
-        "cluster_level_2_distance_threshold": (
-            settings.genai_ticket_cluster_level_2_distance_threshold
-        ),
-        "cluster_level_3_distance_threshold": (
-            settings.genai_ticket_cluster_level_3_distance_threshold
-        ),
-        "cluster_embedding_batch_size": settings.genai_ticket_cluster_embedding_batch_size,
-        "cluster_label_batch_size": settings.genai_ticket_cluster_label_batch_size,
-        "cluster_min_llm_label_ticket_count": (
-            settings.genai_ticket_cluster_min_llm_label_ticket_count
-        ),
-        "automation_representative_ticket_count": (
-            settings.genai_ticket_automation_representative_ticket_count
-        ),
-        "automation_clusters_per_request": settings.genai_ticket_automation_clusters_per_request,
-    }
-
-
 def clamp_positive(value: int | None, default_value: int, *, minimum: int, maximum: int) -> int:
     if value is None:
         value = default_value
@@ -492,26 +444,30 @@ def derived_config(
     )
 
 
-def effective_embedding_config(config: GenAIConfig) -> GenAIConfig:
-    settings = get_settings()
+def effective_embedding_config(
+    config: GenAIConfig,
+    runtime_settings: GenAIWorkbenchRuntimeSettings,
+) -> GenAIConfig:
     return derived_config(
         config,
-        model_name=settings.genai_ticket_cluster_embedding_model_name,
+        model_name=runtime_settings.genai_ticket_cluster_embedding_model_name,
         temperature=0.0,
     )
 
 
-def effective_label_config(config: GenAIConfig) -> GenAIConfig:
-    settings = get_settings()
+def effective_label_config(
+    config: GenAIConfig,
+    runtime_settings: GenAIWorkbenchRuntimeSettings,
+) -> GenAIConfig:
     return derived_config(
         config,
         model_name=(
-            settings.genai_ticket_cluster_label_model_name
-            or settings.genai_ticket_classification_model_name
+            runtime_settings.genai_ticket_cluster_label_model_name
+            or runtime_settings.genai_ticket_classification_model_name
             or config.model_name
         ),
-        max_output_tokens=settings.genai_ticket_cluster_label_max_output_tokens
-        or settings.genai_ticket_classification_max_output_tokens
+        max_output_tokens=runtime_settings.genai_ticket_cluster_label_max_output_tokens
+        or runtime_settings.genai_ticket_classification_max_output_tokens
         or config.max_output_tokens,
         temperature=0.1,
     )
@@ -539,13 +495,27 @@ def cleaned_description_for_embedding(value: Any) -> str:
     return compact_text(text, max_chars=MAX_DESCRIPTION_CHARS) or ""
 
 
-def normalized_ticket_text(ticket: Ticket) -> str:
-    payload = ticket_payload(ticket)
-    parts = [
-        f"Ticket class: {ticket_type_display(ticket.ticket_type)}",
-        f"Short description: {payload.get('short_description') or ''}",
-        f"Description: {cleaned_description_for_embedding(ticket.description)}",
-    ]
+def normalized_ticket_text(
+    ticket: Ticket,
+    *,
+    column_keys: list[str],
+) -> str:
+    payload = selected_ticket_payload(
+        ticket,
+        column_keys,
+        default_columns=DEFAULT_CLUSTERING_COLUMNS,
+        include_empty_columns=False,
+    )
+    parts: list[str] = []
+    if "ticket_type" in payload:
+        parts.append(f"Ticket class: {ticket_type_display(ticket.ticket_type)}")
+    for key, value in payload.items():
+        if key == "ticket_number" or value is None:
+            continue
+        if key == "description":
+            value = cleaned_description_for_embedding(value)
+        label = key.replace("_", " ").title()
+        parts.append(f"{label}: {value}")
     text = " ".join(part for part in parts if part.strip())
     for pattern in NOISE_PATTERNS:
         text = pattern.sub(" ", text)
@@ -559,7 +529,13 @@ def hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def embedding_input_hash(ticket: Ticket, normalized_text: str, embedding_model: str) -> str:
+def embedding_input_hash(
+    ticket: Ticket,
+    normalized_text: str,
+    embedding_model: str,
+    *,
+    column_keys: list[str],
+) -> str:
     payload = {
         "ticket_number": ticket.ticket_number,
         "ticket_type": ticket.ticket_type,
@@ -567,6 +543,7 @@ def embedding_input_hash(ticket: Ticket, normalized_text: str, embedding_model: 
         "normalized_text_hash": hash_text(normalized_text),
         "embedding_model": embedding_model,
         "text_version": EMBEDDING_TEXT_VERSION,
+        "selected_columns": column_keys,
     }
     return hash_text(json.dumps(payload, sort_keys=True, ensure_ascii=False))
 
@@ -621,17 +598,22 @@ def ensure_ticket_embeddings(
     run_id: str,
     tickets: list[Ticket],
     config: GenAIConfig,
+    runtime_settings: GenAIWorkbenchRuntimeSettings,
 ) -> tuple[list[TicketTextInput], int, int]:
-    settings = get_settings()
     range_label = analysis_range_label(month_key, month_key_to)
     embedding_model = provider_model_name(config)
     existing_rows = embedding_rows_by_key(db, project_id, tickets, embedding_model)
     prepared_rows: list[tuple[Ticket, str, str, str, GenAITicketEmbedding | None]] = []
     cached_count = 0
     for ticket in tickets:
-        text = normalized_ticket_text(ticket)
+        text = normalized_ticket_text(ticket, column_keys=runtime_settings.clustering_columns)
         text_hash = hash_text(text)
-        input_hash = embedding_input_hash(ticket, text, embedding_model)
+        input_hash = embedding_input_hash(
+            ticket,
+            text,
+            embedding_model,
+            column_keys=runtime_settings.clustering_columns,
+        )
         existing_row = existing_rows.get((ticket.ticket_number, input_hash))
         if existing_row is not None:
             cached_count += 1
@@ -639,7 +621,7 @@ def ensure_ticket_embeddings(
 
     pending_rows = [row for row in prepared_rows if row[4] is None]
     batch_size = clamp_positive(
-        settings.genai_ticket_cluster_embedding_batch_size,
+        runtime_settings.genai_ticket_cluster_embedding_batch_size,
         100,
         minimum=1,
         maximum=500,
@@ -680,6 +662,7 @@ def ensure_ticket_embeddings(
                 "ticket_count": len(batch),
                 "embedding_model": embedding_model,
                 "text_version": EMBEDDING_TEXT_VERSION,
+                "selected_columns": runtime_settings.clustering_columns,
             },
             prompt_tokens=result.prompt_tokens or result.total_tokens,
             completion_tokens=None,
@@ -712,7 +695,10 @@ def ensure_ticket_embeddings(
                     normalized_text_hash=text_hash,
                     text_preview=compact_text(text, max_chars=1000),
                     embedding_json=vector,
-                    metadata_json={"text_version": EMBEDDING_TEXT_VERSION},
+                    metadata_json={
+                        "text_version": EMBEDDING_TEXT_VERSION,
+                        "selected_columns": runtime_settings.clustering_columns,
+                    },
                 ),
             )
         db.commit()
@@ -1461,17 +1447,17 @@ def label_cluster_level(
     child_clusters: dict[str, ClusterInfo] | None,
     prompt_text: str,
     config: GenAIConfig,
+    runtime_settings: GenAIWorkbenchRuntimeSettings,
 ) -> int:
-    settings = get_settings()
     range_label = analysis_range_label(month_key, month_key_to)
     batch_size = clamp_positive(
-        settings.genai_ticket_cluster_label_batch_size,
+        runtime_settings.genai_ticket_cluster_label_batch_size,
         15,
         minimum=1,
         maximum=50,
     )
     representative_limit = clamp_positive(
-        settings.genai_ticket_cluster_representative_ticket_count,
+        runtime_settings.genai_ticket_cluster_representative_ticket_count,
         8,
         minimum=1,
         maximum=20,
@@ -1632,6 +1618,7 @@ def save_cluster_labels(
     inputs: list[TicketTextInput],
     vectors: np.ndarray,
     metadata: dict[str, Any],
+    runtime_settings: GenAIWorkbenchRuntimeSettings,
 ) -> int:
     db.execute(
         delete(GenAITicketClusterLabel).where(
@@ -1641,7 +1628,7 @@ def save_cluster_labels(
         ),
     )
     representative_limit = clamp_positive(
-        get_settings().genai_ticket_cluster_representative_ticket_count,
+        runtime_settings.genai_ticket_cluster_representative_ticket_count,
         8,
         minimum=1,
         maximum=20,
@@ -2094,8 +2081,9 @@ def run_ticket_cluster_analysis(
     customer_id = project_customer_id(db, request.project_id)
     base_config = get_or_create_config(db)
     validate_config(base_config)
-    embedding_config = effective_embedding_config(base_config)
-    label_config = effective_label_config(base_config)
+    runtime_settings = get_effective_workbench_settings(db)
+    embedding_config = effective_embedding_config(base_config, runtime_settings)
+    label_config = effective_label_config(base_config, runtime_settings)
     use_llm_labels = bool(request.use_llm_labels)
     validate_config(embedding_config)
     if use_llm_labels:
@@ -2176,6 +2164,7 @@ def run_ticket_cluster_analysis(
         run_id=run_id,
         tickets=tickets,
         config=embedding_config,
+        runtime_settings=runtime_settings,
     )
     log_progress(
         "run %s embeddings ready: %s vectors (%s cached, %s new) in %.2fs",
@@ -2193,48 +2182,47 @@ def run_ticket_cluster_analysis(
         vectors.shape[0],
         vectors.shape[1] if vectors.ndim == 2 else 0,
     )
-    settings = get_settings()
-    cluster_mode = normalized_cluster_mode(settings.genai_ticket_cluster_mode)
+    cluster_mode = normalized_cluster_mode(runtime_settings.genai_ticket_cluster_mode)
     level_1_mode = normalized_level_cluster_mode(
-        settings.genai_ticket_cluster_level_1_mode,
+        runtime_settings.genai_ticket_cluster_level_1_mode,
         "capped",
     )
     level_2_mode = normalized_level_cluster_mode(
-        settings.genai_ticket_cluster_level_2_mode,
+        runtime_settings.genai_ticket_cluster_level_2_mode,
         "capped",
     )
     level_3_mode = normalized_level_cluster_mode(
-        settings.genai_ticket_cluster_level_3_mode,
+        runtime_settings.genai_ticket_cluster_level_3_mode,
         "threshold_only",
     )
     level_3_count = clamp_positive(
         request.level_3_count,
-        settings.genai_ticket_cluster_level_3_count,
+        runtime_settings.genai_ticket_cluster_level_3_count,
         minimum=1,
         maximum=len(inputs),
     )
     level_2_count = clamp_positive(
         request.level_2_count,
-        settings.genai_ticket_cluster_level_2_count,
+        runtime_settings.genai_ticket_cluster_level_2_count,
         minimum=1,
         maximum=min(level_3_count, len(inputs)),
     )
     level_1_count = clamp_positive(
         request.level_1_count,
-        settings.genai_ticket_cluster_level_1_count,
+        runtime_settings.genai_ticket_cluster_level_1_count,
         minimum=1,
         maximum=min(level_2_count, len(inputs)),
     )
     level_1_threshold = clamp_distance_threshold(
-        settings.genai_ticket_cluster_level_1_distance_threshold,
+        runtime_settings.genai_ticket_cluster_level_1_distance_threshold,
         0.42,
     )
     level_2_threshold = clamp_distance_threshold(
-        settings.genai_ticket_cluster_level_2_distance_threshold,
+        runtime_settings.genai_ticket_cluster_level_2_distance_threshold,
         0.32,
     )
     level_3_threshold = clamp_distance_threshold(
-        settings.genai_ticket_cluster_level_3_distance_threshold,
+        runtime_settings.genai_ticket_cluster_level_3_distance_threshold,
         0.24,
     )
     if cluster_mode == "adaptive":
@@ -2315,7 +2303,7 @@ def run_ticket_cluster_analysis(
     }
     failed_count = 0
     min_llm_label_ticket_count = clamp_positive(
-        settings.genai_ticket_cluster_min_llm_label_ticket_count,
+        runtime_settings.genai_ticket_cluster_min_llm_label_ticket_count,
         3,
         minimum=1,
         maximum=len(inputs),
@@ -2352,6 +2340,7 @@ def run_ticket_cluster_analysis(
             child_clusters=None,
             prompt_text=prompt_text,
             config=label_config,
+            runtime_settings=runtime_settings,
         )
         failed_count += label_cluster_level(
             db,
@@ -2367,6 +2356,7 @@ def run_ticket_cluster_analysis(
             child_clusters=level_3_clusters,
             prompt_text=prompt_text,
             config=label_config,
+            runtime_settings=runtime_settings,
         )
         failed_count += label_cluster_level(
             db,
@@ -2382,6 +2372,7 @@ def run_ticket_cluster_analysis(
             child_clusters=level_2_clusters,
             prompt_text=prompt_text,
             config=label_config,
+            runtime_settings=runtime_settings,
         )
     else:
         log_progress("run %s cluster labeling skipped; using cluster IDs as labels", run_id)
@@ -2418,6 +2409,7 @@ def run_ticket_cluster_analysis(
         "min_llm_label_ticket_count": min_llm_label_ticket_count if use_llm_labels else None,
         "rare_cluster_counts": rare_cluster_counts if use_llm_labels else None,
         "text_version": EMBEDDING_TEXT_VERSION,
+        "workbench_settings": runtime_settings_metadata(runtime_settings),
     }
     log_progress("run %s saving cluster labels", run_id)
     labeled_cluster_count = save_cluster_labels(
@@ -2430,6 +2422,7 @@ def run_ticket_cluster_analysis(
         inputs=inputs,
         vectors=vectors,
         metadata=run_metadata,
+        runtime_settings=runtime_settings,
     )
     log_progress("run %s saving ticket assignments", run_id)
     assigned_ticket_count = save_ticket_assignments(

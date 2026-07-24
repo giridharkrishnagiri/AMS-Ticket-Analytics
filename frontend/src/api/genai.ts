@@ -185,9 +185,13 @@ export type GenAIWorkbenchSettings = {
   ticket_classification_button_enabled: boolean;
   ticket_cluster_analysis_button_enabled: boolean;
   ticket_automation_analysis_button_enabled: boolean;
+  ticket_classification_model_name: string | null;
+  ticket_classification_max_output_tokens: number | null;
   cluster_embedding_model_name: string;
   cluster_label_model_name: string | null;
+  cluster_label_max_output_tokens: number | null;
   automation_model_name: string | null;
+  automation_max_output_tokens: number | null;
   cluster_mode: string;
   cluster_level_1_mode: string;
   cluster_level_2_mode: string;
@@ -201,9 +205,22 @@ export type GenAIWorkbenchSettings = {
   cluster_embedding_batch_size: number;
   cluster_label_batch_size: number;
   cluster_min_llm_label_ticket_count: number;
+  cluster_representative_ticket_count: number;
   automation_representative_ticket_count: number;
   automation_clusters_per_request: number;
+  clustering_columns: string[];
+  classification_columns: string[];
+  automation_columns: string[];
+  available_ticket_columns: Array<{
+    key: string;
+    label: string;
+    description: string;
+  }>;
 };
+
+export type GenAIWorkbenchSettingsUpdate = Partial<
+  Omit<GenAIWorkbenchSettings, "available_ticket_columns">
+>;
 
 export type GenAITicketClusterRunResponse = {
   project_id: string;
@@ -314,6 +331,15 @@ function getDownloadFilename(contentDisposition: string | null): string | null {
 
 export function getGenAIWorkbenchSettings(): Promise<GenAIWorkbenchSettings> {
   return requestJson<GenAIWorkbenchSettings>("/genai/workbench-settings");
+}
+
+export function updateGenAIWorkbenchSettings(
+  payload: GenAIWorkbenchSettingsUpdate
+): Promise<GenAIWorkbenchSettings> {
+  return requestJson<GenAIWorkbenchSettings>("/genai/workbench-settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getTicketClassificationSummary(

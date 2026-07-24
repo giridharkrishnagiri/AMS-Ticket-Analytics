@@ -127,6 +127,19 @@ class GenAISafetySettings(UuidPrimaryKeyMixin, TimestampMixin, Base):
     mask_sensitive_fields: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class GenAIWorkbenchSetting(UuidPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "genai_workbench_settings"
+
+    settings_key: Mapped[str] = mapped_column(
+        String(80),
+        nullable=False,
+        unique=True,
+        index=True,
+        default="default",
+    )
+    settings_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+
 class GenAIChatSession(UuidPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "genai_chat_sessions"
     __table_args__ = (

@@ -19,11 +19,13 @@ import {
   runTicketAutomationAnalysis,
   runTicketClusterAnalysis,
   runTicketClassificationEnrichment,
+  updateGenAIWorkbenchSettings,
 } from "./api/genai";
 import type {
   GenAITicketAutomationSummary,
   GenAITicketAutomationResults,
   GenAIWorkbenchSettings,
+  GenAIWorkbenchSettingsUpdate,
   GenAITicketClusterRunResponse,
   GenAITicketClassificationPivot,
   GenAITicketClassificationSummary,
@@ -123,6 +125,13 @@ function createRunId(): string {
     return globalThis.crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function editableWorkbenchSettings(
+  settings: GenAIWorkbenchSettings
+): GenAIWorkbenchSettingsUpdate {
+  const { available_ticket_columns: _availableTicketColumns, ...payload } = settings;
+  return payload;
 }
 
 function SummaryMetric({
@@ -253,6 +262,307 @@ function AutomationSummaryTable({
   );
 }
 
+type WorkbenchSettingsKey = keyof Omit<GenAIWorkbenchSettings, "available_ticket_columns">;
+
+function WorkbenchSettingsPanel({
+  settings,
+  isSaving,
+  disabled,
+  onChange,
+  onSave,
+}: {
+  settings: GenAIWorkbenchSettings | null;
+  isSaving: boolean;
+  disabled: boolean;
+  onChange: (settings: GenAIWorkbenchSettings) => void;
+  onSave: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  if (!settings) {
+    return null;
+  }
+
+  const updateField = <K extends WorkbenchSettingsKey>(
+    key: K,
+    value: GenAIWorkbenchSettings[K]
+  ) => {
+    onChange({ ...settings, [key]: value });
+  };
+
+  const updateNumber = (key: WorkbenchSettingsKey, value: string) => {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      updateField(key, parsed as never);
+    }
+  };
+
+  const toggleColumn = (
+    key: "clustering_columns" | "classification_columns" | "automation_columns",
+    columnKey: string,
+    checked: boolean
+  ) => {
+    const current = settings[key] ?? [];
+    const next = checked
+      ? Array.from(new Set([...current, columnKey]))
+      : current.filter((item) => item !== columnKey);
+    updateField(key, next as never);
+  };
+
+  const renderTextInput = (
+    label: string,
+    key: WorkbenchSettingsKey,
+    placeholder?: string
+  ) => (
+    <label>
+      <span>{label}</span>
+      <input
+        type="text"
+        value={String(settings[key] ?? "")}
+        placeholder={placeholder}
+        onChange={(event) => updateField(key, event.target.value as never)}
+      />
+    </label>
+  );
+
+  const renderNumberInput = (
+    label: string,
+    key: WorkbenchSettingsKey,
+    options: { min?: number; max?: number; step?: number; allowBlank?: boolean } = {}
+  ) => {
+    const rawValue = settings[key];
+    return (
+      <label>
+        <span>{label}</span>
+        <input
+          type="number"
+          min={options.min}
+          max={options.max}
+          step={options.step ?? 1}
+          value={rawValue === null || rawValue === undefined ? "" : Number(rawValue)}
+          onChange={(event) => {
+            if (event.target.value === "" && options.allowBlank) {
+              updateField(key, null as never);
+              return;
+            }
+            updateNumber(key, event.target.value);
+          }}
+        />
+      </label>
+    );
+  };
+
+  const renderModeSelect = (label: string, key: WorkbenchSettingsKey) => (
+    <label>
+      <span>{label}</span>
+      <select
+        value={String(settings[key] ?? "capped")}
+        onChange={(event) => updateField(key, event.target.value as never)}
+      >
+        <option value="capped">Capped by count</option>
+        <option value="threshold_only">Distance threshold only</option>
+      </select>
+    </label>
+  );
+
+  const renderColumnGroup = (
+    title: string,
+    key: "clustering_columns" | "classification_columns" | "automation_columns"
+  ) => (
+    <div className="workbench-settings-column-group">
+      <h3>{title}</h3>
+      <div className="workbench-column-checkbox-grid">
+        {settings.available_ticket_columns.map((column) => (
+          <label className="checkbox-label" key={`${key}-${column.key}`} title={column.description}>
+            <input
+              type="checkbox"
+              checked={(settings[key] ?? []).includes(column.key)}
+              onChange={(event) => toggleColumn(key, column.key, event.target.checked)}
+            />
+            <span>{column.label}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <section className="panel workbench-settings-panel" aria-labelledby="workbench-settings-heading">
+      <div className="panel-heading compact-heading">
+        <div>
+          <p className="label">Runtime Settings</p>
+          <h2 id="workbench-settings-heading">GenAI Workbench Settings</h2>
+        </div>
+        <div className="workbench-pivot-actions">
+          <button className="secondary-button" type="button" onClick={() => setIsOpen(!isOpen)}>
+            {isOpen ? "Hide Settings" : "Show Settings"}
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={disabled || isSaving}
+            onClick={onSave}
+          >
+            {isSaving ? "Saving Settings..." : "Save Settings"}
+          </button>
+        </div>
+      </div>
+      {isOpen ? (
+        <div className="workbench-settings-grid">
+          <fieldset>
+            <legend>Feature Toggles</legend>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={settings.ticket_classification_button_enabled}
+                onChange={(event) =>
+                  updateField("ticket_classification_button_enabled", event.target.checked)
+                }
+              />
+              <span>Enable ticket classification enrichment</span>
+            </label>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={settings.ticket_cluster_analysis_button_enabled}
+                onChange={(event) =>
+                  updateField("ticket_cluster_analysis_button_enabled", event.target.checked)
+                }
+              />
+              <span>Enable cluster-based classification</span>
+            </label>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={settings.ticket_automation_analysis_button_enabled}
+                onChange={(event) =>
+                  updateField("ticket_automation_analysis_button_enabled", event.target.checked)
+                }
+              />
+              <span>Enable automation assessment</span>
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Ticket Classification</legend>
+            {renderTextInput(
+              "Classification model",
+              "ticket_classification_model_name",
+              "Use base GenAI model"
+            )}
+            {renderNumberInput(
+              "Classification output token limit",
+              "ticket_classification_max_output_tokens",
+              { min: 500, max: 32000, allowBlank: true }
+            )}
+          </fieldset>
+
+          <fieldset>
+            <legend>Clustering and Cluster Labels</legend>
+            {renderTextInput("Embedding model for clustering", "cluster_embedding_model_name")}
+            {renderTextInput("Cluster label model", "cluster_label_model_name")}
+            {renderNumberInput("Cluster label output token limit", "cluster_label_max_output_tokens", {
+              min: 500,
+              max: 32000,
+              allowBlank: true,
+            })}
+            {renderNumberInput("Embedding batch size", "cluster_embedding_batch_size", {
+              min: 1,
+              max: 500,
+            })}
+            {renderNumberInput("Cluster label batch size", "cluster_label_batch_size", {
+              min: 1,
+              max: 50,
+            })}
+            <label>
+              <span>Cluster build mode</span>
+              <select
+                value={settings.cluster_mode}
+                onChange={(event) => updateField("cluster_mode", event.target.value as never)}
+              >
+                <option value="adaptive">Adaptive recursive clustering</option>
+                <option value="fixed">Fixed cluster count</option>
+              </select>
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Cluster Levels</legend>
+            {renderModeSelect("Category mode", "cluster_level_1_mode")}
+            {renderNumberInput("Category target or cap", "cluster_level_1_count", {
+              min: 1,
+              max: 5000,
+            })}
+            {renderNumberInput("Category distance threshold", "cluster_level_1_distance_threshold", {
+              min: 0.01,
+              max: 1.5,
+              step: 0.01,
+            })}
+            {renderModeSelect("SubCategory-1 mode", "cluster_level_2_mode")}
+            {renderNumberInput("SubCategory-1 target or cap", "cluster_level_2_count", {
+              min: 1,
+              max: 10000,
+            })}
+            {renderNumberInput(
+              "SubCategory-1 distance threshold",
+              "cluster_level_2_distance_threshold",
+              { min: 0.01, max: 1.5, step: 0.01 }
+            )}
+            {renderModeSelect("SubCategory-2 mode", "cluster_level_3_mode")}
+            {renderNumberInput("SubCategory-2 target or cap", "cluster_level_3_count", {
+              min: 1,
+              max: 25000,
+            })}
+            {renderNumberInput(
+              "SubCategory-2 distance threshold",
+              "cluster_level_3_distance_threshold",
+              { min: 0.01, max: 1.5, step: 0.01 }
+            )}
+            {renderNumberInput(
+              "Minimum tickets before LLM labeling",
+              "cluster_min_llm_label_ticket_count",
+              { min: 1, max: 100 }
+            )}
+            {renderNumberInput(
+              "Representative tickets for labels",
+              "cluster_representative_ticket_count",
+              { min: 1, max: 50 }
+            )}
+          </fieldset>
+
+          <fieldset>
+            <legend>Automation Assessment</legend>
+            {renderTextInput("Automation assessment model", "automation_model_name")}
+            {renderNumberInput("Automation output token limit", "automation_max_output_tokens", {
+              min: 500,
+              max: 32000,
+              allowBlank: true,
+            })}
+            {renderNumberInput(
+              "Representative tickets per automation cluster",
+              "automation_representative_ticket_count",
+              { min: 1, max: 50 }
+            )}
+            {renderNumberInput("Automation clusters per request", "automation_clusters_per_request", {
+              min: 1,
+              max: 50,
+            })}
+          </fieldset>
+
+          <fieldset className="workbench-settings-wide">
+            <legend>Evidence Columns</legend>
+            <div className="workbench-settings-columns">
+              {renderColumnGroup("Clustering embeddings", "clustering_columns")}
+              {renderColumnGroup("Classification prompts", "classification_columns")}
+              {renderColumnGroup("Automation assessment prompts", "automation_columns")}
+            </div>
+          </fieldset>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function GenAIWorkbench() {
   const [projectId, setProjectId] = useState("");
   const [selectedProject, setSelectedProject] = useState<ProjectOption | null>(null);
@@ -262,6 +572,7 @@ function GenAIWorkbench() {
   const [forceReprocess, setForceReprocess] = useState(false);
   const [useLlmLabels, setUseLlmLabels] = useState(true);
   const [workbenchSettings, setWorkbenchSettings] = useState<GenAIWorkbenchSettings | null>(null);
+  const [settingsDraft, setSettingsDraft] = useState<GenAIWorkbenchSettings | null>(null);
   const [summary, setSummary] = useState<GenAITicketClassificationSummary | null>(null);
   const [pivot, setPivot] = useState<GenAITicketClassificationPivot | null>(null);
   const [automationResults, setAutomationResults] =
@@ -274,6 +585,7 @@ function GenAIWorkbench() {
   const [isClearing, setIsClearing] = useState(false);
   const [isClearingAutomation, setIsClearingAutomation] = useState(false);
   const [isClearingEmbeddings, setIsClearingEmbeddings] = useState(false);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isDownloadingDump, setIsDownloadingDump] = useState(false);
   const [isDownloadingAutomation, setIsDownloadingAutomation] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -307,6 +619,7 @@ function GenAIWorkbench() {
       .then((settings) => {
         if (isActive) {
           setWorkbenchSettings(settings);
+          setSettingsDraft(settings);
         }
       })
       .catch((requestError) => {
@@ -322,6 +635,29 @@ function GenAIWorkbench() {
       isActive = false;
     };
   }, []);
+
+  const handleSaveWorkbenchSettings = useCallback(async () => {
+    if (!settingsDraft) {
+      return;
+    }
+    setIsSavingSettings(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const savedSettings = await updateGenAIWorkbenchSettings(
+        editableWorkbenchSettings(settingsDraft)
+      );
+      setWorkbenchSettings(savedSettings);
+      setSettingsDraft(savedSettings);
+      setMessage("GenAI Workbench settings saved. The next run will use these values.");
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error ? requestError.message : "Unable to save Workbench settings."
+      );
+    } finally {
+      setIsSavingSettings(false);
+    }
+  }, [settingsDraft]);
 
   const loadUsageRuns = useCallback(async () => {
     if (!projectId || !isMonthRangeValid) {
@@ -1089,6 +1425,14 @@ function GenAIWorkbench() {
           </button>
         </div>
 
+        <WorkbenchSettingsPanel
+          settings={settingsDraft}
+          isSaving={isSavingSettings}
+          disabled={isRunning || isSavingSettings}
+          onChange={setSettingsDraft}
+          onSave={() => void handleSaveWorkbenchSettings()}
+        />
+
         {selectedProject ? (
           <p className="muted-text summary-block">Selected project: {selectedProject.label}</p>
         ) : null}
@@ -1109,6 +1453,9 @@ function GenAIWorkbench() {
             {displayLabel(workbenchSettings.automation_model_name)}; representatives:{" "}
             {formatNumber(workbenchSettings.automation_representative_ticket_count)} tickets,
             {formatNumber(workbenchSettings.automation_clusters_per_request)} clusters/request.
+            Columns: clustering {workbenchSettings.clustering_columns.join(", ")};
+            classification {workbenchSettings.classification_columns.join(", ")}; automation{" "}
+            {workbenchSettings.automation_columns.join(", ")}.
           </p>
         ) : null}
         {!isMonthRangeValid ? (

@@ -389,9 +389,13 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
     ticket_classification_button_enabled: bool
     ticket_cluster_analysis_button_enabled: bool
     ticket_automation_analysis_button_enabled: bool
+    ticket_classification_model_name: str | None = None
+    ticket_classification_max_output_tokens: int | None = None
     cluster_embedding_model_name: str
     cluster_label_model_name: str | None = None
+    cluster_label_max_output_tokens: int | None = None
     automation_model_name: str | None = None
+    automation_max_output_tokens: int | None = None
     cluster_mode: str
     cluster_level_1_mode: str
     cluster_level_2_mode: str
@@ -405,8 +409,45 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
     cluster_embedding_batch_size: int
     cluster_label_batch_size: int
     cluster_min_llm_label_ticket_count: int
+    cluster_representative_ticket_count: int
     automation_representative_ticket_count: int
     automation_clusters_per_request: int
+    clustering_columns: list[str] = Field(default_factory=list)
+    classification_columns: list[str] = Field(default_factory=list)
+    automation_columns: list[str] = Field(default_factory=list)
+    available_ticket_columns: list[dict[str, str]] = Field(default_factory=list)
+
+
+class GenAIWorkbenchSettingsUpdateRequest(BaseModel):
+    ticket_classification_button_enabled: bool | None = None
+    ticket_cluster_analysis_button_enabled: bool | None = None
+    ticket_automation_analysis_button_enabled: bool | None = None
+    ticket_classification_model_name: str | None = Field(default=None, max_length=255)
+    ticket_classification_max_output_tokens: int | None = Field(default=None, ge=500, le=32000)
+    cluster_embedding_model_name: str | None = Field(default=None, max_length=255)
+    cluster_label_model_name: str | None = Field(default=None, max_length=255)
+    cluster_label_max_output_tokens: int | None = Field(default=None, ge=500, le=32000)
+    automation_model_name: str | None = Field(default=None, max_length=255)
+    automation_max_output_tokens: int | None = Field(default=None, ge=500, le=32000)
+    cluster_mode: str | None = Field(default=None, max_length=40)
+    cluster_level_1_mode: str | None = Field(default=None, max_length=40)
+    cluster_level_2_mode: str | None = Field(default=None, max_length=40)
+    cluster_level_3_mode: str | None = Field(default=None, max_length=40)
+    cluster_level_1_count: int | None = Field(default=None, ge=1, le=5000)
+    cluster_level_2_count: int | None = Field(default=None, ge=1, le=10000)
+    cluster_level_3_count: int | None = Field(default=None, ge=1, le=25000)
+    cluster_level_1_distance_threshold: float | None = Field(default=None, ge=0.01, le=1.5)
+    cluster_level_2_distance_threshold: float | None = Field(default=None, ge=0.01, le=1.5)
+    cluster_level_3_distance_threshold: float | None = Field(default=None, ge=0.01, le=1.5)
+    cluster_embedding_batch_size: int | None = Field(default=None, ge=1, le=500)
+    cluster_label_batch_size: int | None = Field(default=None, ge=1, le=50)
+    cluster_min_llm_label_ticket_count: int | None = Field(default=None, ge=1, le=100)
+    cluster_representative_ticket_count: int | None = Field(default=None, ge=1, le=50)
+    automation_representative_ticket_count: int | None = Field(default=None, ge=1, le=50)
+    automation_clusters_per_request: int | None = Field(default=None, ge=1, le=50)
+    clustering_columns: list[str] | None = None
+    classification_columns: list[str] | None = None
+    automation_columns: list[str] | None = None
 
 
 class GenAITicketClusterRunRequest(BaseModel):

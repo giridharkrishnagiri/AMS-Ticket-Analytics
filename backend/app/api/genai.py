@@ -61,6 +61,7 @@ from app.schemas.genai import (
     GenAIUsageLogResponse,
     GenAIUsageSummary,
     GenAIWorkbenchSettingsResponse,
+    GenAIWorkbenchSettingsUpdateRequest,
 )
 from app.services.genai.charts import (
     archive_generated_chart,
@@ -148,7 +149,6 @@ from app.services.genai.ticket_clustering import (
     clear_ticket_cluster_analysis,
     run_ticket_cluster_analysis,
     ticket_cluster_usage_runs,
-    workbench_settings,
 )
 from app.services.genai.ticket_clustering import (
     TicketClusterRunRequest as ServiceTicketClusterRunRequest,
@@ -158,6 +158,10 @@ from app.services.genai.ticket_clustering import (
 )
 from app.services.genai.tools import execute_tool, list_tool_runs, list_tools
 from app.services.genai.usage_log_service import create_usage_log, list_usage_logs
+from app.services.genai.workbench_settings import (
+    update_workbench_settings,
+    workbench_settings_response,
+)
 
 router = APIRouter(prefix="/genai", tags=["genai"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -194,8 +198,16 @@ def put_genai_config(
 
 
 @router.get("/workbench-settings", response_model=GenAIWorkbenchSettingsResponse)
-def get_genai_workbench_settings() -> GenAIWorkbenchSettingsResponse:
-    return workbench_settings()
+def get_genai_workbench_settings(db: DbSession) -> GenAIWorkbenchSettingsResponse:
+    return workbench_settings_response(db)
+
+
+@router.put("/workbench-settings", response_model=GenAIWorkbenchSettingsResponse)
+def put_genai_workbench_settings(
+    request: GenAIWorkbenchSettingsUpdateRequest,
+    db: DbSession,
+) -> GenAIWorkbenchSettingsResponse:
+    return update_workbench_settings(db, request.model_dump(exclude_unset=True))
 
 
 @router.get("/prompts", response_model=list[GenAIPromptTemplateResponse])

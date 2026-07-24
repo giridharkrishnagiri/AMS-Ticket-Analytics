@@ -16,7 +16,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models import (
     GenAIConfig,
     GenAITicketAutomationAssessment,
@@ -40,6 +39,13 @@ from app.services.genai.ticket_classification import (
 )
 from app.services.genai.ticket_clustering import _metadata_matches_analysis_range
 from app.services.genai.usage_log_service import create_usage_log
+from app.services.genai.workbench_settings import (
+    DEFAULT_AUTOMATION_COLUMNS,
+    GenAIWorkbenchRuntimeSettings,
+    get_effective_workbench_settings,
+    selected_ticket_payload,
+    ticket_field_text,
+)
 
 progress_logger = logging.getLogger("app.services.genai.progress")
 PROMPT_KEY = "ticket_automation_analysis"
@@ -147,19 +153,21 @@ def automation_prompt_text_and_version(db: Session) -> tuple[str, int]:
     return prompt_text, prompt_template.version
 
 
-def effective_automation_config(config: GenAIConfig) -> GenAIConfig:
-    settings = get_settings()
+def effective_automation_config(
+    config: GenAIConfig,
+    runtime_settings: GenAIWorkbenchRuntimeSettings,
+) -> GenAIConfig:
     return GenAIConfig(
         is_enabled=config.is_enabled,
         provider=config.provider,
-        model_name=settings.genai_ticket_automation_model_name
-        or settings.genai_ticket_cluster_label_model_name
-        or settings.genai_ticket_classification_model_name
+        model_name=runtime_settings.genai_ticket_automation_model_name
+        or runtime_settings.genai_ticket_cluster_label_model_name
+        or runtime_settings.genai_ticket_classification_model_name
         or config.model_name,
         temperature=config.temperature,
         top_p=config.top_p,
         max_output_tokens=(
-            settings.genai_ticket_automation_max_output_tokens or config.max_output_tokens
+            runtime_settings.genai_ticket_automation_max_output_tokens or config.max_output_tokens
         ),
         timeout_seconds=config.timeout_seconds,
         max_tool_calls=config.max_tool_calls,
@@ -169,15 +177,17 @@ def effective_automation_config(config: GenAIConfig) -> GenAIConfig:
     )
 
 
-def clamp_cluster_limit(value: int | None) -> int:
-    settings = get_settings()
-    configured = value or settings.genai_ticket_automation_clusters_per_request
+def clamp_cluster_limit(
+    value: int | None,
+    runtime_settings: GenAIWorkbenchRuntimeSettings,
+) -> int:
+    configured = value or runtime_settings.genai_ticket_automation_clusters_per_request
     return max(1, min(int(configured), 50))
 
 
-def representative_ticket_limit() -> int:
-    settings = get_settings()
-    return max(1, min(int(settings.genai_ticket_automation_representative_ticket_count), 25))
+def representative_ticket_limit(runtime_settings: GenAIWorkbenchRuntimeSettings) -> int:
+    configured_count = runtime_settings.genai_ticket_automation_representative_ticket_count
+    return max(1, min(int(configured_count), 25))
 
 
 def classification_metadata(row: GenAITicketClassification) -> dict[str, Any]:
@@ -228,57 +238,16 @@ def field_text(
     return compact_text(value, max_chars=max_chars)
 
 
-def ticket_evidence_payload(ticket: Ticket) -> dict[str, Any]:
-    close_notes = field_text(
+def ticket_evidence_payload(
+    ticket: Ticket,
+    *,
+    column_keys: list[str],
+) -> dict[str, Any]:
+    return selected_ticket_payload(
         ticket,
-        payload_keys=(
-            "close_notes",
-            "close notes",
-            "close_note",
-            "resolution_notes",
-            "resolution notes",
-            "resolved_notes",
-            "fix_notes",
-        ),
-        max_chars=MAX_CLOSE_NOTES_CHARS,
+        column_keys,
+        default_columns=DEFAULT_AUTOMATION_COLUMNS,
     )
-    work_notes = field_text(
-        ticket,
-        payload_keys=(
-            "work_notes",
-            "work notes",
-            "comments_and_work_notes",
-            "comments and work notes",
-            "activity",
-            "activity_notes",
-        ),
-        max_chars=MAX_WORK_NOTES_CHARS,
-    )
-    business_service = field_text(
-        ticket,
-        direct_attrs=("business_service", "business_service_ci_name", "cmdb_ci"),
-        payload_keys=("business_service", "business service", "configuration_item", "cmdb_ci"),
-        max_chars=255,
-    )
-    return {
-        "ticket_number": ticket.ticket_number,
-        "ticket_type": ticket.ticket_type,
-        "business_service": business_service,
-        "short_description": field_text(
-            ticket,
-            direct_attrs=("short_description",),
-            payload_keys=("short_description", "short description", "title"),
-            max_chars=500,
-        ),
-        "description": field_text(
-            ticket,
-            direct_attrs=("description",),
-            payload_keys=("description", "details", "detailed_description"),
-            max_chars=MAX_DESCRIPTION_CHARS,
-        ),
-        "close_notes": close_notes,
-        "work_notes": work_notes,
-    }
 
 
 def evidence_richness(payload: dict[str, Any]) -> tuple[int, int, int, str]:
@@ -293,21 +262,26 @@ def representative_tickets_for_candidate(
     candidate: AutomationClusterCandidate,
     *,
     limit: int,
+    column_keys: list[str],
 ) -> list[dict[str, Any]]:
-    payloads = [ticket_evidence_payload(ticket) for _row, ticket in candidate.rows]
+    payloads = [
+        ticket_evidence_payload(ticket, column_keys=column_keys)
+        for _row, ticket in candidate.rows
+    ]
     payloads.sort(key=evidence_richness, reverse=True)
     return payloads[:limit]
 
 
-def business_service_counts(candidate: AutomationClusterCandidate) -> dict[str, int]:
+def business_service_counts(
+    candidate: AutomationClusterCandidate,
+    *,
+    column_keys: list[str],
+) -> dict[str, int]:
+    if "business_service" not in column_keys:
+        return {}
     counter: Counter[str] = Counter()
     for _row, ticket in candidate.rows:
-        service = field_text(
-            ticket,
-            direct_attrs=("business_service", "business_service_ci_name", "cmdb_ci"),
-            payload_keys=("business_service", "business service", "configuration_item", "cmdb_ci"),
-            max_chars=255,
-        )
+        service = ticket_field_text(ticket, "business_service")
         counter[service or "Unknown"] += 1
     return dict(counter.most_common(10))
 
@@ -320,6 +294,7 @@ def cluster_input_hash(
     model_name: str | None,
     prompt_version: int,
     prompt_fingerprint_value: str,
+    column_keys: list[str],
 ) -> str:
     payload = {
         "cluster_key": candidate.cluster_key,
@@ -331,6 +306,7 @@ def cluster_input_hash(
         "ticket_count": candidate.ticket_count,
         "business_services": business_services,
         "representative_tickets": representative_tickets,
+        "selected_columns": column_keys,
         "model_name": model_name,
         "prompt_version": prompt_version,
         "prompt_fingerprint": prompt_fingerprint_value,
@@ -547,6 +523,7 @@ def save_automation_success(
     representative_tickets: list[dict[str, Any]],
     business_services: dict[str, int],
     prompt_fingerprint_value: str,
+    selected_columns: list[str],
 ) -> GenAITicketAutomationAssessment:
     row = existing_row or GenAITicketAutomationAssessment(
         customer_id=customer_id,
@@ -607,6 +584,7 @@ def save_automation_success(
             parsed.get("automation_potential"),
         ),
         "representative_ticket_count": len(representative_tickets),
+        "selected_columns": selected_columns,
         "source_ticket_numbers": sorted(ticket.ticket_number for _row, ticket in candidate.rows),
     }
     row.error_message = None
@@ -632,6 +610,7 @@ def save_automation_error(
     business_services: dict[str, int],
     prompt_fingerprint_value: str,
     error_message: str,
+    selected_columns: list[str],
 ) -> GenAITicketAutomationAssessment:
     row = existing_row or GenAITicketAutomationAssessment(
         customer_id=customer_id,
@@ -669,6 +648,7 @@ def save_automation_error(
         "analysis_month_to": analysis_month_to,
         "prompt_fingerprint": prompt_fingerprint_value,
         "representative_ticket_count": len(representative_tickets),
+        "selected_columns": selected_columns,
         "source_ticket_numbers": sorted(ticket.ticket_number for _row, ticket in candidate.rows),
     }
     row.error_message = error_message[:2000]
@@ -922,13 +902,15 @@ def run_ticket_automation_analysis(
     )
     range_label = analysis_range_label(start_month, end_month)
     customer_id = project_customer_id(db, request.project_id)
-    config = effective_automation_config(get_or_create_config(db))
+    runtime_settings = get_effective_workbench_settings(db)
+    automation_columns = runtime_settings.automation_columns
+    config = effective_automation_config(get_or_create_config(db), runtime_settings)
     validate_config(config)
     model_name = provider_model_name(config)
     prompt_text, prompt_version = automation_prompt_text_and_version(db)
     prompt_fingerprint_value = prompt_fingerprint(prompt_text)
     run_id = (request.run_id or "").strip() or str(uuid4())
-    cluster_limit = clamp_cluster_limit(request.cluster_limit)
+    cluster_limit = clamp_cluster_limit(request.cluster_limit, runtime_settings)
     log_progress(
         "run %s started for project %s, period %s, model %s, request cluster limit %s",
         run_id,
@@ -979,9 +961,10 @@ def run_ticket_automation_analysis(
     for candidate in candidates:
         representative_tickets = representative_tickets_for_candidate(
             candidate,
-            limit=representative_ticket_limit(),
+            limit=representative_ticket_limit(runtime_settings),
+            column_keys=automation_columns,
         )
-        business_services = business_service_counts(candidate)
+        business_services = business_service_counts(candidate, column_keys=automation_columns)
         input_hash = cluster_input_hash(
             candidate,
             representative_tickets=representative_tickets,
@@ -989,6 +972,7 @@ def run_ticket_automation_analysis(
             model_name=model_name,
             prompt_version=prompt_version,
             prompt_fingerprint_value=prompt_fingerprint_value,
+            column_keys=automation_columns,
         )
         existing_row = existing_rows.get((candidate.cluster_run_id, candidate.cluster_key))
         if (
@@ -1071,6 +1055,7 @@ def run_ticket_automation_analysis(
                 "cluster_run_id": candidate.cluster_run_id,
                 "ticket_count": candidate.ticket_count,
                 "representative_ticket_count": len(representative_tickets),
+                "selected_columns": automation_columns,
             },
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -1100,6 +1085,7 @@ def run_ticket_automation_analysis(
                 business_services=business_services,
                 prompt_fingerprint_value=prompt_fingerprint_value,
                 error_message=result.error_message or "The model request failed.",
+                selected_columns=automation_columns,
             )
             db.commit()
             failed_count += 1
@@ -1131,6 +1117,7 @@ def run_ticket_automation_analysis(
                 business_services=business_services,
                 prompt_fingerprint_value=prompt_fingerprint_value,
                 error_message=str(exc),
+                selected_columns=automation_columns,
             )
             db.commit()
             failed_count += 1
@@ -1159,6 +1146,7 @@ def run_ticket_automation_analysis(
             representative_tickets=representative_tickets,
             business_services=business_services,
             prompt_fingerprint_value=prompt_fingerprint_value,
+            selected_columns=automation_columns,
         )
         db.commit()
         processed_count += 1

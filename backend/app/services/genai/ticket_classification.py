@@ -14,7 +14,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import Select, and_, delete, func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models import GenAIConfig, GenAITicketClassification, GenAIUsageLog, Project, Ticket
 from app.services.genai.config_service import get_or_create_config
 from app.services.genai.llm_client import LLMCompletionResult, chat_completion, provider_model_name
@@ -25,6 +24,12 @@ from app.services.genai.tools.validation import (
     ticket_completion_datetime_expression,
 )
 from app.services.genai.usage_log_service import create_usage_log
+from app.services.genai.workbench_settings import (
+    DEFAULT_CLASSIFICATION_COLUMNS,
+    GenAIWorkbenchRuntimeSettings,
+    get_effective_workbench_settings,
+    selected_ticket_payload,
+)
 
 PROMPT_KEY = "ticket_classification_enrichment"
 CATEGORY_QUALITY_PROMPT_KEY = "ticket_category_quality_analysis"
@@ -311,35 +316,32 @@ def prompt_fingerprint(prompt_text: str) -> str:
     return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:16]
 
 
-def ticket_payload(ticket: Ticket) -> dict[str, Any]:
-    existing_category = compact_text(ticket.category, max_chars=255)
-    return {
-        "ticket_number": ticket.ticket_number,
-        "ticket_type": ticket.ticket_type,
-        "short_description": compact_text(
-            ticket.short_description,
-            max_chars=MAX_SHORT_DESCRIPTION_CHARS,
-        ),
-        "description": compact_text(ticket.description, max_chars=MAX_DESCRIPTION_CHARS),
-        "existing_category": existing_category,
-        "existing_subcategory": compact_text(ticket.subcategory, max_chars=255),
-        "catalog_item": compact_text(ticket.catalog_item, max_chars=255),
-        "catalog_item_name": compact_text(ticket.catalog_item_name, max_chars=255),
-    }
+def ticket_payload(
+    ticket: Ticket,
+    *,
+    column_keys: list[str] | None = None,
+) -> dict[str, Any]:
+    return selected_ticket_payload(
+        ticket,
+        column_keys or DEFAULT_CLASSIFICATION_COLUMNS,
+        default_columns=DEFAULT_CLASSIFICATION_COLUMNS,
+    )
 
 
-def category_quality_ticket_payload(ticket: Ticket) -> dict[str, Any]:
-    return {
-        "ticket_number": ticket.ticket_number,
-        "ticket_type": ticket.ticket_type,
-        "short_description": compact_text(
-            ticket.short_description,
-            max_chars=MAX_SHORT_DESCRIPTION_CHARS,
-        ),
-        "description": compact_text(ticket.description, max_chars=MAX_DESCRIPTION_CHARS),
-        "existing_category": compact_text(ticket.category, max_chars=255),
-        "existing_subcategory": compact_text(ticket.subcategory, max_chars=255),
-    }
+def category_quality_ticket_payload(
+    ticket: Ticket,
+    *,
+    column_keys: list[str] | None = None,
+) -> dict[str, Any]:
+    columns = list(column_keys or DEFAULT_CLASSIFICATION_COLUMNS)
+    for required_key in ("existing_category", "existing_subcategory"):
+        if required_key not in columns:
+            columns.append(required_key)
+    return selected_ticket_payload(
+        ticket,
+        columns,
+        default_columns=DEFAULT_CLASSIFICATION_COLUMNS,
+    )
 
 
 def input_hash_for_ticket(
@@ -348,20 +350,14 @@ def input_hash_for_ticket(
     model_name: str | None,
     prompt_version: int,
     prompt_fingerprint_value: str,
+    column_keys: list[str] | None = None,
 ) -> str:
     payload = {
         "ticket_number": ticket.ticket_number,
         "ticket_type": ticket.ticket_type,
         "state": ticket.state,
-        "short_description": compact_text(
-            ticket.short_description,
-            max_chars=MAX_SHORT_DESCRIPTION_CHARS,
-        ),
-        "description": compact_text(ticket.description, max_chars=MAX_DESCRIPTION_CHARS),
-        "existing_category": compact_text(ticket.category, max_chars=255),
-        "existing_subcategory": compact_text(ticket.subcategory, max_chars=255),
-        "catalog_item": compact_text(ticket.catalog_item, max_chars=255),
-        "catalog_item_name": compact_text(ticket.catalog_item_name, max_chars=255),
+        "classification_payload": ticket_payload(ticket, column_keys=column_keys),
+        "selected_columns": column_keys or DEFAULT_CLASSIFICATION_COLUMNS,
         "model_name": model_name,
         "prompt_key": PROMPT_KEY,
         "prompt_version": prompt_version,
@@ -377,12 +373,17 @@ def category_quality_input_hash_for_ticket(
     model_name: str | None,
     prompt_version: int,
     prompt_fingerprint_value: str,
+    column_keys: list[str] | None = None,
 ) -> str:
     payload = {
         "ticket_number": ticket.ticket_number,
         "ticket_type": ticket.ticket_type,
         "state": ticket.state,
-        "category_quality_payload": category_quality_ticket_payload(ticket),
+        "category_quality_payload": category_quality_ticket_payload(
+            ticket,
+            column_keys=column_keys,
+        ),
+        "selected_columns": column_keys or DEFAULT_CLASSIFICATION_COLUMNS,
         "model_name": model_name,
         "prompt_key": CATEGORY_QUALITY_PROMPT_KEY,
         "prompt_version": prompt_version,
@@ -483,10 +484,11 @@ def build_messages(
     prompt_text: str,
     category_reuse_list: list[str],
     tickets: list[Ticket],
+    column_keys: list[str],
 ) -> list[dict[str, str]]:
     request_payload = {
         "category_reuse_list": category_reuse_list,
-        "tickets": [ticket_payload(ticket) for ticket in tickets],
+        "tickets": [ticket_payload(ticket, column_keys=column_keys) for ticket in tickets],
     }
     return [
         {"role": "system", "content": prompt_text},
@@ -504,9 +506,12 @@ def build_category_quality_messages(
     *,
     prompt_text: str,
     tickets: list[Ticket],
+    column_keys: list[str],
 ) -> list[dict[str, str]]:
     request_payload = {
-        "tickets": [category_quality_ticket_payload(ticket) for ticket in tickets],
+        "tickets": [
+            category_quality_ticket_payload(ticket, column_keys=column_keys) for ticket in tickets
+        ],
     }
     return [
         {"role": "system", "content": prompt_text},
@@ -652,9 +657,12 @@ def validate_config(config: GenAIConfig) -> None:
         raise TicketClassificationError("Model name is not configured for GenAI.")
 
 
-def effective_ticket_classification_config(config: GenAIConfig) -> GenAIConfig:
-    model_override = (get_settings().genai_ticket_classification_model_name or "").strip()
-    max_output_tokens_override = get_settings().genai_ticket_classification_max_output_tokens
+def effective_ticket_classification_config(
+    config: GenAIConfig,
+    runtime_settings: GenAIWorkbenchRuntimeSettings,
+) -> GenAIConfig:
+    model_override = (runtime_settings.genai_ticket_classification_model_name or "").strip()
+    max_output_tokens_override = runtime_settings.genai_ticket_classification_max_output_tokens
     if not model_override and not max_output_tokens_override:
         return config
     return GenAIConfig(
@@ -689,7 +697,9 @@ def run_ticket_classification(
     batch_size = clamp_batch_size(request.batch_size)
     batch_limit = clamp_batch_limit(request.batch_limit)
     customer_id = project_customer_id(db, request.project_id)
-    config = effective_ticket_classification_config(get_or_create_config(db))
+    runtime_settings = get_effective_workbench_settings(db)
+    classification_columns = runtime_settings.classification_columns
+    config = effective_ticket_classification_config(get_or_create_config(db), runtime_settings)
     validate_config(config)
     model_name = provider_model_name(config)
     prompt_text, prompt_version = prompt_text_and_version(db)
@@ -706,6 +716,7 @@ def run_ticket_classification(
             model_name=model_name,
             prompt_version=prompt_version,
             prompt_fingerprint_value=fingerprint,
+            column_keys=classification_columns,
         )
         existing_row = existing_rows.get(ticket.ticket_number)
         if (
@@ -742,6 +753,7 @@ def run_ticket_classification(
             prompt_text=prompt_text,
             category_reuse_list=category_reuse_list,
             tickets=batch_tickets,
+            column_keys=classification_columns,
         )
         result: LLMCompletionResult = chat_completion(config, messages)
         create_usage_log(
@@ -761,6 +773,7 @@ def run_ticket_classification(
                 "analysis_month": month_key,
                 "force_reprocess": request.force_reprocess,
                 "batch_limit": batch_limit,
+                "selected_columns": classification_columns,
             },
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -776,6 +789,7 @@ def run_ticket_classification(
             "prompt_fingerprint": fingerprint,
             "batch_ticket_count": len(batch_tickets),
             "category_reuse_count": len(category_reuse_list),
+            "selected_columns": classification_columns,
         }
         if not result.ok:
             error = result.error_message or "The model request failed."
@@ -956,7 +970,9 @@ def run_ticket_category_quality_analysis(
     batch_size = clamp_batch_size(request.batch_size)
     batch_limit = clamp_batch_limit(request.batch_limit)
     customer_id = project_customer_id(db, request.project_id)
-    config = effective_ticket_classification_config(get_or_create_config(db))
+    runtime_settings = get_effective_workbench_settings(db)
+    classification_columns = runtime_settings.classification_columns
+    config = effective_ticket_classification_config(get_or_create_config(db), runtime_settings)
     validate_config(config)
     model_name = provider_model_name(config)
     prompt_text, prompt_version = category_quality_prompt_text_and_version(db)
@@ -982,6 +998,7 @@ def run_ticket_category_quality_analysis(
             model_name=model_name,
             prompt_version=prompt_version,
             prompt_fingerprint_value=fingerprint,
+            column_keys=classification_columns,
         )
         if not compact_text(ticket.category, max_chars=255):
             _set_category_quality_metadata(
@@ -1029,6 +1046,7 @@ def run_ticket_category_quality_analysis(
         messages = build_category_quality_messages(
             prompt_text=prompt_text,
             tickets=batch_tickets,
+            column_keys=classification_columns,
         )
         result: LLMCompletionResult = chat_completion(config, messages)
         create_usage_log(
@@ -1050,6 +1068,7 @@ def run_ticket_category_quality_analysis(
                 "analysis_month_to": end_month,
                 "force_reprocess": request.force_reprocess,
                 "batch_limit": batch_limit,
+                "selected_columns": classification_columns,
             },
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
