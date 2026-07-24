@@ -18,7 +18,6 @@ import {
   runTicketCategoryQualityAnalysis,
   runTicketAutomationAnalysis,
   runTicketClusterAnalysis,
-  runTicketClassificationEnrichment,
   updateGenAIWorkbenchSettings,
 } from "./api/genai";
 import type {
@@ -35,7 +34,8 @@ import type { ProjectOption } from "./api/projects";
 import CustomerSelector from "./CustomerSelector";
 import { formatDisplayDateTime } from "./utils/dateFormat";
 
-const clearConfirmation = "Clear GenAI classification analysis for this selected period?";
+const clearConfirmation =
+  "Clear GenAI ticket classification for this selected period? This also removes cluster labels and dependent automation analysis.";
 const forceReprocessConfirmation =
   "Force reprocess will clear the existing analysis for this selected period before starting a new run. Continue?";
 const categoryQualityForceConfirmation =
@@ -680,11 +680,9 @@ function GenAIWorkbench() {
     analysisMonthFrom <= analysisMonthTo;
   const canAct = Boolean(projectId.trim()) && isMonthRangeValid;
   const hasAnalyzedRows = (summary?.analyzed_ticket_count ?? 0) > 0;
-  const classificationButtonEnabled = false;
   const clusterButtonEnabled = workbenchSettings?.ticket_cluster_analysis_button_enabled ?? true;
   const automationButtonEnabled =
     workbenchSettings?.ticket_automation_analysis_button_enabled ?? true;
-  const canRunTicketClassification = canAct && analysisMonthFrom === analysisMonthTo;
   const hasAutomationRows = (automationResults?.rows.length ?? 0) > 0;
 
   const qualityRows = useMemo(
@@ -820,104 +818,6 @@ function GenAIWorkbench() {
     setUsageRuns([]);
     setMessage(null);
     setError(null);
-  }
-
-  async function handleRun() {
-    if (!canRunTicketClassification) {
-      if (analysisMonthFrom !== analysisMonthTo) {
-        setError("Run GenAI Analysis supports one closed month at a time. Use cluster-based analysis for a period.");
-      }
-      return;
-    }
-    if (forceReprocess && !window.confirm(forceReprocessConfirmation)) {
-      return;
-    }
-    setIsRunning(true);
-    setMessage(null);
-    setError(null);
-    try {
-      if (forceReprocess) {
-        const clearResult = await clearTicketClassificationAnalysis({
-          project_id: projectId,
-          analysis_month: analysisMonthFrom,
-        });
-        setMessage(`Cleared ${formatNumber(clearResult.deleted_count)} rows. Starting analysis...`);
-      }
-
-      const runId = createRunId();
-      let latestResult = null as Awaited<
-        ReturnType<typeof runTicketClassificationEnrichment>
-      > | null;
-      let requestCount = 0;
-      let totalProcessedThisRun = 0;
-      let totalFailedThisRun = 0;
-
-      while (true) {
-        const result = await runTicketClassificationEnrichment({
-          project_id: projectId,
-          analysis_month: analysisMonthFrom,
-          batch_size: workbenchSettings?.ticket_classification_batch_size ?? 10,
-          batch_limit: batchesPerRequest,
-          run_id: runId,
-          force_reprocess: false,
-        });
-        latestResult = result;
-        requestCount += 1;
-        totalProcessedThisRun += result.processed_count;
-        totalFailedThisRun += result.failed_count;
-
-        setSummary(result.summary);
-        if (result.usage_run) {
-          setUsageRuns((currentRuns) => [
-            result.usage_run as GenAITicketClassificationUsageRun,
-            ...currentRuns.filter((run) => run.run_id !== result.usage_run?.run_id),
-          ]);
-        }
-        setMessage(
-          `Running... ${formatNumber(result.summary.analyzed_ticket_count)} of ${formatNumber(
-            result.eligible_ticket_count
-          )} tickets classified, ${formatNumber(result.remaining_ticket_count)} remaining${
-            result.failed_count > 0
-              ? `; ${formatNumber(result.failed_count)} ticket-level issue logged in this batch`
-              : ""
-          }.`
-        );
-
-        if (result.failed_count > 0 && result.processed_count === 0) {
-          setError(
-            `Stopped because this request made no progress and returned ${formatNumber(
-              result.failed_count
-            )} failed tickets.`
-          );
-          break;
-        }
-        if (result.remaining_ticket_count <= 0 || result.processed_batch_count === 0) {
-          break;
-        }
-      }
-
-      const [nextPivot, nextUsageRuns] = await Promise.all([
-        getTicketClassificationPivot(projectId, analysisMonthFrom, analysisMonthTo),
-        getTicketClassificationUsageRuns(projectId, analysisMonthFrom, analysisMonthTo),
-      ]);
-      setPivot(nextPivot);
-      setUsageRuns(nextUsageRuns.runs);
-      if (latestResult) {
-        setMessage(
-          `Analysis complete: ${formatNumber(
-            latestResult.summary.analyzed_ticket_count
-          )} analyzed, ${formatNumber(latestResult.skipped_cached_count)} cached, ${formatNumber(
-            totalProcessedThisRun
-          )} processed in this run across ${formatNumber(requestCount)} requests, ${formatNumber(
-            totalFailedThisRun
-          )} failed.`
-        );
-      }
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Analysis failed.");
-    } finally {
-      setIsRunning(false);
-    }
   }
 
   async function handleRunCluster() {
@@ -1401,99 +1301,70 @@ function GenAIWorkbench() {
           </label>
         </div>
 
-        <div className="workbench-actions">
-          <button
-            className="primary-button"
-            type="button"
-            disabled={
-              !canRunTicketClassification ||
-              isRunning ||
-              isClearing ||
-              !classificationButtonEnabled
-            }
-            title={
-              analysisMonthFrom === analysisMonthTo
-                ? undefined
-                : "Run GenAI Analysis supports one closed month at a time"
-            }
-            onClick={() => void handleRun()}
-          >
-            {isRunning && classificationButtonEnabled
-              ? "Running Analysis..."
-              : classificationButtonEnabled
-                ? "Run GenAI Analysis"
-                : "GenAI Analysis Disabled"}
-          </button>
-          <button
-            className="primary-button"
-            type="button"
-            disabled={!canAct || isRunning || isClearing || !clusterButtonEnabled}
-            onClick={() => void handleRunCluster()}
-          >
-            {isRunning && clusterButtonEnabled
-              ? "Running Cluster Analysis..."
-              : "Run Cluster-Based Analysis"}
-          </button>
-          <button
-            className="secondary-button danger-button"
-            type="button"
-            disabled={!canAct || isRunning || isClearing}
-            onClick={() => void handleClear()}
-          >
-            {isClearing ? "Clearing..." : "Clear GenAI Analysis"}
-          </button>
-        </div>
-
-        <div className="workbench-analysis-actions">
-          <span className="label">Workbench Actions</span>
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={!canAct || isRunning || isClearing || isClearingEmbeddings}
-            onClick={() => void handleRunCategoryQuality()}
-          >
-            {isCategoryQualityRunning
-              ? "Running Category Quality..."
-              : "Run Category Quality Analysis"}
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={
-              !canAct ||
-              isRunning ||
-              isClearing ||
-              isClearingAutomation ||
-              !automationButtonEnabled
-            }
-            onClick={() => void handleRunAutomation()}
-          >
-            {isAutomationRunning ? "Running Automation..." : "Run Automation Analysis"}
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={!canAct || isRunning || isClearing || isClearingAutomation || !hasAutomationRows}
-            onClick={() => void handleDownloadAutomation()}
-          >
-            {isDownloadingAutomation ? "Preparing Automation XLSX..." : "Download Automation XLSX"}
-          </button>
-          <button
-            className="secondary-button danger-button"
-            type="button"
-            disabled={!canAct || isRunning || isClearing || isClearingAutomation}
-            onClick={() => void handleClearAutomation()}
-          >
-            {isClearingAutomation ? "Clearing Automation..." : "Clear Automation Analysis"}
-          </button>
-          <button
-            className="secondary-button danger-button"
-            type="button"
-            disabled={!projectId || isRunning || isClearing || isClearingEmbeddings}
-            onClick={() => void handleClearEmbeddings()}
-          >
-            {isClearingEmbeddings ? "Clearing Embeddings..." : "Clear Project Embeddings"}
-          </button>
+        <div className="workbench-action-groups">
+          <div className="workbench-action-row">
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!canAct || isRunning || isClearing || !clusterButtonEnabled}
+              onClick={() => void handleRunCluster()}
+            >
+              {isRunning && clusterButtonEnabled
+                ? "Running Cluster Analysis..."
+                : "Run Cluster-Based Analysis"}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={
+                !canAct ||
+                isRunning ||
+                isClearing ||
+                isClearingAutomation ||
+                !automationButtonEnabled
+              }
+              onClick={() => void handleRunAutomation()}
+            >
+              {isAutomationRunning ? "Running Automation..." : "Run Automation Analysis"}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!canAct || isRunning || isClearing || isClearingEmbeddings}
+              onClick={() => void handleRunCategoryQuality()}
+            >
+              {isCategoryQualityRunning
+                ? "Running Category Quality..."
+                : "Run Category Quality Analysis"}
+            </button>
+          </div>
+          <div className="workbench-action-row">
+            <button
+              className="secondary-button danger-button"
+              type="button"
+              disabled={!projectId || isRunning || isClearing || isClearingEmbeddings}
+              onClick={() => void handleClearEmbeddings()}
+            >
+              {isClearingEmbeddings ? "Clearing Embeddings..." : "Clear Project Embeddings"}
+            </button>
+            <button
+              className="secondary-button danger-button"
+              type="button"
+              disabled={!canAct || isRunning || isClearing || isClearingAutomation}
+              onClick={() => void handleClear()}
+              title="Clears GenAI classification rows, cluster labels, and dependent automation analysis for the selected period"
+            >
+              {isClearing ? "Clearing..." : "Clear GenAI Ticket Classification"}
+            </button>
+            <button
+              className="secondary-button danger-button"
+              type="button"
+              disabled={!canAct || isRunning || isClearing || isClearingAutomation}
+              onClick={() => void handleClearAutomation()}
+            >
+              {isClearingAutomation ? "Clearing Automation..." : "Clear Automation Analysis"}
+            </button>
+          </div>
         </div>
 
         <WorkbenchSettingsPanel
@@ -1539,7 +1410,7 @@ function GenAIWorkbench() {
                   : "Run cluster-based analysis before downloading the ticket dump"
               }
             >
-              {isDownloadingDump ? "Preparing XLSX..." : "Download Ticket Dump XLSX"}
+              {isDownloadingDump ? "Preparing..." : "Download Ticket Dump"}
             </button>
           </div>
         </div>
@@ -1587,10 +1458,26 @@ function GenAIWorkbench() {
             <p className="label">Automation Analysis</p>
             <h2 id="automation-analysis-heading">Cluster-Level Automation Opportunities</h2>
           </div>
-          <span className="helper-text">
-            Last processed:{" "}
-            {formatDisplayDateTime(automationResults?.summary.last_processed_at)}
-          </span>
+          <div className="workbench-pivot-actions">
+            <span className="helper-text">
+              Last processed:{" "}
+              {formatDisplayDateTime(automationResults?.summary.last_processed_at)}
+            </span>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={
+                !canAct ||
+                isRunning ||
+                isClearing ||
+                isClearingAutomation ||
+                !hasAutomationRows
+              }
+              onClick={() => void handleDownloadAutomation()}
+            >
+              {isDownloadingAutomation ? "Preparing..." : "Download Automation"}
+            </button>
+          </div>
         </div>
         <div className="scroll-frame workbench-table-frame">
           <table>

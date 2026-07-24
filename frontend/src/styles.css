@@ -2934,9 +2934,9 @@ h2 {
 .workbench-controls {
   display: grid;
   grid-template-columns:
-    minmax(260px, 1.4fr) minmax(150px, 0.7fr) minmax(150px, 0.7fr)
-    minmax(120px, 0.5fr) auto auto;
-  align-items: end;
+    minmax(280px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr)
+    max-content max-content;
+  align-items: start;
   gap: 14px;
 }
 
@@ -2954,25 +2954,26 @@ h2 {
 .workbench-controls .checkbox-label {
   display: inline-flex;
   align-items: center;
-  align-self: center;
+  align-self: start;
   gap: 8px;
-  margin-top: 0;
+  margin-top: 32px;
   white-space: nowrap;
 }
 
-.workbench-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+.workbench-action-groups {
+  display: grid;
+  gap: 12px;
   margin-top: 18px;
 }
 
-.workbench-analysis-actions {
+.workbench-action-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 12px;
+}
+
+.workbench-action-row + .workbench-action-row {
   padding-top: 12px;
   border-top: 1px solid #dbeafe;
 }
@@ -3244,6 +3245,10 @@ h2 {
 
   .workbench-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workbench-controls .checkbox-label {
+    margin-top: 0;
   }
 
   .workbench-settings-grid,
