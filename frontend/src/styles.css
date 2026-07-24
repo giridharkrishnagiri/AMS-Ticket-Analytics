@@ -3001,10 +3001,10 @@ h2 {
 .workbench-settings-grid fieldset {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 12px;
+  gap: 9px 12px;
   min-width: 0;
   margin: 0;
-  padding: 12px;
+  padding: 10px 12px 12px;
   border: 1px solid #d9e2ec;
   border-radius: 8px;
   background: #f8fafc;
@@ -3020,7 +3020,7 @@ h2 {
 
 .workbench-settings-grid label {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   color: #334155;
   font-size: 0.86rem;
@@ -3030,6 +3030,8 @@ h2 {
 .workbench-settings-grid input,
 .workbench-settings-grid select {
   min-width: 0;
+  min-height: 34px;
+  padding: 7px 10px;
 }
 
 .workbench-settings-grid .checkbox-label {
@@ -3042,6 +3044,26 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.workbench-settings-grid fieldset.workbench-compact-settings {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.workbench-settings-grid fieldset.workbench-level-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workbench-level-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.workbench-level-row.two-up {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: calc((100% - 24px) * 2 / 3 + 12px);
+}
+
 .workbench-settings-columns {
   display: grid;
   grid-column: 1 / -1;
@@ -3051,6 +3073,10 @@ h2 {
 
 .workbench-settings-column-group {
   min-width: 0;
+  padding: 10px;
+  border: 1px solid #94a3b8;
+  border-radius: 6px;
+  background: #ffffff;
 }
 
 .workbench-settings-column-group h3 {
@@ -3069,6 +3095,29 @@ h2 {
   min-width: 0;
   font-size: 0.82rem;
   font-weight: 700;
+}
+
+.workbench-settings-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 28px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #475569;
+}
+
+.workbench-settings-summary ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.workbench-settings-summary li {
+  line-height: 1.35;
 }
 
 .workbench-summary-grid {
@@ -3178,6 +3227,22 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .workbench-settings-grid,
+  .workbench-compact-settings,
+  .workbench-settings-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-settings-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-level-row,
+  .workbench-level-row.two-up {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: none;
+  }
+
   .applications-dashboard-layout,
   .volumetrics-dashboard-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -3263,7 +3328,13 @@ h2 {
   .split-grid,
   .top-list-grid,
   .workbench-summary-grid,
-  .workbench-controls {
+  .workbench-controls,
+  .workbench-settings-grid,
+  .workbench-compact-settings,
+  .workbench-level-row,
+  .workbench-level-row.two-up,
+  .workbench-settings-summary,
+  .workbench-settings-columns {
     grid-template-columns: 1fr;
   }
 

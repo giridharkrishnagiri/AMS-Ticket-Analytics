@@ -262,6 +262,59 @@ function AutomationSummaryTable({
   );
 }
 
+function WorkbenchSettingsSummary({
+  settings,
+}: {
+  settings: GenAIWorkbenchSettings;
+}) {
+  const leftItems = [
+    `Category: ${formatNumber(settings.cluster_level_1_count)} (${formatClusterMode(
+      settings.cluster_level_1_mode
+    )})`,
+    `SubCategory-1: ${formatNumber(settings.cluster_level_2_count)} (${formatClusterMode(
+      settings.cluster_level_2_mode
+    )})`,
+    `SubCategory-2: ${formatNumber(settings.cluster_level_3_count)} (${formatClusterMode(
+      settings.cluster_level_3_mode
+    )})`,
+    `Distance thresholds: ${settings.cluster_level_1_distance_threshold.toFixed(
+      2
+    )} / ${settings.cluster_level_2_distance_threshold.toFixed(
+      2
+    )} / ${settings.cluster_level_3_distance_threshold.toFixed(2)}`,
+    `Rare label skip: below ${formatNumber(
+      settings.cluster_min_llm_label_ticket_count
+    )} tickets`,
+  ];
+  const rightItems = [
+    `Cluster mode: ${settings.cluster_mode}`,
+    `Embedding model: ${settings.cluster_embedding_model_name}`,
+    `Cluster label model: ${displayLabel(settings.cluster_label_model_name)}`,
+    `Automation model: ${displayLabel(settings.automation_model_name)}`,
+    `Automation representatives: ${formatNumber(
+      settings.automation_representative_ticket_count
+    )} tickets, ${formatNumber(settings.automation_clusters_per_request)} clusters/request`,
+    `Columns: clustering ${settings.clustering_columns.join(", ")}`,
+    `Columns: classification ${settings.classification_columns.join(", ")}`,
+    `Columns: automation ${settings.automation_columns.join(", ")}`,
+  ];
+
+  return (
+    <div className="workbench-settings-summary">
+      <ul>
+        {leftItems.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+      <ul>
+        {rightItems.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 type WorkbenchSettingsKey = keyof Omit<GenAIWorkbenchSettings, "available_ticket_columns">;
 
 function WorkbenchSettingsPanel({
@@ -447,7 +500,7 @@ function WorkbenchSettingsPanel({
             )}
           </fieldset>
 
-          <fieldset>
+          <fieldset className="workbench-compact-settings">
             <legend>Clustering and Cluster Labels</legend>
             {renderTextInput("Embedding model for clustering", "cluster_embedding_model_name")}
             {renderTextInput("Cluster label model", "cluster_label_model_name")}
@@ -476,48 +529,60 @@ function WorkbenchSettingsPanel({
             </label>
           </fieldset>
 
-          <fieldset>
+          <fieldset className="workbench-level-settings">
             <legend>Cluster Levels</legend>
-            {renderModeSelect("Category mode", "cluster_level_1_mode")}
-            {renderNumberInput("Category target or cap", "cluster_level_1_count", {
-              min: 1,
-              max: 5000,
-            })}
-            {renderNumberInput("Category distance threshold", "cluster_level_1_distance_threshold", {
-              min: 0.01,
-              max: 1.5,
-              step: 0.01,
-            })}
-            {renderModeSelect("SubCategory-1 mode", "cluster_level_2_mode")}
-            {renderNumberInput("SubCategory-1 target or cap", "cluster_level_2_count", {
-              min: 1,
-              max: 10000,
-            })}
-            {renderNumberInput(
-              "SubCategory-1 distance threshold",
-              "cluster_level_2_distance_threshold",
-              { min: 0.01, max: 1.5, step: 0.01 }
-            )}
-            {renderModeSelect("SubCategory-2 mode", "cluster_level_3_mode")}
-            {renderNumberInput("SubCategory-2 target or cap", "cluster_level_3_count", {
-              min: 1,
-              max: 25000,
-            })}
-            {renderNumberInput(
-              "SubCategory-2 distance threshold",
-              "cluster_level_3_distance_threshold",
-              { min: 0.01, max: 1.5, step: 0.01 }
-            )}
-            {renderNumberInput(
-              "Minimum tickets before LLM labeling",
-              "cluster_min_llm_label_ticket_count",
-              { min: 1, max: 100 }
-            )}
-            {renderNumberInput(
-              "Representative tickets for labels",
-              "cluster_representative_ticket_count",
-              { min: 1, max: 50 }
-            )}
+            <div className="workbench-level-row">
+              {renderModeSelect("Category mode", "cluster_level_1_mode")}
+              {renderNumberInput("Category target or cap", "cluster_level_1_count", {
+                min: 1,
+                max: 5000,
+              })}
+              {renderNumberInput(
+                "Category distance threshold",
+                "cluster_level_1_distance_threshold",
+                {
+                  min: 0.01,
+                  max: 1.5,
+                  step: 0.01,
+                }
+              )}
+            </div>
+            <div className="workbench-level-row">
+              {renderModeSelect("SubCategory-1 mode", "cluster_level_2_mode")}
+              {renderNumberInput("SubCategory-1 target or cap", "cluster_level_2_count", {
+                min: 1,
+                max: 10000,
+              })}
+              {renderNumberInput(
+                "SubCategory-1 distance threshold",
+                "cluster_level_2_distance_threshold",
+                { min: 0.01, max: 1.5, step: 0.01 }
+              )}
+            </div>
+            <div className="workbench-level-row">
+              {renderModeSelect("SubCategory-2 mode", "cluster_level_3_mode")}
+              {renderNumberInput("SubCategory-2 target or cap", "cluster_level_3_count", {
+                min: 1,
+                max: 25000,
+              })}
+              {renderNumberInput(
+                "SubCategory-2 distance threshold",
+                "cluster_level_3_distance_threshold",
+                { min: 0.01, max: 1.5, step: 0.01 }
+              )}
+            </div>
+            <div className="workbench-level-row two-up">
+              {renderNumberInput(
+                "Minimum tickets before LLM labeling",
+                "cluster_min_llm_label_ticket_count",
+                { min: 1, max: 100 }
+              )}
+              {renderNumberInput(
+                "Representative tickets for labels",
+                "cluster_representative_ticket_count",
+                { min: 1, max: 50 }
+              )}
+            </div>
           </fieldset>
 
           <fieldset>
@@ -1422,31 +1487,7 @@ function GenAIWorkbench() {
           onSave={() => void handleSaveWorkbenchSettings()}
         />
 
-        {selectedProject ? (
-          <p className="muted-text summary-block">Selected project: {selectedProject.label}</p>
-        ) : null}
-        {workbenchSettings ? (
-          <p className="muted-text summary-block">
-            Cluster settings: L1 {formatNumber(workbenchSettings.cluster_level_1_count)} (
-            {formatClusterMode(workbenchSettings.cluster_level_1_mode)}), L2{" "}
-            {formatNumber(workbenchSettings.cluster_level_2_count)} (
-            {formatClusterMode(workbenchSettings.cluster_level_2_mode)}), L3{" "}
-            {formatNumber(workbenchSettings.cluster_level_3_count)} (
-            {formatClusterMode(workbenchSettings.cluster_level_3_mode)}). Mode:{" "}
-            {workbenchSettings.cluster_mode}. Thresholds:{" "}
-            {workbenchSettings.cluster_level_1_distance_threshold.toFixed(2)} /{" "}
-            {workbenchSettings.cluster_level_2_distance_threshold.toFixed(2)} /{" "}
-            {workbenchSettings.cluster_level_3_distance_threshold.toFixed(2)}. Rare label skip:{" "}
-            below {formatNumber(workbenchSettings.cluster_min_llm_label_ticket_count)} tickets.
-            Embedding model: {workbenchSettings.cluster_embedding_model_name}. Automation model:{" "}
-            {displayLabel(workbenchSettings.automation_model_name)}; representatives:{" "}
-            {formatNumber(workbenchSettings.automation_representative_ticket_count)} tickets,
-            {formatNumber(workbenchSettings.automation_clusters_per_request)} clusters/request.
-            Columns: clustering {workbenchSettings.clustering_columns.join(", ")};
-            classification {workbenchSettings.classification_columns.join(", ")}; automation{" "}
-            {workbenchSettings.automation_columns.join(", ")}.
-          </p>
-        ) : null}
+        {workbenchSettings ? <WorkbenchSettingsSummary settings={workbenchSettings} /> : null}
         {!isMonthRangeValid ? (
           <p className="error-text summary-block">
             To Closed Month must be same as or later than From Closed Month.
