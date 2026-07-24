@@ -3050,16 +3050,21 @@ h2 {
 
 .workbench-settings-grid fieldset.workbench-level-settings {
   display: grid;
+  grid-column: 2;
+  grid-row: span 2;
   grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  align-self: stretch;
 }
 
-.workbench-level-row {
+.workbench-settings-grid fieldset.workbench-level-settings > .workbench-level-row {
   display: grid;
+  grid-column: 1 / -1;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px 12px;
 }
 
-.workbench-level-row.two-up {
+.workbench-settings-grid fieldset.workbench-level-settings > .workbench-level-row.two-up {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   max-width: calc((100% - 24px) * 2 / 3 + 12px);
 }
@@ -3231,6 +3236,11 @@ h2 {
   .workbench-compact-settings,
   .workbench-settings-summary {
     grid-template-columns: 1fr;
+  }
+
+  .workbench-settings-grid fieldset.workbench-level-settings {
+    grid-column: auto;
+    grid-row: auto;
   }
 
   .workbench-settings-columns {
