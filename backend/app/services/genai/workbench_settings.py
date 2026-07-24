@@ -329,16 +329,16 @@ def normalize_workbench_settings(raw_settings: dict[str, Any] | None = None) -> 
             bool(defaults["ticket_automation_analysis_button_enabled"]),
         ),
         "ticket_classification_model_name": _clean_string(
-            values.get("ticket_classification_model_name"),
+            defaults.get("ticket_classification_model_name"),
         ),
         "ticket_classification_max_output_tokens": _nullable_int_setting(
-            values.get("ticket_classification_max_output_tokens"),
+            defaults.get("ticket_classification_max_output_tokens"),
             defaults.get("ticket_classification_max_output_tokens"),
             minimum=500,
             maximum=32000,
         ),
         "ticket_classification_batch_size": _int_setting(
-            values.get("ticket_classification_batch_size"),
+            defaults.get("ticket_classification_batch_size"),
             int(defaults["ticket_classification_batch_size"]),
             minimum=1,
             maximum=25,

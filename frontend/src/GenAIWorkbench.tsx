@@ -130,7 +130,13 @@ function createRunId(): string {
 function editableWorkbenchSettings(
   settings: GenAIWorkbenchSettings
 ): GenAIWorkbenchSettingsUpdate {
-  const { available_ticket_columns: _availableTicketColumns, ...payload } = settings;
+  const {
+    available_ticket_columns: _availableTicketColumns,
+    ticket_classification_model_name: _ticketClassificationModelName,
+    ticket_classification_max_output_tokens: _ticketClassificationMaxOutputTokens,
+    ticket_classification_batch_size: _ticketClassificationBatchSize,
+    ...payload
+  } = settings;
   return { ...payload, ticket_classification_button_enabled: false };
 }
 
@@ -290,7 +296,6 @@ function WorkbenchSettingsSummary({
     `Cluster mode: ${settings.cluster_mode}`,
     `Embedding model: ${settings.cluster_embedding_model_name}`,
     `Cluster label model: ${displayLabel(settings.cluster_label_model_name)}`,
-    `Ticket analysis batch: ${formatNumber(settings.ticket_classification_batch_size)} tickets/request`,
     `Automation model: ${displayLabel(settings.automation_model_name)}`,
     `Automation representatives: ${formatNumber(
       settings.automation_representative_ticket_count
@@ -475,40 +480,9 @@ function WorkbenchSettingsPanel({
       </div>
       {isOpen ? (
         <div className="workbench-settings-grid">
-          <fieldset className="workbench-ticket-settings">
-            <legend>Ticket Classification</legend>
-            {renderTextInput(
-              "Classification model",
-              "ticket_classification_model_name",
-              "Use base GenAI model"
-            )}
-            {renderNumberInput(
-              "Classification output token limit",
-              "ticket_classification_max_output_tokens",
-              { min: 500, max: 32000, allowBlank: true }
-            )}
-            {renderNumberInput(
-              "Ticket analysis batch size",
-              "ticket_classification_batch_size",
-              { min: 1, max: 25 }
-            )}
-            <p className="workbench-ticket-settings-note">
-              Ticket analysis batch size is the number of tickets sent in one LLM request
-              for Category Quality. It also applies to legacy per-ticket enrichment if
-              that path is enabled later. Smaller batches reduce JSON truncation risk;
-              larger batches reduce request count.
-            </p>
-          </fieldset>
-
-          <fieldset className="workbench-compact-settings">
-            <legend>Clustering and Cluster Labels</legend>
+          <fieldset className="workbench-clustering-settings">
+            <legend>Clustering</legend>
             {renderTextInput("Embedding model for clustering", "cluster_embedding_model_name")}
-            {renderTextInput("Cluster label model", "cluster_label_model_name")}
-            {renderNumberInput("Cluster label output token limit", "cluster_label_max_output_tokens", {
-              min: 500,
-              max: 32000,
-              allowBlank: true,
-            })}
             {renderHelpfulNumberInput(
               "Embedding batch size",
               "cluster_embedding_batch_size",
@@ -516,15 +490,6 @@ function WorkbenchSettingsPanel({
               {
                 min: 1,
                 max: 500,
-              }
-            )}
-            {renderHelpfulNumberInput(
-              "Cluster label batch size",
-              "cluster_label_batch_size",
-              "Number of clusters sent in one LLM request for naming Category, SubCategory-1 and SubCategory-2 labels.",
-              {
-                min: 1,
-                max: 50,
               }
             )}
             <label>
@@ -537,6 +502,25 @@ function WorkbenchSettingsPanel({
                 <option value="fixed">Fixed cluster count</option>
               </select>
             </label>
+          </fieldset>
+
+          <fieldset className="workbench-cluster-label-settings">
+            <legend>Cluster Labels</legend>
+            {renderTextInput("Cluster label model", "cluster_label_model_name")}
+            {renderNumberInput("Cluster label output token limit", "cluster_label_max_output_tokens", {
+              min: 500,
+              max: 32000,
+              allowBlank: true,
+            })}
+            {renderHelpfulNumberInput(
+              "Cluster label batch size",
+              "cluster_label_batch_size",
+              "Number of clusters sent in one LLM request for naming Category, SubCategory-1 and SubCategory-2 labels.",
+              {
+                min: 1,
+                max: 50,
+              }
+            )}
           </fieldset>
 
           <fieldset className="workbench-level-settings">

@@ -4,6 +4,7 @@ from app.models import Ticket
 from app.services.genai.ticket_classification import input_hash_for_ticket
 from app.services.genai.workbench_settings import (
     DEFAULT_CLUSTERING_COLUMNS,
+    env_default_settings,
     normalize_workbench_settings,
     selected_ticket_payload,
 )
@@ -19,6 +20,7 @@ def test_workbench_settings_normalize_modes_counts_and_columns() -> None:
             "clustering_columns": ["short_description", "not_a_column"],
             "automation_clusters_per_request": "12",
             "ticket_classification_batch_size": "99",
+            "ticket_classification_model_name": "saved-legacy-model",
         },
     )
 
@@ -28,7 +30,13 @@ def test_workbench_settings_normalize_modes_counts_and_columns() -> None:
     assert settings["cluster_level_3_distance_threshold"] == 0.07
     assert settings["clustering_columns"] == ["short_description"]
     assert settings["automation_clusters_per_request"] == 12
-    assert settings["ticket_classification_batch_size"] == 25
+    env_defaults = env_default_settings()
+    assert settings["ticket_classification_batch_size"] == env_defaults[
+        "ticket_classification_batch_size"
+    ]
+    assert settings["ticket_classification_model_name"] == env_defaults[
+        "ticket_classification_model_name"
+    ]
 
 
 def test_selected_ticket_payload_extracts_direct_and_raw_payload_fields() -> None:

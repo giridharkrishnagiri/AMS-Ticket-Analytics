@@ -3059,28 +3059,16 @@ h2 {
   grid-column: 1 / -1;
 }
 
-.workbench-settings-grid fieldset.workbench-ticket-settings {
-  grid-column: 1 / -1;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.workbench-ticket-settings-note {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: #64748b;
-  font-size: 0.78rem;
-  font-weight: 650;
-  line-height: 1.35;
-}
-
-.workbench-settings-grid fieldset.workbench-compact-settings {
+.workbench-settings-grid fieldset.workbench-clustering-settings,
+.workbench-settings-grid fieldset.workbench-cluster-label-settings {
+  grid-column: 1;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .workbench-settings-grid fieldset.workbench-level-settings {
   display: grid;
   grid-column: 2;
-  grid-row: span 2;
+  grid-row: 1 / span 2;
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
   align-self: stretch;
@@ -3266,8 +3254,8 @@ h2 {
   }
 
   .workbench-settings-grid,
-  .workbench-ticket-settings,
-  .workbench-compact-settings,
+  .workbench-clustering-settings,
+  .workbench-cluster-label-settings,
   .workbench-settings-summary {
     grid-template-columns: 1fr;
   }
@@ -3374,8 +3362,8 @@ h2 {
   .workbench-summary-grid,
   .workbench-controls,
   .workbench-settings-grid,
-  .workbench-ticket-settings,
-  .workbench-compact-settings,
+  .workbench-clustering-settings,
+  .workbench-cluster-label-settings,
   .workbench-level-row,
   .workbench-level-row.two-up,
   .workbench-settings-summary,
