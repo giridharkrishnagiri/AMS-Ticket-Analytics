@@ -579,7 +579,7 @@ function WorkbenchSettingsPanel({
             </div>
           </fieldset>
 
-          <fieldset>
+          <fieldset className="workbench-automation-settings">
             <legend>Automation Assessment</legend>
             {renderTextInput("Automation assessment model", "automation_model_name")}
             {renderNumberInput("Automation output token limit", "automation_max_output_tokens", {

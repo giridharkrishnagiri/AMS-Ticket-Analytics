@@ -3002,6 +3002,7 @@ h2 {
 .workbench-settings-grid fieldset {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 9px 12px;
   min-width: 0;
   margin: 0;
@@ -3021,6 +3022,7 @@ h2 {
 
 .workbench-settings-grid label {
   display: grid;
+  align-content: start;
   gap: 5px;
   min-width: 0;
   color: #334155;
@@ -3030,8 +3032,10 @@ h2 {
 
 .workbench-settings-grid input,
 .workbench-settings-grid select {
+  box-sizing: border-box;
   min-width: 0;
-  min-height: 34px;
+  height: 40px;
+  min-height: 40px;
   padding: 7px 10px;
 }
 
@@ -3043,6 +3047,7 @@ h2 {
 
 .workbench-setting-help {
   display: grid;
+  align-content: start;
   gap: 4px;
   min-width: 0;
 }
@@ -3063,6 +3068,17 @@ h2 {
 .workbench-settings-grid fieldset.workbench-cluster-label-settings {
   grid-column: 1;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.workbench-settings-grid fieldset.workbench-automation-settings {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.workbench-clustering-settings label > span,
+.workbench-cluster-label-settings label > span,
+.workbench-automation-settings label > span {
+  min-height: 36px;
 }
 
 .workbench-settings-grid fieldset.workbench-level-settings {
@@ -3256,6 +3272,7 @@ h2 {
   .workbench-settings-grid,
   .workbench-clustering-settings,
   .workbench-cluster-label-settings,
+  .workbench-automation-settings,
   .workbench-settings-summary {
     grid-template-columns: 1fr;
   }
@@ -3364,6 +3381,7 @@ h2 {
   .workbench-settings-grid,
   .workbench-clustering-settings,
   .workbench-cluster-label-settings,
+  .workbench-automation-settings,
   .workbench-level-row,
   .workbench-level-row.two-up,
   .workbench-settings-summary,
