@@ -3059,6 +3059,20 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.workbench-settings-grid fieldset.workbench-ticket-settings {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.workbench-ticket-settings-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .workbench-settings-grid fieldset.workbench-compact-settings {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -3252,6 +3266,7 @@ h2 {
   }
 
   .workbench-settings-grid,
+  .workbench-ticket-settings,
   .workbench-compact-settings,
   .workbench-settings-summary {
     grid-template-columns: 1fr;
@@ -3359,6 +3374,7 @@ h2 {
   .workbench-summary-grid,
   .workbench-controls,
   .workbench-settings-grid,
+  .workbench-ticket-settings,
   .workbench-compact-settings,
   .workbench-level-row,
   .workbench-level-row.two-up,

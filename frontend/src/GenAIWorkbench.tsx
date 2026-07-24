@@ -295,9 +295,9 @@ function WorkbenchSettingsSummary({
     `Automation representatives: ${formatNumber(
       settings.automation_representative_ticket_count
     )} tickets, ${formatNumber(settings.automation_clusters_per_request)} clusters/request`,
-    `Columns: clustering ${settings.clustering_columns.join(", ")}`,
-    `Columns: classification ${settings.classification_columns.join(", ")}`,
-    `Columns: automation ${settings.automation_columns.join(", ")}`,
+    `Columns selected for Clustering: ${settings.clustering_columns.join(", ")}`,
+    `Columns selected for Classification: ${settings.classification_columns.join(", ")}`,
+    `Columns selected for Automation Assessment: ${settings.automation_columns.join(", ")}`,
   ];
 
   return (
@@ -475,31 +475,7 @@ function WorkbenchSettingsPanel({
       </div>
       {isOpen ? (
         <div className="workbench-settings-grid">
-          <fieldset>
-            <legend>Feature Toggles</legend>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={settings.ticket_cluster_analysis_button_enabled}
-                onChange={(event) =>
-                  updateField("ticket_cluster_analysis_button_enabled", event.target.checked)
-                }
-              />
-              <span>Enable cluster-based classification</span>
-            </label>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={settings.ticket_automation_analysis_button_enabled}
-                onChange={(event) =>
-                  updateField("ticket_automation_analysis_button_enabled", event.target.checked)
-                }
-              />
-              <span>Enable automation assessment</span>
-            </label>
-          </fieldset>
-
-          <fieldset>
+          <fieldset className="workbench-ticket-settings">
             <legend>Ticket Classification</legend>
             {renderTextInput(
               "Classification model",
@@ -511,12 +487,17 @@ function WorkbenchSettingsPanel({
               "ticket_classification_max_output_tokens",
               { min: 500, max: 32000, allowBlank: true }
             )}
-            {renderHelpfulNumberInput(
+            {renderNumberInput(
               "Ticket analysis batch size",
               "ticket_classification_batch_size",
-              "Number of tickets sent in one LLM request for Category Quality. It also applies to legacy per-ticket enrichment if that path is enabled later. Smaller batches reduce JSON truncation risk; larger batches reduce request count.",
               { min: 1, max: 25 }
             )}
+            <p className="workbench-ticket-settings-note">
+              Ticket analysis batch size is the number of tickets sent in one LLM request
+              for Category Quality. It also applies to legacy per-ticket enrichment if
+              that path is enabled later. Smaller batches reduce JSON truncation risk;
+              larger batches reduce request count.
+            </p>
           </fieldset>
 
           <fieldset className="workbench-compact-settings">
