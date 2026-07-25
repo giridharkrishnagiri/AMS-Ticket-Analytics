@@ -242,14 +242,13 @@ function AutomationSummaryTable({
         <table className="workbench-summary-table">
           <thead>
             <tr>
-              <th colSpan={3}>Coverage</th>
+              <th colSpan={2}>Coverage</th>
               <th colSpan={5}>Automation Potential Clusters</th>
               <th>Error</th>
             </tr>
             <tr>
               <th>Clusters Assessed</th>
               <th>Tickets Covered</th>
-              <th>Last Processed</th>
               <th>High</th>
               <th>Medium</th>
               <th>Low</th>
@@ -262,7 +261,6 @@ function AutomationSummaryTable({
             <tr>
               <td>{formatNumber(summary?.assessed_cluster_count)}</td>
               <td>{formatNumber(summary?.ticket_count)}</td>
-              <td>{formatDisplayDateTime(summary?.last_processed_at)}</td>
               <td>{formatNumber(summary?.high_potential_count)}</td>
               <td>{formatNumber(summary?.medium_potential_count)}</td>
               <td>{formatNumber(summary?.low_potential_count)}</td>
@@ -530,6 +528,16 @@ function WorkbenchSettingsPanel({
                 max: 50,
               }
             )}
+            {renderNumberInput(
+              "Minimum tickets for LLM labeling",
+              "cluster_min_llm_label_ticket_count",
+              { min: 1, max: 100 }
+            )}
+            {renderNumberInput(
+              "Representative tickets for labels",
+              "cluster_representative_ticket_count",
+              { min: 1, max: 50 }
+            )}
           </fieldset>
 
           <fieldset className="workbench-level-settings">
@@ -572,18 +580,6 @@ function WorkbenchSettingsPanel({
                 "SubCategory-2 distance threshold",
                 "cluster_level_3_distance_threshold",
                 { min: 0.01, max: 1.5, step: 0.01 }
-              )}
-            </div>
-            <div className="workbench-level-row two-up">
-              {renderNumberInput(
-                "Minimum tickets before LLM labeling",
-                "cluster_min_llm_label_ticket_count",
-                { min: 1, max: 100 }
-              )}
-              {renderNumberInput(
-                "Representative tickets for labels",
-                "cluster_representative_ticket_count",
-                { min: 1, max: 50 }
               )}
             </div>
           </fieldset>
@@ -1021,7 +1017,8 @@ function GenAIWorkbench() {
       let requestCount = 0;
       let totalProcessedThisRun = 0;
       let totalFailedThisRun = 0;
-      let totalCachedThisRun = 0;
+      let previouslySavedClusterCount = 0;
+      let capturedPreviouslySavedCount = false;
 
       while (true) {
         const result = await runTicketAutomationAnalysis({
@@ -1036,7 +1033,10 @@ function GenAIWorkbench() {
         requestCount += 1;
         totalProcessedThisRun += result.processed_count;
         totalFailedThisRun += result.failed_count;
-        totalCachedThisRun += result.skipped_cached_count;
+        if (!capturedPreviouslySavedCount) {
+          previouslySavedClusterCount = result.skipped_cached_count;
+          capturedPreviouslySavedCount = true;
+        }
         if (result.usage_run) {
           setUsageRuns((currentRuns) => [
             result.usage_run as GenAITicketClassificationUsageRun,
@@ -1046,9 +1046,13 @@ function GenAIWorkbench() {
         setMessage(
           `Running automation analysis... ${formatNumber(
             totalProcessedThisRun
-          )} clusters assessed in this run, ${formatNumber(
-            totalCachedThisRun
-          )} cached, ${formatNumber(result.remaining_cluster_count)} remaining${
+          )} newly assessed clusters, ${formatNumber(
+            previouslySavedClusterCount
+          )} previously saved clusters reused, ${formatNumber(
+            result.remaining_cluster_count
+          )} clusters remaining out of ${formatNumber(
+            result.eligible_cluster_count
+          )} eligible automation clusters${
             result.failed_count > 0
               ? `; ${formatNumber(result.failed_count)} cluster-level issue logged in this request`
               : ""
@@ -1078,13 +1082,13 @@ function GenAIWorkbench() {
         setMessage(
           `Automation analysis complete: ${formatNumber(
             latestResult.summary.assessed_cluster_count
-          )} clusters assessed, covering ${formatNumber(
+          )} saved cluster assessments, covering ${formatNumber(
             latestResult.summary.ticket_count
-          )} tickets. This run processed ${formatNumber(
+          )} tickets. This run newly assessed ${formatNumber(
             totalProcessedThisRun
           )} clusters across ${formatNumber(requestCount)} requests, ${formatNumber(
-            totalCachedThisRun
-          )} cached, ${formatNumber(totalFailedThisRun)} failed.`
+            previouslySavedClusterCount
+          )} previously saved clusters reused, ${formatNumber(totalFailedThisRun)} failed.`
         );
       }
     } catch (requestError) {

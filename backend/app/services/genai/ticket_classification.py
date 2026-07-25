@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -1222,24 +1223,6 @@ def ticket_classification_summary(
         select(
             func.count().filter(GenAITicketClassification.status == "success"),
             func.count().filter(GenAITicketClassification.status == "error"),
-            func.count(func.distinct(GenAITicketClassification.genai_category)).filter(
-                and_(
-                    GenAITicketClassification.status == "success",
-                    GenAITicketClassification.genai_category.is_not(None),
-                ),
-            ),
-            func.count(func.distinct(GenAITicketClassification.genai_subcategory_1)).filter(
-                and_(
-                    GenAITicketClassification.status == "success",
-                    GenAITicketClassification.genai_subcategory_1.is_not(None),
-                ),
-            ),
-            func.count(func.distinct(GenAITicketClassification.genai_subcategory_2)).filter(
-                and_(
-                    GenAITicketClassification.status == "success",
-                    GenAITicketClassification.genai_subcategory_2.is_not(None),
-                ),
-            ),
             func.max(GenAITicketClassification.processed_at),
         ).where(*base_filters),
     ).one()
@@ -1268,6 +1251,17 @@ def ticket_classification_summary(
         select(GenAITicketClassification).where(*success_filters),
     ).scalars().all()
     labeling_split = _cluster_labeling_split(success_rows)
+    category_cluster_count = (
+        labeling_split["category_llm_assessed_count"] + labeling_split["category_rare_count"]
+    )
+    subcategory_1_cluster_count = (
+        labeling_split["subcategory_1_llm_assessed_count"]
+        + labeling_split["subcategory_1_rare_count"]
+    )
+    subcategory_2_cluster_count = (
+        labeling_split["subcategory_2_llm_assessed_count"]
+        + labeling_split["subcategory_2_rare_count"]
+    )
     return {
         "project_id": project_id,
         "analysis_month": start_month,
@@ -1276,15 +1270,52 @@ def ticket_classification_summary(
         "eligible_ticket_count": eligible_count,
         "analyzed_ticket_count": int(totals[0] or 0),
         "error_ticket_count": int(totals[1] or 0),
-        "category_count": int(totals[2] or 0),
-        "subcategory_1_count": int(totals[3] or 0),
-        "subcategory_2_count": int(totals[4] or 0),
+        "category_count": category_cluster_count,
+        "subcategory_1_count": subcategory_1_cluster_count,
+        "subcategory_2_count": subcategory_2_cluster_count,
         "incident_count": int(incident_count or 0),
         "sc_task_count": int(sc_task_count or 0),
-        "last_processed_at": totals[5],
+        "last_processed_at": totals[2],
         "category_quality_counts": category_quality_counts,
         **labeling_split,
     }
+
+
+def _label_sort_value(value: str | None) -> tuple[int, str]:
+    cleaned = value.strip().lower() if isinstance(value, str) else ""
+    return (0 if cleaned else 1, cleaned)
+
+
+def _classification_labels(
+    classification: GenAITicketClassification | None,
+) -> tuple[str | None, str | None, str | None]:
+    if classification is None or classification.status != "success":
+        return None, None, None
+    return (
+        classification.genai_category,
+        classification.genai_subcategory_1,
+        classification.genai_subcategory_2,
+    )
+
+
+def _classification_hierarchy_counts(
+    classifications: list[GenAITicketClassification],
+) -> tuple[
+    Counter[str | None],
+    Counter[tuple[str | None, str | None]],
+    Counter[tuple[str | None, str | None, str | None]],
+]:
+    category_counts: Counter[str | None] = Counter()
+    subcategory_1_counts: Counter[tuple[str | None, str | None]] = Counter()
+    subcategory_2_counts: Counter[tuple[str | None, str | None, str | None]] = Counter()
+    for classification in classifications:
+        category, subcategory_1, subcategory_2 = _classification_labels(classification)
+        if category is None:
+            continue
+        category_counts[category] += 1
+        subcategory_1_counts[(category, subcategory_1)] += 1
+        subcategory_2_counts[(category, subcategory_1, subcategory_2)] += 1
+    return category_counts, subcategory_1_counts, subcategory_2_counts
 
 
 def ticket_classification_pivot(
@@ -1317,36 +1348,51 @@ def ticket_classification_pivot(
             GenAITicketClassification.genai_category,
             GenAITicketClassification.genai_subcategory_1,
             GenAITicketClassification.genai_subcategory_2,
-        )
-        .order_by(
-            GenAITicketClassification.genai_category.asc(),
-            GenAITicketClassification.genai_subcategory_1.asc().nullsfirst(),
-            GenAITicketClassification.genai_subcategory_2.asc().nullsfirst(),
         ),
     ).all()
+    payload_rows = [
+        {
+            "genai_category": category,
+            "genai_subcategory_1": subcategory_1,
+            "genai_subcategory_2": subcategory_2,
+            "incident_count": int(incident_count or 0),
+            "sc_task_count": int(sc_task_count or 0),
+            "total_count": int(total_count or 0),
+        }
+        for (
+            category,
+            subcategory_1,
+            subcategory_2,
+            total_count,
+            incident_count,
+            sc_task_count,
+        ) in rows
+    ]
+    category_counts: Counter[str | None] = Counter()
+    subcategory_1_counts: Counter[tuple[str | None, str | None]] = Counter()
+    for row in payload_rows:
+        category = row["genai_category"]
+        subcategory_1 = row["genai_subcategory_1"]
+        total_count = row["total_count"]
+        category_counts[category] += total_count
+        subcategory_1_counts[(category, subcategory_1)] += total_count
+
+    payload_rows.sort(
+        key=lambda row: (
+            -category_counts[row["genai_category"]],
+            _label_sort_value(row["genai_category"]),
+            -subcategory_1_counts[(row["genai_category"], row["genai_subcategory_1"])],
+            _label_sort_value(row["genai_subcategory_1"]),
+            -row["total_count"],
+            _label_sort_value(row["genai_subcategory_2"]),
+        ),
+    )
     return {
         "project_id": project_id,
         "analysis_month": start_month,
         "analysis_month_from": start_month,
         "analysis_month_to": end_month,
-        "rows": [
-            {
-                "genai_category": category,
-                "genai_subcategory_1": subcategory_1,
-                "genai_subcategory_2": subcategory_2,
-                "incident_count": int(incident_count or 0),
-                "sc_task_count": int(sc_task_count or 0),
-                "total_count": int(total_count or 0),
-            }
-            for (
-                category,
-                subcategory_1,
-                subcategory_2,
-                total_count,
-                incident_count,
-                sc_task_count,
-            ) in rows
-        ],
+        "rows": payload_rows,
     }
 
 
@@ -1457,6 +1503,27 @@ def ticket_classification_dump_csv(
             "Run cluster-based analysis or ticket classification enrichment before downloading "
             "the ticket dump.",
         )
+    (
+        category_counts,
+        subcategory_1_counts,
+        subcategory_2_counts,
+    ) = _classification_hierarchy_counts(list(classification_rows.values()))
+
+    def ticket_sort_key(ticket: Ticket) -> tuple[Any, ...]:
+        classification = classification_rows.get(ticket.ticket_number)
+        category, subcategory_1, subcategory_2 = _classification_labels(classification)
+        return (
+            -category_counts[category],
+            _label_sort_value(category),
+            -subcategory_1_counts[(category, subcategory_1)],
+            _label_sort_value(subcategory_1),
+            -subcategory_2_counts[(category, subcategory_1, subcategory_2)],
+            _label_sort_value(subcategory_2),
+            str(getattr(ticket, "ticket_type", "") or "").lower(),
+            str(getattr(ticket, "ticket_number", "") or "").lower(),
+        )
+
+    tickets.sort(key=ticket_sort_key)
     ticket_columns = [
         column.name
         for column in Ticket.__table__.columns
