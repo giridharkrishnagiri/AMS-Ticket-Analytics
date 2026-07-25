@@ -268,6 +268,15 @@ function AutomationSummaryTable({
               <td>{formatNumber(summary?.not_recommended_count)}</td>
               <td>{formatNumber(summary?.error_cluster_count)}</td>
             </tr>
+            <tr>
+              <td colSpan={2}>Ticket count by potential</td>
+              <td>{formatNumber(summary?.high_potential_ticket_count)}</td>
+              <td>{formatNumber(summary?.medium_potential_ticket_count)}</td>
+              <td>{formatNumber(summary?.low_potential_ticket_count)}</td>
+              <td>{formatNumber(summary?.insufficient_information_ticket_count)}</td>
+              <td>{formatNumber(summary?.not_recommended_ticket_count)}</td>
+              <td>-</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1337,7 +1346,7 @@ function GenAIWorkbench() {
                 : "Run Cluster-Based Analysis"}
             </button>
             <button
-              className="secondary-button"
+              className="primary-button"
               type="button"
               disabled={
                 !canAct ||
@@ -1352,7 +1361,7 @@ function GenAIWorkbench() {
               {isAutomationRunning ? "Running Automation..." : "Run Automation Analysis"}
             </button>
             <button
-              className="secondary-button"
+              className="primary-button"
               type="button"
               disabled={
                 !canAct ||
@@ -1448,7 +1457,7 @@ function GenAIWorkbench() {
               Last processed: {formatDisplayDateTime(summary?.last_processed_at)}
             </span>
             <button
-              className="secondary-button"
+              className="primary-button"
               type="button"
               disabled={!canAct || isDownloadingDump || !hasAnalyzedRows}
               onClick={() => void handleDownloadDump()}
@@ -1512,7 +1521,7 @@ function GenAIWorkbench() {
               {formatDisplayDateTime(automationResults?.summary.last_processed_at)}
             </span>
             <button
-              className="secondary-button"
+              className="primary-button"
               type="button"
               disabled={
                 !canAct ||

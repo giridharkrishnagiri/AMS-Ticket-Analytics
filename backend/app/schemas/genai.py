@@ -231,7 +231,13 @@ class GenAITicketAutomationSummaryResponse(BaseModel):
     low_potential_count: int
     not_recommended_count: int
     insufficient_information_count: int
+    high_potential_ticket_count: int = 0
+    medium_potential_ticket_count: int = 0
+    low_potential_ticket_count: int = 0
+    not_recommended_ticket_count: int = 0
+    insufficient_information_ticket_count: int = 0
     potential_counts: dict[str, int] = Field(default_factory=dict)
+    potential_ticket_counts: dict[str, int] = Field(default_factory=dict)
     resolution_path_counts: dict[str, int] = Field(default_factory=dict)
     last_processed_at: datetime | None = None
 

@@ -673,6 +673,9 @@ def automation_summary(
     ).scalars().all()
     success_rows = [row for row in rows if row.status == "success"]
     potential_counts = Counter(row_automation_potential(row) for row in success_rows)
+    potential_ticket_counts: Counter[str] = Counter()
+    for row in success_rows:
+        potential_ticket_counts[row_automation_potential(row)] += row.ticket_count or 0
     path_counts = Counter(row.recommended_resolution_path or "Not assessed" for row in success_rows)
     return {
         "project_id": project_id,
@@ -687,7 +690,16 @@ def automation_summary(
         "low_potential_count": potential_counts.get("Low", 0),
         "not_recommended_count": potential_counts.get("Not Recommended", 0),
         "insufficient_information_count": potential_counts.get("Insufficient information", 0),
+        "high_potential_ticket_count": potential_ticket_counts.get("High", 0),
+        "medium_potential_ticket_count": potential_ticket_counts.get("Medium", 0),
+        "low_potential_ticket_count": potential_ticket_counts.get("Low", 0),
+        "not_recommended_ticket_count": potential_ticket_counts.get("Not Recommended", 0),
+        "insufficient_information_ticket_count": potential_ticket_counts.get(
+            "Insufficient information",
+            0,
+        ),
         "potential_counts": dict(potential_counts),
+        "potential_ticket_counts": dict(potential_ticket_counts),
         "resolution_path_counts": dict(path_counts),
         "last_processed_at": max(
             (row.processed_at for row in rows if row.processed_at is not None),

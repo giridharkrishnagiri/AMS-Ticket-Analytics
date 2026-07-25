@@ -101,7 +101,13 @@ export type GenAITicketAutomationSummary = {
   low_potential_count: number;
   not_recommended_count: number;
   insufficient_information_count: number;
+  high_potential_ticket_count: number;
+  medium_potential_ticket_count: number;
+  low_potential_ticket_count: number;
+  not_recommended_ticket_count: number;
+  insufficient_information_ticket_count: number;
   potential_counts: Record<string, number>;
+  potential_ticket_counts: Record<string, number>;
   resolution_path_counts: Record<string, number>;
   last_processed_at: string | null;
 };
