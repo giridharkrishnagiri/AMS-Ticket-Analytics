@@ -190,6 +190,11 @@ def representative_ticket_limit(runtime_settings: GenAIWorkbenchRuntimeSettings)
     return max(1, min(int(configured_count), 25))
 
 
+def automation_min_ticket_count(runtime_settings: GenAIWorkbenchRuntimeSettings) -> int:
+    configured_count = runtime_settings.genai_ticket_automation_min_ticket_count
+    return max(1, min(int(configured_count), 100))
+
+
 def classification_metadata(row: GenAITicketClassification) -> dict[str, Any]:
     return dict(row.metadata_json) if isinstance(row.metadata_json, dict) else {}
 
@@ -329,6 +334,7 @@ def automation_cluster_candidates(
     project_id: UUID,
     analysis_month: str,
     analysis_month_to: str,
+    min_ticket_count: int = 3,
 ) -> list[AutomationClusterCandidate]:
     month_keys = month_keys_in_range(analysis_month, analysis_month_to)
     rows = db.execute(
@@ -379,7 +385,7 @@ def automation_cluster_candidates(
         candidate.rows.append((classification, ticket))
 
     candidates = [
-        candidate for candidate in grouped.values() if candidate.ticket_count >= 3
+        candidate for candidate in grouped.values() if candidate.ticket_count >= min_ticket_count
     ]
     candidates.sort(
         key=lambda candidate: (
@@ -923,13 +929,18 @@ def run_ticket_automation_analysis(
     prompt_fingerprint_value = prompt_fingerprint(prompt_text)
     run_id = (request.run_id or "").strip() or str(uuid4())
     cluster_limit = clamp_cluster_limit(request.cluster_limit, runtime_settings)
+    min_ticket_count = automation_min_ticket_count(runtime_settings)
     log_progress(
-        "run %s started for project %s, period %s, model %s, request cluster limit %s",
+        (
+            "run %s started for project %s, period %s, model %s, "
+            "request cluster limit %s, min tickets %s"
+        ),
         run_id,
         request.project_id,
         range_label,
         model_name,
         cluster_limit,
+        min_ticket_count,
     )
 
     if request.force_reprocess:
@@ -952,6 +963,7 @@ def run_ticket_automation_analysis(
         project_id=request.project_id,
         analysis_month=start_month,
         analysis_month_to=end_month,
+        min_ticket_count=min_ticket_count,
     )
     existing_rows = _existing_assessments_for_period(
         db,

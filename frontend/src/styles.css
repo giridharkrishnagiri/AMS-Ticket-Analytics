@@ -331,6 +331,8 @@ h2 {
 }
 
 .panel {
+  min-width: 0;
+  max-width: 100%;
   padding: 20px;
 }
 
@@ -338,8 +340,13 @@ h2 {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 18px;
+}
+
+.panel-heading > * {
+  min-width: 0;
 }
 
 .panel-heading h2 {
@@ -1451,6 +1458,9 @@ h2 {
 }
 
 .scroll-frame {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   max-height: 300px;
   overflow: auto;
   border: 1px solid #e2e8f0;
@@ -2925,26 +2935,36 @@ h2 {
 .workbench-layout {
   display: grid;
   gap: 16px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .workbench-control-panel {
+  min-width: 0;
+  overflow: hidden;
   border-color: #bfdbfe;
 }
 
 .workbench-controls {
-  display: grid;
-  grid-template-columns:
-    minmax(280px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr)
-    max-content max-content;
+  display: flex;
+  flex-wrap: wrap;
   align-items: start;
   gap: 14px;
 }
 
 .workbench-controls label {
   display: grid;
+  flex: 1 1 220px;
   gap: 7px;
+  min-width: 0;
   color: #334155;
   font-weight: 800;
+}
+
+.workbench-controls > label:first-child {
+  flex: 2 1 360px;
 }
 
 .workbench-controls label > span {
@@ -2955,7 +2975,9 @@ h2 {
   display: inline-flex;
   align-items: center;
   align-self: start;
+  flex: 0 1 auto;
   gap: 8px;
+  max-width: 100%;
   margin-top: 32px;
   white-space: nowrap;
 }
@@ -2982,11 +3004,27 @@ h2 {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
   gap: 12px;
   flex-wrap: wrap;
 }
 
+.workbench-pivot-actions .helper-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workbench-pivot-actions .primary-button,
+.workbench-action-row .primary-button,
+.workbench-action-row .secondary-button {
+  max-width: 100%;
+  white-space: normal;
+}
+
 .workbench-settings-panel {
+  min-width: 0;
+  overflow: hidden;
   margin-top: 16px;
   border-color: #dbeafe;
   background: #ffffff;
@@ -2996,6 +3034,7 @@ h2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+  min-width: 0;
   margin-top: 12px;
 }
 
@@ -3072,7 +3111,7 @@ h2 {
 
 .workbench-settings-grid fieldset.workbench-automation-settings {
   grid-column: 1 / -1;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
 
 .workbench-clustering-settings label > span,
@@ -3187,6 +3226,8 @@ h2 {
 }
 
 .workbench-summary-panel {
+  min-width: 0;
+  overflow: hidden;
   padding: 14px 16px 16px;
 }
 
@@ -3230,6 +3271,17 @@ h2 {
 
 .workbench-table-frame {
   max-height: 520px;
+}
+
+.workbench-table-frame table {
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.workbench-table-frame th,
+.workbench-table-frame td {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .workbench-usage-frame {

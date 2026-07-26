@@ -316,6 +316,9 @@ function WorkbenchSettingsSummary({
     `Automation representatives: ${formatNumber(
       settings.automation_representative_ticket_count
     )} tickets, ${formatNumber(settings.automation_clusters_per_request)} clusters/request`,
+    `Automation assessment skip: below ${formatNumber(
+      settings.automation_min_ticket_count
+    )} tickets`,
     `Columns selected for Clustering: ${settings.clustering_columns.join(", ")}`,
     `Columns selected for Classification: ${settings.classification_columns.join(", ")}`,
     `Columns selected for Automation Assessment: ${settings.automation_columns.join(", ")}`,
@@ -610,6 +613,11 @@ function WorkbenchSettingsPanel({
               min: 1,
               max: 50,
             })}
+            {renderNumberInput(
+              "Minimum tickets for automation assessment",
+              "automation_min_ticket_count",
+              { min: 1, max: 100 }
+            )}
           </fieldset>
 
           <fieldset className="workbench-settings-wide">
@@ -1035,7 +1043,7 @@ function GenAIWorkbench() {
           analysis_month: analysisMonthFrom,
           analysis_month_to: analysisMonthTo,
           force_reprocess: false,
-          cluster_limit: workbenchSettings?.automation_clusters_per_request,
+          cluster_limit: savedSettings.automation_clusters_per_request,
           run_id: runId,
         });
         latestResult = result;
@@ -1061,7 +1069,9 @@ function GenAIWorkbench() {
             result.remaining_cluster_count
           )} clusters remaining out of ${formatNumber(
             result.eligible_cluster_count
-          )} eligible automation clusters${
+          )} eligible automation clusters with at least ${formatNumber(
+            savedSettings.automation_min_ticket_count
+          )} tickets${
             result.failed_count > 0
               ? `; ${formatNumber(result.failed_count)} cluster-level issue logged in this request`
               : ""

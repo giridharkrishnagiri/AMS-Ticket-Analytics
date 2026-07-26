@@ -419,6 +419,7 @@ class GenAIWorkbenchSettingsResponse(BaseModel):
     cluster_representative_ticket_count: int
     automation_representative_ticket_count: int
     automation_clusters_per_request: int
+    automation_min_ticket_count: int
     clustering_columns: list[str] = Field(default_factory=list)
     classification_columns: list[str] = Field(default_factory=list)
     automation_columns: list[str] = Field(default_factory=list)
@@ -453,6 +454,7 @@ class GenAIWorkbenchSettingsUpdateRequest(BaseModel):
     cluster_representative_ticket_count: int | None = Field(default=None, ge=1, le=50)
     automation_representative_ticket_count: int | None = Field(default=None, ge=1, le=50)
     automation_clusters_per_request: int | None = Field(default=None, ge=1, le=50)
+    automation_min_ticket_count: int | None = Field(default=None, ge=1, le=100)
     clustering_columns: list[str] | None = None
     classification_columns: list[str] | None = None
     automation_columns: list[str] | None = None

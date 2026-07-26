@@ -167,6 +167,7 @@ class GenAIWorkbenchRuntimeSettings:
     genai_ticket_automation_max_output_tokens: int | None
     genai_ticket_automation_representative_ticket_count: int
     genai_ticket_automation_clusters_per_request: int
+    genai_ticket_automation_min_ticket_count: int
     clustering_columns: list[str]
     classification_columns: list[str]
     automation_columns: list[str]
@@ -306,6 +307,7 @@ def env_default_settings() -> dict[str, Any]:
             settings.genai_ticket_automation_representative_ticket_count
         ),
         "automation_clusters_per_request": settings.genai_ticket_automation_clusters_per_request,
+        "automation_min_ticket_count": settings.genai_ticket_automation_min_ticket_count,
         "clustering_columns": DEFAULT_CLUSTERING_COLUMNS,
         "classification_columns": DEFAULT_CLASSIFICATION_COLUMNS,
         "automation_columns": DEFAULT_AUTOMATION_COLUMNS,
@@ -440,6 +442,12 @@ def normalize_workbench_settings(raw_settings: dict[str, Any] | None = None) -> 
             minimum=1,
             maximum=50,
         ),
+        "automation_min_ticket_count": _int_setting(
+            values.get("automation_min_ticket_count"),
+            int(defaults["automation_min_ticket_count"]),
+            minimum=1,
+            maximum=100,
+        ),
         "clustering_columns": normalize_column_keys(
             values.get("clustering_columns"),
             DEFAULT_CLUSTERING_COLUMNS,
@@ -506,6 +514,7 @@ def settings_to_runtime(settings: dict[str, Any]) -> GenAIWorkbenchRuntimeSettin
         genai_ticket_automation_clusters_per_request=settings[
             "automation_clusters_per_request"
         ],
+        genai_ticket_automation_min_ticket_count=settings["automation_min_ticket_count"],
         clustering_columns=list(settings["clustering_columns"]),
         classification_columns=list(settings["classification_columns"]),
         automation_columns=list(settings["automation_columns"]),
@@ -616,6 +625,7 @@ def runtime_settings_response(settings: GenAIWorkbenchRuntimeSettings) -> dict[s
         "automation_clusters_per_request": (
             settings.genai_ticket_automation_clusters_per_request
         ),
+        "automation_min_ticket_count": settings.genai_ticket_automation_min_ticket_count,
         "clustering_columns": list(settings.clustering_columns),
         "classification_columns": list(settings.classification_columns),
         "automation_columns": list(settings.automation_columns),

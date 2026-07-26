@@ -215,6 +215,7 @@ export type GenAIWorkbenchSettings = {
   cluster_representative_ticket_count: number;
   automation_representative_ticket_count: number;
   automation_clusters_per_request: number;
+  automation_min_ticket_count: number;
   clustering_columns: string[];
   classification_columns: string[];
   automation_columns: string[];

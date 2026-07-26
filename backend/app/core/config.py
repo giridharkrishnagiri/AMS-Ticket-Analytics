@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     genai_ticket_automation_max_output_tokens: int | None = None
     genai_ticket_automation_representative_ticket_count: int = 12
     genai_ticket_automation_clusters_per_request: int = 10
+    genai_ticket_automation_min_ticket_count: int = 3
 
     @property
     def cors_origins(self) -> list[str]:
