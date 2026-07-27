@@ -10,12 +10,14 @@ from sqlalchemy.orm import Session
 from app.models import (
     AssessmentChangeRecord,
     AssessmentProblemRecord,
+    ResourceDemandServiceLevelSplit,
     ResourceDemandUnitEffort,
     Ticket,
 )
 from app.schemas.resource_demand import (
     ResourceDemandInputRow,
     ResourceDemandResponse,
+    ResourceDemandServiceLevelSplitRow,
     ResourceDemandServiceLevelValues,
     ResourceDemandTechnologyView,
     ResourceDemandUnitEffortRow,
@@ -35,6 +37,7 @@ UNIT_EFFORT_DEFAULTS = (
     ("PROBLEM", "Any"),
     ("CHANGE", "Any"),
 )
+SERVICE_LEVEL_SPLIT_DEFAULTS = UNIT_EFFORT_DEFAULTS
 
 
 def parse_month_key(month_key: str) -> tuple[int, int]:
@@ -85,6 +88,23 @@ def average_monthly(total: int, month_count: int) -> int:
     if month_count <= 0:
         return 0
     return int((2 * total + month_count) // (2 * month_count))
+
+
+def round_half_up(value: float) -> int:
+    return int(value + 0.5)
+
+
+def service_level_volume(
+    average_monthly_volume: float | int | None,
+    percentage: float | int | None,
+) -> int | None:
+    if average_monthly_volume is None or percentage is None:
+        return None
+    return round_half_up(float(average_monthly_volume) * float(percentage) / 100.0)
+
+
+def technology_for_view(label: str) -> str:
+    return "Generic" if label == "Overall" else label
 
 
 def count_ticket_volume(
@@ -188,14 +208,13 @@ def overall_demand_rows(
     problems = count_problem_volume(db, project_id, from_datetime, to_datetime_exclusive)
     changes = count_change_volume(db, project_id, from_datetime, to_datetime_exclusive)
 
-    blank_split = ResourceDemandServiceLevelValues()
     return [
         ResourceDemandInputRow(
             key="incident_total",
             label="Incidents",
             ticket_type="INCIDENT",
             average_monthly_volume=average_monthly(incident_total, month_count),
-            service_level_split=blank_split,
+            service_level_split=ResourceDemandServiceLevelValues(),
         ),
         ResourceDemandInputRow(
             key="incident_user_generated",
@@ -203,7 +222,7 @@ def overall_demand_rows(
             ticket_type="INCIDENT",
             incident_source="User-generated",
             average_monthly_volume=average_monthly(incident_user, month_count),
-            service_level_split=blank_split,
+            service_level_split=ResourceDemandServiceLevelValues(),
         ),
         ResourceDemandInputRow(
             key="incident_system_generated",
@@ -211,7 +230,7 @@ def overall_demand_rows(
             ticket_type="INCIDENT",
             incident_source="System-generated",
             average_monthly_volume=average_monthly(incident_system, month_count),
-            service_level_split=blank_split,
+            service_level_split=ResourceDemandServiceLevelValues(),
             notes="System-generated when caller/requester contains integration.",
         ),
         ResourceDemandInputRow(
@@ -219,28 +238,28 @@ def overall_demand_rows(
             label="SC Tasks",
             ticket_type="SERVICE_CATALOG_TASK",
             average_monthly_volume=average_monthly(sc_tasks, month_count),
-            service_level_split=blank_split,
+            service_level_split=ResourceDemandServiceLevelValues(),
         ),
         ResourceDemandInputRow(
             key="problems",
             label="Problems",
             ticket_type="PROBLEM",
             average_monthly_volume=average_monthly(problems, month_count),
-            service_level_split=blank_split,
+            service_level_split=ResourceDemandServiceLevelValues(),
         ),
         ResourceDemandInputRow(
             key="changes",
             label="Changes",
             ticket_type="CHANGE",
             average_monthly_volume=average_monthly(changes, month_count),
-            service_level_split=blank_split,
+            service_level_split=ResourceDemandServiceLevelValues(),
         ),
         ResourceDemandInputRow(
             key="non_ticketed_activities",
             label="Non-ticketed activities",
             ticket_type="NON_TICKETED",
             average_monthly_volume=None,
-            service_level_split=blank_split,
+            service_level_split=ResourceDemandServiceLevelValues(),
             notes="Absolute service-level hours will be added once the non-ticketed activity source is defined.",
         ),
     ]
@@ -330,6 +349,92 @@ def unit_effort_response_rows(db: Session, project_id: UUID) -> list[ResourceDem
     ]
 
 
+def ensure_default_service_level_splits(db: Session, project_id: UUID) -> None:
+    existing_keys = {
+        (row.ticket_type, row.incident_source, row.technology)
+        for row in db.scalars(
+            select(ResourceDemandServiceLevelSplit).where(
+                ResourceDemandServiceLevelSplit.project_id == project_id,
+            )
+        )
+    }
+
+    sort_order = 0
+    for ticket_type, incident_source in SERVICE_LEVEL_SPLIT_DEFAULTS:
+        for technology in MASTER_TECHNOLOGIES:
+            sort_order += 10
+            key = (ticket_type, incident_source, technology)
+            if key in existing_keys:
+                continue
+            db.add(
+                ResourceDemandServiceLevelSplit(
+                    project_id=project_id,
+                    ticket_type=ticket_type,
+                    incident_source=incident_source,
+                    technology=technology,
+                    sort_order=sort_order,
+                )
+            )
+    db.flush()
+
+
+def service_level_split_response_rows(
+    db: Session,
+    project_id: UUID,
+) -> list[ResourceDemandServiceLevelSplitRow]:
+    ensure_default_service_level_splits(db, project_id)
+    rows = db.scalars(
+        select(ResourceDemandServiceLevelSplit)
+        .where(ResourceDemandServiceLevelSplit.project_id == project_id)
+        .order_by(
+            ResourceDemandServiceLevelSplit.sort_order,
+            ResourceDemandServiceLevelSplit.ticket_type,
+            ResourceDemandServiceLevelSplit.incident_source,
+            ResourceDemandServiceLevelSplit.technology,
+        )
+    ).all()
+    return [
+        ResourceDemandServiceLevelSplitRow(
+            id=row.id,
+            ticket_type=row.ticket_type,
+            incident_source=row.incident_source,
+            technology=row.technology,
+            l1_5_pct=decimal_to_float(row.l1_5_pct),
+            l2_pct=decimal_to_float(row.l2_pct),
+            l3_pct=decimal_to_float(row.l3_pct),
+            sort_order=row.sort_order,
+        )
+        for row in rows
+    ]
+
+
+def apply_service_level_splits(
+    demand_views: list[ResourceDemandTechnologyView],
+    split_rows: list[ResourceDemandServiceLevelSplitRow],
+) -> None:
+    split_by_basis = {
+        (row.ticket_type, row.incident_source or "Any", row.technology): row for row in split_rows
+    }
+    for view in demand_views:
+        technology = technology_for_view(view.label)
+        for row in view.rows:
+            if row.ticket_type == "NON_TICKETED" or row.average_monthly_volume is None:
+                continue
+            split_row = split_by_basis.get(
+                (row.ticket_type, row.incident_source or "Any", technology),
+            )
+            if split_row is None:
+                continue
+            row.service_level_split = ResourceDemandServiceLevelValues(
+                l1_5=service_level_volume(
+                    row.average_monthly_volume,
+                    split_row.l1_5_pct,
+                ),
+                l2=service_level_volume(row.average_monthly_volume, split_row.l2_pct),
+                l3=service_level_volume(row.average_monthly_volume, split_row.l3_pct),
+            )
+
+
 def get_resource_demand(
     db: Session,
     project_id: UUID,
@@ -358,6 +463,8 @@ def get_resource_demand(
             for technology in MASTER_TECHNOLOGIES
         ],
     ]
+    service_level_splits = service_level_split_response_rows(db, project_id)
+    apply_service_level_splits(demand_views, service_level_splits)
 
     return ResourceDemandResponse(
         project_id=project_id,
@@ -367,10 +474,11 @@ def get_resource_demand(
         technologies=list(TECHNOLOGY_TABS),
         demand_views=demand_views,
         unit_efforts=unit_effort_response_rows(db, project_id),
+        service_level_splits=service_level_splits,
         data_notes=[
             "Overall volumes use in-scope closed/resolved records from Mar 2026 to May 2026 by default.",
             "Incident source split uses caller/requester containing integration for system-generated incidents.",
-            "Technology-specific volume and service-level splits are intentionally blank until the mapping rules are defined.",
+            "Technology-specific volume is intentionally blank until the mapping rules are defined.",
         ],
         warnings=[],
     )
@@ -421,3 +529,50 @@ def upsert_resource_demand_unit_efforts(
 
     db.flush()
     return unit_effort_response_rows(db, project_id)
+
+
+def upsert_resource_demand_service_level_splits(
+    db: Session,
+    project_id: UUID,
+    rows: list[ResourceDemandServiceLevelSplitRow],
+) -> list[ResourceDemandServiceLevelSplitRow]:
+    ensure_default_service_level_splits(db, project_id)
+    existing_by_id = {
+        row.id: row
+        for row in db.scalars(
+            select(ResourceDemandServiceLevelSplit).where(
+                ResourceDemandServiceLevelSplit.project_id == project_id,
+            )
+        )
+    }
+    existing_by_basis = {
+        (row.ticket_type, row.incident_source, row.technology): row
+        for row in existing_by_id.values()
+    }
+
+    for index, input_row in enumerate(rows):
+        ticket_type = clean_text(input_row.ticket_type, "UNKNOWN").upper()
+        incident_source = clean_text(input_row.incident_source, "Any")
+        technology = clean_text(input_row.technology, "Generic")
+        target = existing_by_id.get(input_row.id) if input_row.id else None
+        if target is None:
+            target = existing_by_basis.get((ticket_type, incident_source, technology))
+        if target is None:
+            target = ResourceDemandServiceLevelSplit(
+                project_id=project_id,
+                ticket_type=ticket_type,
+                incident_source=incident_source,
+                technology=technology,
+            )
+            db.add(target)
+
+        target.ticket_type = ticket_type
+        target.incident_source = incident_source
+        target.technology = technology
+        target.l1_5_pct = input_row.l1_5_pct
+        target.l2_pct = input_row.l2_pct
+        target.l3_pct = input_row.l3_pct
+        target.sort_order = input_row.sort_order or (index + 1) * 10
+
+    db.flush()
+    return service_level_split_response_rows(db, project_id)

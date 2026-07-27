@@ -3149,7 +3149,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       min-width: 760px;
     }
     .resource-demand-number-input {
-      width: 100%;
+      width: 108px;
+      max-width: 108px;
       min-width: 78px;
       min-height: 32px;
       padding: 5px 8px;
@@ -3458,7 +3459,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       topVolumeN: "10",
       topBatchN: "10",
       topActiveUsersN: "10",
-      resourceDemandTechnology: "overall"
+      resourceDemandTechnology: "overall",
+      resourceDemandUnitTechnology: "Generic",
+      resourceDemandSplitTechnology: "Generic"
     };
     function fmt(value, digits = 0) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "N/A";
@@ -3773,6 +3776,17 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function resourceDemandTechnologyForEffort(view) {
       return view?.label === "Overall" ? "Generic" : view?.label || "Generic";
     }
+    function resourceDemandMasterTechnologies(data) {
+      const configured = (data?.technologies || []).filter((technology) => technology !== "Overall");
+      const rowValues = [
+        ...(data?.unit_efforts || []).map((row) => row.technology),
+        ...(data?.service_level_splits || []).map((row) => row.technology)
+      ].filter(Boolean);
+      return [...new Set(configured.length ? configured : rowValues)];
+    }
+    function resourceDemandTabs(technologies, activeTechnology, dataAttribute) {
+      return `<div class="subtabs" role="tablist">${technologies.map((technology) => `<button type="button" ${dataAttribute}="${esc(technology)}" class="${technology === activeTechnology ? "active" : ""}">${esc(technology)}</button>`).join("")}</div>`;
+    }
     function matchingResourceDemandUnitEffort(data, row, view) {
       const technology = resourceDemandTechnologyForEffort(view);
       const incidentSource = row.incident_source || "Any";
@@ -3854,17 +3868,37 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       </div>`;
     }
     function resourceDemandUnitEffortTable(data) {
-      const rows = (data.unit_efforts || []).map((row, index) => `<tr>
+      const rows = (data.unit_efforts || [])
+        .map((row, index) => ({ row, index }))
+        .filter((item) => item.row.technology === state.resourceDemandUnitTechnology)
+        .map(({ row, index }) => `<tr>
         <td>${esc(row.ticket_type === "SERVICE_CATALOG_TASK" ? "SC Tasks" : row.ticket_type)}</td>
         <td>${esc(row.incident_source || "Any")}</td>
-        <td>${esc(row.technology || "Generic")}</td>
         <td>${resourceDemandNumberInput("unit", { index, field: "l1_5_hours" }, row.l1_5_hours, "0.01")}</td>
         <td>${resourceDemandNumberInput("unit", { index, field: "l2_hours" }, row.l2_hours, "0.01")}</td>
         <td>${resourceDemandNumberInput("unit", { index, field: "l3_hours" }, row.l3_hours, "0.01")}</td>
       </tr>`).join("");
       return `<div class="table-frame table-scroll resource-demand-table-frame">
         <table class="resource-demand-table">
-          <thead><tr><th>Ticket type</th><th>Incident source</th><th>Technology</th><th>L1.5 hours</th><th>L2 hours</th><th>L3 hours</th></tr></thead>
+          <thead><tr><th>Ticket type</th><th>Incident source</th><th>L1.5 hours</th><th>L2 hours</th><th>L3 hours</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    }
+    function resourceDemandServiceSplitTable(data) {
+      const rows = (data.service_level_splits || [])
+        .map((row, index) => ({ row, index }))
+        .filter((item) => item.row.technology === state.resourceDemandSplitTechnology)
+        .map(({ row, index }) => `<tr>
+        <td>${esc(row.ticket_type === "SERVICE_CATALOG_TASK" ? "SC Tasks" : row.ticket_type)}</td>
+        <td>${esc(row.incident_source || "Any")}</td>
+        <td>${resourceDemandNumberInput("split", { index, field: "l1_5_pct" }, row.l1_5_pct, "0.01")}</td>
+        <td>${resourceDemandNumberInput("split", { index, field: "l2_pct" }, row.l2_pct, "0.01")}</td>
+        <td>${resourceDemandNumberInput("split", { index, field: "l3_pct" }, row.l3_pct, "0.01")}</td>
+      </tr>`).join("");
+      return `<div class="table-frame table-scroll resource-demand-table-frame">
+        <table class="resource-demand-table">
+          <thead><tr><th>Ticket type</th><th>Incident source</th><th>L1.5 %</th><th>L2 %</th><th>L3 %</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
@@ -3887,6 +3921,11 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       });
       root.querySelectorAll("input[data-rd-kind='unit']").forEach((input) => {
         const row = (data.unit_efforts || [])[Number(input.dataset.rdIndex)];
+        if (!row) return;
+        row[input.dataset.rdField] = parseResourceDemandNumber(input.value);
+      });
+      root.querySelectorAll("input[data-rd-kind='split']").forEach((input) => {
+        const row = (data.service_level_splits || [])[Number(input.dataset.rdIndex)];
         if (!row) return;
         row[input.dataset.rdField] = parseResourceDemandNumber(input.value);
       });
@@ -3913,6 +3952,20 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           safeRenderSection("resource_demand", "Resource Demand", renderResourceDemand);
         });
       });
+      root.querySelectorAll("[data-rd-unit-technology-tab]").forEach((button) => {
+        button.addEventListener("click", () => {
+          syncResourceDemandFromDom();
+          state.resourceDemandUnitTechnology = button.dataset.rdUnitTechnologyTab;
+          safeRenderSection("resource_demand", "Resource Demand", renderResourceDemand);
+        });
+      });
+      root.querySelectorAll("[data-rd-split-technology-tab]").forEach((button) => {
+        button.addEventListener("click", () => {
+          syncResourceDemandFromDom();
+          state.resourceDemandSplitTechnology = button.dataset.rdSplitTechnologyTab;
+          safeRenderSection("resource_demand", "Resource Demand", renderResourceDemand);
+        });
+      });
     }
     function renderResourceDemand() {
       const root = document.getElementById("resource_demand");
@@ -3925,6 +3978,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const views = data.demand_views || [];
       if (!views.some((view) => view.key === state.resourceDemandTechnology)) {
         state.resourceDemandTechnology = views[0]?.key || "overall";
+      }
+      const masterTechnologies = resourceDemandMasterTechnologies(data);
+      if (!masterTechnologies.includes(state.resourceDemandUnitTechnology)) {
+        state.resourceDemandUnitTechnology = masterTechnologies[0] || "Generic";
+      }
+      if (!masterTechnologies.includes(state.resourceDemandSplitTechnology)) {
+        state.resourceDemandSplitTechnology = masterTechnologies[0] || "Generic";
       }
       const view = resourceDemandView(data);
       const notes = (data.data_notes || []).map((note) => `<li>${esc(note)}</li>`).join("");
@@ -3953,7 +4013,15 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           <div class="resource-demand-heading">
             <div><p class="label">Resource Demand Master</p><h2>Unit Effort Master</h2><p class="muted">Maintain hours per ticket by ticket type, incident source, technology, and service level for this offline dashboard.</p></div>
           </div>
+          ${resourceDemandTabs(masterTechnologies, state.resourceDemandUnitTechnology, "data-rd-unit-technology-tab")}
           ${resourceDemandUnitEffortTable(data)}
+        </section>
+        <section class="panel resource-demand-panel">
+          <div class="resource-demand-heading">
+            <div><p class="label">Resource Demand Master</p><h2>Service Level Split Master</h2><p class="muted">Maintain percentage split by service level for this offline dashboard.</p></div>
+          </div>
+          ${resourceDemandTabs(masterTechnologies, state.resourceDemandSplitTechnology, "data-rd-split-technology-tab")}
+          ${resourceDemandServiceSplitTable(data)}
         </section>
       </div>`;
       installResourceDemandEditors(root);

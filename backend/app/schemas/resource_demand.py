@@ -40,6 +40,17 @@ class ResourceDemandUnitEffortRow(BaseModel):
     sort_order: int = 0
 
 
+class ResourceDemandServiceLevelSplitRow(BaseModel):
+    id: UUID | None = None
+    ticket_type: str
+    incident_source: str = "Any"
+    technology: str = "Generic"
+    l1_5_pct: float | None = None
+    l2_pct: float | None = None
+    l3_pct: float | None = None
+    sort_order: int = 0
+
+
 class ResourceDemandResponse(BaseModel):
     project_id: UUID
     period_from_month: str
@@ -48,6 +59,7 @@ class ResourceDemandResponse(BaseModel):
     technologies: list[str]
     demand_views: list[ResourceDemandTechnologyView]
     unit_efforts: list[ResourceDemandUnitEffortRow]
+    service_level_splits: list[ResourceDemandServiceLevelSplitRow]
     data_notes: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -55,3 +67,8 @@ class ResourceDemandResponse(BaseModel):
 class ResourceDemandUnitEffortUpdateRequest(BaseModel):
     project_id: UUID
     rows: list[ResourceDemandUnitEffortRow]
+
+
+class ResourceDemandServiceLevelSplitUpdateRequest(BaseModel):
+    project_id: UUID
+    rows: list[ResourceDemandServiceLevelSplitRow]

@@ -1679,6 +1679,32 @@ def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_sp
         sap_rows = views["sap"]["rows"]
         assert all(row["average_monthly_volume"] is None for row in sap_rows)
         assert len(payload["unit_efforts"]) == 15
+        assert len(payload["service_level_splits"]) == 15
+
+        split_rows = payload["service_level_splits"]
+        generic_user_incident = next(
+            row
+            for row in split_rows
+            if row["ticket_type"] == "INCIDENT"
+            and row["incident_source"] == "User-generated"
+            and row["technology"] == "Generic"
+        )
+        generic_user_incident["l2_pct"] = 100
+        with TestClient(app) as client:
+            split_response = client.put(
+                "/api/dashboard/resource-demand/service-level-splits",
+                json={"project_id": str(project_id), "rows": split_rows},
+            )
+
+        assert split_response.status_code == 200
+        split_payload = split_response.json()
+        split_views = {view["key"]: view for view in split_payload["demand_views"]}
+        split_overall_rows = {row["key"]: row for row in split_views["overall"]["rows"]}
+        assert split_overall_rows["incident_user_generated"]["service_level_split"] == {
+            "l1_5": None,
+            "l2": 1,
+            "l3": None,
+        }
     finally:
         cleanup_client(db, client_id)
 

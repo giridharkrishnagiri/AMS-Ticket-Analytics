@@ -2,16 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   getDashboardResourceDemand,
+  updateDashboardResourceDemandServiceLevelSplits,
   updateDashboardResourceDemandUnitEfforts,
 } from "./api/dashboard";
 import type {
   ResourceDemandResponse,
+  ResourceDemandServiceLevelSplitRow,
+  ResourceDemandTechnologyView,
   ResourceDemandUnitEffortRow,
 } from "./api/dashboard";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type SaveStatus = "idle" | "saving" | "success" | "error";
 type UnitEffortField = "l1_5_hours" | "l2_hours" | "l3_hours";
+type SplitPercentField = "l1_5_pct" | "l2_pct" | "l3_pct";
+type DemandSplitField = "l1_5" | "l2" | "l3";
 
 const defaultFromMonth = "2026-03";
 const defaultToMonth = "2026-05";
@@ -33,6 +38,13 @@ function formatVolume(value: number | null | undefined): string {
     return "";
   }
   return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+function formatHours(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value) || value === 0) {
+    return "";
+  }
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
 function ticketTypeLabel(ticketType: string): string {
@@ -60,9 +72,22 @@ function parseNullableNumber(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function effortInputValue(value: number | null): string {
+function numberInputValue(value: number | null | undefined): string {
   return value === null || value === undefined ? "" : String(value);
 }
+
+function technologyForDemandView(view: ResourceDemandTechnologyView | null): string {
+  return view?.label === "Overall" ? "Generic" : view?.label ?? "Generic";
+}
+
+type EffortSummaryRow = {
+  label: string;
+  l1_5: number;
+  l2: number;
+  l3: number;
+  total: number;
+  personDays: number;
+};
 
 export default function ResourceDemandDashboard({
   isActive,
@@ -74,17 +99,27 @@ export default function ResourceDemandDashboard({
   const [status, setStatus] = useState<LoadStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ResourceDemandResponse | null>(null);
+  const [demandViews, setDemandViews] = useState<ResourceDemandTechnologyView[]>([]);
   const [activeTechnology, setActiveTechnology] = useState("overall");
+  const [activeUnitTechnology, setActiveUnitTechnology] = useState("Generic");
+  const [activeSplitTechnology, setActiveSplitTechnology] = useState("Generic");
   const [unitEfforts, setUnitEfforts] = useState<ResourceDemandUnitEffortRow[]>([]);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [serviceLevelSplits, setServiceLevelSplits] = useState<
+    ResourceDemandServiceLevelSplitRow[]
+  >([]);
+  const [unitSaveStatus, setUnitSaveStatus] = useState<SaveStatus>("idle");
+  const [unitSaveMessage, setUnitSaveMessage] = useState<string | null>(null);
+  const [splitSaveStatus, setSplitSaveStatus] = useState<SaveStatus>("idle");
+  const [splitSaveMessage, setSplitSaveMessage] = useState<string | null>(null);
 
   const loadResourceDemand = useCallback(async () => {
     const cleanedProjectId = projectId.trim();
     if (!cleanedProjectId) {
       setStatus("idle");
       setData(null);
+      setDemandViews([]);
       setUnitEfforts([]);
+      setServiceLevelSplits([]);
       return;
     }
 
@@ -97,11 +132,20 @@ export default function ResourceDemandDashboard({
         toMonth: defaultToMonth,
       });
       setData(response);
+      setDemandViews(response.demand_views);
       setUnitEfforts(response.unit_efforts);
+      setServiceLevelSplits(response.service_level_splits);
       setActiveTechnology((current) =>
         response.demand_views.some((view) => view.key === current)
           ? current
           : response.demand_views[0]?.key ?? "overall"
+      );
+      const masterTechnologies = response.technologies.filter((technology) => technology !== "Overall");
+      setActiveUnitTechnology((current) =>
+        masterTechnologies.includes(current) ? current : masterTechnologies[0] ?? "Generic"
+      );
+      setActiveSplitTechnology((current) =>
+        masterTechnologies.includes(current) ? current : masterTechnologies[0] ?? "Generic"
       );
       setStatus("success");
     } catch (nextError) {
@@ -120,24 +164,138 @@ export default function ResourceDemandDashboard({
 
   const activeDemandView = useMemo(
     () =>
-      data?.demand_views.find((view) => view.key === activeTechnology) ??
-      data?.demand_views[0] ??
+      demandViews.find((view) => view.key === activeTechnology) ??
+      demandViews[0] ??
       null,
-    [activeTechnology, data]
+    [activeTechnology, demandViews]
   );
 
-  function updateUnitEffort(
-    rowIndex: number,
-    field: UnitEffortField,
-    value: string
-  ) {
+  const masterTechnologies = useMemo(() => {
+    const configured = data?.technologies.filter((technology) => technology !== "Overall") ?? [];
+    const fromRows = [
+      ...unitEfforts.map((row) => row.technology),
+      ...serviceLevelSplits.map((row) => row.technology),
+    ].filter(Boolean);
+    return [...new Set(configured.length > 0 ? configured : fromRows)];
+  }, [data, serviceLevelSplits, unitEfforts]);
+
+  const filteredUnitEfforts = useMemo(
+    () =>
+      unitEfforts
+        .map((row, rowIndex) => ({ row, rowIndex }))
+        .filter((item) => item.row.technology === activeUnitTechnology),
+    [activeUnitTechnology, unitEfforts]
+  );
+
+  const filteredServiceLevelSplits = useMemo(
+    () =>
+      serviceLevelSplits
+        .map((row, rowIndex) => ({ row, rowIndex }))
+        .filter((item) => item.row.technology === activeSplitTechnology),
+    [activeSplitTechnology, serviceLevelSplits]
+  );
+
+  const effortSummaryRows = useMemo<EffortSummaryRow[]>(() => {
+    if (!activeDemandView) {
+      return [];
+    }
+    const effortTechnology = technologyForDemandView(activeDemandView);
+    return activeDemandView.rows
+      .filter((row) => row.key !== "incident_total")
+      .map((row) => {
+        const split = row.service_level_split;
+        if (row.ticket_type === "NON_TICKETED") {
+          const l1_5 = split.l1_5 ?? 0;
+          const l2 = split.l2 ?? 0;
+          const l3 = split.l3 ?? 0;
+          const total = l1_5 + l2 + l3;
+          return {
+            label: row.label,
+            l1_5,
+            l2,
+            l3,
+            total,
+            personDays: total / 8,
+          };
+        }
+        const unitEffort = unitEfforts.find(
+          (unit) =>
+            unit.ticket_type === row.ticket_type &&
+            unit.incident_source === (row.incident_source ?? "Any") &&
+            unit.technology === effortTechnology
+        );
+        const l1_5 = (split.l1_5 ?? 0) * (unitEffort?.l1_5_hours ?? 0);
+        const l2 = (split.l2 ?? 0) * (unitEffort?.l2_hours ?? 0);
+        const l3 = (split.l3 ?? 0) * (unitEffort?.l3_hours ?? 0);
+        const total = l1_5 + l2 + l3;
+        return {
+          label: row.label,
+          l1_5,
+          l2,
+          l3,
+          total,
+          personDays: total / 8,
+        };
+      });
+  }, [activeDemandView, unitEfforts]);
+
+  const overallEffortSummary = useMemo(
+    () =>
+      effortSummaryRows.reduce<EffortSummaryRow>(
+        (accumulator, row) => ({
+          label: "Overall resource demand",
+          l1_5: accumulator.l1_5 + row.l1_5,
+          l2: accumulator.l2 + row.l2,
+          l3: accumulator.l3 + row.l3,
+          total: accumulator.total + row.total,
+          personDays: accumulator.personDays + row.personDays,
+        }),
+        { label: "Overall resource demand", l1_5: 0, l2: 0, l3: 0, total: 0, personDays: 0 }
+      ),
+    [effortSummaryRows]
+  );
+
+  function updateUnitEffort(rowIndex: number, field: UnitEffortField, value: string) {
     setUnitEfforts((currentRows) =>
       currentRows.map((row, index) =>
         index === rowIndex ? { ...row, [field]: parseNullableNumber(value) } : row
       )
     );
-    setSaveStatus("idle");
-    setSaveMessage(null);
+    setUnitSaveStatus("idle");
+    setUnitSaveMessage(null);
+  }
+
+  function updateServiceLevelSplit(rowIndex: number, field: SplitPercentField, value: string) {
+    setServiceLevelSplits((currentRows) =>
+      currentRows.map((row, index) =>
+        index === rowIndex ? { ...row, [field]: parseNullableNumber(value) } : row
+      )
+    );
+    setSplitSaveStatus("idle");
+    setSplitSaveMessage(null);
+  }
+
+  function updateDemandSplit(rowKey: string, field: DemandSplitField, value: string) {
+    setDemandViews((currentViews) =>
+      currentViews.map((view) =>
+        view.key !== activeTechnology
+          ? view
+          : {
+              ...view,
+              rows: view.rows.map((row) =>
+                row.key !== rowKey
+                  ? row
+                  : {
+                      ...row,
+                      service_level_split: {
+                        ...row.service_level_split,
+                        [field]: parseNullableNumber(value),
+                      },
+                    }
+              ),
+            }
+      )
+    );
   }
 
   async function saveUnitEfforts() {
@@ -145,21 +303,51 @@ export default function ResourceDemandDashboard({
     if (!cleanedProjectId) {
       return;
     }
-    setSaveStatus("saving");
-    setSaveMessage(null);
+    setUnitSaveStatus("saving");
+    setUnitSaveMessage(null);
     try {
       const response = await updateDashboardResourceDemandUnitEfforts({
         projectId: cleanedProjectId,
         rows: unitEfforts,
       });
       setData(response);
+      setDemandViews(response.demand_views);
       setUnitEfforts(response.unit_efforts);
-      setSaveStatus("success");
-      setSaveMessage("Unit effort master saved.");
+      setServiceLevelSplits(response.service_level_splits);
+      setUnitSaveStatus("success");
+      setUnitSaveMessage("Unit effort master saved.");
     } catch (nextError) {
-      setSaveStatus("error");
-      setSaveMessage(
+      setUnitSaveStatus("error");
+      setUnitSaveMessage(
         nextError instanceof Error ? nextError.message : "Unable to save unit effort master."
+      );
+    }
+  }
+
+  async function saveServiceLevelSplits() {
+    const cleanedProjectId = projectId.trim();
+    if (!cleanedProjectId) {
+      return;
+    }
+    setSplitSaveStatus("saving");
+    setSplitSaveMessage(null);
+    try {
+      const response = await updateDashboardResourceDemandServiceLevelSplits({
+        projectId: cleanedProjectId,
+        rows: serviceLevelSplits,
+      });
+      setData(response);
+      setDemandViews(response.demand_views);
+      setUnitEfforts(response.unit_efforts);
+      setServiceLevelSplits(response.service_level_splits);
+      setSplitSaveStatus("success");
+      setSplitSaveMessage("Service level split master saved and demand inputs recalculated.");
+    } catch (nextError) {
+      setSplitSaveStatus("error");
+      setSplitSaveMessage(
+        nextError instanceof Error
+          ? nextError.message
+          : "Unable to save service level split master."
       );
     }
   }
@@ -210,7 +398,7 @@ export default function ResourceDemandDashboard({
               role="tablist"
               aria-label="Resource demand technology views"
             >
-              {data.demand_views.map((view) => (
+              {demandViews.map((view) => (
                 <button
                   key={view.key}
                   className={activeTechnology === view.key ? "active" : ""}
@@ -241,9 +429,21 @@ export default function ResourceDemandDashboard({
                         <strong>{row.label}</strong>
                       </td>
                       <td>{formatVolume(row.average_monthly_volume)}</td>
-                      <td>{formatVolume(row.service_level_split.l1_5)}</td>
-                      <td>{formatVolume(row.service_level_split.l2)}</td>
-                      <td>{formatVolume(row.service_level_split.l3)}</td>
+                      {(["l1_5", "l2", "l3"] as DemandSplitField[]).map((field) => (
+                        <td key={field}>
+                          <input
+                            aria-label={`${row.label} ${field} volume`}
+                            className="resource-demand-number-input"
+                            min="0"
+                            step={row.ticket_type === "NON_TICKETED" ? "0.25" : "1"}
+                            type="number"
+                            value={numberInputValue(row.service_level_split[field])}
+                            onChange={(event) =>
+                              updateDemandSplit(row.key, field, event.target.value)
+                            }
+                          />
+                        </td>
+                      ))}
                       <td>{row.notes ?? ""}</td>
                     </tr>
                   ))}
@@ -268,8 +468,7 @@ export default function ResourceDemandDashboard({
             <p className="label">Resource Demand</p>
             <h2>Effort Demand Summary</h2>
             <p className="muted-text">
-              Computation will be enabled after service-level, incident-source, and technology split
-              rules are finalized.
+              Calculated from editable demand inputs and saved unit effort assumptions.
             </p>
           </div>
         </div>
@@ -287,25 +486,20 @@ export default function ResourceDemandDashboard({
             </thead>
             <tbody>
               {[
-                "Incidents - User-generated",
-                "Incidents - System-generated",
-                "SC Tasks",
-                "Problems",
-                "Changes",
-                "Non-ticketed activities",
-                "Management efforts",
-                "Contingency",
-                "Overall resource demand",
-              ].map((label) => (
-                <tr key={label}>
+                ...effortSummaryRows,
+                { label: "Management efforts", l1_5: 0, l2: 0, l3: 0, total: 0, personDays: 0 },
+                { label: "Contingency", l1_5: 0, l2: 0, l3: 0, total: 0, personDays: 0 },
+                overallEffortSummary,
+              ].map((row) => (
+                <tr key={row.label}>
                   <td>
-                    <strong>{label}</strong>
+                    <strong>{row.label}</strong>
                   </td>
-                  <td />
-                  <td />
-                  <td />
-                  <td />
-                  <td />
+                  <td>{formatHours(row.l1_5)}</td>
+                  <td>{formatHours(row.l2)}</td>
+                  <td>{formatHours(row.l3)}</td>
+                  <td>{formatHours(row.total)}</td>
+                  <td>{formatHours(row.personDays)}</td>
                 </tr>
               ))}
             </tbody>
@@ -325,46 +519,142 @@ export default function ResourceDemandDashboard({
           </div>
           <button
             className="primary-button"
-            disabled={saveStatus === "saving" || unitEfforts.length === 0}
+            disabled={unitSaveStatus === "saving" || unitEfforts.length === 0}
             type="button"
             onClick={() => void saveUnitEfforts()}
           >
-            {saveStatus === "saving" ? "Saving..." : "Save Unit Efforts"}
+            {unitSaveStatus === "saving" ? "Saving..." : "Save Unit Efforts"}
           </button>
         </div>
 
-        {saveMessage ? (
-          <p className={saveStatus === "error" ? "error-text" : "success-text"}>{saveMessage}</p>
+        <div className="resource-demand-tech-tabs" role="tablist" aria-label="Unit effort technology">
+          {masterTechnologies.map((technology) => (
+            <button
+              key={technology}
+              className={activeUnitTechnology === technology ? "active" : ""}
+              type="button"
+              onClick={() => setActiveUnitTechnology(technology)}
+            >
+              {technology}
+            </button>
+          ))}
+        </div>
+
+        {unitSaveMessage ? (
+          <p className={unitSaveStatus === "error" ? "error-text" : "success-text"}>
+            {unitSaveMessage}
+          </p>
         ) : null}
 
         <div className="table-wrap resource-demand-table-wrap">
-          <table>
+          <table className="resource-demand-master-table">
             <thead>
               <tr>
                 <th>Ticket type</th>
                 <th>Incident source</th>
-                <th>Technology</th>
                 <th>L1.5 hours</th>
                 <th>L2 hours</th>
                 <th>L3 hours</th>
               </tr>
             </thead>
             <tbody>
-              {unitEfforts.map((row, rowIndex) => (
+              {filteredUnitEfforts.map(({ row, rowIndex }) => (
                 <tr key={row.id ?? `${row.ticket_type}-${row.incident_source}-${row.technology}`}>
                   <td>{ticketTypeLabel(row.ticket_type)}</td>
                   <td>{row.incident_source}</td>
-                  <td>{row.technology}</td>
                   {(["l1_5_hours", "l2_hours", "l3_hours"] as UnitEffortField[]).map((field) => (
                     <td key={field}>
                       <input
                         aria-label={`${row.ticket_type} ${row.incident_source} ${row.technology} ${field}`}
+                        className="resource-demand-number-input"
                         min="0"
                         step="0.01"
                         type="number"
-                        value={effortInputValue(row[field])}
+                        value={numberInputValue(row[field])}
                         onChange={(event) =>
                           updateUnitEffort(rowIndex, field, event.target.value)
+                        }
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="label">Resource Demand Master</p>
+            <h2>Service Level Split Master</h2>
+            <p className="muted-text">
+              Maintain percentage split by service level. Saved percentages recalculate Demand Input
+              split volumes.
+            </p>
+          </div>
+          <button
+            className="primary-button"
+            disabled={splitSaveStatus === "saving" || serviceLevelSplits.length === 0}
+            type="button"
+            onClick={() => void saveServiceLevelSplits()}
+          >
+            {splitSaveStatus === "saving" ? "Saving..." : "Save Service Splits"}
+          </button>
+        </div>
+
+        <div
+          className="resource-demand-tech-tabs"
+          role="tablist"
+          aria-label="Service level split technology"
+        >
+          {masterTechnologies.map((technology) => (
+            <button
+              key={technology}
+              className={activeSplitTechnology === technology ? "active" : ""}
+              type="button"
+              onClick={() => setActiveSplitTechnology(technology)}
+            >
+              {technology}
+            </button>
+          ))}
+        </div>
+
+        {splitSaveMessage ? (
+          <p className={splitSaveStatus === "error" ? "error-text" : "success-text"}>
+            {splitSaveMessage}
+          </p>
+        ) : null}
+
+        <div className="table-wrap resource-demand-table-wrap">
+          <table className="resource-demand-master-table">
+            <thead>
+              <tr>
+                <th>Ticket type</th>
+                <th>Incident source</th>
+                <th>L1.5 %</th>
+                <th>L2 %</th>
+                <th>L3 %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredServiceLevelSplits.map(({ row, rowIndex }) => (
+                <tr key={row.id ?? `${row.ticket_type}-${row.incident_source}-${row.technology}`}>
+                  <td>{ticketTypeLabel(row.ticket_type)}</td>
+                  <td>{row.incident_source}</td>
+                  {(["l1_5_pct", "l2_pct", "l3_pct"] as SplitPercentField[]).map((field) => (
+                    <td key={field}>
+                      <input
+                        aria-label={`${row.ticket_type} ${row.incident_source} ${row.technology} ${field}`}
+                        className="resource-demand-number-input"
+                        max="100"
+                        min="0"
+                        step="0.01"
+                        type="number"
+                        value={numberInputValue(row[field])}
+                        onChange={(event) =>
+                          updateServiceLevelSplit(rowIndex, field, event.target.value)
                         }
                       />
                     </td>

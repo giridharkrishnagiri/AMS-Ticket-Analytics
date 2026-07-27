@@ -28,6 +28,7 @@ def test_expected_ams_tables_are_registered() -> None:
         "genai_safety_settings",
         "genai_ticket_classifications",
         "resource_demand_unit_efforts",
+        "resource_demand_service_level_splits",
     }
 
     assert expected_tables.issubset(Base.metadata.tables.keys())

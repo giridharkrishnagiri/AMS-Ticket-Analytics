@@ -1226,6 +1226,17 @@ export type ResourceDemandUnitEffortRow = {
   sort_order: number;
 };
 
+export type ResourceDemandServiceLevelSplitRow = {
+  id: string | null;
+  ticket_type: string;
+  incident_source: string;
+  technology: string;
+  l1_5_pct: number | null;
+  l2_pct: number | null;
+  l3_pct: number | null;
+  sort_order: number;
+};
+
 export type ResourceDemandResponse = {
   project_id: string;
   period_from_month: string;
@@ -1234,6 +1245,7 @@ export type ResourceDemandResponse = {
   technologies: string[];
   demand_views: ResourceDemandTechnologyView[];
   unit_efforts: ResourceDemandUnitEffortRow[];
+  service_level_splits: ResourceDemandServiceLevelSplitRow[];
   data_notes: string[];
   warnings: string[];
 };
@@ -1803,6 +1815,17 @@ export function updateDashboardResourceDemandUnitEfforts(input: {
   rows: ResourceDemandUnitEffortRow[];
 }): Promise<ResourceDemandResponse> {
   return requestJson<ResourceDemandResponse>("/dashboard/resource-demand/unit-efforts", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: input.projectId.trim(), rows: input.rows }),
+  });
+}
+
+export function updateDashboardResourceDemandServiceLevelSplits(input: {
+  projectId: string;
+  rows: ResourceDemandServiceLevelSplitRow[];
+}): Promise<ResourceDemandResponse> {
+  return requestJson<ResourceDemandResponse>("/dashboard/resource-demand/service-level-splits", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project_id: input.projectId.trim(), rows: input.rows }),

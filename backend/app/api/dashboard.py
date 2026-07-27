@@ -82,6 +82,7 @@ from app.schemas.dashboard import (
 )
 from app.schemas.resource_demand import (
     ResourceDemandResponse,
+    ResourceDemandServiceLevelSplitUpdateRequest,
     ResourceDemandUnitEffortUpdateRequest,
 )
 from app.services.dashboard import (
@@ -144,6 +145,7 @@ from app.services.resource_demand import (
     DEFAULT_FROM_MONTH,
     DEFAULT_TO_MONTH,
     get_resource_demand,
+    upsert_resource_demand_service_level_splits,
     upsert_resource_demand_unit_efforts,
 )
 from app.services.dashboard_filter_cache import (
@@ -251,6 +253,21 @@ def put_dashboard_resource_demand_unit_efforts(
 ) -> ResourceDemandResponse:
     try:
         upsert_resource_demand_unit_efforts(db, request.project_id, request.rows)
+        response = get_resource_demand(db, request.project_id)
+        db.commit()
+        return response
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/resource-demand/service-level-splits", response_model=ResourceDemandResponse)
+def put_dashboard_resource_demand_service_level_splits(
+    request: ResourceDemandServiceLevelSplitUpdateRequest,
+    db: DbSession,
+) -> ResourceDemandResponse:
+    try:
+        upsert_resource_demand_service_level_splits(db, request.project_id, request.rows)
         response = get_resource_demand(db, request.project_id)
         db.commit()
         return response
