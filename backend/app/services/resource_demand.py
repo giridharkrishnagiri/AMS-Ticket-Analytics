@@ -81,10 +81,10 @@ def clean_text(value: str | None, fallback: str) -> str:
     return cleaned or fallback
 
 
-def average_monthly(total: int, month_count: int) -> float:
+def average_monthly(total: int, month_count: int) -> int:
     if month_count <= 0:
-        return 0.0
-    return total / month_count
+        return 0
+    return int((2 * total + month_count) // (2 * month_count))
 
 
 def count_ticket_volume(

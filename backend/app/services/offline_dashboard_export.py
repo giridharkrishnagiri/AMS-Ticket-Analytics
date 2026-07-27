@@ -66,6 +66,11 @@ from app.services.dashboard import (
     volumetrics_source_select,
 )
 from app.services.dashboard_commentary import export_project_commentaries
+from app.services.resource_demand import (
+    DEFAULT_FROM_MONTH as RESOURCE_DEMAND_DEFAULT_FROM_MONTH,
+    DEFAULT_TO_MONTH as RESOURCE_DEMAND_DEFAULT_TO_MONTH,
+    get_resource_demand,
+)
 
 OFFLINE_APPLICATION_FIELDS = tuple(
     dict.fromkeys((*APPLICATION_LIST_FIELDS, "lifecycle_stage_status")),
@@ -2193,6 +2198,15 @@ def build_volumetrics_payload(
     }
 
 
+def build_resource_demand_payload(db: Session, project_id: UUID) -> dict[str, Any]:
+    return get_resource_demand(
+        db,
+        project_id,
+        RESOURCE_DEMAND_DEFAULT_FROM_MONTH,
+        RESOURCE_DEMAND_DEFAULT_TO_MONTH,
+    ).model_dump(mode="json")
+
+
 def build_offline_dashboard_payload(db: Session, project_id: UUID) -> dict[str, Any]:
     project, client = get_project_metadata(db, project_id)
     exported_at = datetime.now(UTC)
@@ -2229,6 +2243,7 @@ def build_offline_dashboard_payload(db: Session, project_id: UUID) -> dict[str, 
         "overview": overview,
         "applications": build_applications_payload(db, project_id),
         "volumetrics": volumetrics,
+        "resource_demand": build_resource_demand_payload(db, project_id),
         "commentaries": export_project_commentaries(db, project_id),
     }
 
@@ -3105,6 +3120,57 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       font-weight: 900;
     }
     .subtabs button.active { border-color: var(--teal); color: #fff; background: var(--teal); }
+    .resource-demand-grid {
+      display: grid;
+      gap: 12px;
+      width: 100%;
+      min-width: 0;
+    }
+    .resource-demand-panel {
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .resource-demand-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .resource-demand-table-frame {
+      min-height: 0;
+      max-height: 420px;
+    }
+    .resource-demand-table {
+      min-width: 980px;
+    }
+    .resource-demand-summary-table {
+      min-width: 760px;
+    }
+    .resource-demand-number-input {
+      width: 100%;
+      min-width: 78px;
+      min-height: 32px;
+      padding: 5px 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      background: #fff;
+      color: #111827;
+      font: inherit;
+      font-weight: 800;
+    }
+    .resource-demand-number-input:focus {
+      outline: 2px solid rgba(15, 118, 110, 0.24);
+      border-color: var(--teal);
+    }
+    .resource-demand-notes {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 0.84rem;
+      font-weight: 700;
+    }
     .chart-title-row {
       display: flex;
       align-items: center;
@@ -3327,6 +3393,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       <button class="tab active" data-tab="overview" type="button">Overview</button>
       <button class="tab" data-tab="applications" type="button">Applications</button>
       <button class="tab" data-tab="volumetrics" type="button">Volumetrics &amp; SLA</button>
+      <button class="tab" data-tab="resource_demand" type="button">Resource Demand</button>
     </nav>
     <div class="offline-actions">
       <button class="secondary-button" id="download-edited-dashboard" type="button">
@@ -3336,6 +3403,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     <section class="view active" id="overview"></section>
     <section class="view" id="applications"></section>
     <section class="view" id="volumetrics"></section>
+    <section class="view" id="resource_demand"></section>
   </main>
   <script>
     function parseDashboardPayload() {
@@ -3389,7 +3457,8 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       slaMode: "sla",
       topVolumeN: "10",
       topBatchN: "10",
-      topActiveUsersN: "10"
+      topActiveUsersN: "10",
+      resourceDemandTechnology: "overall"
     };
     function fmt(value, digits = 0) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "N/A";
@@ -3652,6 +3721,243 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function allMergedCommentaries() {
       return [...baseCommentaryMap().values()];
     }
+    const RESOURCE_DEMAND_STORAGE_KEY = `ams-dashboard-resource-demand:${DASHBOARD?.metadata?.project_id || "project"}:${DASHBOARD?.metadata?.exported_at || "export"}`;
+    function cloneJson(value) {
+      if (value === null || value === undefined) return value;
+      return JSON.parse(JSON.stringify(value));
+    }
+    function loadResourceDemandEdits() {
+      try {
+        return JSON.parse(localStorage.getItem(RESOURCE_DEMAND_STORAGE_KEY) || "{}");
+      } catch (error) {
+        console.warn("Offline Resource Demand edits could not be loaded.", error);
+        return {};
+      }
+    }
+    let resourceDemandEdits = loadResourceDemandEdits();
+    function currentResourceDemandData() {
+      return cloneJson(resourceDemandEdits?.resource_demand || DASHBOARD?.resource_demand || null);
+    }
+    function persistResourceDemandData(data) {
+      if (!data) return;
+      resourceDemandEdits = { resource_demand: cloneJson(data) };
+      localStorage.setItem(RESOURCE_DEMAND_STORAGE_KEY, JSON.stringify(resourceDemandEdits));
+    }
+    function formatMonthLabel(monthKey) {
+      const [yearText, monthText] = String(monthKey || "").split("-");
+      const year = Number(yearText);
+      const month = Number(monthText);
+      if (!Number.isFinite(year) || !Number.isFinite(month)) return monthKey || "";
+      return new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" }).format(
+        new Date(Date.UTC(year, month - 1, 1))
+      );
+    }
+    function blankableFmt(value, digits = 0) {
+      if (value === null || value === undefined || value === "") return "";
+      if (Number.isNaN(Number(value))) return "";
+      return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+    }
+    function resourceDemandInputValue(value) {
+      return value === null || value === undefined || Number.isNaN(Number(value)) ? "" : String(value);
+    }
+    function parseResourceDemandNumber(value) {
+      const text = String(value ?? "").trim();
+      if (!text) return null;
+      const parsed = Number(text);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    function resourceDemandView(data) {
+      const views = data?.demand_views || [];
+      return views.find((view) => view.key === state.resourceDemandTechnology) || views[0] || null;
+    }
+    function resourceDemandTechnologyForEffort(view) {
+      return view?.label === "Overall" ? "Generic" : view?.label || "Generic";
+    }
+    function matchingResourceDemandUnitEffort(data, row, view) {
+      const technology = resourceDemandTechnologyForEffort(view);
+      const incidentSource = row.incident_source || "Any";
+      return (data.unit_efforts || []).find((unit) =>
+        unit.ticket_type === row.ticket_type &&
+        (unit.incident_source || "Any") === incidentSource &&
+        unit.technology === technology
+      ) || null;
+    }
+    function resourceDemandEffortRows(data) {
+      const view = resourceDemandView(data);
+      if (!view) return [];
+      return (view.rows || [])
+        .filter((row) => row.key !== "incident_total")
+        .map((row) => {
+          const split = row.service_level_split || {};
+          if (row.ticket_type === "NON_TICKETED") {
+            const l15 = Number(split.l1_5 || 0);
+            const l2 = Number(split.l2 || 0);
+            const l3 = Number(split.l3 || 0);
+            return { label: row.label, l15, l2, l3, total: l15 + l2 + l3, personDays: (l15 + l2 + l3) / 8 };
+          }
+          const unit = matchingResourceDemandUnitEffort(data, row, view) || {};
+          const l15 = Number(split.l1_5 || 0) * Number(unit.l1_5_hours || 0);
+          const l2 = Number(split.l2 || 0) * Number(unit.l2_hours || 0);
+          const l3 = Number(split.l3 || 0) * Number(unit.l3_hours || 0);
+          return { label: row.label, l15, l2, l3, total: l15 + l2 + l3, personDays: (l15 + l2 + l3) / 8 };
+        });
+    }
+    function resourceDemandEffortSummaryMarkup(data) {
+      const rows = resourceDemandEffortRows(data);
+      const total = rows.reduce((acc, row) => ({
+        l15: acc.l15 + row.l15,
+        l2: acc.l2 + row.l2,
+        l3: acc.l3 + row.l3,
+        total: acc.total + row.total,
+        personDays: acc.personDays + row.personDays
+      }), { l15: 0, l2: 0, l3: 0, total: 0, personDays: 0 });
+      const bodyRows = [
+        ...rows,
+        { label: "Management efforts", l15: 0, l2: 0, l3: 0, total: 0, personDays: 0 },
+        { label: "Contingency", l15: 0, l2: 0, l3: 0, total: 0, personDays: 0 },
+        { label: "Overall resource demand", ...total }
+      ];
+      return `<div class="table-frame table-scroll resource-demand-table-frame">
+        <table class="resource-demand-summary-table">
+          <thead><tr><th>Demand category</th><th>L1.5 hours</th><th>L2 hours</th><th>L3 hours</th><th>Total hours</th><th>Person days</th></tr></thead>
+          <tbody>${bodyRows.map((row) => `<tr><td><strong>${esc(row.label)}</strong></td><td>${blankableFmt(row.l15, 2)}</td><td>${blankableFmt(row.l2, 2)}</td><td>${blankableFmt(row.l3, 2)}</td><td>${blankableFmt(row.total, 2)}</td><td>${blankableFmt(row.personDays, 2)}</td></tr>`).join("")}</tbody>
+        </table>
+      </div>`;
+    }
+    function resourceDemandNumberInput(kind, attrs, value, step = "1") {
+      const dataset = Object.entries(attrs)
+        .map(([key, attrValue]) => `data-rd-${key}="${esc(attrValue)}"`)
+        .join(" ");
+      return `<input class="resource-demand-number-input" type="number" min="0" step="${esc(step)}" value="${esc(resourceDemandInputValue(value))}" data-rd-kind="${esc(kind)}" ${dataset}>`;
+    }
+    function resourceDemandDemandTable(view) {
+      if (!view) {
+        return `<p class="muted">No Resource Demand view is available.</p>`;
+      }
+      const rows = (view.rows || []).map((row) => {
+        const split = row.service_level_split || {};
+        const serviceStep = row.ticket_type === "NON_TICKETED" ? "0.25" : "1";
+        return `<tr>
+          <td><strong>${esc(row.label)}</strong></td>
+          <td>${resourceDemandNumberInput("demand", { view: view.key, row: row.key, field: "average_monthly_volume" }, row.average_monthly_volume, "1")}</td>
+          <td>${resourceDemandNumberInput("demand", { view: view.key, row: row.key, field: "l1_5" }, split.l1_5, serviceStep)}</td>
+          <td>${resourceDemandNumberInput("demand", { view: view.key, row: row.key, field: "l2" }, split.l2, serviceStep)}</td>
+          <td>${resourceDemandNumberInput("demand", { view: view.key, row: row.key, field: "l3" }, split.l3, serviceStep)}</td>
+          <td>${esc(row.notes || "")}</td>
+        </tr>`;
+      }).join("");
+      return `<div class="table-frame table-scroll resource-demand-table-frame">
+        <table class="resource-demand-table">
+          <thead><tr><th>Demand category</th><th>Avg monthly volume</th><th>L1.5</th><th>L2</th><th>L3</th><th>Notes</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    }
+    function resourceDemandUnitEffortTable(data) {
+      const rows = (data.unit_efforts || []).map((row, index) => `<tr>
+        <td>${esc(row.ticket_type === "SERVICE_CATALOG_TASK" ? "SC Tasks" : row.ticket_type)}</td>
+        <td>${esc(row.incident_source || "Any")}</td>
+        <td>${esc(row.technology || "Generic")}</td>
+        <td>${resourceDemandNumberInput("unit", { index, field: "l1_5_hours" }, row.l1_5_hours, "0.01")}</td>
+        <td>${resourceDemandNumberInput("unit", { index, field: "l2_hours" }, row.l2_hours, "0.01")}</td>
+        <td>${resourceDemandNumberInput("unit", { index, field: "l3_hours" }, row.l3_hours, "0.01")}</td>
+      </tr>`).join("");
+      return `<div class="table-frame table-scroll resource-demand-table-frame">
+        <table class="resource-demand-table">
+          <thead><tr><th>Ticket type</th><th>Incident source</th><th>Technology</th><th>L1.5 hours</th><th>L2 hours</th><th>L3 hours</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    }
+    function syncResourceDemandFromDom() {
+      const data = currentResourceDemandData();
+      const root = document.getElementById("resource_demand");
+      if (!data || !root) return data;
+      root.querySelectorAll("input[data-rd-kind='demand']").forEach((input) => {
+        const view = (data.demand_views || []).find((item) => item.key === input.dataset.rdView);
+        const row = (view?.rows || []).find((item) => item.key === input.dataset.rdRow);
+        if (!row) return;
+        const parsed = parseResourceDemandNumber(input.value);
+        if (input.dataset.rdField === "average_monthly_volume") {
+          row.average_monthly_volume = parsed === null ? null : Math.round(parsed);
+        } else {
+          row.service_level_split = row.service_level_split || {};
+          row.service_level_split[input.dataset.rdField] = parsed;
+        }
+      });
+      root.querySelectorAll("input[data-rd-kind='unit']").forEach((input) => {
+        const row = (data.unit_efforts || [])[Number(input.dataset.rdIndex)];
+        if (!row) return;
+        row[input.dataset.rdField] = parseResourceDemandNumber(input.value);
+      });
+      persistResourceDemandData(data);
+      return data;
+    }
+    function updateResourceDemandSummary() {
+      const data = syncResourceDemandFromDom();
+      const summary = document.getElementById("resource-demand-effort-summary");
+      if (summary && data) {
+        summary.innerHTML = resourceDemandEffortSummaryMarkup(data);
+      }
+    }
+    function installResourceDemandEditors(root) {
+      if (!root) return;
+      root.querySelectorAll("input[data-rd-kind]").forEach((input) => {
+        input.addEventListener("input", updateResourceDemandSummary);
+        input.addEventListener("change", updateResourceDemandSummary);
+      });
+      root.querySelectorAll("[data-rd-technology-tab]").forEach((button) => {
+        button.addEventListener("click", () => {
+          syncResourceDemandFromDom();
+          state.resourceDemandTechnology = button.dataset.rdTechnologyTab;
+          safeRenderSection("resource_demand", "Resource Demand", renderResourceDemand);
+        });
+      });
+    }
+    function renderResourceDemand() {
+      const root = document.getElementById("resource_demand");
+      if (!root) return;
+      const data = currentResourceDemandData();
+      if (!data) {
+        root.innerHTML = `<section class="panel resource-demand-panel"><p class="label">Resource Demand</p><h2>Resource Demand</h2><p class="muted">Resource Demand data is not available in this offline export.</p></section>`;
+        return;
+      }
+      const views = data.demand_views || [];
+      if (!views.some((view) => view.key === state.resourceDemandTechnology)) {
+        state.resourceDemandTechnology = views[0]?.key || "overall";
+      }
+      const view = resourceDemandView(data);
+      const notes = (data.data_notes || []).map((note) => `<li>${esc(note)}</li>`).join("");
+      root.innerHTML = `<div class="resource-demand-grid">
+        <section class="panel resource-demand-panel">
+          <div class="resource-demand-heading">
+            <div>
+              <p class="label">Resource Demand</p>
+              <h2>Demand Inputs</h2>
+              <p class="muted">Average monthly closed/resolved volume for ${esc(formatMonthLabel(data.period_from_month))} to ${esc(formatMonthLabel(data.period_to_month))}. Offline edits stay in this HTML file.</p>
+            </div>
+          </div>
+          <div class="subtabs" role="tablist" aria-label="Resource demand technology views">
+            ${views.map((item) => `<button type="button" data-rd-technology-tab="${esc(item.key)}" class="${item.key === state.resourceDemandTechnology ? "active" : ""}">${esc(item.label)}</button>`).join("")}
+          </div>
+          ${resourceDemandDemandTable(view)}
+          ${notes ? `<ul class="resource-demand-notes">${notes}</ul>` : ""}
+        </section>
+        <section class="panel resource-demand-panel">
+          <div class="resource-demand-heading">
+            <div><p class="label">Resource Demand</p><h2>Effort Demand Summary</h2><p class="muted">Calculated from the editable offline demand inputs and unit effort master values.</p></div>
+          </div>
+          <div id="resource-demand-effort-summary">${resourceDemandEffortSummaryMarkup(data)}</div>
+        </section>
+        <section class="panel resource-demand-panel">
+          <div class="resource-demand-heading">
+            <div><p class="label">Resource Demand Master</p><h2>Unit Effort Master</h2><p class="muted">Maintain hours per ticket by ticket type, incident source, technology, and service level for this offline dashboard.</p></div>
+          </div>
+          ${resourceDemandUnitEffortTable(data)}
+        </section>
+      </div>`;
+      installResourceDemandEditors(root);
+    }
     function safeJsonForScript(payload) {
       return JSON.stringify(payload).replace(/<[/]/g, "<\\\\/");
     }
@@ -3661,8 +3967,12 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       return `AMS_Apps_Volumetrics_Dashboard_Edited_${stamp}.html`;
     }
     function downloadUpdatedOfflineDashboard() {
+      const editedResourceDemand = syncResourceDemandFromDom();
       const updatedPayload = JSON.parse(JSON.stringify(DASHBOARD));
       updatedPayload.commentaries = allMergedCommentaries();
+      if (editedResourceDemand) {
+        updatedPayload.resource_demand = editedResourceDemand;
+      }
       const clonedDocument = document.documentElement.cloneNode(true);
       const payloadElement = clonedDocument.querySelector("#dashboard-data");
       if (payloadElement) {
@@ -3693,7 +4003,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       }
     }
     function renderFatalDashboardError(message) {
-      ["overview", "applications", "volumetrics"].forEach((sectionId) => {
+      ["overview", "applications", "volumetrics", "resource_demand"].forEach((sectionId) => {
         const node = document.getElementById(sectionId);
         if (!node) return;
         node.innerHTML = `<section class="panel" style="padding:18px"><p class="label">Dashboard Error</p><h3>${esc(message)}</h3><p class="muted">Open the browser console for details, then download a fresh dashboard export.</p></section>`;
@@ -6211,6 +6521,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       safeRenderSection("overview", "Overview", renderOverview);
       safeRenderSection("applications", "Applications", renderApplications);
       safeRenderSection("volumetrics", "Volumetrics & SLA", renderVolumetrics);
+      safeRenderSection("resource_demand", "Resource Demand", renderResourceDemand);
     }
     initialize();
   </script>

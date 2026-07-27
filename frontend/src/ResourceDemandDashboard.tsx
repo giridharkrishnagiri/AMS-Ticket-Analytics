@@ -32,7 +32,7 @@ function formatVolume(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "";
   }
-  return value.toLocaleString(undefined, { maximumFractionDigits: value % 1 === 0 ? 0 : 1 });
+  return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
 function ticketTypeLabel(ticketType: string): string {

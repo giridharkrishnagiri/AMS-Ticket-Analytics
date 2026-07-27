@@ -34,6 +34,7 @@ from app.models import (
 from app.schemas.dashboard import VolumetricsFilters, VolumetricsRequest
 from app.services import dashboard as dashboard_service
 from app.services.batch_classification import derive_is_batch_related
+from app.services.resource_demand import average_monthly
 from app.services.sap_classification import derive_sap_non_sap
 
 
@@ -1680,6 +1681,12 @@ def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_sp
         assert len(payload["unit_efforts"]) == 15
     finally:
         cleanup_client(db, client_id)
+
+
+def test_resource_demand_average_monthly_rounds_to_nearest_integer() -> None:
+    assert average_monthly(4, 3) == 1
+    assert average_monthly(5, 3) == 2
+    assert average_monthly(1, 2) == 1
 
 
 def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
@@ -6752,6 +6759,11 @@ def test_offline_dashboard_export_returns_safe_interactive_html() -> None:
         assert "function wrapExportText" in document
         assert "function chartExportText" in document
         assert "function downloadOfflineChartPng" in document
+        assert 'data-tab="resource_demand"' in document
+        assert "function renderResourceDemand" in document
+        assert "RESOURCE_DEMAND_STORAGE_KEY" in document
+        assert "updatedPayload.resource_demand = editedResourceDemand" in document
+        assert 'safeRenderSection("resource_demand", "Resource Demand", renderResourceDemand)' in document
         assert (
             "Future offline charts only need the standard .chart-card + .chart-frame SVG pattern."
             in document
