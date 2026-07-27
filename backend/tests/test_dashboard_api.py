@@ -1570,6 +1570,17 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
 def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_split() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:
+        db.add(
+            InScopeAssignmentGroup(
+                client_id=client_id,
+                project_id=project_id,
+                assignment_group="DA-GROUP",
+                assignment_group_key="da-group",
+                functional_track="Data & Analytics",
+                is_in_scope=True,
+                is_active=True,
+            ),
+        )
         for index, month in enumerate(("03", "04", "05"), start=1):
             user_incident = add_ticket(
                 db,
@@ -1605,6 +1616,19 @@ def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_sp
                 dt(f"2026-{month}-05T00:00:00"),
                 state="Closed Complete",
                 closed_at=dt(f"2026-{month}-06T00:00:00"),
+            )
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"SCTASK-RD-DA-{index}",
+                "SERVICE_CATALOG_TASK",
+                dt(f"2026-{month}-05T00:00:00"),
+                state="Closed Complete",
+                closed_at=dt(f"2026-{month}-06T00:00:00"),
+                assignment_group="DA-GROUP",
+                sap_non_sap="SAP",
             )
             add_problem_record(
                 db,
@@ -1672,12 +1696,21 @@ def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_sp
         assert overall_rows["incident_total"]["average_monthly_volume"] == 2
         assert overall_rows["incident_user_generated"]["average_monthly_volume"] == 1
         assert overall_rows["incident_system_generated"]["average_monthly_volume"] == 1
-        assert overall_rows["sc_tasks"]["average_monthly_volume"] == 1
+        assert overall_rows["sc_tasks"]["average_monthly_volume"] == 2
         assert overall_rows["problems"]["average_monthly_volume"] == 1
         assert overall_rows["changes"]["average_monthly_volume"] == 1
 
+        generic_rows = {row["key"]: row for row in views["generic"]["rows"]}
         sap_rows = views["sap"]["rows"]
-        assert all(row["average_monthly_volume"] is None for row in sap_rows)
+        sap_rows_by_key = {row["key"]: row for row in sap_rows}
+        data_rows = {row["key"]: row for row in views["data_and_analytics"]["rows"]}
+        assert generic_rows["generic_incident_total"]["average_monthly_volume"] == 2
+        assert generic_rows["generic_sc_tasks"]["average_monthly_volume"] == 1
+        assert generic_rows["generic_changes"]["average_monthly_volume"] == 1
+        assert sap_rows_by_key["sap_problems"]["average_monthly_volume"] == 1
+        assert sap_rows_by_key["sap_sc_tasks"]["average_monthly_volume"] == 0
+        assert data_rows["data_and_analytics_sc_tasks"]["average_monthly_volume"] == 1
+        assert any("Technology split priority" in note for note in payload["data_notes"])
         assert len(payload["unit_efforts"]) == 15
         assert len(payload["service_level_splits"]) == 15
 

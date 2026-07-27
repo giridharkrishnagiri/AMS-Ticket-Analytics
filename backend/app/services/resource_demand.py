@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     AssessmentChangeRecord,
     AssessmentProblemRecord,
+    InScopeAssignmentGroup,
     ResourceDemandServiceLevelSplit,
     ResourceDemandUnitEffort,
     Ticket,
@@ -38,6 +40,7 @@ UNIT_EFFORT_DEFAULTS = (
     ("CHANGE", "Any"),
 )
 SERVICE_LEVEL_SPLIT_DEFAULTS = UNIT_EFFORT_DEFAULTS
+DATA_ANALYTICS_TRACK_KEYS = ("data & analytics", "data and analytics")
 
 
 def parse_month_key(month_key: str) -> tuple[int, int]:
@@ -107,6 +110,56 @@ def technology_for_view(label: str) -> str:
     return "Generic" if label == "Overall" else label
 
 
+def normalized_text_expression(expression: Any) -> Any:
+    return func.lower(func.btrim(func.coalesce(expression, "")))
+
+
+def data_analytics_technology_condition(source: Any) -> Any:
+    assignment_group_key = normalized_text_expression(source.assignment_group)
+    scoped_assignment_group_key = normalized_text_expression(
+        InScopeAssignmentGroup.assignment_group_key,
+    )
+    scoped_assignment_group_name = normalized_text_expression(
+        InScopeAssignmentGroup.assignment_group,
+    )
+    scoped_track = normalized_text_expression(InScopeAssignmentGroup.functional_track)
+    scoped_data_analytics_assignment_group = (
+        select(InScopeAssignmentGroup.id)
+        .where(
+            InScopeAssignmentGroup.project_id == source.project_id,
+            InScopeAssignmentGroup.is_active.is_(True),
+            InScopeAssignmentGroup.is_in_scope.is_(True),
+            scoped_track.in_(DATA_ANALYTICS_TRACK_KEYS),
+            or_(
+                scoped_assignment_group_key == assignment_group_key,
+                scoped_assignment_group_name == assignment_group_key,
+            ),
+        )
+        .exists()
+    )
+
+    return or_(
+        normalized_text_expression(source.functional_track).in_(DATA_ANALYTICS_TRACK_KEYS),
+        scoped_data_analytics_assignment_group,
+    )
+
+
+def sap_technology_condition(source: Any) -> Any:
+    return normalized_text_expression(source.sap_non_sap) == "sap"
+
+
+def technology_volume_condition(source: Any, technology: str) -> Any:
+    data_analytics_condition = data_analytics_technology_condition(source)
+    sap_condition = sap_technology_condition(source)
+    if technology == "Data & Analytics":
+        return data_analytics_condition
+    if technology == "SAP":
+        return and_(not_(data_analytics_condition), sap_condition)
+    if technology == "Generic":
+        return and_(not_(data_analytics_condition), not_(sap_condition))
+    raise ValueError(f"Unsupported Resource Demand technology: {technology}")
+
+
 def count_ticket_volume(
     db: Session,
     project_id: UUID,
@@ -134,12 +187,14 @@ def count_problem_volume(
     project_id: UUID,
     from_datetime: datetime,
     to_datetime_exclusive: datetime,
+    *extra_conditions: object,
 ) -> int:
     statement = select(func.count(AssessmentProblemRecord.id)).where(
         AssessmentProblemRecord.project_id == project_id,
         AssessmentProblemRecord.closed_at.is_not(None),
         AssessmentProblemRecord.closed_at >= from_datetime,
         AssessmentProblemRecord.closed_at < to_datetime_exclusive,
+        *extra_conditions,
     )
     return int(db.scalar(statement) or 0)
 
@@ -149,14 +204,87 @@ def count_change_volume(
     project_id: UUID,
     from_datetime: datetime,
     to_datetime_exclusive: datetime,
+    *extra_conditions: object,
 ) -> int:
     statement = select(func.count(AssessmentChangeRecord.id)).where(
         AssessmentChangeRecord.project_id == project_id,
         AssessmentChangeRecord.closed_at.is_not(None),
         AssessmentChangeRecord.closed_at >= from_datetime,
         AssessmentChangeRecord.closed_at < to_datetime_exclusive,
+        *extra_conditions,
     )
     return int(db.scalar(statement) or 0)
+
+
+def demand_rows_from_counts(
+    *,
+    key_prefix: str | None,
+    month_count: int,
+    incident_total: int,
+    incident_user: int,
+    incident_system: int,
+    sc_tasks: int,
+    problems: int,
+    changes: int,
+) -> list[ResourceDemandInputRow]:
+    def row_key(value: str) -> str:
+        return f"{key_prefix}_{value}" if key_prefix else value
+
+    return [
+        ResourceDemandInputRow(
+            key=row_key("incident_total"),
+            label="Incidents",
+            ticket_type="INCIDENT",
+            average_monthly_volume=average_monthly(incident_total, month_count),
+            service_level_split=ResourceDemandServiceLevelValues(),
+        ),
+        ResourceDemandInputRow(
+            key=row_key("incident_user_generated"),
+            label="Incidents - User-generated",
+            ticket_type="INCIDENT",
+            incident_source="User-generated",
+            average_monthly_volume=average_monthly(incident_user, month_count),
+            service_level_split=ResourceDemandServiceLevelValues(),
+        ),
+        ResourceDemandInputRow(
+            key=row_key("incident_system_generated"),
+            label="Incidents - System-generated",
+            ticket_type="INCIDENT",
+            incident_source="System-generated",
+            average_monthly_volume=average_monthly(incident_system, month_count),
+            service_level_split=ResourceDemandServiceLevelValues(),
+            notes="System-generated when caller/requester contains integration.",
+        ),
+        ResourceDemandInputRow(
+            key=row_key("sc_tasks"),
+            label="SC Tasks",
+            ticket_type="SERVICE_CATALOG_TASK",
+            average_monthly_volume=average_monthly(sc_tasks, month_count),
+            service_level_split=ResourceDemandServiceLevelValues(),
+        ),
+        ResourceDemandInputRow(
+            key=row_key("problems"),
+            label="Problems",
+            ticket_type="PROBLEM",
+            average_monthly_volume=average_monthly(problems, month_count),
+            service_level_split=ResourceDemandServiceLevelValues(),
+        ),
+        ResourceDemandInputRow(
+            key=row_key("changes"),
+            label="Changes",
+            ticket_type="CHANGE",
+            average_monthly_volume=average_monthly(changes, month_count),
+            service_level_split=ResourceDemandServiceLevelValues(),
+        ),
+        ResourceDemandInputRow(
+            key=row_key("non_ticketed_activities"),
+            label="Non-ticketed activities",
+            ticket_type="NON_TICKETED",
+            average_monthly_volume=None,
+            service_level_split=ResourceDemandServiceLevelValues(),
+            notes="Absolute service-level hours will be added once the non-ticketed activity source is defined.",
+        ),
+    ]
 
 
 def overall_demand_rows(
@@ -208,89 +336,98 @@ def overall_demand_rows(
     problems = count_problem_volume(db, project_id, from_datetime, to_datetime_exclusive)
     changes = count_change_volume(db, project_id, from_datetime, to_datetime_exclusive)
 
-    return [
-        ResourceDemandInputRow(
-            key="incident_total",
-            label="Incidents",
-            ticket_type="INCIDENT",
-            average_monthly_volume=average_monthly(incident_total, month_count),
-            service_level_split=ResourceDemandServiceLevelValues(),
-        ),
-        ResourceDemandInputRow(
-            key="incident_user_generated",
-            label="Incidents - User-generated",
-            ticket_type="INCIDENT",
-            incident_source="User-generated",
-            average_monthly_volume=average_monthly(incident_user, month_count),
-            service_level_split=ResourceDemandServiceLevelValues(),
-        ),
-        ResourceDemandInputRow(
-            key="incident_system_generated",
-            label="Incidents - System-generated",
-            ticket_type="INCIDENT",
-            incident_source="System-generated",
-            average_monthly_volume=average_monthly(incident_system, month_count),
-            service_level_split=ResourceDemandServiceLevelValues(),
-            notes="System-generated when caller/requester contains integration.",
-        ),
-        ResourceDemandInputRow(
-            key="sc_tasks",
-            label="SC Tasks",
-            ticket_type="SERVICE_CATALOG_TASK",
-            average_monthly_volume=average_monthly(sc_tasks, month_count),
-            service_level_split=ResourceDemandServiceLevelValues(),
-        ),
-        ResourceDemandInputRow(
-            key="problems",
-            label="Problems",
-            ticket_type="PROBLEM",
-            average_monthly_volume=average_monthly(problems, month_count),
-            service_level_split=ResourceDemandServiceLevelValues(),
-        ),
-        ResourceDemandInputRow(
-            key="changes",
-            label="Changes",
-            ticket_type="CHANGE",
-            average_monthly_volume=average_monthly(changes, month_count),
-            service_level_split=ResourceDemandServiceLevelValues(),
-        ),
-        ResourceDemandInputRow(
-            key="non_ticketed_activities",
-            label="Non-ticketed activities",
-            ticket_type="NON_TICKETED",
-            average_monthly_volume=None,
-            service_level_split=ResourceDemandServiceLevelValues(),
-            notes="Absolute service-level hours will be added once the non-ticketed activity source is defined.",
-        ),
-    ]
+    return demand_rows_from_counts(
+        key_prefix=None,
+        month_count=month_count,
+        incident_total=incident_total,
+        incident_user=incident_user,
+        incident_system=incident_system,
+        sc_tasks=sc_tasks,
+        problems=problems,
+        changes=changes,
+    )
 
 
-def blank_technology_rows(technology: str) -> list[ResourceDemandInputRow]:
-    return [
-        ResourceDemandInputRow(
-            key=f"{technology.lower().replace(' ', '_').replace('&', 'and')}_{row_key}",
-            label=label,
-            ticket_type=ticket_type,
-            incident_source=incident_source,
-            average_monthly_volume=None,
-            service_level_split=ResourceDemandServiceLevelValues(),
-            notes="Technology-specific volume will be populated after technology derivation is finalized.",
-        )
-        for row_key, label, ticket_type, incident_source in (
-            ("incident_total", "Incidents", "INCIDENT", None),
-            ("incident_user_generated", "Incidents - User-generated", "INCIDENT", "User-generated"),
-            (
-                "incident_system_generated",
-                "Incidents - System-generated",
-                "INCIDENT",
-                "System-generated",
-            ),
-            ("sc_tasks", "SC Tasks", "SERVICE_CATALOG_TASK", None),
-            ("problems", "Problems", "PROBLEM", None),
-            ("changes", "Changes", "CHANGE", None),
-            ("non_ticketed_activities", "Non-ticketed activities", "NON_TICKETED", None),
-        )
-    ]
+def technology_key(technology: str) -> str:
+    return technology.lower().replace(" ", "_").replace("&", "and")
+
+
+def technology_demand_rows(
+    db: Session,
+    project_id: UUID,
+    technology: str,
+    from_datetime: datetime,
+    to_datetime_exclusive: datetime,
+    month_count: int,
+) -> list[ResourceDemandInputRow]:
+    system_generated_condition = func.lower(func.coalesce(Ticket.requester, "")).like(
+        "%integration%",
+    )
+    user_generated_condition = ~system_generated_condition
+    ticket_technology_condition = technology_volume_condition(Ticket, technology)
+
+    incident_total = count_ticket_volume(
+        db,
+        project_id,
+        "INCIDENT",
+        Ticket.resolved_at,
+        from_datetime,
+        to_datetime_exclusive,
+        ticket_technology_condition,
+    )
+    incident_user = count_ticket_volume(
+        db,
+        project_id,
+        "INCIDENT",
+        Ticket.resolved_at,
+        from_datetime,
+        to_datetime_exclusive,
+        ticket_technology_condition,
+        user_generated_condition,
+    )
+    incident_system = count_ticket_volume(
+        db,
+        project_id,
+        "INCIDENT",
+        Ticket.resolved_at,
+        from_datetime,
+        to_datetime_exclusive,
+        ticket_technology_condition,
+        system_generated_condition,
+    )
+    sc_tasks = count_ticket_volume(
+        db,
+        project_id,
+        "SERVICE_CATALOG_TASK",
+        Ticket.closed_at,
+        from_datetime,
+        to_datetime_exclusive,
+        ticket_technology_condition,
+    )
+    problems = count_problem_volume(
+        db,
+        project_id,
+        from_datetime,
+        to_datetime_exclusive,
+        technology_volume_condition(AssessmentProblemRecord, technology),
+    )
+    changes = count_change_volume(
+        db,
+        project_id,
+        from_datetime,
+        to_datetime_exclusive,
+        technology_volume_condition(AssessmentChangeRecord, technology),
+    )
+    return demand_rows_from_counts(
+        key_prefix=technology_key(technology),
+        month_count=month_count,
+        incident_total=incident_total,
+        incident_user=incident_user,
+        incident_system=incident_system,
+        sc_tasks=sc_tasks,
+        problems=problems,
+        changes=changes,
+    )
 
 
 def ensure_default_unit_efforts(db: Session, project_id: UUID) -> None:
@@ -456,9 +593,16 @@ def get_resource_demand(
         ResourceDemandTechnologyView(key="overall", label="Overall", rows=overall_rows),
         *[
             ResourceDemandTechnologyView(
-                key=technology.lower().replace(" ", "_").replace("&", "and"),
+                key=technology_key(technology),
                 label=technology,
-                rows=blank_technology_rows(technology),
+                rows=technology_demand_rows(
+                    db,
+                    project_id,
+                    technology,
+                    from_datetime,
+                    to_datetime_exclusive,
+                    month_count,
+                ),
             )
             for technology in MASTER_TECHNOLOGIES
         ],
@@ -478,7 +622,7 @@ def get_resource_demand(
         data_notes=[
             "Overall volumes use in-scope closed/resolved records from Mar 2026 to May 2026 by default.",
             "Incident source split uses caller/requester containing integration for system-generated incidents.",
-            "Technology-specific volume is intentionally blank until the mapping rules are defined.",
+            "Technology split priority: Data & Analytics when the assignment group belongs to the Data & Analytics functional track; otherwise SAP when SAP/Non-SAP is SAP; all remaining records are Generic.",
         ],
         warnings=[],
     )
