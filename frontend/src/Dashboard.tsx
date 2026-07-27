@@ -55,12 +55,13 @@ import ApplicationsDashboard from "./ApplicationsDashboard";
 import CommentaryEditor from "./components/CommentaryEditor";
 import TableExportActions from "./components/TableExportActions";
 import CustomerSelector from "./CustomerSelector";
+import ResourceDemandDashboard from "./ResourceDemandDashboard";
 import VolumetricsDashboard from "./VolumetricsDashboard";
 import type { ProjectOption } from "./api/projects";
 import { formatDisplayDateRange, formatDisplayDateTime } from "./utils/dateFormat";
 
 type TicketTypeSelection = "ALL" | TicketTypeFilter;
-type DashboardTab = "overview" | "applications" | "volumetrics";
+type DashboardTab = "overview" | "applications" | "volumetrics" | "resource_demand";
 type LoadStatus = "idle" | "loading" | "success" | "error";
 type PowerPointScope = "all" | "in_scope" | "out_of_scope";
 type PowerPointTicketType = "all" | "incident" | "sc_task";
@@ -1196,6 +1197,15 @@ function Dashboard() {
         >
           Volumetrics &amp; SLA
         </button>
+        <button
+          className={
+            activeDashboardTab === "resource_demand" ? "section-tab active" : "section-tab"
+          }
+          type="button"
+          onClick={() => setActiveDashboardTab("resource_demand")}
+        >
+          Resource Demand
+        </button>
       </div>
 
       {activeDashboardTab === "overview" ? (
@@ -1966,6 +1976,13 @@ function Dashboard() {
       </div>
           </>
         ) : null}
+      </div>
+
+      <div hidden={activeDashboardTab !== "resource_demand"}>
+        <ResourceDemandDashboard
+          isActive={activeDashboardTab === "resource_demand"}
+          projectId={projectId}
+        />
       </div>
     </div>
   );

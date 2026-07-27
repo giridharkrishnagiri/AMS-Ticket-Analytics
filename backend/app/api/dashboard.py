@@ -80,6 +80,10 @@ from app.schemas.dashboard import (
     VolumetricsTopApplicationsResponse,
     VolumetricsTopIncidentBatchApplicationsResponse,
 )
+from app.schemas.resource_demand import (
+    ResourceDemandResponse,
+    ResourceDemandUnitEffortUpdateRequest,
+)
 from app.services.dashboard import (
     DashboardFilters,
     DateFilterBasis,
@@ -135,6 +139,12 @@ from app.services.dashboard_commentary import (
     batch_commentaries,
     get_commentary_by_context,
     upsert_commentary,
+)
+from app.services.resource_demand import (
+    DEFAULT_FROM_MONTH,
+    DEFAULT_TO_MONTH,
+    get_resource_demand,
+    upsert_resource_demand_unit_efforts,
 )
 from app.services.dashboard_filter_cache import (
     dynamic_filter_counts,
@@ -216,6 +226,37 @@ def dashboard_filters(
 
 
 DashboardFilterDependency = Annotated[DashboardFilters, Depends(dashboard_filters)]
+
+
+@router.get("/resource-demand", response_model=ResourceDemandResponse)
+def get_dashboard_resource_demand(
+    project_id: Annotated[UUID, Query(...)],
+    db: DbSession,
+    from_month: Annotated[str, Query()] = DEFAULT_FROM_MONTH,
+    to_month: Annotated[str, Query()] = DEFAULT_TO_MONTH,
+) -> ResourceDemandResponse:
+    try:
+        response = get_resource_demand(db, project_id, from_month, to_month)
+        db.commit()
+        return response
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/resource-demand/unit-efforts", response_model=ResourceDemandResponse)
+def put_dashboard_resource_demand_unit_efforts(
+    request: ResourceDemandUnitEffortUpdateRequest,
+    db: DbSession,
+) -> ResourceDemandResponse:
+    try:
+        upsert_resource_demand_unit_efforts(db, request.project_id, request.rows)
+        response = get_resource_demand(db, request.project_id)
+        db.commit()
+        return response
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/filter-cache/status", response_model=DashboardFilterCacheStatusResponse)

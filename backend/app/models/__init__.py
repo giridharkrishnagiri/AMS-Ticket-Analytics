@@ -35,6 +35,7 @@ from app.models.problem_change_record import (
     AssessmentProblemRecord,
 )
 from app.models.project import Project
+from app.models.resource_demand import ResourceDemandUnitEffort
 from app.models.source_column_mapping import SourceColumnMapping
 from app.models.ticket import Ticket
 from app.models.ticket_raw_row import TicketRawRow
@@ -71,6 +72,7 @@ __all__ = [
     "IncidentSlaRow",
     "IncidentSlaUpload",
     "Project",
+    "ResourceDemandUnitEffort",
     "AssessmentChangeRecord",
     "AssessmentOutOfScopeChangeRecord",
     "AssessmentOutOfScopeProblemRecord",

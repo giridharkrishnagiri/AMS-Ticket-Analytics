@@ -1566,6 +1566,122 @@ def test_dashboard_overview_uses_inventory_counts_and_in_scope_ticket_counts() -
         cleanup_client(db, client_id)
 
 
+def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_split() -> None:
+    db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
+    try:
+        for index, month in enumerate(("03", "04", "05"), start=1):
+            user_incident = add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"INC-RD-USER-{index}",
+                "INCIDENT",
+                dt(f"2026-{month}-01T00:00:00"),
+                state="Resolved",
+                resolved_at=dt(f"2026-{month}-02T00:00:00"),
+            )
+            user_incident.requester = "business.user@example.com"
+            system_incident = add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"INC-RD-SYSTEM-{index}",
+                "INCIDENT",
+                dt(f"2026-{month}-03T00:00:00"),
+                state="Resolved",
+                resolved_at=dt(f"2026-{month}-04T00:00:00"),
+            )
+            system_incident.requester = "sap.integration.account"
+            add_ticket(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"SCTASK-RD-{index}",
+                "SERVICE_CATALOG_TASK",
+                dt(f"2026-{month}-05T00:00:00"),
+                state="Closed Complete",
+                closed_at=dt(f"2026-{month}-06T00:00:00"),
+            )
+            add_problem_record(
+                db,
+                project_id,
+                batch_id,
+                file_id,
+                f"PRB-RD-{index}",
+                created_at_source=dt(f"2026-{month}-07T00:00:00"),
+                closed_at=dt(f"2026-{month}-08T00:00:00"),
+            )
+            db.add(
+                AssessmentChangeRecord(
+                    project_id=project_id,
+                    upload_batch_id=batch_id,
+                    uploaded_file_id=file_id,
+                    row_fingerprint=f"change-rd-{index}",
+                    number=f"CHG-RD-{index}",
+                    state="Closed",
+                    created_at_source=dt(f"2026-{month}-09T00:00:00"),
+                    closed_at=dt(f"2026-{month}-10T00:00:00"),
+                    application_inventory_match_status="matched",
+                    normalized_payload={"raw_payload_json": {}},
+                ),
+            )
+
+        canceled_incident = add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "INC-RD-CANCELED",
+            "INCIDENT",
+            dt("2026-05-01T00:00:00"),
+            state="Canceled",
+            resolved_at=dt("2026-05-02T00:00:00"),
+        )
+        canceled_incident.requester = "service.integration"
+        add_ticket(
+            db,
+            project_id,
+            batch_id,
+            file_id,
+            "SCTASK-RD-INCOMPLETE",
+            "SERVICE_CATALOG_TASK",
+            dt("2026-05-01T00:00:00"),
+            state="Closed Incomplete",
+            closed_at=dt("2026-05-02T00:00:00"),
+        )
+        db.commit()
+
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/dashboard/resource-demand",
+                params={"project_id": str(project_id)},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["period_from_month"] == "2026-03"
+        assert payload["period_to_month"] == "2026-05"
+        assert payload["month_count"] == 3
+
+        views = {view["key"]: view for view in payload["demand_views"]}
+        overall_rows = {row["key"]: row for row in views["overall"]["rows"]}
+        assert overall_rows["incident_total"]["average_monthly_volume"] == 2
+        assert overall_rows["incident_user_generated"]["average_monthly_volume"] == 1
+        assert overall_rows["incident_system_generated"]["average_monthly_volume"] == 1
+        assert overall_rows["sc_tasks"]["average_monthly_volume"] == 1
+        assert overall_rows["problems"]["average_monthly_volume"] == 1
+        assert overall_rows["changes"]["average_monthly_volume"] == 1
+
+        sap_rows = views["sap"]["rows"]
+        assert all(row["average_monthly_volume"] is None for row in sap_rows)
+        assert len(payload["unit_efforts"]) == 15
+    finally:
+        cleanup_client(db, client_id)
+
+
 def test_dashboard_filter_cache_catalog_and_dynamic_counts() -> None:
     db, client_id, project_id, batch_id, file_id, _ = create_dashboard_project()
     try:

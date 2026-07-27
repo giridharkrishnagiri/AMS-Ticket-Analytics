@@ -1193,6 +1193,51 @@ export type DashboardVolumetricsBusinessServiceCiVolumetrics = {
   warnings: string[];
 };
 
+export type ResourceDemandServiceLevelValues = {
+  l1_5: number | null;
+  l2: number | null;
+  l3: number | null;
+};
+
+export type ResourceDemandInputRow = {
+  key: string;
+  label: string;
+  ticket_type: string;
+  incident_source: string | null;
+  average_monthly_volume: number | null;
+  service_level_split: ResourceDemandServiceLevelValues;
+  notes: string | null;
+};
+
+export type ResourceDemandTechnologyView = {
+  key: string;
+  label: string;
+  rows: ResourceDemandInputRow[];
+};
+
+export type ResourceDemandUnitEffortRow = {
+  id: string | null;
+  ticket_type: string;
+  incident_source: string;
+  technology: string;
+  l1_5_hours: number | null;
+  l2_hours: number | null;
+  l3_hours: number | null;
+  sort_order: number;
+};
+
+export type ResourceDemandResponse = {
+  project_id: string;
+  period_from_month: string;
+  period_to_month: string;
+  month_count: number;
+  technologies: string[];
+  demand_views: ResourceDemandTechnologyView[];
+  unit_efforts: ResourceDemandUnitEffortRow[];
+  data_notes: string[];
+  warnings: string[];
+};
+
 function appendMulti(query: URLSearchParams, key: string, values: string[] | undefined) {
   for (const value of values ?? []) {
     if (value.trim()) {
@@ -1736,6 +1781,32 @@ export function getDashboardVolumetricsBusinessServiceCiVolumetrics(
       body: JSON.stringify(input),
     }
   );
+}
+
+export function getDashboardResourceDemand(input: {
+  projectId: string;
+  fromMonth?: string;
+  toMonth?: string;
+}): Promise<ResourceDemandResponse> {
+  const query = new URLSearchParams({ project_id: input.projectId.trim() });
+  if (input.fromMonth) {
+    query.set("from_month", input.fromMonth);
+  }
+  if (input.toMonth) {
+    query.set("to_month", input.toMonth);
+  }
+  return requestJson<ResourceDemandResponse>(`/dashboard/resource-demand?${query.toString()}`);
+}
+
+export function updateDashboardResourceDemandUnitEfforts(input: {
+  projectId: string;
+  rows: ResourceDemandUnitEffortRow[];
+}): Promise<ResourceDemandResponse> {
+  return requestJson<ResourceDemandResponse>("/dashboard/resource-demand/unit-efforts", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: input.projectId.trim(), rows: input.rows }),
+  });
 }
 
 export function getCreatedResolvedOpenTrend(
