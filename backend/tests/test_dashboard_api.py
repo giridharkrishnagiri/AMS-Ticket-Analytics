@@ -1647,6 +1647,7 @@ def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_sp
                     row_fingerprint=f"change-rd-{index}",
                     number=f"CHG-RD-{index}",
                     state="Closed",
+                    change_reason="Upgrade",
                     created_at_source=dt(f"2026-{month}-09T00:00:00"),
                     closed_at=dt(f"2026-{month}-10T00:00:00"),
                     application_inventory_match_status="matched",

@@ -38,6 +38,7 @@ import {
   getDashboardVolumetricsAssignmentGroupVolumetrics,
   getDashboardVolumetricsBusinessServiceCiVolumetrics,
   getDashboardVolumetricsCategoryLevel2Trends,
+  getDashboardVolumetricsDetailedVolumeAdditions,
   getDashboardVolumetricsPriorityDistribution,
   getDashboardVolumetricsScTaskCatalogItemProportion,
   getDashboardVolumetricsSlaTrends,
@@ -52,6 +53,8 @@ import type {
   DashboardVolumetricsCreatedResolvedCanceled,
   DashboardVolumetricsDataRange,
   DashboardVolumetricsDetailedArchitectureInstallSplits,
+  DashboardVolumetricsDetailedVolumeAdditions,
+  DashboardVolumetricsChangeCreatedMonthRow,
   DashboardVolumetricsDistributionSplits,
   DashboardVolumetricsDurationBucketRow,
   DashboardVolumetricsFilterValues,
@@ -326,6 +329,13 @@ const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
   architecture_type: emptyDistributionGroup,
   install_type: emptyDistributionGroup,
   hosting_env: emptyDistributionGroup,
+};
+
+const emptyDetailedVolumeAdditions: DashboardVolumetricsDetailedVolumeAdditions = {
+  incident_creation_source_split: [],
+  change_created_by_month: [],
+  data_notes: [],
+  warnings: [],
 };
 
 const emptyScTaskCatalogItemProportion: DashboardVolumetricsScTaskCatalogItemProportion = {
@@ -1239,6 +1249,9 @@ function VolumetricsDashboard({
   const [distributionSplits, setDistributionSplits] = useState<
     LoadState<DashboardVolumetricsDistributionSplits>
   >(createLoadState(emptyDistributionSplits));
+  const [detailedVolumeAdditions, setDetailedVolumeAdditions] = useState<
+    LoadState<DashboardVolumetricsDetailedVolumeAdditions>
+  >(createLoadState(emptyDetailedVolumeAdditions));
   const [scTaskCatalogItemProportion, setScTaskCatalogItemProportion] = useState<
     LoadState<DashboardVolumetricsScTaskCatalogItemProportion>
   >(createLoadState(emptyScTaskCatalogItemProportion));
@@ -1490,6 +1503,7 @@ function VolumetricsDashboard({
     setTopIncidentBatchApplications(createLoadState(emptyTopIncidentBatchApplications, "loading"));
     setDetailedSplits(createLoadState(emptyDetailedSplits, "loading"));
     setDistributionSplits(createLoadState(emptyDistributionSplits, "loading"));
+    setDetailedVolumeAdditions(createLoadState(emptyDetailedVolumeAdditions, "loading"));
     setScTaskCatalogItemProportion(
       createLoadState(emptyScTaskCatalogItemProportion, "loading")
     );
@@ -1661,6 +1675,22 @@ function VolumetricsDashboard({
           status: "error",
           data: emptyDistributionSplits,
           error: errorMessage(error, "Unable to load distribution splits"),
+        });
+      });
+
+    void getDashboardVolumetricsDetailedVolumeAdditions(requestBody)
+      .then((nextDetailedVolumeAdditions) => {
+        setDetailedVolumeAdditions({
+          status: "success",
+          data: nextDetailedVolumeAdditions,
+          error: nextDetailedVolumeAdditions.warnings[0] ?? null,
+        });
+      })
+      .catch((error) => {
+        setDetailedVolumeAdditions({
+          status: "error",
+          data: emptyDetailedVolumeAdditions,
+          error: errorMessage(error, "Unable to load detailed volume additions"),
         });
       });
 
@@ -1904,6 +1934,7 @@ function VolumetricsDashboard({
       setTopIncidentBatchApplications(createLoadState(emptyTopIncidentBatchApplications));
       setDetailedSplits(createLoadState(emptyDetailedSplits));
       setDistributionSplits(createLoadState(emptyDistributionSplits));
+      setDetailedVolumeAdditions(createLoadState(emptyDetailedVolumeAdditions));
       setScTaskCatalogItemProportion(createLoadState(emptyScTaskCatalogItemProportion));
       setCategoryLevel2Trends(createLoadState(emptyCategoryLevel2Trends));
       setKpiMttrTrends(createLoadState(emptyKpiMttrTrends));
@@ -2462,6 +2493,9 @@ function VolumetricsDashboard({
             distributionSplits={distributionSplits.data}
             distributionSplitsError={distributionSplits.error}
             distributionSplitsStatus={distributionSplits.status}
+            detailedVolumeAdditions={detailedVolumeAdditions.data}
+            detailedVolumeAdditionsError={detailedVolumeAdditions.error}
+            detailedVolumeAdditionsStatus={detailedVolumeAdditions.status}
             incidentBatchTrend={incidentBatchTrend.data}
             incidentBatchTrendError={incidentBatchTrend.error}
             incidentBatchTrendStatus={incidentBatchTrend.status}
@@ -3502,6 +3536,9 @@ function DetailedVolumeTrends({
   detailedSplits,
   detailedSplitsError,
   detailedSplitsStatus,
+  detailedVolumeAdditions,
+  detailedVolumeAdditionsError,
+  detailedVolumeAdditionsStatus,
   distributionSplits,
   distributionSplitsError,
   distributionSplitsStatus,
@@ -3527,6 +3564,9 @@ function DetailedVolumeTrends({
   detailedSplits: DashboardVolumetricsDetailedArchitectureInstallSplits;
   detailedSplitsError: string | null;
   detailedSplitsStatus: LoadStatus;
+  detailedVolumeAdditions: DashboardVolumetricsDetailedVolumeAdditions;
+  detailedVolumeAdditionsError: string | null;
+  detailedVolumeAdditionsStatus: LoadStatus;
   distributionSplits: DashboardVolumetricsDistributionSplits;
   distributionSplitsError: string | null;
   distributionSplitsStatus: LoadStatus;
@@ -3693,7 +3733,265 @@ function DetailedVolumeTrends({
         status={scTaskCatalogItemProportionStatus}
         ticketType={ticketType}
       />
+
+      <DetailedVolumeAdditionsSection
+        commentaryForChart={commentaryForChart}
+        data={detailedVolumeAdditions}
+        error={detailedVolumeAdditionsError}
+        status={detailedVolumeAdditionsStatus}
+        ticketType={ticketType}
+      />
     </>
+  );
+}
+
+function IncidentCreationSourceSplitPanel({
+  commentary,
+  data,
+  error,
+  status,
+  ticketType,
+}: {
+  commentary?: ReactNode;
+  data: DashboardVolumetricsDetailedVolumeAdditions["incident_creation_source_split"];
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+}) {
+  const title = "User-generated vs System-generated Incidents";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const notApplicable = ticketType === "sc_task";
+  const rows = notApplicable ? [] : data;
+  const total = rows.reduce((sum, row) => sum + row.incident_count, 0);
+  const hasRows = total > 0;
+  const chartWidth = Math.max(420, Math.min(620, plotWidth - 24));
+  const canCopy = status !== "loading" && hasRows && !notApplicable;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Created Incidents in the selected date range, excluding canceled Incidents.
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {notApplicable ? (
+        <p className="muted-text chart-state-text">
+          This Incident source split is not applicable for SC Tasks.
+        </p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && !hasRows ? (
+        <p className="muted-text chart-state-text">No Incident source split data available.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && !notApplicable && hasRows ? (
+        <div className="incident-source-split-grid" ref={chartRef}>
+          <div className="applications-chart-stage incident-source-pie-stage">
+            <PieChart width={chartWidth} height={300}>
+              <Pie
+                data={rows}
+                cx="50%"
+                cy="45%"
+                dataKey="incident_count"
+                nameKey="label"
+                outerRadius={92}
+                label={(props) => renderOutsidePieLabel(props, 4)}
+              >
+                {rows.map((entry, index) => (
+                  <Cell
+                    fill={chartColors.pie[index % chartColors.pie.length]}
+                    key={entry.label}
+                  />
+                ))}
+              </Pie>
+              <Tooltip
+                formatter={(value, name) => [
+                  `${formatNumber(Number(value))} (${formatPercent(
+                    rows.find((row) => row.label === String(name))?.percentage
+                  )})`,
+                  "Incidents",
+                ]}
+              />
+              <Legend
+                formatter={(value) => {
+                  const row = rows.find((item) => item.label === value);
+                  return `${value} (${formatNumber(row?.incident_count)}, ${formatPercent(
+                    row?.percentage
+                  )})`;
+                }}
+              />
+            </PieChart>
+          </div>
+          <div className="compact-table-wrapper incident-source-table-wrapper">
+            <table className="compact-data-table">
+              <thead>
+                <tr>
+                  <th>Incident Source</th>
+                  <th>Incidents</th>
+                  <th>Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    <td>{formatNumber(row.incident_count)}</td>
+                    <td>{formatPercent(row.percentage)}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td>Total</td>
+                  <td>{formatNumber(total)}</td>
+                  <td>100.0%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
+    </section>
+  );
+}
+
+function ChangeCreatedByMonthPanel({
+  commentary,
+  data,
+  error,
+  status,
+}: {
+  commentary?: ReactNode;
+  data: DashboardVolumetricsChangeCreatedMonthRow[];
+  error: string | null;
+  status: LoadStatus;
+}) {
+  const title = "AMS Changes Created by Month";
+  const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
+  const hasRows = data.some((row) => row.change_count > 0);
+  const chartWidth = Math.max(760, plotWidth - 24);
+  const canCopy = status !== "loading" && hasRows;
+
+  return (
+    <section className="chart-card volumetrics-chart-card" aria-label={title}>
+      <div className="applications-chart-header">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted-text">
+            Created Changes with AMS change reasons, excluding canceled Changes.
+          </p>
+        </div>
+        <button
+          className="secondary-button chart-copy-button"
+          type="button"
+          disabled={!canCopy}
+          onClick={handleCopy}
+        >
+          Copy chart
+        </button>
+      </div>
+      {status === "loading" ? <p className="muted-text chart-state-text">Loading chart...</p> : null}
+      {status === "error" ? <p className="error-text">{error}</p> : null}
+      {status !== "loading" && status !== "error" && !hasRows ? (
+        <p className="muted-text chart-state-text">No AMS Change volume available.</p>
+      ) : null}
+      {status !== "loading" && status !== "error" && hasRows ? (
+        <div className="applications-chart-plot volumetrics-chart-plot" ref={chartRef}>
+          <div className="applications-chart-stage">
+            <BarChart
+              data={data}
+              height={340}
+              margin={{ top: 22, right: 42, bottom: 42, left: 52 }}
+              width={chartWidth}
+            >
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="period_label"
+                tick={{ fontSize: 11, fontWeight: 700 }}
+              />
+              <YAxis tick={{ fontSize: 11, fontWeight: 700 }} />
+              <Tooltip formatter={(value) => formatNumber(Number(value))} />
+              <Bar
+                dataKey="change_count"
+                fill={chartColors.pattern}
+                name="Changes Created"
+                radius={[5, 5, 0, 0]}
+              >
+                <LabelList
+                  dataKey="change_count"
+                  position="top"
+                  fontSize={11}
+                  fontWeight={800}
+                />
+              </Bar>
+            </BarChart>
+          </div>
+        </div>
+      ) : null}
+      {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
+      {commentary}
+    </section>
+  );
+}
+
+function DetailedVolumeAdditionsSection({
+  commentaryForChart,
+  data,
+  error,
+  status,
+  ticketType,
+}: {
+  commentaryForChart: (chartKey: string) => ReactNode;
+  data: DashboardVolumetricsDetailedVolumeAdditions;
+  error: string | null;
+  status: LoadStatus;
+  ticketType: VolumetricsTicketType;
+}) {
+  return (
+    <section className="panel detailed-volume-additions-section">
+      <div className="panel-heading">
+        <div>
+          <p className="label">Detailed Volume Trends</p>
+          <h3>Incident Source and AMS Change Volume</h3>
+        </div>
+      </div>
+      {status !== "loading" && status !== "error" && error ? (
+        <p className="muted-text">{error}</p>
+      ) : null}
+      <div className="detailed-volume-additions-grid">
+        <IncidentCreationSourceSplitPanel
+          commentary={commentaryForChart("incident_user_system_split")}
+          data={data.incident_creation_source_split}
+          error={error}
+          status={status}
+          ticketType={ticketType}
+        />
+        <ChangeCreatedByMonthPanel
+          commentary={commentaryForChart("ams_changes_created_by_month")}
+          data={data.change_created_by_month}
+          error={error}
+          status={status}
+        />
+      </div>
+      {data.data_notes.length ? (
+        <ul className="chart-data-notes">
+          {data.data_notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 

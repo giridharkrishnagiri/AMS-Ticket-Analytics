@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, not_, or_, select
+from sqlalchemy import and_, case, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -24,7 +24,12 @@ from app.schemas.resource_demand import (
     ResourceDemandTechnologyView,
     ResourceDemandUnitEffortRow,
 )
-from app.services.dashboard import valid_resolved_closed_state_condition
+from app.services.dashboard import (
+    ams_in_scope_change_condition,
+    cancelled_or_canceled_state_condition,
+    volumetrics_cancelled_count_date_expression,
+    volumetrics_cancelled_state_expression,
+)
 
 DEFAULT_FROM_MONTH = "2026-03"
 DEFAULT_TO_MONTH = "2026-05"
@@ -160,26 +165,49 @@ def technology_volume_condition(source: Any, technology: str) -> Any:
     raise ValueError(f"Unsupported Resource Demand technology: {technology}")
 
 
+def ticket_cancelled_effective_date_expression() -> Any:
+    cancelled_date = volumetrics_cancelled_count_date_expression(Ticket)
+    return case(
+        (
+            and_(volumetrics_cancelled_state_expression(Ticket), cancelled_date.is_(None)),
+            Ticket.created_at,
+        ),
+        else_=cancelled_date,
+    )
+
+
 def count_ticket_volume(
     db: Session,
     project_id: UUID,
     ticket_type: str,
-    completion_column: object,
     from_datetime: datetime,
     to_datetime_exclusive: datetime,
     *extra_conditions: object,
 ) -> int:
-    statement = select(func.count(Ticket.id)).where(
+    created_statement = select(func.count(Ticket.id)).where(
         Ticket.project_id == project_id,
         Ticket.ticket_type == ticket_type,
         Ticket.is_in_scope.is_(True),
-        valid_resolved_closed_state_condition(Ticket),
-        completion_column.is_not(None),  # type: ignore[attr-defined]
-        completion_column >= from_datetime,
-        completion_column < to_datetime_exclusive,
+        Ticket.created_at.is_not(None),
+        Ticket.created_at >= from_datetime,
+        Ticket.created_at < to_datetime_exclusive,
         *extra_conditions,
     )
-    return int(db.scalar(statement) or 0)
+    created_count = int(db.scalar(created_statement) or 0)
+
+    cancelled_date = ticket_cancelled_effective_date_expression()
+    cancelled_statement = select(func.count(Ticket.id)).where(
+        Ticket.project_id == project_id,
+        Ticket.ticket_type == ticket_type,
+        Ticket.is_in_scope.is_(True),
+        volumetrics_cancelled_state_expression(Ticket),
+        cancelled_date.is_not(None),
+        cancelled_date >= from_datetime,
+        cancelled_date < to_datetime_exclusive,
+        *extra_conditions,
+    )
+    cancelled_count = int(db.scalar(cancelled_statement) or 0)
+    return max(0, created_count - cancelled_count)
 
 
 def count_problem_volume(
@@ -189,14 +217,28 @@ def count_problem_volume(
     to_datetime_exclusive: datetime,
     *extra_conditions: object,
 ) -> int:
-    statement = select(func.count(AssessmentProblemRecord.id)).where(
+    created_statement = select(func.count(AssessmentProblemRecord.id)).where(
         AssessmentProblemRecord.project_id == project_id,
-        AssessmentProblemRecord.closed_at.is_not(None),
-        AssessmentProblemRecord.closed_at >= from_datetime,
-        AssessmentProblemRecord.closed_at < to_datetime_exclusive,
+        AssessmentProblemRecord.created_at_source.is_not(None),
+        AssessmentProblemRecord.created_at_source >= from_datetime,
+        AssessmentProblemRecord.created_at_source < to_datetime_exclusive,
         *extra_conditions,
     )
-    return int(db.scalar(statement) or 0)
+    created_count = int(db.scalar(created_statement) or 0)
+    cancelled_date = func.coalesce(
+        AssessmentProblemRecord.closed_at,
+        AssessmentProblemRecord.created_at_source,
+    )
+    cancelled_statement = select(func.count(AssessmentProblemRecord.id)).where(
+        AssessmentProblemRecord.project_id == project_id,
+        cancelled_or_canceled_state_condition(AssessmentProblemRecord),
+        cancelled_date.is_not(None),
+        cancelled_date >= from_datetime,
+        cancelled_date < to_datetime_exclusive,
+        *extra_conditions,
+    )
+    cancelled_count = int(db.scalar(cancelled_statement) or 0)
+    return max(0, created_count - cancelled_count)
 
 
 def count_change_volume(
@@ -208,9 +250,10 @@ def count_change_volume(
 ) -> int:
     statement = select(func.count(AssessmentChangeRecord.id)).where(
         AssessmentChangeRecord.project_id == project_id,
-        AssessmentChangeRecord.closed_at.is_not(None),
-        AssessmentChangeRecord.closed_at >= from_datetime,
-        AssessmentChangeRecord.closed_at < to_datetime_exclusive,
+        AssessmentChangeRecord.created_at_source.is_not(None),
+        AssessmentChangeRecord.created_at_source >= from_datetime,
+        AssessmentChangeRecord.created_at_source < to_datetime_exclusive,
+        ams_in_scope_change_condition(AssessmentChangeRecord),
         *extra_conditions,
     )
     return int(db.scalar(statement) or 0)
@@ -303,7 +346,6 @@ def overall_demand_rows(
         db,
         project_id,
         "INCIDENT",
-        Ticket.resolved_at,
         from_datetime,
         to_datetime_exclusive,
     )
@@ -311,7 +353,6 @@ def overall_demand_rows(
         db,
         project_id,
         "INCIDENT",
-        Ticket.resolved_at,
         from_datetime,
         to_datetime_exclusive,
         user_generated_condition,
@@ -320,7 +361,6 @@ def overall_demand_rows(
         db,
         project_id,
         "INCIDENT",
-        Ticket.resolved_at,
         from_datetime,
         to_datetime_exclusive,
         system_generated_condition,
@@ -329,7 +369,6 @@ def overall_demand_rows(
         db,
         project_id,
         "SERVICE_CATALOG_TASK",
-        Ticket.closed_at,
         from_datetime,
         to_datetime_exclusive,
     )
@@ -370,7 +409,6 @@ def technology_demand_rows(
         db,
         project_id,
         "INCIDENT",
-        Ticket.resolved_at,
         from_datetime,
         to_datetime_exclusive,
         ticket_technology_condition,
@@ -379,7 +417,6 @@ def technology_demand_rows(
         db,
         project_id,
         "INCIDENT",
-        Ticket.resolved_at,
         from_datetime,
         to_datetime_exclusive,
         ticket_technology_condition,
@@ -389,7 +426,6 @@ def technology_demand_rows(
         db,
         project_id,
         "INCIDENT",
-        Ticket.resolved_at,
         from_datetime,
         to_datetime_exclusive,
         ticket_technology_condition,
@@ -399,7 +435,6 @@ def technology_demand_rows(
         db,
         project_id,
         "SERVICE_CATALOG_TASK",
-        Ticket.closed_at,
         from_datetime,
         to_datetime_exclusive,
         ticket_technology_condition,
@@ -620,8 +655,9 @@ def get_resource_demand(
         unit_efforts=unit_effort_response_rows(db, project_id),
         service_level_splits=service_level_splits,
         data_notes=[
-            "Overall volumes use in-scope closed/resolved records from Mar 2026 to May 2026 by default.",
+            "Average monthly volumes use in-scope created records minus canceled records from Mar 2026 to May 2026 by default.",
             "Incident source split uses caller/requester containing integration for system-generated incidents.",
+            "Change volume uses created Changes with Change Reason values Decommission, Fix/Repair, Patching, and Upgrade, excluding canceled Changes.",
             "Technology split priority: Data & Analytics when the assignment group belongs to the Data & Analytics functional track; otherwise SAP when SAP/Non-SAP is SAP; all remaining records are Generic.",
         ],
         warnings=[],

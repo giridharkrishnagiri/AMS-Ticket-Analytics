@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentChangeRecord,
+    AssessmentOutOfScopeChangeRecord,
     AssessmentOutOfScopeProblemRecord,
     AssessmentProblemRecord,
     Client,
@@ -231,6 +233,13 @@ VOLUMETRICS_CANCELLED_STATES = {
     "closed cancelled",
     "closed canceled",
     "closed incomplete",
+}
+AMS_IN_SCOPE_CHANGE_REASONS = {
+    "decommission",
+    "fix/repair",
+    "fix / repair",
+    "patching",
+    "upgrade",
 }
 
 SINGLE_VOLUMETRICS_FILTER_FIELDS = {
@@ -592,6 +601,19 @@ def valid_resolved_closed_state_condition(model: Any) -> Any:
     return and_(
         ~cancelled_or_canceled_state_condition(model),
         ~sc_task_closed_incomplete_state_condition(model),
+    )
+
+
+def ams_change_reason_condition(model: Any) -> Any:
+    return func.lower(func.trim(func.coalesce(model.change_reason, ""))).in_(
+        tuple(AMS_IN_SCOPE_CHANGE_REASONS),
+    )
+
+
+def ams_in_scope_change_condition(model: Any) -> Any:
+    return and_(
+        ams_change_reason_condition(model),
+        ~cancelled_or_canceled_state_condition(model),
     )
 
 
@@ -3501,6 +3523,7 @@ def volumetrics_source_select(
         model.priority.label("priority"),
         model.assignment_group.label("assignment_group"),
         model.assigned_to.label("assigned_to"),
+        model.requester.label("requester"),
         model.support_lead.label("support_lead"),
         model.functional_track.label("functional_track"),
         model.ams_owner.label("ams_owner"),
@@ -4596,6 +4619,194 @@ def volumetrics_created_resolved_cancelled(db: Session, request: Any) -> dict[st
             }
             for row in rows
         ],
+    }
+
+
+CHANGE_VOLUME_SINGLE_FILTER_FIELDS = {
+    "assignment_group_support_lead": "assignment_group",
+    "functional_track_ams_owner": "functional_track",
+    "parent_application_name": "parent_business_application",
+    "supported_by_vendor": "supported_by_vendor",
+    "sap_non_sap": "sap_non_sap",
+    "architecture_type": "architecture_type",
+    "install_type": "install_type",
+}
+
+CHANGE_VOLUME_UNSUPPORTED_FILTERS = {
+    "application_owner": "Application Owner is not normalized on Change records.",
+    "business_critical": "Business Criticality is not normalized on Change records.",
+    "service_entitlement": "Service Entitlement is not normalized on Change records.",
+}
+
+
+def change_volume_source_select(model: Any, scope_label: str, project_id: UUID) -> Any:
+    return select(
+        literal(scope_label).label("scope"),
+        model.id.label("id"),
+        model.created_at_source.label("created_at_source"),
+        model.state.label("state"),
+        model.change_reason.label("change_reason"),
+        model.assignment_group.label("assignment_group"),
+        model.functional_track.label("functional_track"),
+        model.ams_owner.label("ams_owner"),
+        model.parent_business_application.label("parent_business_application"),
+        model.supported_by_vendor.label("supported_by_vendor"),
+        model.sap_non_sap.label("sap_non_sap"),
+        model.architecture_type.label("architecture_type"),
+        model.install_type.label("install_type"),
+    ).where(model.project_id == project_id)
+
+
+def change_volume_source_subquery(request: Any) -> Any:
+    scope = normalize_volumetrics_scope(request.scope)
+    in_scope_select = change_volume_source_select(
+        AssessmentChangeRecord,
+        "in_scope",
+        request.project_id,
+    )
+    out_of_scope_select = change_volume_source_select(
+        AssessmentOutOfScopeChangeRecord,
+        "out_of_scope",
+        request.project_id,
+    )
+    if scope == "in_scope":
+        return in_scope_select.subquery("change_volume_source")
+    if scope == "out_of_scope":
+        return out_of_scope_select.subquery("change_volume_source")
+    return union_all(in_scope_select, out_of_scope_select).subquery("change_volume_source")
+
+
+def change_volume_filter_conditions(source: Any, filters: Any) -> tuple[list[Any], list[str]]:
+    conditions: list[Any] = []
+    warnings: list[str] = []
+    for filter_name, field_name in CHANGE_VOLUME_SINGLE_FILTER_FIELDS.items():
+        selected_values = selected_volumetrics_filter_values(filters, filter_name)
+        if selected_values:
+            conditions.append(
+                volumetrics_display_expression(getattr(source.c, field_name)).in_(
+                    selected_values,
+                ),
+            )
+
+    for filter_name, message in CHANGE_VOLUME_UNSUPPORTED_FILTERS.items():
+        if selected_volumetrics_filter_values(filters, filter_name):
+            warnings.append(message)
+    return conditions, warnings
+
+
+def volumetrics_incident_creation_source_split(db: Session, request: Any) -> list[dict[str, Any]]:
+    source = volumetrics_source_subquery(request)
+    system_condition = func.lower(func.coalesce(source.c.requester, "")).like("%integration%")
+    conditions = [
+        *volumetrics_base_conditions(source, request),
+        source.c.ticket_type == "INCIDENT",
+        ~volumetrics_cancelled_expression(source),
+    ]
+    statement = (
+        select(
+            func.count(source.c.id)
+            .filter(~system_condition)
+            .label("user_generated_incidents"),
+            func.count(source.c.id)
+            .filter(system_condition)
+            .label("system_generated_incidents"),
+        )
+        .select_from(source)
+        .where(*conditions)
+    )
+    row = db.execute(statement).mappings().one()
+    user_count = int_count(row["user_generated_incidents"])
+    system_count = int_count(row["system_generated_incidents"])
+    total = user_count + system_count
+    return [
+        {
+            "label": "User-generated",
+            "incident_count": user_count,
+            "percentage": percentage(user_count, total),
+        },
+        {
+            "label": "System-generated",
+            "incident_count": system_count,
+            "percentage": percentage(system_count, total),
+        },
+    ]
+
+
+def volumetrics_change_created_by_month(
+    db: Session,
+    request: Any,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    monthly_request = replace_request_value(request, "time_grain", "monthly")
+    periods = build_volumetrics_periods(monthly_request)
+    source = change_volume_source_subquery(monthly_request)
+    filter_conditions, warnings = change_volume_filter_conditions(
+        source,
+        monthly_request.filters,
+    )
+    period_expression = volumetrics_period_start_expression(
+        source.c.created_at_source,
+        "monthly",
+    )
+    statement = (
+        select(
+            period_expression.label("period_start"),
+            func.count(source.c.id).label("change_count"),
+        )
+        .select_from(source)
+        .where(
+            *filter_conditions,
+            source.c.created_at_source.is_not(None),
+            source.c.created_at_source >= normalize_dashboard_datetime(request.start_datetime),
+            source.c.created_at_source <= normalize_dashboard_datetime(request.end_datetime),
+            func.lower(func.trim(func.coalesce(source.c.change_reason, ""))).in_(
+                tuple(AMS_IN_SCOPE_CHANGE_REASONS),
+            ),
+            func.lower(func.trim(func.coalesce(source.c.state, ""))).not_like("%cancel%"),
+        )
+        .group_by(period_expression)
+    )
+    values_by_period: dict[str, int] = {}
+    for row in db.execute(statement).mappings().all():
+        period_start = normalize_volumetrics_period_key(row["period_start"], "monthly")
+        if period_start is None:
+            continue
+        values_by_period[volumetrics_period_lookup_key(period_start, "monthly")] = int_count(
+            row["change_count"],
+        )
+
+    rows = [
+        {
+            "period_key": volumetrics_period_lookup_key(period.start, "monthly"),
+            "period_label": period.label,
+            "period_start": period.start,
+            "period_end": period.end,
+            "change_count": values_by_period.get(
+                volumetrics_period_lookup_key(period.start, "monthly"),
+                0,
+            ),
+        }
+        for period in periods
+    ]
+    return rows, warnings
+
+
+def volumetrics_detailed_volume_additions(db: Session, request: Any) -> dict[str, Any]:
+    change_rows, warnings = volumetrics_change_created_by_month(db, request)
+    return {
+        "incident_creation_source_split": volumetrics_incident_creation_source_split(
+            db,
+            request,
+        ),
+        "change_created_by_month": change_rows,
+        "data_notes": [
+            "Incident source split uses created Incidents in the selected date range, "
+            "excludes canceled Incidents, and treats caller/requester containing "
+            "integration as system-generated.",
+            "Change volume uses Change created date, excludes canceled Changes, and includes "
+            "only Change Reason values Decommission, Fix/Repair, Patching, and Upgrade.",
+            "Change scope uses the in-scope/out-of-scope Change record classification.",
+        ],
+        "warnings": warnings,
     }
 
 

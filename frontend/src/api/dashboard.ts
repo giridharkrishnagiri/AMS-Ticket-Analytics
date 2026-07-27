@@ -901,6 +901,24 @@ export type DashboardVolumetricsDistributionSplits = {
   hosting_env: DashboardVolumetricsTripleTicketTypeSplit;
 };
 
+export type DashboardVolumetricsIncidentCreationSourceSplitRow = {
+  label: string;
+  incident_count: number;
+  percentage: number | null;
+};
+
+export type DashboardVolumetricsChangeCreatedMonthRow = PeriodMetricRow & {
+  period_key: string;
+  change_count: number;
+};
+
+export type DashboardVolumetricsDetailedVolumeAdditions = {
+  incident_creation_source_split: DashboardVolumetricsIncidentCreationSourceSplitRow[];
+  change_created_by_month: DashboardVolumetricsChangeCreatedMonthRow[];
+  data_notes: string[];
+  warnings: string[];
+};
+
 export type DashboardVolumetricsScTaskCatalogItemRow = {
   catalog_item_name: string;
   sc_task_count: number;
@@ -1690,6 +1708,15 @@ export function getDashboardVolumetricsDistributionSplits(
 ): Promise<DashboardVolumetricsDistributionSplits> {
   return postVolumetricsRequest<DashboardVolumetricsDistributionSplits>(
     "/dashboard/volumetrics/distribution-splits",
+    input
+  );
+}
+
+export function getDashboardVolumetricsDetailedVolumeAdditions(
+  input: DashboardVolumetricsRequest
+): Promise<DashboardVolumetricsDetailedVolumeAdditions> {
+  return postVolumetricsRequest<DashboardVolumetricsDetailedVolumeAdditions>(
+    "/dashboard/volumetrics/detailed-volume-additions",
     input
   );
 }

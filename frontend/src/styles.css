@@ -2719,6 +2719,36 @@ h2 {
   font-size: 0.78rem;
 }
 
+.detailed-volume-additions-section {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.detailed-volume-additions-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.incident-source-split-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(260px, 0.75fr);
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.incident-source-pie-stage {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.incident-source-table-wrapper {
+  align-self: center;
+}
+
 .compact-table-wrapper {
   max-width: 100%;
   overflow-x: auto;
@@ -3455,6 +3485,10 @@ h2 {
   }
 
   .sc-task-catalog-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .incident-source-split-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }

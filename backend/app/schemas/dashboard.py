@@ -1014,6 +1014,24 @@ class VolumetricsDistributionSplitsResponse(BaseModel):
     hosting_env: VolumetricsTripleTicketTypeSplit
 
 
+class VolumetricsIncidentCreationSourceSplitRow(BaseModel):
+    label: str
+    incident_count: int
+    percentage: float | None
+
+
+class VolumetricsChangeCreatedMonthRow(PeriodMetricRow):
+    period_key: str
+    change_count: int
+
+
+class VolumetricsDetailedVolumeAdditionsResponse(BaseModel):
+    incident_creation_source_split: list[VolumetricsIncidentCreationSourceSplitRow]
+    change_created_by_month: list[VolumetricsChangeCreatedMonthRow]
+    data_notes: list[str]
+    warnings: list[str]
+
+
 class VolumetricsScTaskCatalogItemRow(BaseModel):
     catalog_item_name: str
     sc_task_count: int

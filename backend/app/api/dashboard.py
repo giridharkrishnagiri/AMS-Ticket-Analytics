@@ -58,6 +58,7 @@ from app.schemas.dashboard import (
     VolumetricsCreatedResolvedCanceledResponse,
     VolumetricsDataRangeResponse,
     VolumetricsDetailedArchitectureInstallSplitsResponse,
+    VolumetricsDetailedVolumeAdditionsResponse,
     VolumetricsDistributionSplitsResponse,
     VolumetricsFilterValuesResponse,
     VolumetricsHourlyCreatedResolvedRequest,
@@ -118,6 +119,7 @@ from app.services.dashboard import (
     volumetrics_created_resolved_cancelled,
     volumetrics_data_range,
     volumetrics_detailed_architecture_install_splits,
+    volumetrics_detailed_volume_additions,
     volumetrics_distribution_splits,
     volumetrics_filter_value_counts,
     volumetrics_hourly_created_resolved,
@@ -663,6 +665,20 @@ def get_dashboard_volumetrics_detailed_architecture_install_splits(
 ) -> dict[str, object]:
     try:
         return volumetrics_detailed_architecture_install_splits(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/volumetrics/detailed-volume-additions",
+    response_model=VolumetricsDetailedVolumeAdditionsResponse,
+)
+def get_dashboard_volumetrics_detailed_volume_additions(
+    request: VolumetricsRequest,
+    db: DbSession,
+) -> dict[str, object]:
+    try:
+        return volumetrics_detailed_volume_additions(db, request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

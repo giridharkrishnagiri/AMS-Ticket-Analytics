@@ -28,6 +28,7 @@ from app.models import (
 from app.services.dashboard import (
     APPLICATION_CRITICALITY_ORDER,
     APPLICATION_LIST_FIELDS,
+    AMS_IN_SCOPE_CHANGE_REASONS,
     BLANK_LABEL,
     DURATION_BUCKETS,
     MTTR_PRIORITIES,
@@ -39,6 +40,7 @@ from app.services.dashboard import (
     applications_summary,
     assignment_group_sap_non_sap_expression,
     build_volumetrics_periods,
+    change_volume_source_subquery,
     combined_volumetrics_display_expression,
     date_counts_by_day_of_month,
     date_counts_by_weekday,
@@ -1424,6 +1426,110 @@ def build_sla_trends_payload(
     }
 
 
+def build_detailed_incident_creation_source_rows(
+    db: Session,
+    project_id: UUID,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> list[dict[str, Any]]:
+    source = build_volumetrics_source(project_id)
+    dimensions = volumetrics_dimension_expressions(source)
+    creation_source_expression = case(
+        (
+            func.lower(func.coalesce(source.c.requester, "")).like("%integration%"),
+            literal("System-generated"),
+        ),
+        else_=literal("User-generated"),
+    )
+    statement = (
+        select(
+            *[expression.label(name) for name, expression in dimensions.items()],
+            creation_source_expression.label("incident_source"),
+            func.count(source.c.id).label("incident_count"),
+        )
+        .select_from(source)
+        .where(
+            source.c.created_at.is_not(None),
+            source.c.created_at >= normalize_dashboard_datetime(start_datetime),
+            source.c.created_at <= normalize_dashboard_datetime(end_datetime),
+            source.c.ticket_type == "INCIDENT",
+            ~volumetrics_cancelled_expression(source),
+        )
+        .group_by(*dimensions.values(), creation_source_expression)
+    )
+    return [
+        {
+            **dimension_dict(dimension_key(row)),
+            "incident_source": str(row["incident_source"]),
+            "incident_count": int(row["incident_count"] or 0),
+        }
+        for row in db.execute(statement).mappings().all()
+    ]
+
+
+def change_volume_dimension_expressions(source: Any) -> dict[str, Any]:
+    return {
+        "scope": source.c.scope,
+        "ticket_type": literal("change"),
+        "service_entitlement": literal(BLANK_LABEL),
+        "functional_track": volumetrics_display_expression(source.c.functional_track),
+        "ams_owner": volumetrics_display_expression(source.c.ams_owner),
+        "functional_track_ams_owner": combined_volumetrics_display_expression(
+            source,
+            "functional_track",
+            "ams_owner",
+        ),
+        "sap_non_sap": volumetrics_display_expression(source.c.sap_non_sap),
+        "business_critical": literal(BLANK_LABEL),
+    }
+
+
+def build_detailed_change_created_rows(
+    db: Session,
+    project_id: UUID,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> list[dict[str, Any]]:
+    request = monthly_request(project_id, start_datetime, end_datetime)
+    source = change_volume_source_subquery(request)
+    dimensions = change_volume_dimension_expressions(source)
+    period_expression = volumetrics_period_start_expression(
+        source.c.created_at_source,
+        "monthly",
+    )
+    statement = (
+        select(
+            *[expression.label(name) for name, expression in dimensions.items()],
+            period_expression.label("period_start"),
+            func.count(source.c.id).label("change_count"),
+        )
+        .select_from(source)
+        .where(
+            source.c.created_at_source.is_not(None),
+            source.c.created_at_source >= normalize_dashboard_datetime(start_datetime),
+            source.c.created_at_source <= normalize_dashboard_datetime(end_datetime),
+            func.lower(func.trim(func.coalesce(source.c.change_reason, ""))).in_(
+                tuple(AMS_IN_SCOPE_CHANGE_REASONS),
+            ),
+            func.lower(func.trim(func.coalesce(source.c.state, ""))).not_like("%cancel%"),
+        )
+        .group_by(*dimensions.values(), period_expression)
+    )
+    rows: list[dict[str, Any]] = []
+    for row in db.execute(statement).mappings().all():
+        period_start = normalize_dashboard_datetime(row["period_start"])
+        rows.append(
+            {
+                **dimension_dict(dimension_key(row)),
+                "period_key": month_key(period_start),
+                "period_label": f"{period_start:%b-%y}",
+                "period_start": period_start,
+                "change_count": int(row["change_count"] or 0),
+            },
+        )
+    return rows
+
+
 def build_detailed_volume_payload(
     db: Session,
     project_id: UUID,
@@ -1588,12 +1694,32 @@ def build_detailed_volume_payload(
             row["catalog_item_name"].casefold(),
         ),
     )
-
     return {
         "ranking_window": ranking_window_payload(start_datetime, end_datetime),
         "split_window": latest_complete_window_payload(start_datetime, end_datetime),
         "application_rows": rows,
         "split_rows": build_detailed_split_rows(db, project_id, start_datetime, end_datetime),
+        "incident_creation_source_rows": build_detailed_incident_creation_source_rows(
+            db,
+            project_id,
+            start_datetime,
+            end_datetime,
+        ),
+        "change_created_rows": build_detailed_change_created_rows(
+            db,
+            project_id,
+            start_datetime,
+            end_datetime,
+        ),
+        "data_notes": [
+            "Incident source split uses created Incidents in the selected date range, "
+            "excludes canceled Incidents, and treats caller/requester containing integration "
+            "as system-generated.",
+            "Change volume uses Change created date, excludes canceled Changes, and includes "
+            "only Change Reason values Decommission, Fix/Repair, Patching, and Upgrade.",
+            "Change scope uses the in-scope/out-of-scope Change record classification.",
+        ],
+        "warnings": [],
         "batch_rule": {
             "field": "short_description",
             "rule_description": (
@@ -2584,6 +2710,13 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       min-inline-size: 0;
       overflow-x: hidden;
     }
+    .offline-side-by-side {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) minmax(240px, .85fr);
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
     .category-trend-stack {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
@@ -3349,6 +3482,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     }
     @media (max-width: 1100px) {
       .chart-grid { grid-template-columns: 1fr; }
+      .offline-side-by-side { grid-template-columns: 1fr; }
       .chart-grid-three { grid-template-columns: 1fr; }
       .sc-task-catalog-grid { grid-template-columns: minmax(0, 1fr); }
       .duration-grid { grid-template-columns: 1fr; }
@@ -3366,7 +3500,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       .topbar, .layout { grid-template-columns: 1fr; display: grid; }
       .topbar { max-height: none; min-height: 0; }
       .dashboard-title, #export-meta { text-align: left; }
-      .summary-grid, .chart-grid, .chart-grid-three, .sc-task-catalog-grid, .duration-grid, #volumetrics .summary-grid { grid-template-columns: 1fr; }
+      .summary-grid, .chart-grid, .chart-grid-three, .offline-side-by-side, .sc-task-catalog-grid, .duration-grid, #volumetrics .summary-grid { grid-template-columns: 1fr; }
       .overview-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .filters { position: static; max-height: none; }
       .main { overflow-y: visible; }
@@ -5259,6 +5393,15 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
         (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
       );
     }
+    function offlineChangeFilterMatch(row) {
+      return (
+        (state.volScope === "all" || row.scope === state.volScope) &&
+        (state.volFunctional === "all" || row.functional_track_ams_owner === state.volFunctional) &&
+        (state.volServiceEntitlement === "all" || row.service_entitlement === state.volServiceEntitlement) &&
+        (state.volSap === "all" || row.sap_non_sap === state.volSap) &&
+        (state.volBusinessCritical === "all" || row.business_critical === state.volBusinessCritical)
+      );
+    }
     function filteredHourlyRows() {
       return (DASHBOARD.volumetrics.overall_volume_trends?.created_resolved_by_hour?.rows || [])
         .filter((row) => row.day_type === state.hourlyDayType && offlineFilterMatch(row));
@@ -5786,6 +5929,64 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const periods = scTaskCatalogPeriodDefinitions().map(scTaskCatalogPeriodData);
       return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows average monthly SC Tasks by catalog item for Dec-25 through May-26.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage table-scroll">${scTaskCatalogBarChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Catalog items below 2% are grouped into Others.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
     }
+    function incidentSourceSplitSection() {
+      const totals = new Map();
+      (DASHBOARD.volumetrics.detailed_volume_trends?.incident_creation_source_rows || [])
+        .filter(offlineFilterMatch)
+        .forEach((row) => {
+          const label = row.incident_source || "User-generated";
+          totals.set(label, (totals.get(label) || 0) + Number(row.incident_count || 0));
+        });
+      const total = [...totals.values()].reduce((sum, count) => sum + Number(count || 0), 0);
+      const rows = ["User-generated", "System-generated"].map((label) => {
+        const count = Number(totals.get(label) || 0);
+        return { label, incident_count: count, percentage: total ? (count / total) * 100 : null };
+      });
+      const tableRows = rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.incident_count || 0)}</td><td>${row.percentage === null || row.percentage === undefined ? "N/A" : `${Number(row.percentage).toFixed(1)}%`}</td></tr>`).join("");
+      const table = `<div class="table-frame table-scroll compact-table-frame"><table class="applications-table compact-export-table"><thead><tr><th>Incident Source</th><th>Incidents</th><th>Share</th></tr></thead><tbody>${tableRows}<tr><td>Total</td><td>${fmt(total)}</td><td>${total ? "100.0%" : "N/A"}</td></tr></tbody></table></div>`;
+      if (state.volTicketType === "sc_task") {
+        return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">This Incident source split is not applicable for SC Tasks.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
+      }
+      if (!total) {
+        return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">No Incident source split data available.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
+      }
+      return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">Created Incidents in the selected date range, excluding canceled Incidents.</p><div class="offline-side-by-side"><div class="chart-frame chart-stage">${pieChart(rows.map((row) => ({ label: row.label, count: row.incident_count || 0, percentage: row.percentage })), { labelAll: true })}</div>${table}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
+    }
+    function amsChangesCreatedSection() {
+      const totals = new Map();
+      (DASHBOARD.volumetrics.detailed_volume_trends?.change_created_rows || [])
+        .filter(offlineChangeFilterMatch)
+        .forEach((row) => {
+          totals.set(row.period_key, {
+            label: row.period_label,
+            changes: Number(totals.get(row.period_key)?.changes || 0) + Number(row.change_count || 0),
+          });
+        });
+      const detailedPeriods = new Map();
+      detailedVolumeRows().forEach((row) => {
+        if (!detailedPeriods.has(row.period_key)) {
+          detailedPeriods.set(row.period_key, row.period_label);
+        }
+      });
+      const periods = [...detailedPeriods.entries()]
+        .sort((left, right) => String(left[0]).localeCompare(String(right[0])))
+        .map(([period_key, period_label]) => ({ period_key, period_label }));
+      const rows = periods.map((period) => ({
+        label: period.period_label,
+        changes: Number(totals.get(period.period_key)?.changes || 0),
+      }));
+      const total = rows.reduce((sum, row) => sum + Number(row.changes || 0), 0);
+      if (!total) {
+        return `<section class="chart-card panel" data-commentary-key="ams_changes_created_by_month"><h3>AMS Changes Created by Month</h3><p class="muted">No AMS Change volume available.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "ams_changes_created_by_month" })}</section>`;
+      }
+      return `<section class="chart-card panel" data-commentary-key="ams_changes_created_by_month"><h3>AMS Changes Created by Month</h3><p class="muted">Created Changes with AMS change reasons, excluding canceled Changes.</p><div class="chart-frame chart-stage">${barChart(rows, [{ key: "changes", name: "Changes Created", color: COLORS.teal }], { width: 1080, height: 340 })}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "ams_changes_created_by_month" })}</section>`;
+    }
+    function detailedVolumeAdditionsSection() {
+      const payload = DASHBOARD.volumetrics.detailed_volume_trends || {};
+      const notes = payload.data_notes || [];
+      const warnings = payload.warnings || [];
+      return `<section class="panel full"><p class="label">Detailed Volume Trends</p><h3>Incident Source and AMS Change Volume</h3><div class="chart-grid two">${incidentSourceSplitSection()}${amsChangesCreatedSection()}</div>${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}${warnings.length ? `<ul class="error-text">${warnings.map((warning) => `<li>${esc(warning)}</li>`).join("")}</ul>` : ""}</section>`;
+    }
     function incidentBatchTrendPoints() {
       const rows = filteredVolumetricsRows().filter(incidentBatchFilterMatch);
       return DASHBOARD.volumetrics.periods.map((period) => ({
@@ -5847,6 +6048,7 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
           ${distributionPieSection("Average Monthly SC Tasks by Hosting Env", "hosting_env", "sc_task")}
         </div>
         ${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "hosting_env_distribution_row" })}
+        ${detailedVolumeAdditionsSection()}
       `;
     }
     function categoryTrendFilterMatch(row, ticketType) {
