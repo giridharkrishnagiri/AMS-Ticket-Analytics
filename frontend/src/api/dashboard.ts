@@ -904,6 +904,7 @@ export type DashboardVolumetricsDistributionSplits = {
 export type DashboardVolumetricsIncidentCreationSourceSplitRow = {
   label: string;
   incident_count: number;
+  average_monthly_incident_count: number;
   percentage: number | null;
 };
 
@@ -913,6 +914,7 @@ export type DashboardVolumetricsChangeCreatedMonthRow = PeriodMetricRow & {
 };
 
 export type DashboardVolumetricsDetailedVolumeAdditions = {
+  incident_source_window: DashboardVolumetricsRankingWindow;
   incident_creation_source_split: DashboardVolumetricsIncidentCreationSourceSplitRow[];
   change_created_by_month: DashboardVolumetricsChangeCreatedMonthRow[];
   data_notes: string[];

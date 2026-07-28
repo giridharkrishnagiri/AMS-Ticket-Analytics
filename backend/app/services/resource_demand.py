@@ -263,7 +263,6 @@ def demand_rows_from_counts(
     *,
     key_prefix: str | None,
     month_count: int,
-    incident_total: int,
     incident_user: int,
     incident_system: int,
     sc_tasks: int,
@@ -274,13 +273,6 @@ def demand_rows_from_counts(
         return f"{key_prefix}_{value}" if key_prefix else value
 
     return [
-        ResourceDemandInputRow(
-            key=row_key("incident_total"),
-            label="Incidents",
-            ticket_type="INCIDENT",
-            average_monthly_volume=average_monthly(incident_total, month_count),
-            service_level_split=ResourceDemandServiceLevelValues(),
-        ),
         ResourceDemandInputRow(
             key=row_key("incident_user_generated"),
             label="Incidents - User-generated",
@@ -342,13 +334,6 @@ def overall_demand_rows(
     )
     user_generated_condition = ~system_generated_condition
 
-    incident_total = count_ticket_volume(
-        db,
-        project_id,
-        "INCIDENT",
-        from_datetime,
-        to_datetime_exclusive,
-    )
     incident_user = count_ticket_volume(
         db,
         project_id,
@@ -378,7 +363,6 @@ def overall_demand_rows(
     return demand_rows_from_counts(
         key_prefix=None,
         month_count=month_count,
-        incident_total=incident_total,
         incident_user=incident_user,
         incident_system=incident_system,
         sc_tasks=sc_tasks,
@@ -405,14 +389,6 @@ def technology_demand_rows(
     user_generated_condition = ~system_generated_condition
     ticket_technology_condition = technology_volume_condition(Ticket, technology)
 
-    incident_total = count_ticket_volume(
-        db,
-        project_id,
-        "INCIDENT",
-        from_datetime,
-        to_datetime_exclusive,
-        ticket_technology_condition,
-    )
     incident_user = count_ticket_volume(
         db,
         project_id,
@@ -456,7 +432,6 @@ def technology_demand_rows(
     return demand_rows_from_counts(
         key_prefix=technology_key(technology),
         month_count=month_count,
-        incident_total=incident_total,
         incident_user=incident_user,
         incident_system=incident_system,
         sc_tasks=sc_tasks,

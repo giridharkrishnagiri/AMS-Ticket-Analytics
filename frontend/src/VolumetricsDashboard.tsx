@@ -332,6 +332,11 @@ const emptyDistributionSplits: DashboardVolumetricsDistributionSplits = {
 };
 
 const emptyDetailedVolumeAdditions: DashboardVolumetricsDetailedVolumeAdditions = {
+  incident_source_window: {
+    start_month: "",
+    end_month: "",
+    description: "Latest complete 6 months",
+  },
   incident_creation_source_split: [],
   change_created_by_month: [],
   data_notes: [],
@@ -3749,23 +3754,31 @@ function IncidentCreationSourceSplitPanel({
   commentary,
   data,
   error,
+  notes = [],
   status,
   ticketType,
+  window,
 }: {
   commentary?: ReactNode;
   data: DashboardVolumetricsDetailedVolumeAdditions["incident_creation_source_split"];
   error: string | null;
+  notes?: string[];
   status: LoadStatus;
   ticketType: VolumetricsTicketType;
+  window: DashboardVolumetricsRankingWindow;
 }) {
   const title = "User-generated vs System-generated Incidents";
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
   const notApplicable = ticketType === "sc_task";
   const rows = notApplicable ? [] : data;
-  const total = rows.reduce((sum, row) => sum + row.incident_count, 0);
+  const total = rows.reduce((sum, row) => sum + row.average_monthly_incident_count, 0);
   const hasRows = total > 0;
   const chartWidth = Math.max(420, Math.min(620, plotWidth - 24));
   const canCopy = status !== "loading" && hasRows && !notApplicable;
+  const windowLabel =
+    window.start_month && window.end_month
+      ? `${formatMonthLabel(window.start_month)} to ${formatMonthLabel(window.end_month)}`
+      : "the latest complete 6 months";
 
   return (
     <section className="chart-card volumetrics-chart-card" aria-label={title}>
@@ -3773,7 +3786,7 @@ function IncidentCreationSourceSplitPanel({
         <div>
           <h3>{title}</h3>
           <p className="muted-text">
-            Created Incidents in the selected date range, excluding canceled Incidents.
+            Average monthly created Incidents for {windowLabel}, excluding canceled Incidents.
           </p>
         </div>
         <button
@@ -3803,7 +3816,7 @@ function IncidentCreationSourceSplitPanel({
                 data={rows}
                 cx="50%"
                 cy="45%"
-                dataKey="incident_count"
+                dataKey="average_monthly_incident_count"
                 nameKey="label"
                 outerRadius={92}
                 label={(props) => renderOutsidePieLabel(props, 4)}
@@ -3820,15 +3833,15 @@ function IncidentCreationSourceSplitPanel({
                   `${formatNumber(Number(value))} (${formatPercent(
                     rows.find((row) => row.label === String(name))?.percentage
                   )})`,
-                  "Incidents",
+                  "Avg Monthly Incidents",
                 ]}
               />
               <Legend
                 formatter={(value) => {
                   const row = rows.find((item) => item.label === value);
-                  return `${value} (${formatNumber(row?.incident_count)}, ${formatPercent(
-                    row?.percentage
-                  )})`;
+                  return `${value} (${formatNumber(
+                    row?.average_monthly_incident_count
+                  )}, ${formatPercent(row?.percentage)})`;
                 }}
               />
             </PieChart>
@@ -3838,7 +3851,7 @@ function IncidentCreationSourceSplitPanel({
               <thead>
                 <tr>
                   <th>Incident Source</th>
-                  <th>Incidents</th>
+                  <th>Avg Monthly Incidents</th>
                   <th>Share</th>
                 </tr>
               </thead>
@@ -3846,7 +3859,7 @@ function IncidentCreationSourceSplitPanel({
                 {rows.map((row) => (
                   <tr key={row.label}>
                     <td>{row.label}</td>
-                    <td>{formatNumber(row.incident_count)}</td>
+                    <td>{formatNumber(row.average_monthly_incident_count)}</td>
                     <td>{formatPercent(row.percentage)}</td>
                   </tr>
                 ))}
@@ -3860,6 +3873,13 @@ function IncidentCreationSourceSplitPanel({
           </div>
         </div>
       ) : null}
+      {notes.length ? (
+        <ul className="chart-data-notes">
+          {notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
       {commentary}
     </section>
@@ -3870,12 +3890,16 @@ function ChangeCreatedByMonthPanel({
   commentary,
   data,
   error,
+  notes = [],
   status,
+  warnings = [],
 }: {
   commentary?: ReactNode;
   data: DashboardVolumetricsChangeCreatedMonthRow[];
   error: string | null;
+  notes?: string[];
   status: LoadStatus;
+  warnings?: string[];
 }) {
   const title = "AMS Changes Created by Month";
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
@@ -3939,6 +3963,20 @@ function ChangeCreatedByMonthPanel({
           </div>
         </div>
       ) : null}
+      {notes.length ? (
+        <ul className="chart-data-notes">
+          {notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null}
+      {warnings.length ? (
+        <ul className="chart-warning-notes">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
       {copyMessage ? <p className="chart-copy-status">{copyMessage}</p> : null}
       {commentary}
     </section>
@@ -3958,40 +3996,28 @@ function DetailedVolumeAdditionsSection({
   status: LoadStatus;
   ticketType: VolumetricsTicketType;
 }) {
+  const incidentNotes = data.data_notes.filter((note) => note.startsWith("Incident"));
+  const changeNotes = data.data_notes.filter((note) => note.startsWith("Change"));
   return (
-    <section className="panel detailed-volume-additions-section">
-      <div className="panel-heading">
-        <div>
-          <p className="label">Detailed Volume Trends</p>
-          <h3>Incident Source and AMS Change Volume</h3>
-        </div>
-      </div>
-      {status !== "loading" && status !== "error" && error ? (
-        <p className="muted-text">{error}</p>
-      ) : null}
-      <div className="detailed-volume-additions-grid">
-        <IncidentCreationSourceSplitPanel
-          commentary={commentaryForChart("incident_user_system_split")}
-          data={data.incident_creation_source_split}
-          error={error}
-          status={status}
-          ticketType={ticketType}
-        />
-        <ChangeCreatedByMonthPanel
-          commentary={commentaryForChart("ams_changes_created_by_month")}
-          data={data.change_created_by_month}
-          error={error}
-          status={status}
-        />
-      </div>
-      {data.data_notes.length ? (
-        <ul className="chart-data-notes">
-          {data.data_notes.map((note) => (
-            <li key={note}>{note}</li>
-          ))}
-        </ul>
-      ) : null}
-    </section>
+    <>
+      <IncidentCreationSourceSplitPanel
+        commentary={commentaryForChart("incident_user_system_split")}
+        data={data.incident_creation_source_split}
+        error={error}
+        notes={incidentNotes}
+        status={status}
+        ticketType={ticketType}
+        window={data.incident_source_window}
+      />
+      <ChangeCreatedByMonthPanel
+        commentary={commentaryForChart("ams_changes_created_by_month")}
+        data={data.change_created_by_month}
+        error={error}
+        notes={changeNotes}
+        status={status}
+        warnings={data.warnings}
+      />
+    </>
   );
 }
 

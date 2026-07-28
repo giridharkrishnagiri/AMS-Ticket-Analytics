@@ -1712,9 +1712,9 @@ def build_detailed_volume_payload(
             end_datetime,
         ),
         "data_notes": [
-            "Incident source split uses created Incidents in the selected date range, "
-            "excludes canceled Incidents, and treats caller/requester containing integration "
-            "as system-generated.",
+            "Incident source split uses average monthly created Incidents over the latest "
+            "complete 6 months, excludes canceled Incidents, and treats caller/requester "
+            "containing integration as system-generated.",
             "Change volume uses Change created date, excludes canceled Changes, and includes "
             "only Change Reason values Decommission, Fix/Repair, Patching, and Upgrade.",
             "Change scope uses the in-scope/out-of-scope Change record classification.",
@@ -5929,7 +5929,9 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const periods = scTaskCatalogPeriodDefinitions().map(scTaskCatalogPeriodData);
       return `<section class="chart-card panel full" data-commentary-key="volumetrics_sc_task_catalog_item_proportion"><h3>SC Task Catalog Item Proportion</h3><p class="muted">Shows average monthly SC Tasks by catalog item for Dec-25 through May-26.</p><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.title)}</h4><p class="muted">${esc(periodData.period.from)} to ${esc(periodData.period.to)} · ${fmt(periodData.total)} SC Tasks</p><div class="chart-frame chart-stage table-scroll">${scTaskCatalogBarChart(periodData.pieRows)}</div></section>`).join("")}</div><div class="sc-task-catalog-grid">${periods.map((periodData) => `<section class="sc-task-catalog-card"><h4>${esc(periodData.period.label)} Top Catalog Items</h4>${scTaskCatalogTable(periodData)}</section>`).join("")}</div><p class="muted">SC Task Catalog Item Proportion uses SC Tasks only. Incidents, Problems, and Changes are excluded. Catalog items below 2% are grouped into Others.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "volumetrics_sc_task_catalog_item_proportion" })}</section>`;
     }
-    function incidentSourceSplitSection() {
+    function incidentSourceSplitSection(extraHtml = "") {
+      const window = DASHBOARD.volumetrics.detailed_volume_trends?.split_window || {};
+      const monthCount = monthCountFromWindow(window);
       const totals = new Map();
       (DASHBOARD.volumetrics.detailed_volume_trends?.incident_creation_source_rows || [])
         .filter(offlineFilterMatch)
@@ -5940,19 +5942,28 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const total = [...totals.values()].reduce((sum, count) => sum + Number(count || 0), 0);
       const rows = ["User-generated", "System-generated"].map((label) => {
         const count = Number(totals.get(label) || 0);
-        return { label, incident_count: count, percentage: total ? (count / total) * 100 : null };
+        return {
+          label,
+          incident_count: count,
+          average_monthly_incident_count: Math.round(count / monthCount),
+          percentage: total ? (count / total) * 100 : null
+        };
       });
-      const tableRows = rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.incident_count || 0)}</td><td>${row.percentage === null || row.percentage === undefined ? "N/A" : `${Number(row.percentage).toFixed(1)}%`}</td></tr>`).join("");
-      const table = `<div class="table-frame table-scroll compact-table-frame"><table class="applications-table compact-export-table"><thead><tr><th>Incident Source</th><th>Incidents</th><th>Share</th></tr></thead><tbody>${tableRows}<tr><td>Total</td><td>${fmt(total)}</td><td>${total ? "100.0%" : "N/A"}</td></tr></tbody></table></div>`;
+      const averageTotal = rows.reduce((sum, row) => sum + Number(row.average_monthly_incident_count || 0), 0);
+      const tableRows = rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.average_monthly_incident_count || 0)}</td><td>${row.percentage === null || row.percentage === undefined ? "N/A" : `${Number(row.percentage).toFixed(1)}%`}</td></tr>`).join("");
+      const table = `<div class="table-frame table-scroll compact-table-frame"><table class="applications-table compact-export-table"><thead><tr><th>Incident Source</th><th>Avg Monthly Incidents</th><th>Share</th></tr></thead><tbody>${tableRows}<tr><td>Total</td><td>${fmt(averageTotal)}</td><td>${total ? "100.0%" : "N/A"}</td></tr></tbody></table></div>`;
       if (state.volTicketType === "sc_task") {
-        return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">This Incident source split is not applicable for SC Tasks.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
+        return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">This Incident source split is not applicable for SC Tasks.</p>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
       }
       if (!total) {
-        return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">No Incident source split data available.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
+        return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">No Incident source split data available.</p>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
       }
-      return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">Created Incidents in the selected date range, excluding canceled Incidents.</p><div class="offline-side-by-side"><div class="chart-frame chart-stage">${pieChart(rows.map((row) => ({ label: row.label, count: row.incident_count || 0, percentage: row.percentage })), { labelAll: true })}</div>${table}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
+      const windowText = window.start_month && window.end_month
+        ? `${formatMonthLabel(window.start_month)} to ${formatMonthLabel(window.end_month)}`
+        : "the latest complete 6 months";
+      return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">Average monthly created Incidents for ${esc(windowText)}, excluding canceled Incidents.</p><div class="offline-side-by-side"><div class="chart-frame chart-stage">${pieChart(rows.map((row) => ({ label: row.label, count: row.average_monthly_incident_count || 0, percentage: row.percentage })), { labelAll: true })}</div>${table}</div>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
     }
-    function amsChangesCreatedSection() {
+    function amsChangesCreatedSection(extraHtml = "") {
       const totals = new Map();
       (DASHBOARD.volumetrics.detailed_volume_trends?.change_created_rows || [])
         .filter(offlineChangeFilterMatch)
@@ -5977,15 +5988,19 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       }));
       const total = rows.reduce((sum, row) => sum + Number(row.changes || 0), 0);
       if (!total) {
-        return `<section class="chart-card panel" data-commentary-key="ams_changes_created_by_month"><h3>AMS Changes Created by Month</h3><p class="muted">No AMS Change volume available.</p>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "ams_changes_created_by_month" })}</section>`;
+        return `<section class="chart-card panel" data-commentary-key="ams_changes_created_by_month"><h3>AMS Changes Created by Month</h3><p class="muted">No AMS Change volume available.</p>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "ams_changes_created_by_month" })}</section>`;
       }
-      return `<section class="chart-card panel" data-commentary-key="ams_changes_created_by_month"><h3>AMS Changes Created by Month</h3><p class="muted">Created Changes with AMS change reasons, excluding canceled Changes.</p><div class="chart-frame chart-stage">${barChart(rows, [{ key: "changes", name: "Changes Created", color: COLORS.teal }], { width: 1080, height: 340 })}</div>${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "ams_changes_created_by_month" })}</section>`;
+      return `<section class="chart-card panel" data-commentary-key="ams_changes_created_by_month"><h3>AMS Changes Created by Month</h3><p class="muted">Created Changes with AMS change reasons, excluding canceled Changes.</p><div class="chart-frame chart-stage">${barChart(rows, [{ key: "changes", name: "Changes Created", color: COLORS.teal }], { width: 1080, height: 340 })}</div>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "ams_changes_created_by_month" })}</section>`;
     }
     function detailedVolumeAdditionsSection() {
       const payload = DASHBOARD.volumetrics.detailed_volume_trends || {};
       const notes = payload.data_notes || [];
       const warnings = payload.warnings || [];
-      return `<section class="panel full"><p class="label">Detailed Volume Trends</p><h3>Incident Source and AMS Change Volume</h3><div class="chart-grid two">${incidentSourceSplitSection()}${amsChangesCreatedSection()}</div>${notes.length ? `<ul class="muted">${notes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}${warnings.length ? `<ul class="error-text">${warnings.map((warning) => `<li>${esc(warning)}</li>`).join("")}</ul>` : ""}</section>`;
+      const incidentNotes = notes.filter((note) => String(note).startsWith("Incident"));
+      const changeNotes = notes.filter((note) => String(note).startsWith("Change"));
+      const incidentExtra = incidentNotes.length ? `<ul class="muted">${incidentNotes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : "";
+      const changeExtra = `${changeNotes.length ? `<ul class="muted">${changeNotes.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : ""}${warnings.length ? `<ul class="error-text">${warnings.map((warning) => `<li>${esc(warning)}</li>`).join("")}</ul>` : ""}`;
+      return `${incidentSourceSplitSection(incidentExtra)}${amsChangesCreatedSection(changeExtra)}`;
     }
     function incidentBatchTrendPoints() {
       const rows = filteredVolumetricsRows().filter(incidentBatchFilterMatch);
@@ -5998,6 +6013,17 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
       const window = DASHBOARD.volumetrics.detailed_volume_trends?.split_window || {};
       if (!window.start_month || !window.end_month) return "Uses the latest complete 6 months and excludes the current partial month.";
       return `Uses average monthly created volume for ${esc(window.start_month)} to ${esc(window.end_month)}.`;
+    }
+    function monthCountFromWindow(window) {
+      if (!window?.start_month || !window?.end_month) return 6;
+      const [startYearText, startMonthText] = String(window.start_month).split("-");
+      const [endYearText, endMonthText] = String(window.end_month).split("-");
+      const startYear = Number(startYearText);
+      const startMonth = Number(startMonthText);
+      const endYear = Number(endYearText);
+      const endMonth = Number(endMonthText);
+      if (![startYear, startMonth, endYear, endMonth].every(Number.isFinite)) return 6;
+      return Math.max(1, (endYear - startYear) * 12 + endMonth - startMonth + 1);
     }
     function renderDetailedVolumeTrends() {
       const topVolume = topApplicationPoints({ topN: state.topVolumeN, batch: false });

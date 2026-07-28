@@ -1694,7 +1694,7 @@ def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_sp
 
         views = {view["key"]: view for view in payload["demand_views"]}
         overall_rows = {row["key"]: row for row in views["overall"]["rows"]}
-        assert overall_rows["incident_total"]["average_monthly_volume"] == 2
+        assert "incident_total" not in overall_rows
         assert overall_rows["incident_user_generated"]["average_monthly_volume"] == 1
         assert overall_rows["incident_system_generated"]["average_monthly_volume"] == 1
         assert overall_rows["sc_tasks"]["average_monthly_volume"] == 2
@@ -1705,7 +1705,7 @@ def test_dashboard_resource_demand_returns_overall_volume_and_incident_source_sp
         sap_rows = views["sap"]["rows"]
         sap_rows_by_key = {row["key"]: row for row in sap_rows}
         data_rows = {row["key"]: row for row in views["data_and_analytics"]["rows"]}
-        assert generic_rows["generic_incident_total"]["average_monthly_volume"] == 2
+        assert "generic_incident_total" not in generic_rows
         assert generic_rows["generic_sc_tasks"]["average_monthly_volume"] == 1
         assert generic_rows["generic_changes"]["average_monthly_volume"] == 1
         assert sap_rows_by_key["sap_problems"]["average_monthly_volume"] == 1

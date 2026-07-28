@@ -2818,6 +2818,14 @@ h2 {
   font-weight: 700;
 }
 
+.chart-warning-notes {
+  margin: 0;
+  padding-left: 20px;
+  color: #b91c1c;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
 .kpi-trends-section {
   display: grid;
   gap: 14px;

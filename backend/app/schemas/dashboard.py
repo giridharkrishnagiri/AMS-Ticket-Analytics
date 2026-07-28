@@ -1017,6 +1017,7 @@ class VolumetricsDistributionSplitsResponse(BaseModel):
 class VolumetricsIncidentCreationSourceSplitRow(BaseModel):
     label: str
     incident_count: int
+    average_monthly_incident_count: int
     percentage: float | None
 
 
@@ -1026,6 +1027,7 @@ class VolumetricsChangeCreatedMonthRow(PeriodMetricRow):
 
 
 class VolumetricsDetailedVolumeAdditionsResponse(BaseModel):
+    incident_source_window: VolumetricsRankingWindow
     incident_creation_source_split: list[VolumetricsIncidentCreationSourceSplitRow]
     change_created_by_month: list[VolumetricsChangeCreatedMonthRow]
     data_notes: list[str]

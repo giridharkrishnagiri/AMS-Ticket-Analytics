@@ -4696,10 +4696,17 @@ def change_volume_filter_conditions(source: Any, filters: Any) -> tuple[list[Any
 
 def volumetrics_incident_creation_source_split(db: Session, request: Any) -> list[dict[str, Any]]:
     source = volumetrics_source_subquery(request)
+    window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
+    month_count = max(
+        1,
+        (window_end.year - window_start.year) * 12 + window_end.month - window_start.month + 1,
+    )
     system_condition = func.lower(func.coalesce(source.c.requester, "")).like("%integration%")
     conditions = [
-        *volumetrics_base_conditions(source, request),
+        *volumetrics_base_conditions(source, request, include_date_bounds=False),
         source.c.ticket_type == "INCIDENT",
+        source.c.created_at >= window_start,
+        source.c.created_at <= window_end,
         ~volumetrics_cancelled_expression(source),
     ]
     statement = (
@@ -4718,15 +4725,21 @@ def volumetrics_incident_creation_source_split(db: Session, request: Any) -> lis
     user_count = int_count(row["user_generated_incidents"])
     system_count = int_count(row["system_generated_incidents"])
     total = user_count + system_count
+
+    def average_count(count: int) -> int:
+        return int((2 * count + month_count) // (2 * month_count))
+
     return [
         {
             "label": "User-generated",
             "incident_count": user_count,
+            "average_monthly_incident_count": average_count(user_count),
             "percentage": percentage(user_count, total),
         },
         {
             "label": "System-generated",
             "incident_count": system_count,
+            "average_monthly_incident_count": average_count(system_count),
             "percentage": percentage(system_count, total),
         },
     ]
@@ -4792,16 +4805,25 @@ def volumetrics_change_created_by_month(
 
 def volumetrics_detailed_volume_additions(db: Session, request: Any) -> dict[str, Any]:
     change_rows, warnings = volumetrics_change_created_by_month(db, request)
+    incident_window_start, incident_window_end = latest_complete_month_window(
+        db,
+        request.project_id,
+        6,
+    )
     return {
+        "incident_source_window": latest_complete_window_payload(
+            incident_window_start,
+            incident_window_end,
+        ),
         "incident_creation_source_split": volumetrics_incident_creation_source_split(
             db,
             request,
         ),
         "change_created_by_month": change_rows,
         "data_notes": [
-            "Incident source split uses created Incidents in the selected date range, "
-            "excludes canceled Incidents, and treats caller/requester containing "
-            "integration as system-generated.",
+            "Incident source split uses average monthly created Incidents over the latest "
+            "complete 6 months, excludes canceled Incidents, and treats caller/requester "
+            "containing integration as system-generated.",
             "Change volume uses Change created date, excludes canceled Changes, and includes "
             "only Change Reason values Decommission, Fix/Repair, Patching, and Upgrade.",
             "Change scope uses the in-scope/out-of-scope Change record classification.",
