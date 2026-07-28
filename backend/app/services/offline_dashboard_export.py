@@ -18,12 +18,15 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ApplicationInventoryItem,
+    AssessmentChangeRecord,
+    AssessmentOutOfScopeChangeRecord,
     AssessmentOutOfScopeProblemRecord,
     AssessmentProblemRecord,
     Client,
     GenAITicketClassification,
     Project,
     Ticket,
+    TicketRawRow,
 )
 from app.services.dashboard import (
     APPLICATION_CRITICALITY_ORDER,
@@ -1441,10 +1444,12 @@ def build_detailed_incident_creation_source_rows(
         ),
         else_=literal("User-generated"),
     )
+    cancelled_expression = volumetrics_cancelled_expression(source)
     statement = (
         select(
             *[expression.label(name) for name, expression in dimensions.items()],
             creation_source_expression.label("incident_source"),
+            cancelled_expression.label("incident_is_canceled"),
             func.count(source.c.id).label("incident_count"),
         )
         .select_from(source)
@@ -1453,14 +1458,14 @@ def build_detailed_incident_creation_source_rows(
             source.c.created_at >= normalize_dashboard_datetime(start_datetime),
             source.c.created_at <= normalize_dashboard_datetime(end_datetime),
             source.c.ticket_type == "INCIDENT",
-            ~volumetrics_cancelled_expression(source),
         )
-        .group_by(*dimensions.values(), creation_source_expression)
+        .group_by(*dimensions.values(), creation_source_expression, cancelled_expression)
     )
     return [
         {
             **dimension_dict(dimension_key(row)),
             "incident_source": str(row["incident_source"]),
+            "incident_is_canceled": bool(row["incident_is_canceled"]),
             "incident_count": int(row["incident_count"] or 0),
         }
         for row in db.execute(statement).mappings().all()
@@ -1528,6 +1533,40 @@ def build_detailed_change_created_rows(
             },
         )
     return rows
+
+
+def offline_change_volume_warnings(db: Session, project_id: UUID) -> list[str]:
+    normalized_count = int(
+        db.scalar(
+            select(func.count(AssessmentChangeRecord.id)).where(
+                AssessmentChangeRecord.project_id == project_id,
+            ),
+        )
+        or 0,
+    ) + int(
+        db.scalar(
+            select(func.count(AssessmentOutOfScopeChangeRecord.id)).where(
+                AssessmentOutOfScopeChangeRecord.project_id == project_id,
+            ),
+        )
+        or 0,
+    )
+    raw_count = int(
+        db.scalar(
+            select(func.count(TicketRawRow.id)).where(
+                TicketRawRow.project_id == project_id,
+                func.upper(TicketRawRow.ticket_type) == "CHANGE",
+            ),
+        )
+        or 0,
+    )
+    if raw_count > 0 and normalized_count == 0:
+        return [
+            "Change request raw rows exist, but no normalized Change records are available. "
+            "Normalize/apply mapping for the Change upload batch before this chart can show "
+            "AMS Change volume.",
+        ]
+    return []
 
 
 def build_detailed_volume_payload(
@@ -1713,13 +1752,14 @@ def build_detailed_volume_payload(
         ),
         "data_notes": [
             "Incident source split uses average monthly created Incidents over the latest "
-            "complete 6 months, excludes canceled Incidents, and treats caller/requester "
-            "containing integration as system-generated.",
+            "complete 6 months and treats caller/requester containing integration as "
+            "system-generated. One pie includes all created Incidents; the second excludes "
+            "canceled Incidents.",
             "Change volume uses Change created date, excludes canceled Changes, and includes "
             "only Change Reason values Decommission, Fix/Repair, Patching, and Upgrade.",
             "Change scope uses the in-scope/out-of-scope Change record classification.",
         ],
-        "warnings": [],
+        "warnings": offline_change_volume_warnings(db, project_id),
         "batch_rule": {
             "field": "short_description",
             "rule_description": (
@@ -5932,36 +5972,53 @@ OFFLINE_DASHBOARD_TEMPLATE = """<!doctype html>
     function incidentSourceSplitSection(extraHtml = "") {
       const window = DASHBOARD.volumetrics.detailed_volume_trends?.split_window || {};
       const monthCount = monthCountFromWindow(window);
-      const totals = new Map();
-      (DASHBOARD.volumetrics.detailed_volume_trends?.incident_creation_source_rows || [])
-        .filter(offlineFilterMatch)
-        .forEach((row) => {
-          const label = row.incident_source || "User-generated";
-          totals.set(label, (totals.get(label) || 0) + Number(row.incident_count || 0));
+      const buildRows = (excludeCanceled) => {
+        const totals = new Map();
+        (DASHBOARD.volumetrics.detailed_volume_trends?.incident_creation_source_rows || [])
+          .filter(offlineFilterMatch)
+          .filter((row) => !excludeCanceled || !row.incident_is_canceled)
+          .forEach((row) => {
+            const label = row.incident_source || "User-generated";
+            totals.set(label, (totals.get(label) || 0) + Number(row.incident_count || 0));
+          });
+        const total = [...totals.values()].reduce((sum, count) => sum + Number(count || 0), 0);
+        const rows = ["User-generated", "System-generated"].map((label) => {
+          const count = Number(totals.get(label) || 0);
+          return {
+            label,
+            incident_count: count,
+            average_monthly_incident_count: Math.round(count / monthCount),
+            percentage: total ? (count / total) * 100 : null
+          };
         });
-      const total = [...totals.values()].reduce((sum, count) => sum + Number(count || 0), 0);
-      const rows = ["User-generated", "System-generated"].map((label) => {
-        const count = Number(totals.get(label) || 0);
-        return {
-          label,
-          incident_count: count,
-          average_monthly_incident_count: Math.round(count / monthCount),
-          percentage: total ? (count / total) * 100 : null
-        };
-      });
-      const averageTotal = rows.reduce((sum, row) => sum + Number(row.average_monthly_incident_count || 0), 0);
-      const tableRows = rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.average_monthly_incident_count || 0)}</td><td>${row.percentage === null || row.percentage === undefined ? "N/A" : `${Number(row.percentage).toFixed(1)}%`}</td></tr>`).join("");
-      const table = `<div class="table-frame table-scroll compact-table-frame"><table class="applications-table compact-export-table"><thead><tr><th>Incident Source</th><th>Avg Monthly Incidents</th><th>Share</th></tr></thead><tbody>${tableRows}<tr><td>Total</td><td>${fmt(averageTotal)}</td><td>${total ? "100.0%" : "N/A"}</td></tr></tbody></table></div>`;
+        return { rows, total };
+      };
+      const chartSets = [
+        { key: "all-created", title: "All Created Incidents", ...buildRows(false) },
+        {
+          key: "excluding-canceled",
+          title: "Created Incidents Excluding Canceled",
+          ...buildRows(true)
+        }
+      ];
+      const hasAnyData = chartSets.some((set) => set.total > 0);
+      const tableForSet = (set) => {
+        const averageTotal = set.rows.reduce((sum, row) => sum + Number(row.average_monthly_incident_count || 0), 0);
+        const tableRows = set.rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${fmt(row.average_monthly_incident_count || 0)}</td><td>${row.percentage === null || row.percentage === undefined ? "N/A" : `${Number(row.percentage).toFixed(1)}%`}</td></tr>`).join("");
+        return `<div class="table-frame table-scroll compact-table-frame"><h4>${esc(set.title)}</h4><table class="applications-table compact-export-table"><thead><tr><th>Incident Source</th><th>Avg Monthly Incidents</th><th>Share</th></tr></thead><tbody>${tableRows}<tr><td>Total</td><td>${fmt(averageTotal)}</td><td>${set.total ? "100.0%" : "N/A"}</td></tr></tbody></table></div>`;
+      };
       if (state.volTicketType === "sc_task") {
         return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">This Incident source split is not applicable for SC Tasks.</p>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
       }
-      if (!total) {
+      if (!hasAnyData) {
         return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">No Incident source split data available.</p>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
       }
       const windowText = window.start_month && window.end_month
         ? `${formatMonthLabel(window.start_month)} to ${formatMonthLabel(window.end_month)}`
         : "the latest complete 6 months";
-      return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">Average monthly created Incidents for ${esc(windowText)}, excluding canceled Incidents.</p><div class="offline-side-by-side"><div class="chart-frame chart-stage">${pieChart(rows.map((row) => ({ label: row.label, count: row.average_monthly_incident_count || 0, percentage: row.percentage })), { labelAll: true })}</div>${table}</div>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
+      const pies = chartSets.map((set) => `<div class="chart-frame chart-stage"><h4>${esc(set.title)}</h4>${pieChart(set.rows.map((row) => ({ label: row.label, count: row.average_monthly_incident_count || 0, percentage: row.percentage })), { labelAll: true })}</div>`).join("");
+      const tables = chartSets.map(tableForSet).join("");
+      return `<section class="chart-card panel" data-commentary-key="incident_user_system_split"><h3>User-generated vs System-generated Incidents</h3><p class="muted">Average monthly created Incidents for ${esc(windowText)}.</p><div class="chart-grid two">${pies}</div><div class="chart-grid two">${tables}</div>${extraHtml}${commentaryMarkup({ ...currentVolumetricsCommentaryContext(), chart_key: "incident_user_system_split" })}</section>`;
     }
     function amsChangesCreatedSection(extraHtml = "") {
       const totals = new Map();

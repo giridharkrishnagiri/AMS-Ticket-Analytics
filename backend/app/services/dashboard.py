@@ -4694,7 +4694,12 @@ def change_volume_filter_conditions(source: Any, filters: Any) -> tuple[list[Any
     return conditions, warnings
 
 
-def volumetrics_incident_creation_source_split(db: Session, request: Any) -> list[dict[str, Any]]:
+def volumetrics_incident_creation_source_split(
+    db: Session,
+    request: Any,
+    *,
+    exclude_cancelled: bool,
+) -> list[dict[str, Any]]:
     source = volumetrics_source_subquery(request)
     window_start, window_end = latest_complete_month_window(db, request.project_id, 6)
     month_count = max(
@@ -4707,8 +4712,9 @@ def volumetrics_incident_creation_source_split(db: Session, request: Any) -> lis
         source.c.ticket_type == "INCIDENT",
         source.c.created_at >= window_start,
         source.c.created_at <= window_end,
-        ~volumetrics_cancelled_expression(source),
     ]
+    if exclude_cancelled:
+        conditions.append(~volumetrics_cancelled_expression(source))
     statement = (
         select(
             func.count(source.c.id)
@@ -4743,6 +4749,31 @@ def volumetrics_incident_creation_source_split(db: Session, request: Any) -> lis
             "percentage": percentage(system_count, total),
         },
     ]
+
+
+def change_record_count(db: Session, project_id: UUID) -> int:
+    in_scope_count = db.scalar(
+        select(func.count(AssessmentChangeRecord.id)).where(
+            AssessmentChangeRecord.project_id == project_id,
+        ),
+    )
+    out_scope_count = db.scalar(
+        select(func.count(AssessmentOutOfScopeChangeRecord.id)).where(
+            AssessmentOutOfScopeChangeRecord.project_id == project_id,
+        ),
+    )
+    return int_count(in_scope_count) + int_count(out_scope_count)
+
+
+def raw_change_row_count(db: Session, project_id: UUID) -> int:
+    return int_count(
+        db.scalar(
+            select(func.count(TicketRawRow.id)).where(
+                TicketRawRow.project_id == project_id,
+                func.upper(TicketRawRow.ticket_type) == "CHANGE",
+            ),
+        ),
+    )
 
 
 def volumetrics_change_created_by_month(
@@ -4800,6 +4831,16 @@ def volumetrics_change_created_by_month(
         }
         for period in periods
     ]
+    if (
+        sum(row["change_count"] for row in rows) == 0
+        and change_record_count(db, request.project_id) == 0
+        and raw_change_row_count(db, request.project_id) > 0
+    ):
+        warnings.append(
+            "Change request raw rows exist, but no normalized Change records are available. "
+            "Normalize/apply mapping for the Change upload batch before this chart can show "
+            "AMS Change volume.",
+        )
     return rows, warnings
 
 
@@ -4815,15 +4856,31 @@ def volumetrics_detailed_volume_additions(db: Session, request: Any) -> dict[str
             incident_window_start,
             incident_window_end,
         ),
+        "incident_creation_source_split_all_created": (
+            volumetrics_incident_creation_source_split(
+                db,
+                request,
+                exclude_cancelled=False,
+            )
+        ),
+        "incident_creation_source_split_excluding_canceled": (
+            volumetrics_incident_creation_source_split(
+                db,
+                request,
+                exclude_cancelled=True,
+            )
+        ),
         "incident_creation_source_split": volumetrics_incident_creation_source_split(
             db,
             request,
+            exclude_cancelled=True,
         ),
         "change_created_by_month": change_rows,
         "data_notes": [
             "Incident source split uses average monthly created Incidents over the latest "
-            "complete 6 months, excludes canceled Incidents, and treats caller/requester "
-            "containing integration as system-generated.",
+            "complete 6 months and treats caller/requester containing integration as "
+            "system-generated. One pie includes all created Incidents; the second excludes "
+            "canceled Incidents.",
             "Change volume uses Change created date, excludes canceled Changes, and includes "
             "only Change Reason values Decommission, Fix/Repair, Patching, and Upgrade.",
             "Change scope uses the in-scope/out-of-scope Change record classification.",

@@ -1029,6 +1029,10 @@ class VolumetricsChangeCreatedMonthRow(PeriodMetricRow):
 class VolumetricsDetailedVolumeAdditionsResponse(BaseModel):
     incident_source_window: VolumetricsRankingWindow
     incident_creation_source_split: list[VolumetricsIncidentCreationSourceSplitRow]
+    incident_creation_source_split_all_created: list[VolumetricsIncidentCreationSourceSplitRow]
+    incident_creation_source_split_excluding_canceled: list[
+        VolumetricsIncidentCreationSourceSplitRow
+    ]
     change_created_by_month: list[VolumetricsChangeCreatedMonthRow]
     data_notes: list[str]
     warnings: list[str]

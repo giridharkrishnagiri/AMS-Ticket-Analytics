@@ -916,6 +916,8 @@ export type DashboardVolumetricsChangeCreatedMonthRow = PeriodMetricRow & {
 export type DashboardVolumetricsDetailedVolumeAdditions = {
   incident_source_window: DashboardVolumetricsRankingWindow;
   incident_creation_source_split: DashboardVolumetricsIncidentCreationSourceSplitRow[];
+  incident_creation_source_split_all_created: DashboardVolumetricsIncidentCreationSourceSplitRow[];
+  incident_creation_source_split_excluding_canceled: DashboardVolumetricsIncidentCreationSourceSplitRow[];
   change_created_by_month: DashboardVolumetricsChangeCreatedMonthRow[];
   data_notes: string[];
   warnings: string[];

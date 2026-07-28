@@ -338,6 +338,8 @@ const emptyDetailedVolumeAdditions: DashboardVolumetricsDetailedVolumeAdditions 
     description: "Latest complete 6 months",
   },
   incident_creation_source_split: [],
+  incident_creation_source_split_all_created: [],
+  incident_creation_source_split_excluding_canceled: [],
   change_created_by_month: [],
   data_notes: [],
   warnings: [],
@@ -3751,17 +3753,19 @@ function DetailedVolumeTrends({
 }
 
 function IncidentCreationSourceSplitPanel({
+  allCreatedData,
   commentary,
-  data,
   error,
+  excludingCanceledData,
   notes = [],
   status,
   ticketType,
   window,
 }: {
+  allCreatedData: DashboardVolumetricsDetailedVolumeAdditions["incident_creation_source_split_all_created"];
   commentary?: ReactNode;
-  data: DashboardVolumetricsDetailedVolumeAdditions["incident_creation_source_split"];
   error: string | null;
+  excludingCanceledData: DashboardVolumetricsDetailedVolumeAdditions["incident_creation_source_split_excluding_canceled"];
   notes?: string[];
   status: LoadStatus;
   ticketType: VolumetricsTicketType;
@@ -3770,10 +3774,26 @@ function IncidentCreationSourceSplitPanel({
   const title = "User-generated vs System-generated Incidents";
   const { chartRef, copyMessage, handleCopy, plotWidth } = useChartFrame(title);
   const notApplicable = ticketType === "sc_task";
-  const rows = notApplicable ? [] : data;
-  const total = rows.reduce((sum, row) => sum + row.average_monthly_incident_count, 0);
-  const hasRows = total > 0;
-  const chartWidth = Math.max(420, Math.min(620, plotWidth - 24));
+  const chartSets = [
+    {
+      key: "all-created",
+      title: "All Created Incidents",
+      rows: notApplicable ? [] : allCreatedData,
+    },
+    {
+      key: "excluding-canceled",
+      title: "Created Incidents Excluding Canceled",
+      rows: notApplicable ? [] : excludingCanceledData,
+    },
+  ];
+  const totalsByKey = new Map(
+    chartSets.map((set) => [
+      set.key,
+      set.rows.reduce((sum, row) => sum + row.average_monthly_incident_count, 0),
+    ])
+  );
+  const hasRows = chartSets.some((set) => (totalsByKey.get(set.key) ?? 0) > 0);
+  const chartWidth = Math.max(360, Math.min(560, Math.floor((plotWidth - 56) / 2)));
   const canCopy = status !== "loading" && hasRows && !notApplicable;
   const windowLabel =
     window.start_month && window.end_month
@@ -3786,7 +3806,7 @@ function IncidentCreationSourceSplitPanel({
         <div>
           <h3>{title}</h3>
           <p className="muted-text">
-            Average monthly created Incidents for {windowLabel}, excluding canceled Incidents.
+            Average monthly created Incidents for {windowLabel}.
           </p>
         </div>
         <button
@@ -3809,67 +3829,80 @@ function IncidentCreationSourceSplitPanel({
         <p className="muted-text chart-state-text">No Incident source split data available.</p>
       ) : null}
       {status !== "loading" && status !== "error" && !notApplicable && hasRows ? (
-        <div className="incident-source-split-grid" ref={chartRef}>
-          <div className="applications-chart-stage incident-source-pie-stage">
-            <PieChart width={chartWidth} height={300}>
-              <Pie
-                data={rows}
-                cx="50%"
-                cy="45%"
-                dataKey="average_monthly_incident_count"
-                nameKey="label"
-                outerRadius={92}
-                label={(props) => renderOutsidePieLabel(props, 4)}
-              >
-                {rows.map((entry, index) => (
-                  <Cell
-                    fill={chartColors.pie[index % chartColors.pie.length]}
-                    key={entry.label}
+        <div className="incident-source-split-stack" ref={chartRef}>
+          <div className="incident-source-pies-grid">
+            {chartSets.map((set) => (
+              <div className="applications-chart-stage incident-source-pie-stage" key={set.key}>
+                <h4>{set.title}</h4>
+                <PieChart width={chartWidth} height={300}>
+                  <Pie
+                    data={set.rows}
+                    cx="50%"
+                    cy="45%"
+                    dataKey="average_monthly_incident_count"
+                    nameKey="label"
+                    outerRadius={88}
+                    label={(props) => renderOutsidePieLabel(props, 4)}
+                  >
+                    {set.rows.map((entry, index) => (
+                      <Cell
+                        fill={chartColors.pie[index % chartColors.pie.length]}
+                        key={`${set.key}-${entry.label}`}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value, name) => [
+                      `${formatNumber(Number(value))} (${formatPercent(
+                        set.rows.find((row) => row.label === String(name))?.percentage
+                      )})`,
+                      "Avg Monthly Incidents",
+                    ]}
                   />
-                ))}
-              </Pie>
-              <Tooltip
-                formatter={(value, name) => [
-                  `${formatNumber(Number(value))} (${formatPercent(
-                    rows.find((row) => row.label === String(name))?.percentage
-                  )})`,
-                  "Avg Monthly Incidents",
-                ]}
-              />
-              <Legend
-                formatter={(value) => {
-                  const row = rows.find((item) => item.label === value);
-                  return `${value} (${formatNumber(
-                    row?.average_monthly_incident_count
-                  )}, ${formatPercent(row?.percentage)})`;
-                }}
-              />
-            </PieChart>
+                  <Legend
+                    formatter={(value) => {
+                      const row = set.rows.find((item) => item.label === value);
+                      return `${value} (${formatNumber(
+                        row?.average_monthly_incident_count
+                      )}, ${formatPercent(row?.percentage)})`;
+                    }}
+                  />
+                </PieChart>
+              </div>
+            ))}
           </div>
-          <div className="compact-table-wrapper incident-source-table-wrapper">
-            <table className="compact-data-table">
-              <thead>
-                <tr>
-                  <th>Incident Source</th>
-                  <th>Avg Monthly Incidents</th>
-                  <th>Share</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.label}>
-                    <td>{row.label}</td>
-                    <td>{formatNumber(row.average_monthly_incident_count)}</td>
-                    <td>{formatPercent(row.percentage)}</td>
-                  </tr>
-                ))}
-                <tr>
-                  <td>Total</td>
-                  <td>{formatNumber(total)}</td>
-                  <td>100.0%</td>
-                </tr>
-              </tbody>
-            </table>
+          <div className="incident-source-tables-grid">
+            {chartSets.map((set) => {
+              const total = totalsByKey.get(set.key) ?? 0;
+              return (
+                <div className="compact-table-wrapper incident-source-table-wrapper" key={set.key}>
+                  <h4>{set.title}</h4>
+                  <table className="compact-data-table">
+                    <thead>
+                      <tr>
+                        <th>Incident Source</th>
+                        <th>Avg Monthly Incidents</th>
+                        <th>Share</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {set.rows.map((row) => (
+                        <tr key={`${set.key}-${row.label}`}>
+                          <td>{row.label}</td>
+                          <td>{formatNumber(row.average_monthly_incident_count)}</td>
+                          <td>{formatPercent(row.percentage)}</td>
+                        </tr>
+                      ))}
+                      <tr>
+                        <td>Total</td>
+                        <td>{formatNumber(total)}</td>
+                        <td>{total > 0 ? "100.0%" : "N/A"}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : null}
@@ -4001,9 +4034,18 @@ function DetailedVolumeAdditionsSection({
   return (
     <>
       <IncidentCreationSourceSplitPanel
+        allCreatedData={
+          data.incident_creation_source_split_all_created?.length
+            ? data.incident_creation_source_split_all_created
+            : data.incident_creation_source_split
+        }
         commentary={commentaryForChart("incident_user_system_split")}
-        data={data.incident_creation_source_split}
         error={error}
+        excludingCanceledData={
+          data.incident_creation_source_split_excluding_canceled?.length
+            ? data.incident_creation_source_split_excluding_canceled
+            : data.incident_creation_source_split
+        }
         notes={incidentNotes}
         status={status}
         ticketType={ticketType}
